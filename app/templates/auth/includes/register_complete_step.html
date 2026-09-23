@@ -1,0 +1,43 @@
+{# Экран завершения регистрации — ЕДИНСТВЕННЫЙ источник его разметки (Фаза 14, план 14-03).
+
+   Включаемый шаблон, а не макрос: контекст вызывающего приходит сам. Читаются
+   `email` (подтверждённый адрес — текстом), `token` (подписанный подтверждённый
+   токен шага), `error` (короткий пароль) и `name` — присланное имя, которое
+   ответ ошибки возвращает в поле. Рисуют экран отсюда и страница
+   `auth/register_complete.html`, и ответ-фрагмент
+   (`auth/includes/step_response.html`): второго места разметки экрана нет.
+
+   ⚠️ ПАРОЛЬ НЕ ВОЗВРАЩАЕТСЯ НИКОГДА (D-04): поле пароля приходит пустым на
+   любом ответе, и значения в контекст экрана обработчик не передаёт вовсе.
+
+   ⚠️ ТОКЕН — ТОЛЬКО СКРЫТЫМ ПОЛЕМ (D-08): в адрес, историю и заголовки он не
+   попадает.
+
+   ⚠️ АДРЕСНАЯ СТРОКА НЕ МЕНЯЕТСЯ (D-08, решение Фазы 15): у экрана нет своего
+   адреса, и форма его в историю не кладёт.
+
+   Импорт: {% include "auth/includes/register_complete_step.html" %} #}
+{% from "components/field.html" import field %}
+{% from "components/button.html" import button %}
+{% from "components/alert.html" import alert %}
+{% from "components/form_wrapper.html" import form_wrapper %}
+<p class="auth-subtitle">Завершите регистрацию</p>
+{% if error %}{{ alert(error) }}{% endif %}
+
+<p class="auth-note">Email <strong>{{ email }}</strong> подтверждён</p>
+
+{#- ⚠️ ФОРМУ ПЕЧАТАЕТ МАКРОС-ОБЁРТКА (D-09), ЦЕЛЬ — ПОСТОЯННЫЙ ЯКОРЬ ШЕЛЛА. Ответ
+    ошибки (422) приезжает в якорь тем же экраном с именем в поле, успех уходит
+    полной загрузкой в кабинет (D-10). Без JavaScript форма отправляется, как и
+    прежде, настоящим POST.
+    ⚠️ КОРОБКУ ВЫКЛАДКИ ДАЁТ ВНУТРЕННИЙ УЗЕЛ, А НЕ ТЕГ ФОРМЫ: тег печатает макрос
+    со своим классом (приём `accounts/includes/max_connect_step.html`). -#}
+{% call form_wrapper(action='/register/complete', target='#auth-step', swap='innerHTML') %}
+<div class="auth-form">
+  <input type="hidden" name="token" value="{{ token }}">
+  {{ field(name="name", label='Имя', type='text', value=name or '', required=true, autocomplete='name', placeholder='Ваше имя') }}
+  {{ field(name="password", label='Пароль', type='password', required=true, autocomplete='new-password',
+           minlength=6, placeholder='Минимум 6 символов') }}
+  {{ button('Зарегистрироваться', extra_class='btn--block') }}
+</div>
+{% endcall %}

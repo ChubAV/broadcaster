@@ -1,26 +1,3 @@
 {% extends "auth_base.html" %}
-{% from "components/field.html" import field %}
-{% from "components/button.html" import button %}
-{% from "components/alert.html" import alert %}
 {% block title %}Подтверждение email — Broadcaster{% endblock %}
-{% block auth_subtitle %}Введите код из письма{% endblock %}
-{% block content %}
-{% if success %}{{ alert(success, 'success') }}{% endif %}
-{% if error %}{{ alert(error) }}{% endif %}
-
-<p class="auth-note">Мы отправили 6-значный код на <strong>{{ email }}</strong></p>
-
-<form class="auth-form" method="post" action="/register/verify">
-  <input type="hidden" name="token" value="{{ token }}">
-  {{ field(name="code", label='Код подтверждения', type='text', required=true, autocomplete='one-time-code',
-           maxlength=6, pattern='[0-9]{6}', inputmode='numeric', align='center', placeholder='000000') }}
-  {{ button('Подтвердить', extra_class='btn--block') }}
-</form>
-
-<form class="auth-form auth-form--secondary" method="post" action="/register/resend-code">
-  <input type="hidden" name="token" value="{{ token }}">
-  {{ button('Отправить код повторно', variant='ghost', extra_class='btn--block') }}
-</form>
-
-<p class="auth-foot"><a href="/register">Назад</a></p>
-{% endblock %}
+{% block content %}{% include "auth/includes/register_verify_step.html" %}{% endblock %}

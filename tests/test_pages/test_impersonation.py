@@ -1662,3 +1662,351 @@ async def test_a_blocked_actor_is_logged_out_by_the_return_not_re_admitted(
     assert still_in.status_code != 200, (
         f"админка отдана заблокированному после возврата ({still_in.status_code})"
     )
+
+
+# =============================================================================
+# ВОЗВРАТ НА СЛОЕ ОТВЕТА — ТРИ ВЕТКИ И ОТКАЗ ПО ИСТОЧНИКУ (Фаза 14, план 14-06)
+# =============================================================================
+#
+# ⚠️ ПОЧЕМУ ЭТИ ПЯТЬ ПРАВИЛ СТОЯТ ЗДЕСЬ, А НЕ В МОДУЛЕ ТРАНСПОРТА АВТОРИЗАЦИИ.
+# Предмет у них — ИМПЕРСОНАЦИЯ, а не экраны второго шелла: каждому нужны посев
+# цели, вход под нею и разбор признака действующего лица в выданном токене —
+# то есть ровно те помощники, ради которых этот файл и собран в один. Правила
+# семи экранов авторизации живут в `tests/test_pages/test_auth_transport.py`,
+# и возврат туда не переезжает: у него нет ни экрана, ни формы-карточки.
+#
+# ⚠️ ТРЁХ ВЕТОК У ВОЗВРАТА РОВНО ТРИ, И ДВЕ ИЗ НИХ УХОДЯТ ЗАГОЛОВКОМ ЧАСТИЧНОГО
+# ПЕРЕХОДА ВНУТРИ ОСНОВНОГО ШЕЛЛА, А ТРЕТЬЯ — ПОЛНОЙ ЗАГРУЗКОЙ ЧЕРЕЗ ГРАНИЦУ
+# ШЕЛЛОВ (D-12). Четвёртый исход — отказ по источнику — остаётся ГОЛЫМ 403 на
+# обоих транспортах решением владельца (D-01 Фазы 14, продление D-08 Фазы 11),
+# и его правило написано отдельным: изъятие, у которого нет собственного
+# утверждения, через фазу неотличимо от недоделки.
+
+
+@pytest.mark.asyncio
+async def test_the_return_over_htmx_keeps_both_the_location_and_the_admin_cookie(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРОЙНАЯ пара возврата: заголовок перехода, cookie БЕЗ признака и админка.
+
+    ⚠️ ТА ЖЕ ТРОЙНАЯ ФОРМА, ЧТО У ВХОДА, И ПО ТОЙ ЖЕ ПРИЧИНЕ. Ветка перехода
+    собирает НОВЫЙ ответ со статусом 204; cookie, навешенная на выброшенный
+    редирект, не уедет никуда, а тест, проверяющий ТОЛЬКО заголовок, останется
+    зелёным — администратор остался бы под чужой личностью при полностью
+    правильном заголовке. Поэтому утверждается ещё и то, что следующий запрос
+    видит СВОЮ личность: открывается админка и исчезает полоса.
+
+    ⚠️ `follow_redirects=True` — ЧАСТЬ ПРЕДМЕТА, а не удобство: ответ 302 пришёл
+    бы сюда кодом 200 и телом чужого документа, и утверждение о 204 позеленеть
+    не может ни при каком стечении обстоятельств.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    back = await admin_client.post(
+        "/impersonation/stop", headers=HTMX_REQUEST, follow_redirects=True
+    )
+
+    assert back.status_code == 204, (
+        f"слою письма ответили {back.status_code} вместо 204 — возврат ушёл "
+        "полной перезагрузкой там, где объявлен частичный переход (D-12)"
+    )
+    assert back.headers["HX-Location"] == "/admin", (
+        "заголовок частичного перехода не назвал админку — администратор "
+        "приземлился бы не туда, откуда уходил под чужую личность"
+    )
+    assert "HX-Redirect" not in back.headers, (
+        "ответ несёт ДВА заголовка перехода: слой письма читает `HX-Location` "
+        "первым, и второй заголовок молча не исполнится"
+    )
+    assert back.text == "", "у ответа 204 появилось тело"
+    assert "access_token" in _session_cookies(back), (
+        "COOKIE ПОТЕРЯНА НА ОТВЕТЕ 204. Она навешена на выброшенный редирект, а "
+        "человеку уехал другой объект — возврат молча не состоялся, и заголовок "
+        "перехода об этом не говорит ничего"
+    )
+    assert _act_of(back) is None, (
+        "возвращённый токен по-прежнему несёт признак действующего лица — "
+        "администратор остался под чужой личностью"
+    )
+
+    admin_page = await admin_client.get("/admin")
+    assert admin_page.status_code == 200, (
+        f"после возврата админка ответила {admin_page.status_code}: заголовок "
+        "перехода приехал, а смена личности не состоялась"
+    )
+
+    dashboard = await admin_client.get("/dashboard")
+    assert "data-impersonation" not in dashboard.text, (
+        "полоса имперсонации пережила возврат — человек читает, что работает "
+        "от чужого имени, когда это уже неправда"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_return_without_an_actor_goes_to_the_dashboard_on_both_transports(
+    authed_client: AsyncClient
+):
+    """Действующего лица НЕТ: возврат уводит в кабинет и НЕ ВЫДАЁТ токена.
+
+    ⚠️ ВТОРАЯ ПОЛОВИНА УТВЕРЖДЕНИЯ ДОРОЖЕ ПЕРВОЙ. Возврат выпускает токен НА
+    ДЕЙСТВУЮЩЕЕ ЛИЦО, и обработчик, не спросивший, есть ли оно, выдал бы токен
+    тому, кого назвали снаружи. Поэтому `access_token` не должен появиться в
+    `set-cookie` НИ НА ОДНОМ из двух транспортов, а не только на удобном.
+    """
+    without = await authed_client.post(
+        "/impersonation/stop", follow_redirects=False
+    )
+
+    assert without.status_code == 302, (
+        f"путь деградации ответил {without.status_code} вместо 302 — человек "
+        "без JavaScript остался бы без пути назад"
+    )
+    assert without.headers["location"] == "/dashboard", (
+        f"возврат без действующего лица увёл на {without.headers['location']!r} "
+        "вместо кабинета, откуда человек пришёл"
+    )
+    assert "access_token" not in _session_cookies(without), (
+        "возврат выдал токен тому, у кого действующего лица не было"
+    )
+
+    with_layer = await authed_client.post(
+        "/impersonation/stop", headers=HTMX_REQUEST, follow_redirects=True
+    )
+
+    assert with_layer.status_code == 204, (
+        f"слою письма ответили {with_layer.status_code} вместо 204"
+    )
+    assert with_layer.headers["HX-Location"] == "/dashboard", (
+        "заголовок частичного перехода не назвал адрес пути деградации — два "
+        "транспорта приземляются в разных местах"
+    )
+    assert "HX-Redirect" not in with_layer.headers, "ответ несёт два заголовка перехода"
+    assert with_layer.text == "", "у ответа 204 появилось тело"
+    assert "access_token" not in _session_cookies(with_layer), (
+        "возврат выдал токен тому, у кого действующего лица не было, — на пути "
+        "слоя письма"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_closed_actor_is_logged_out_by_the_return_on_both_transports(
+    admin_client: AsyncClient, db_session: AsyncSession, test_settings
+):
+    """Действующее лицо ЗАКРЫТО либо ИСЧЕЗЛО: возврат — ВЫХОД, на обоих транспортах.
+
+    ⚠️ ЭТО ЕДИНСТВЕННАЯ ВЕТКА ВОЗВРАТА, УХОДЯЩАЯ ЧЕРЕЗ ГРАНИЦУ ШЕЛЛОВ, И ПОТОМУ
+    ЕДИНСТВЕННАЯ, КОТОРАЯ ОБЯЗАНА ИДТИ ПОЛНОЙ ЗАГРУЗКОЙ (D-12): экран входа
+    живёт во ВТОРОМ шелле, а сменой содержимого `body` шелл не подменить —
+    фрагментом смену шелла не отдать.
+
+    ⚠️ ЦЕНА ОТСУТСТВУЮЩЕЙ ВЕТКИ — ПОЛНЫЙ СУТОЧНЫЙ ТОКЕН НА ОТОЗВАННУЮ УЧЁТНУЮ
+    ЗАПИСЬ (WR-02 ревизии фазы 6), и перевод транспорта её не отменяет.
+    Утверждение о снятии cookie сравнивает НАБОР атрибутов с набором установки:
+    снятие, взявшее умолчания, браузер с установкой не сопоставит, и старая
+    cookie переживёт выход — заблокированный остался бы внутри.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    admin = await _user(db_session, test_settings.admin_email)
+
+    ordinary_login = await admin_client.post(
+        "/login",
+        data={"email": test_settings.admin_email, "password": PASSWORD},
+        follow_redirects=False,
+    )
+    set_attrs = _cookie_attrs(ordinary_login)
+    assert set_attrs, "обычный вход не выставил cookie — сравнивать не с чем"
+
+    def _assert_cleared(response, where: str) -> None:
+        cleared = _cookie_attrs(response)
+        assert "access_token" in _session_cookies(response), (
+            f"{where}: сеанс не переписан ни одной cookie — старый токен "
+            "переживает выход"
+        )
+        assert set_attrs <= cleared, (
+            f"{where}: набор атрибутов снятия {sorted(cleared)} не накрывает "
+            f"набор установки {sorted(set_attrs)} — браузер их не сопоставит, и "
+            "cookie переживёт выход"
+        )
+        assert any(
+            attribute == "max-age=0" or attribute.startswith("expires=")
+            for attribute in cleared
+        ), (
+            f"{where}: cookie не снята — у неё нет ни нулевого срока, ни "
+            f"истёкшей даты: {sorted(cleared)}"
+        )
+
+    # --- половина деградации: закрытое действующее лицо, признака htmx нет ---
+    await _enter(admin_client, target_id)
+    admin.is_blocked = True
+    await db_session.commit()
+
+    without = await _stop(admin_client)
+
+    assert without.status_code == 302, (
+        f"путь деградации ответил {without.status_code} вместо 302"
+    )
+    assert without.headers["location"] == "/login", (
+        f"заблокированное действующее лицо возвращено в "
+        f"{without.headers['location']!r} вместо выхода"
+    )
+    _assert_cleared(without, "закрытое действующее лицо, без htmx")
+
+    still_in = await admin_client.get("/admin", follow_redirects=False)
+    assert still_in.status_code != 200, (
+        f"админка отдана заблокированному после возврата ({still_in.status_code})"
+    )
+
+    # --- половина слоя письма: то же закрытое лицо, признак htmx ---
+    admin.is_blocked = False
+    await db_session.commit()
+    await admin_client.post(
+        "/login",
+        data={"email": test_settings.admin_email, "password": PASSWORD},
+        follow_redirects=False,
+    )
+    await _enter(admin_client, target_id)
+    admin.is_blocked = True
+    await db_session.commit()
+
+    with_layer = await admin_client.post(
+        "/impersonation/stop", headers=HTMX_REQUEST, follow_redirects=True
+    )
+
+    assert with_layer.status_code == 204, (
+        f"слою письма ответили {with_layer.status_code} вместо 204"
+    )
+    assert with_layer.headers["HX-Redirect"] == "/login", (
+        "выход через границу шеллов ушёл не полной загрузкой: экран входа живёт "
+        "во ВТОРОМ шелле, и фрагментом смену шелла не отдать (D-12)"
+    )
+    assert "HX-Location" not in with_layer.headers, (
+        "ответ несёт заголовок ЧАСТИЧНОГО перехода: слой письма прочтёт его "
+        "первым, и выход подменит содержимое `body` вместо полной загрузки"
+    )
+    assert with_layer.text == "", "у ответа 204 появилось тело"
+    _assert_cleared(with_layer, "закрытое действующее лицо, с htmx")
+
+    still_in_htmx = await admin_client.get("/admin", follow_redirects=False)
+    assert still_in_htmx.status_code != 200, (
+        f"админка отдана заблокированному после возврата на пути слоя письма "
+        f"({still_in_htmx.status_code})"
+    )
+
+    # --- отдельным шагом: действующего лица БОЛЬШЕ НЕТ ---
+    #
+    # Исчезнувшее лицо подаётся собранным вручную токеном, а не удалением
+    # строки: удаление администратора унесло бы с собой подписку и посев,
+    # которыми живут утверждения выше, и правило краснело бы по ЧУЖОЙ причине.
+    vanished = jwt.encode(
+        {
+            "sub": str(target_id),
+            "act": {"sub": str(10**6)},
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+        },
+        test_settings.secret_key,
+        algorithm="HS256",
+    )
+    admin_client.cookies.set("access_token", vanished)
+
+    gone = await admin_client.post(
+        "/impersonation/stop", headers=HTMX_REQUEST, follow_redirects=True
+    )
+
+    assert gone.status_code == 204, (
+        f"исчезнувшее действующее лицо: слою письма ответили {gone.status_code}"
+    )
+    assert gone.headers["HX-Redirect"] == "/login", (
+        "исчезнувшее действующее лицо обслужено иначе, чем закрытое, хотя исход "
+        "у них один"
+    )
+    _assert_cleared(gone, "исчезнувшее действующее лицо, с htmx")
+
+
+@pytest.mark.asyncio
+async def test_a_cross_origin_return_is_refused_with_a_bare_403_on_both_transports(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Чужой источник получает ГОЛЫЙ 403 — именованное изъятие владельца (D-01).
+
+    ⚠️ ЭТО ПРАВИЛО СТЕРЕЖЁТ РЕШЕНИЕ, А НЕ ПОВЕДЕНИЕ ПО УМОЛЧАНИЮ. Владелец
+    решил 2026-09-22 (`14-CONTEXT.md` D-01), что форма отказа по источнику у
+    возврата остаётся прежней и после перевода на слой ответа: ни кода исхода,
+    ни перехода, ни тела. Перевод, утащивший отказ в слой «заодно», нарушил бы
+    решение владельца молча — и ровно это здесь и краснеет.
+
+    Поддельная форма со стороннего сайта получает тот же 403, что и до фазы:
+    возврат — изменяющая операция (перевыпуск токена и перезапись cookie).
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    foreign = {"Origin": "https://evil.example"}
+
+    for headers, where in (
+        (foreign, "без признака htmx"),
+        ({**foreign, **HTMX_REQUEST}, "с признаком htmx"),
+    ):
+        refused = await admin_client.post(
+            "/impersonation/stop", headers=headers, follow_redirects=False
+        )
+
+        assert refused.status_code == 403, (
+            f"{where}: чужой источник получил {refused.status_code} вместо "
+            "голого 403 — поддельная форма стороннего сайта выполнила возврат"
+        )
+        assert refused.text == "", f"{where}: у отказа появилось тело"
+        assert "access_token" not in _session_cookies(refused), (
+            f"{where}: отказ по источнику ВЫДАЛ токен"
+        )
+        assert not [
+            name for name in refused.headers if name.lower().startswith("hx-")
+        ], (
+            f"{where}: отказ понёс заголовок с приставкой `HX-` — решение "
+            "владельца D-01 требует ГОЛОГО кода: "
+            f"{[name for name in refused.headers if name.lower().startswith('hx-')]}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_return_form_rides_the_macro_and_swaps_nothing(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Форма возврата рождена макросом и НЕ ИМЕЕТ ЦЕЛИ подмены (D-09, D-12).
+
+    ⚠️ ЦЕЛИ У ЭТОЙ ФОРМЫ НЕТ НАМЕРЕННО, И ЭТО НЕ ЗАБЫТЫЙ ПАРАМЕТР. Любой исход
+    возврата есть ПЕРЕХОД — частичный внутри основного шелла либо полная
+    загрузка через границу шеллов; подменять фрагментом здесь нечего, и
+    `hx-swap="none"` это и объявляет. Полоса живёт на КАЖДОЙ странице
+    основного шелла, поэтому цель, названная по ошибке, вставила бы кусок
+    чужого документа в произвольное место двадцати шести экранов.
+
+    ⚠️ БЕЗ JS ФОРМА ОСТАЁТСЯ НАСТОЯЩЕЙ ФОРМОЙ POST — это утверждает соседнее
+    правило `test_the_return_control_is_a_real_post_form`, и оно не снято:
+    `method` и `action` печатает тот же макрос.
+    """
+    target_id = await _seed_target(admin_client, db_session)
+    await _enter(admin_client, target_id)
+
+    html = (await admin_client.get("/dashboard")).text
+
+    assert RETURN_FORM in html, "формы возврата в полосе нет"
+    tag = html.split(RETURN_FORM, 1)[1].split(">", 1)[0]
+
+    assert 'hx-post="/impersonation/stop"' in tag, (
+        "тег формы возврата не несёт `hx-post` — форма не рождена макросом, и "
+        "возврат уходит полной перезагрузкой документа (D-09)"
+    )
+    assert 'hx-swap="none"' in tag, (
+        f"у формы возврата объявлена подмена вместо её отсутствия: {tag!r}"
+    )
+
+    wrapper = '<div class="impersonation-back">'
+    assert wrapper in html, (
+        "обёртки прижатия нет — класс `.impersonation-back` уехал бы на тег "
+        "формы, который печатает макрос, и прижатие вправо потерялось бы"
+    )
+    inside = html.split(wrapper, 1)[1].split("</div>", 1)[0]
+    assert RETURN_FORM in inside, (
+        "форма возврата стоит ВНЕ обёртки прижатия — полоса разъедется"
+    )

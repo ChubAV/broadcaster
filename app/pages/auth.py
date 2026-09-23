@@ -1,5 +1,6 @@
 import secrets
 import structlog
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request, Response
@@ -24,6 +25,12 @@ from app.services.email_service import send_verification_email, send_password_re
 from app.services.subscription_service import start_trial
 from app.pages import notices
 from app.pages.common import is_same_origin, templates
+from app.pages.htmx import (
+    redirect_internal,
+    respond,
+    respond_field_error,
+    respond_screen,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -107,6 +114,118 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
     response.delete_cookie(key=SESSION_COOKIE_NAME, **_session_cookie_attrs(settings))
 
 
+# ⚠️ ОТВЕТ-ФРАГМЕНТ ЭКРАНА — ОДИН ШАБЛОН НА ВСЕ ЭКРАНЫ (Фаза 14, D-06, D-07).
+# Он несёт `<title>` экрана верхним узлом и включает разметку экрана — ту же,
+# что включает страница. Страницы этот шаблон не используют.
+AUTH_STEP_RESPONSE_TEMPLATE = "auth/includes/step_response.html"
+
+
+@dataclass(frozen=True)
+class AuthScreen:
+    """Экран второго шелла: страница, включаемая разметка и заголовок вкладки.
+
+    ⚠️ ЗАГОЛОВОК ФРАГМЕНТА — ЭТА ЗАПИСЬ, А ЗАГОЛОВОК СТРАНИЦЫ — БЛОК `title`
+    ЕЁ ШАБЛОНА (D-07). Двум записям одного текста негде разойтись незаметно:
+    их сличает правило суиты (`tests/test_pages/test_auth_transport.py`).
+    """
+
+    page: str
+    step: str
+    title: str
+
+
+# Реестр переведённых экранов. Прочие экраны дописывают планы 14-02…14-05.
+# После плана 14-05 в реестре все семь экранов второго шелла.
+AUTH_SCREENS: dict[str, AuthScreen] = {
+    "login": AuthScreen(
+        page="auth/login.html",
+        step="auth/includes/login_step.html",
+        title="Вход — Broadcaster",
+    ),
+    # Фаза 14, план 14-02: начало регистрации и экран кода.
+    "register": AuthScreen(
+        page="auth/register.html",
+        step="auth/includes/register_step.html",
+        title="Регистрация — Broadcaster",
+    ),
+    "register_verify": AuthScreen(
+        page="auth/register_verify.html",
+        step="auth/includes/register_verify_step.html",
+        title="Подтверждение email — Broadcaster",
+    ),
+    # Фаза 14, план 14-03: экран имени и пароля.
+    "register_complete": AuthScreen(
+        page="auth/register_complete.html",
+        step="auth/includes/register_complete_step.html",
+        title="Завершение регистрации — Broadcaster",
+    ),
+    # Фаза 14, план 14-04: начало восстановления пароля и экран его кода.
+    "forgot_password": AuthScreen(
+        page="auth/forgot_password.html",
+        step="auth/includes/forgot_password_step.html",
+        title="Забыли пароль — Broadcaster",
+    ),
+    "forgot_password_verify": AuthScreen(
+        page="auth/forgot_password_verify.html",
+        step="auth/includes/forgot_password_verify_step.html",
+        title="Код подтверждения — Broadcaster",
+    ),
+    # Фаза 14, план 14-05: экран нового пароля — последний экран второго шелла.
+    "forgot_password_reset": AuthScreen(
+        page="auth/forgot_password_reset.html",
+        step="auth/includes/forgot_password_reset_step.html",
+        title="Новый пароль — Broadcaster",
+    ),
+}
+
+
+def _screen_markup(screen: str, **context) -> str:
+    """Ответ-фрагмент экрана, собранный ОКРУЖЕНИЕМ ШАБЛОНОВ (форма `_max_step_markup`).
+
+    ⚠️ ОДНА РАЗМЕТКА НА СТРАНИЦУ И ФРАГМЕНТ (D-06): обёртка включает тот же
+    шаблон экрана, что и страница, — второй копии разметки нет, и разойтись
+    им негде. `<title>` берётся из одной записи реестра (D-07).
+
+    ⚠️ ЭКРАНИРОВАНИЕ — ОКРУЖЕНИЯ, А НЕ ЭТОГО ПОМОЩНИКА. Эхо введённого
+    уезжает в шаблон параметром; ни фильтра безопасной разметки, ни обёртки
+    готовой разметки на этом пути нет.
+    """
+    entry = AUTH_SCREENS[screen]
+    return templates.env.get_template(AUTH_STEP_RESPONSE_TEMPLATE).render(
+        screen_title=entry.title, screen_template=entry.step, **context
+    )
+
+
+def _screen_builders(request: Request, screen: str, **context):
+    """Пара сборщиков экрана — страница и фрагмент — для выходов слоя ответа.
+
+    Страничный отдаёт шаблон страницы тем же ответом-шаблоном, каким отвечает
+    её GET; фрагментный — обёртку ответа с `<title>` верхним узлом. Какой из
+    двух позвать, решает слой ответа по транспорту.
+
+    ⚠️ ПАРОЛЬ В КОНТЕКСТ ЭКРАНА НЕ ПЕРЕДАЁТСЯ НИКОГДА (D-04). Шаблон, получивший
+    пароль, мог бы однажды его напечатать, и это обнаружилось бы в чужом
+    ответе; отказ стоит здесь, у единственного входа в экран. Текст отказа
+    значения не подставляет — иначе пароль ушёл бы в журнал трассировкой.
+    """
+    if "password" in context:
+        raise ValueError(
+            "пароль не передаётся в контекст экрана авторизации: поле пароля "
+            "приходит пустым всегда (D-04)"
+        )
+    entry = AUTH_SCREENS[screen]
+
+    async def _page():
+        """Страница экрана — путь деградации."""
+        return templates.TemplateResponse(entry.page, {"request": request, **context})
+
+    async def _fragment():
+        """Ответ-фрагмент экрана — содержимое постоянного якоря шага."""
+        return HTMLResponse(_screen_markup(screen, **context))
+
+    return _page, _fragment
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     return templates.TemplateResponse("auth/login.html", {"request": request})
@@ -120,24 +239,38 @@ async def login_submit(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Вход страничной формой — на выходах слоя ответа (Фаза 14, план 14-01).
+
+    ⚠️ ОШИБКА — 422 НА ОБОИХ ТРАНСПОРТАХ С ЭХОМ EMAIL (D-03, D-04). Человек
+    остаётся на экране входа со своим email; пароль не возвращается никогда —
+    поле приходит пустым. Отказ заблокированному — тот же 422 со своими
+    словами и без cookie (D-05).
+
+    ⚠️ УСПЕХ — ПОЛНАЯ ЗАГРУЗКА (D-10): без признака htmx 302, с ним 204 и
+    заголовок полной перезагрузки. ПОРЯДОК НЕСУЩИЙ: сначала ответ слоя, потом
+    cookie на ТОТ ЖЕ объект — cookie на отдельно собранном ответе не уехала бы
+    никуда, и вход молча не состоялся бы.
+
+    Решения обработчика прежние (D-15): тексты, порядок «пароль → блокировка →
+    cookie» и набор атрибутов cookie не меняются.
+    """
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
+    error = None
     if not user or not verify_password(password, user.password_hash):
-        return templates.TemplateResponse(
-            "auth/login.html", {"request": request, "error": "Неверный email или пароль"}
-        )
+        error = "Неверный email или пароль"
     # Отказ стоит ДО выдачи cookie — первый из трёх путей блокировки (D-30).
     # До этой правки заблокированный входил СТРАНИЧНОЙ формой как ни в чём не
     # бывало: проверка `is_blocked` стояла только в JSON-маршруте входа, а
     # человек ходит сюда.
-    if user.is_blocked:
+    elif user.is_blocked:
         logger.warning("blocked_login_refused", user_id=user.id)
-        return templates.TemplateResponse(
-            "auth/login.html",
-            {"request": request, "error": BLOCKED_LOGIN_ERROR},
-        )
+        error = BLOCKED_LOGIN_ERROR
+    if error is not None:
+        page, fragment = _screen_builders(request, "login", error=error, email=email)
+        return await respond_field_error(request, page=page, fragment=fragment)
     token = create_access_token(user.id, settings.secret_key)
-    response = RedirectResponse(url="/dashboard", status_code=302)
+    response = await redirect_internal(request, redirect="/dashboard")
     set_session_cookie(response, token, settings)
     return response
 
@@ -156,13 +289,26 @@ async def register_send_code(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Шаг адреса регистрации — на выходах слоя ответа (Фаза 14, план 14-02).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН, А НЕ ТЕКСТ (D-03). 422 — человек остаётся на ТОМ
+    ЖЕ экране (адрес занят: экран начала с адресом в поле); 200 — экран
+    сменился (код отправлен или «код уже отправлен»: экран кода).
+
+    ⚠️ ЭКРАН КОДА ПРИЕЗЖАЕТ ЦЕЛИКОМ В ПОСТОЯННЫЙ ЯКОРЬ (D-06): обе его формы
+    несут подписанный токен скрытым полем, и путь без JavaScript получает
+    страницу прямо в ответ на POST — токен в адрес не кладётся (D-08).
+
+    Решения обработчика прежние (D-15): запросы, минута между кодами, срок и
+    источник кода, отправка письма и тексты не меняются.
+    """
     # Check if email already registered
     existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Этот email уже зарегистрирован", "email": email},
+        page, fragment = _screen_builders(
+            request, "register", error="Этот email уже зарегистрирован", email=email
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Rate limit: check last code sent to this email
     result = await db.execute(
@@ -176,15 +322,14 @@ async def register_send_code(
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
         token = create_verification_token(email, settings.secret_key)
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код уже отправлен. Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            error="Код уже отправлен. Подождите минуту перед повторной отправкой.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     # Generate and save code
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
@@ -217,10 +362,10 @@ async def register_send_code(
 
     # Create token and show verify page
     token = create_verification_token(email, settings.secret_key)
-    return templates.TemplateResponse(
-        "auth/register_verify.html",
-        {"request": request, "email": email, "token": token},
+    page, fragment = _screen_builders(
+        request, "register_verify", email=email, token=token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 # ---- Step 2: Verify code ----
@@ -233,13 +378,24 @@ async def register_verify(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Подтверждение кода регистрации — на выходах слоя ответа (Фаза 14, план 14-03).
+
+    ⚠️ НЕВЕРНЫЙ КОД НЕ СТИРАЕТ НАБРАННОЕ (D-03, D-04). Кода нет, код истёк,
+    попытки кончились или код не тот — 422: человек остаётся на экране кода,
+    набранный код стоит в поле, прежний токен — скрытым полем. Устаревшая
+    ссылка — 200: экран сменился на начало регистрации. Успех — 200: экран
+    имени и пароля с подтверждённым токеном.
+
+    Решения обработчика прежние (D-15): запрос кода, счёт попыток и его запись
+    ДО ответа, лимит пять, срок и тексты не меняются — эхо счёта не трогает.
+    """
     # Decode token to get email
     payload = decode_verification_token(token, settings.secret_key)
     if not payload:
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Ссылка устарела. Начните регистрацию заново."},
+        page, fragment = _screen_builders(
+            request, "register", error="Ссылка устарела. Начните регистрацию заново."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Find latest non-expired, non-verified code for this email
@@ -259,29 +415,29 @@ async def register_verify(
     code_record = result.scalar_one_or_none()
 
     if not code_record:
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код истёк или превышено число попыток. Отправьте код заново.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            code=code,
+            error="Код истёк или превышено число попыток. Отправьте код заново.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     if code_record.code != code.strip():
         code_record.attempts += 1
         await db.commit()
         remaining = CODE_MAX_ATTEMPTS - code_record.attempts
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": f"Неверный код. Осталось попыток: {remaining}",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            code=code,
+            error=f"Неверный код. Осталось попыток: {remaining}",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Mark as verified
     code_record.verified_at = now
@@ -289,10 +445,10 @@ async def register_verify(
 
     # Issue verified token
     verified_token = create_verification_token(email, settings.secret_key, verified=True)
-    return templates.TemplateResponse(
-        "auth/register_complete.html",
-        {"request": request, "email": email, "token": verified_token},
+    page, fragment = _screen_builders(
+        request, "register_complete", email=email, token=verified_token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/register/resend-code", response_class=HTMLResponse)
@@ -302,12 +458,24 @@ async def register_resend_code(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Повтор кода регистрации — на выходах слоя ответа (Фаза 14, план 14-02).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН (D-03). Раньше минуты — 422: человек остаётся на
+    экране кода с присланным токеном. Устаревшая ссылка — 200: экран сменился
+    на начало регистрации. Успех — 200: экран кода с новым кодом.
+
+    ⚠️ ПОВТОР ВЫДАЁТ НОВЫЙ ТОКЕН, ПОЭТОМУ ПОДМЕНЯЕТСЯ ВЕСЬ ЯКОРЬ (D-06,
+    Landmine CONTEXT): подмена одной формы повтора оставила бы форму
+    подтверждения со старым токеном.
+
+    Решения обработчика прежние (D-15).
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload:
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Ссылка устарела. Начните регистрацию заново."},
+        page, fragment = _screen_builders(
+            request, "register", error="Ссылка устарела. Начните регистрацию заново."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Rate limit check
@@ -321,15 +489,14 @@ async def register_resend_code(
     last_code = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
-        return templates.TemplateResponse(
-            "auth/register_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "register_verify",
+            email=email,
+            token=token,
+            error="Подождите минуту перед повторной отправкой.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Generate new code
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
@@ -360,15 +527,14 @@ async def register_resend_code(
         logger.error("verification_email_send_failed", email=email, error=str(e))
 
     new_token = create_verification_token(email, settings.secret_key)
-    return templates.TemplateResponse(
-        "auth/register_verify.html",
-        {
-            "request": request,
-            "email": email,
-            "token": new_token,
-            "success": "Новый код отправлен на вашу почту.",
-        },
+    page, fragment = _screen_builders(
+        request,
+        "register_verify",
+        email=email,
+        token=new_token,
+        success="Новый код отправлен на вашу почту.",
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 # ---- Step 3: Complete registration ----
@@ -382,28 +548,54 @@ async def register_complete(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
+    """Завершение регистрации — на выходах слоя ответа (Фаза 14, план 14-03).
+
+    ⚠️ КОРОТКИЙ ПАРОЛЬ — 422 С ИМЕНЕМ В ПОЛЕ И БЕЗ ПАРОЛЯ (D-03, D-04): человек
+    остаётся на экране завершения, пароль в контекст экрана не передаётся
+    вовсе (сборщики его и не примут), токен — новый подтверждённый, как
+    сегодня.
+
+    ⚠️ АДРЕС, ЗАНЯТЫЙ К ЗАВЕРШЕНИЮ, — 200, А НЕ 422 (критерий D-03, RESEARCH
+    §Карта выходов, Open Question 3). Перечень 422 в D-03 называет «адрес уже
+    зарегистрирован», но критерий самого D-03 — остаётся ли человек на ТОМ ЖЕ
+    экране. Здесь экран меняется на начало регистрации, значит это смена
+    экрана. У шага адреса (`register_send_code`) тот же текст — 422: экран там
+    тот же.
+
+    ⚠️ УСПЕХ — ПОЛНАЯ ЗАГРУЗКА (D-10): без признака htmx 302, с ним 204 и
+    заголовок полной перезагрузки. Cookie ставится на ТОТ ЖЕ объект, который
+    вернул выход слоя, — на отдельно собранном ответе она не уехала бы никуда.
+
+    Решения обработчика прежние (D-15): порядок «пользователь → пробный срок →
+    cookie» (D-B), тексты и набор атрибутов cookie не меняются.
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or not payload.get("verified") or payload.get("purpose") != "email_verification":
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Ссылка устарела. Начните регистрацию заново."},
+        page, fragment = _screen_builders(
+            request, "register", error="Ссылка устарела. Начните регистрацию заново."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Double-check email not taken
     existing = await db.execute(select(User).where(User.email == email))
     if existing.scalar_one_or_none():
-        return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Этот email уже зарегистрирован"},
+        page, fragment = _screen_builders(
+            request, "register", error="Этот email уже зарегистрирован"
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     if len(password) < 6:
         verified_token = create_verification_token(email, settings.secret_key, verified=True)
-        return templates.TemplateResponse(
-            "auth/register_complete.html",
-            {"request": request, "email": email, "token": verified_token, "error": "Пароль должен быть не менее 6 символов"},
+        page, fragment = _screen_builders(
+            request,
+            "register_complete",
+            email=email,
+            token=verified_token,
+            name=name,
+            error="Пароль должен быть не менее 6 символов",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     user = User(email=email, password_hash=hash_password(password), name=name)
     db.add(user)
@@ -422,7 +614,7 @@ async def register_complete(
     await db.commit()
 
     access_token = create_access_token(user.id, settings.secret_key)
-    response = RedirectResponse(url="/dashboard", status_code=302)
+    response = await redirect_internal(request, redirect="/dashboard")
     set_session_cookie(response, access_token, settings)
     return response
 
@@ -472,10 +664,43 @@ async def stop_impersonation(
     СРОК ВОЗВРАЩЁННОГО ТОКЕНА — ОБЫЧНЫЙ, а признака действующего лица в нём
     нет: это снова простой вход администратора в свою учётную запись, и
     короткий срок имперсонации к нему не относится.
+
+    ⚠️ ТРИ ВЕТКИ ВОЗВРАТА УХОДЯТ ДВУМЯ РАЗНЫМИ ЗАГОЛОВКАМИ ПЕРЕХОДА, И РАЗНИЦА
+    МЕЖДУ НИМИ — ГРАНИЦА ШЕЛЛОВ (Фаза 14, план 14-06, D-12). ДВЕ ветки —
+    успех на `/admin` и «действующего лица нет» на `/dashboard` — приземляются
+    в ОСНОВНОМ шелле, том же, в котором нарисована полоса возврата, и потому
+    уходят заголовком ЧАСТИЧНОГО перехода: рантайм подменяет содержимое `body`
+    целиком, полоса `[data-impersonation]` стоит внутри `body` и уезжает
+    вместе с ним, а `<title>` становится заголовком приземлившейся страницы
+    (RESEARCH Находка 5, вендоренный htmx 2.0.10). ТРЕТЬЯ — «действующего лица
+    больше нет либо оно закрыто» — уводит на экран входа, то есть во ВТОРОЙ
+    шелл (`auth_base.html`), и уходит ПОЛНОЙ ЗАГРУЗКОЙ: фрагментом смену шелла
+    не отдать, подменённым содержимым `body` чужой шелл не собрать. Это и есть
+    первая из двух оговорок к буквальному тексту критерия 3 фазы, и записана
+    она летописью, а не переписыванием критерия.
+
+    ⚠️ ПОРЯДОК «ОТВЕТ СЛОЯ → COOKIE НА ТОТ ЖЕ ОБЪЕКТ» НЕСУЩИЙ (прецедент
+    `admin_impersonate`, `app/pages/admin.py`). Ветка перехода собирает НОВЫЙ
+    ответ со статусом 204; cookie, навешенная на отдельно собранный редирект,
+    не уехала бы никуда — и отказ был бы МОЛЧАЛИВЫМ: браузер ушёл бы по
+    заголовку, а администратор остался бы под чужой личностью. Тест,
+    проверяющий ТОЛЬКО заголовок, остался бы при этом зелёным, поэтому пара
+    написана ТРОЙНОЙ (`tests/test_pages/test_impersonation.py`): заголовок,
+    cookie без признака действующего лица и ФАКТИЧЕСКИ открывшаяся админка.
     """
     if not is_same_origin(request):
         # Возврат — изменяющая операция (перевыпуск токена и перезапись
         # cookie), и гард у неё тот же, что у остальных изменяющих форм.
+        #
+        # ⚠️ ГОЛЫЙ 403 ОСТАЁТСЯ И ПОСЛЕ ПЕРЕВОДА НА СЛОЙ ОТВЕТА — ЭТО
+        # ИМЕНОВАННОЕ ИЗЪЯТИЕ, А НЕ НЕДОДЕЛКА (D-01 Фазы 14, решение владельца
+        # 2026-09-22; продление D-08 Фазы 11). Из интерфейса на пути htmx этот
+        # отказ недостижим: своя страница шлёт `same-origin`. Цена названа:
+        # при редком сбое заголовков у прокси человек увидит общую плашку
+        # «Действие не выполнено», а поддельная форма стороннего сайта
+        # получает ровно тот же 403, что и до фазы. Выход объявлен записью
+        # `OWN_RESPONSE_EXITS` (`tests/test_pages/test_htmx_gates.py`) в
+        # состоянии `DECISION_OWNER_D01_F14`.
         return Response(status_code=403)
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
@@ -484,7 +709,11 @@ async def stop_impersonation(
     if admin_id is None:
         # Действующего лица нет — возвращаться неоткуда. Человек уходит туда
         # же, откуда пришёл, и НИ ОДНОГО токена ему не выдаётся.
-        return RedirectResponse(url="/dashboard", status_code=302)
+        #
+        # Приземление — в ОСНОВНОМ шелле, поэтому уход идёт заголовком
+        # частичного перехода; путь деградации — прежнее перенаправление 302 на
+        # тот же адрес (Фаза 14, план 14-06, D-12).
+        return await respond(request, redirect="/dashboard")
 
     admin = await db.get(User, admin_id)
     if admin is None or admin.is_blocked:
@@ -507,11 +736,16 @@ async def stop_impersonation(
         # здесь заперло бы в чужой учётной записи ровно того, кого этот
         # обработчик обязан из неё вывести, — довод, уже выписанный в
         # докстринге выше.
-        response = RedirectResponse(url="/login", status_code=302)
+        #
+        # ⚠️ ЕДИНСТВЕННАЯ ВЕТКА ВОЗВРАТА, УХОДЯЩАЯ ПОЛНОЙ ЗАГРУЗКОЙ (Фаза 14,
+        # план 14-06, D-12): экран входа живёт во ВТОРОМ шелле, и подменённым
+        # содержимым `body` его не собрать. Cookie снимается на ВОЗВРАЩЁННОМ
+        # объекте — тем же набором атрибутов, каким она поставлена.
+        response = await redirect_internal(request, redirect="/login")
         clear_session_cookie(response, settings)
         return response
 
-    response = RedirectResponse(url="/admin", status_code=302)
+    response = await respond(request, redirect="/admin")
     set_session_cookie(
         response, create_access_token(admin.id, settings.secret_key), settings
     )
@@ -555,13 +789,33 @@ async def forgot_password_send_code(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Шаг адреса восстановления — на выходах слоя ответа (Фаза 14, план 14-04).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН, А НЕ ТЕКСТ (D-03). 422 — человек остаётся на ТОМ
+    ЖЕ экране (адрес не найден: экран начала с адресом в поле); 200 — экран
+    сменился (код отправлен или «код уже отправлен»: экран кода).
+
+    ⚠️ ЭКРАН КОДА ПРИЕЗЖАЕТ ЦЕЛИКОМ В ПОСТОЯННЫЙ ЯКОРЬ (D-06): обе его формы
+    несут подписанный токен восстановления скрытым полем, и путь без
+    JavaScript получает страницу прямо в ответ на POST — токен в адрес не
+    кладётся (D-08).
+
+    ⚠️ ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ — ЗАВИСИМОСТИ, И ОНА НЕ ТРОНУТА (D-13, D-22):
+    до тела обработчика запрос под чужой личностью не доходит вовсе.
+
+    Решения обработчика прежние (D-15): запросы, минута между кодами, срок и
+    источник кода, отправка письма и тексты не меняются.
+    """
     # Check if email exists
     existing = await db.execute(select(User).where(User.email == email))
     if not existing.scalar_one_or_none():
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Пользователь с таким email не найден", "email": email},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Пользователь с таким email не найден",
+            email=email,
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     # Rate limit: check last code sent to this email for password_reset
     result = await db.execute(
@@ -577,15 +831,14 @@ async def forgot_password_send_code(
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
         token = create_verification_token(email, settings.secret_key, purpose="password_reset")
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код уже отправлен. Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            error="Код уже отправлен. Подождите минуту перед повторной отправкой.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     # Generate and save code
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
@@ -617,10 +870,10 @@ async def forgot_password_send_code(
         logger.error("password_reset_email_send_failed", email=email, error=str(e))
 
     token = create_verification_token(email, settings.secret_key, purpose="password_reset")
-    return templates.TemplateResponse(
-        "auth/forgot_password_verify.html",
-        {"request": request, "email": email, "token": token},
+    page, fragment = _screen_builders(
+        request, "forgot_password_verify", email=email, token=token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/forgot-password/verify", response_class=HTMLResponse)
@@ -632,12 +885,26 @@ async def forgot_password_verify(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Подтверждение кода восстановления — на выходах слоя ответа (Фаза 14, план 14-05).
+
+    ⚠️ НЕВЕРНЫЙ КОД НЕ СТИРАЕТ НАБРАННОЕ (D-03, D-04). Кода нет, код истёк,
+    попытки кончились или код не тот — 422: человек остаётся на экране кода,
+    набранный код стоит в поле, прежний токен — скрытым полем. Устаревшая
+    ссылка — 200: экран сменился на начало восстановления. Успех — 200: экран
+    нового пароля с подтверждённым токеном.
+
+    Отказ под чужой личностью — зависимости, она не тронута (D-13, D-22).
+    Решения обработчика прежние (D-15): запрос кода, счёт попыток и его запись
+    ДО ответа, лимит пять, срок и тексты не меняются — эхо счёта не трогает.
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or payload.get("purpose") != "password_reset":
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Ссылка устарела. Начните сброс пароля заново."},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Ссылка устарела. Начните сброс пароля заново.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     now = datetime.now(timezone.utc)
@@ -656,38 +923,38 @@ async def forgot_password_verify(
     code_record = result.scalar_one_or_none()
 
     if not code_record:
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Код истёк или превышено число попыток. Отправьте код заново.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            code=code,
+            error="Код истёк или превышено число попыток. Отправьте код заново.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     if code_record.code != code.strip():
         code_record.attempts += 1
         await db.commit()
         remaining = CODE_MAX_ATTEMPTS - code_record.attempts
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": f"Неверный код. Осталось попыток: {remaining}",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            code=code,
+            error=f"Неверный код. Осталось попыток: {remaining}",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     code_record.verified_at = now
     await db.commit()
 
     verified_token = create_verification_token(email, settings.secret_key, verified=True, purpose="password_reset")
-    return templates.TemplateResponse(
-        "auth/forgot_password_reset.html",
-        {"request": request, "email": email, "token": verified_token},
+    page, fragment = _screen_builders(
+        request, "forgot_password_reset", email=email, token=verified_token
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/forgot-password/resend-code", response_class=HTMLResponse)
@@ -698,12 +965,27 @@ async def forgot_password_resend_code(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Повтор кода восстановления — на выходах слоя ответа (Фаза 14, план 14-04).
+
+    ⚠️ КРИТЕРИЙ КОДА — ЭКРАН (D-03). Раньше минуты — 422: человек остаётся на
+    экране кода с присланным токеном. Устаревшая ссылка — 200: экран сменился
+    на начало восстановления. Успех — 200: экран кода с новым кодом.
+
+    ⚠️ ПОВТОР ВЫДАЁТ НОВЫЙ ТОКЕН, ПОЭТОМУ ПОДМЕНЯЕТСЯ ВЕСЬ ЯКОРЬ (D-06,
+    Landmine CONTEXT): подмена одной формы повтора оставила бы форму
+    подтверждения со старым токеном.
+
+    Отказ под чужой личностью — зависимости, она не тронута (D-13, D-22).
+    Решения обработчика прежние (D-15).
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or payload.get("purpose") != "password_reset":
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Ссылка устарела. Начните сброс пароля заново."},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Ссылка устарела. Начните сброс пароля заново.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Rate limit check
@@ -719,15 +1001,14 @@ async def forgot_password_resend_code(
     last_code = result.scalar_one_or_none()
     now = datetime.now(timezone.utc)
     if last_code and (now - last_code.created_at.replace(tzinfo=timezone.utc)).total_seconds() < CODE_RESEND_COOLDOWN_SECONDS:
-        return templates.TemplateResponse(
-            "auth/forgot_password_verify.html",
-            {
-                "request": request,
-                "email": email,
-                "token": token,
-                "error": "Подождите минуту перед повторной отправкой.",
-            },
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_verify",
+            email=email,
+            token=token,
+            error="Подождите минуту перед повторной отправкой.",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     code = "".join([str(secrets.randbelow(10)) for _ in range(CODE_LENGTH)])
     verification = EmailVerificationCode(
@@ -757,15 +1038,14 @@ async def forgot_password_resend_code(
         logger.error("password_reset_email_send_failed", email=email, error=str(e))
 
     new_token = create_verification_token(email, settings.secret_key, purpose="password_reset")
-    return templates.TemplateResponse(
-        "auth/forgot_password_verify.html",
-        {
-            "request": request,
-            "email": email,
-            "token": new_token,
-            "success": "Новый код отправлен на вашу почту.",
-        },
+    page, fragment = _screen_builders(
+        request,
+        "forgot_password_verify",
+        email=email,
+        token=new_token,
+        success="Новый код отправлен на вашу почту.",
     )
+    return await respond_screen(request, page=page, fragment=fragment)
 
 
 @router.post("/forgot-password/reset", response_class=HTMLResponse)
@@ -777,29 +1057,50 @@ async def forgot_password_reset(
     settings: Settings = Depends(get_settings),
     _under_another_identity: None = Depends(forbid_when_impersonating),
 ):
+    """Новый пароль — на выходах слоя ответа (Фаза 14, план 14-05).
+
+    ⚠️ КОРОТКИЙ ПАРОЛЬ — 422 БЕЗ ПАРОЛЯ (D-03, D-04): человек остаётся на экране
+    нового пароля, пароль в контекст экрана не передаётся вовсе (сборщики его и
+    не примут), токен — новый подтверждённый, как сегодня. Устаревшая ссылка и
+    исчезнувший пользователь — 200: экран сменился на начало восстановления.
+
+    ⚠️ УСПЕХ — ПОЛНАЯ ЗАГРУЗКА НА ВХОД (D-10): без признака htmx 302, с ним 204
+    и заголовок полной перезагрузки на тот же адрес с кодом исхода. Cookie
+    сессии смена пароля не выдаёт: человек входит новым паролем сам.
+
+    Отказ под чужой личностью — зависимости, она не тронута (D-13, D-22).
+    Решения обработчика прежние (D-15): проверки, их порядок, хеш и тексты не
+    меняются.
+    """
     payload = decode_verification_token(token, settings.secret_key)
     if not payload or not payload.get("verified") or payload.get("purpose") != "password_reset":
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Ссылка устарела. Начните сброс пароля заново."},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password",
+            error="Ссылка устарела. Начните сброс пароля заново.",
         )
+        return await respond_screen(request, page=page, fragment=fragment)
     email = payload["email"]
 
     # Find user
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if not user:
-        return templates.TemplateResponse(
-            "auth/forgot_password.html",
-            {"request": request, "error": "Пользователь не найден."},
+        page, fragment = _screen_builders(
+            request, "forgot_password", error="Пользователь не найден."
         )
+        return await respond_screen(request, page=page, fragment=fragment)
 
     if len(password) < 6:
         verified_token = create_verification_token(email, settings.secret_key, verified=True, purpose="password_reset")
-        return templates.TemplateResponse(
-            "auth/forgot_password_reset.html",
-            {"request": request, "email": email, "token": verified_token, "error": "Пароль должен быть не менее 6 символов"},
+        page, fragment = _screen_builders(
+            request,
+            "forgot_password_reset",
+            email=email,
+            token=verified_token,
+            error="Пароль должен быть не менее 6 символов",
         )
+        return await respond_field_error(request, page=page, fragment=fragment)
 
     user.password_hash = hash_password(password)
     await db.commit()
@@ -810,8 +1111,8 @@ async def forgot_password_reset(
     # слов. Не осталось ни того, ни другого: код выбирает запись реестра
     # (`app/pages/notices.py`), а рисует её общая область шелла — та же, что и
     # на всех остальных экранах обоих шеллов.
-    response = RedirectResponse(url=f"/login?notice={notices.PASSWORD_RESET_DONE}", status_code=302)
-    return response
+    # На пути htmx — полная загрузка тем же адресом (D-10).
+    return await redirect_internal(request, redirect="/login", notice=notices.PASSWORD_RESET_DONE)
 
 
 @router.get("/", response_class=HTMLResponse)

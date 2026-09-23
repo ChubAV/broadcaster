@@ -16,6 +16,8 @@
 | `FRAGMENT` — действие оставляет экран | 200, фрагмент несёт свою метку, `<!DOCTYPE` нет |
 | `LOCATION` — действие уводит с экрана | 204, `HX-Location` посимвольно равен адресу 302, тела нет |
 | `EXTERNAL` — переход на чужой сайт | 204, `HX-Redirect`, тела нет (первый случай — план 11-15) |
+| `FULL_LOAD` — полная перезагрузка на свой адрес | 204, `HX-Redirect` посимвольно равен адресу 302, тела нет (первый случай — вход, план 14-01) |
+| `SCREEN` — смена экрана шага | 200, `<!DOCTYPE` нет, метка есть, первый узел — `<title>`; без htmx — 200 и страница с меткой вместо 302 (первые случаи — регистрация, план 14-02) |
 
 Буквальное «с заголовком → 200 для всех» отвергнуто: оно противоречит
 отгруженной ветке перехода Фазы 8.
@@ -67,9 +69,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.main import create_app
 from app.models.ad import Ad
+from app.models.email_verification import EmailVerificationCode
 from app.models.payment import Payment
 from app.models.schedule import Schedule
 from app.models.subscription import Subscription
+from app.models.user import User
+from app.services.auth_service import create_verification_token, hash_password
 from app.pages import notices
 from app.pages.identifiers import ID_MAX
 from tests.test_pages.test_account_groups import (
@@ -107,6 +112,19 @@ from tests.test_pages.test_htmx_gates import (
 FRAGMENT = "ожидается 200 и фрагмент"
 LOCATION = "ожидается 204 и заголовок перехода"
 EXTERNAL = "ожидается 204 и заголовок внешнего перехода"
+# Фаза 14, план 14-01 (D-10): успех, меняющий личность или шелл, уходит полной
+# загрузкой на СВОЙ адрес — 204 и заголовок полной перезагрузки, а не частичного
+# перехода.
+FULL_LOAD = "ожидается 204 и заголовок полной перезагрузки"
+# Фаза 14, план 14-02 (D-03, RESEARCH Находка 1): смена ЭКРАНА шага, у которой
+# адреса нет — подписанный токен шага едет скрытым полем. Путь деградации здесь
+# не 302, а 200 и страница следующего экрана; путь htmx — 200 и фрагмент с
+# `<title>` верхним узлом.
+SCREEN = "ожидается 200 и экран шага на обоих транспортах"
+
+# Личность случая, который приходит БЕЗ сессии (Фаза 14, план 14-01): форма входа
+# открыта анониму, и вход под чужой учёткой до запроса проверял бы не тот путь.
+ANONYMOUS = "anonymous"
 
 
 @dataclass(frozen=True)
@@ -136,6 +154,10 @@ class _PairCase:
     transport: str
     fragment_mark: str | None = None
     resolve_after: Callable[[AsyncSession, _Arranged], Awaitable[dict]] | None = None
+    # ⚠️ Фаза 14, план 14-01 (D-10, Landmine CONTEXT): случай, чей успех ставит
+    # cookie сессии, утверждает её на ОБЕИХ половинах — заголовок перехода без
+    # cookie означал бы, что вход молча не состоялся.
+    sets_session_cookie: bool = False
 
     @property
     def handler(self) -> str:
@@ -1089,6 +1111,313 @@ async def _arrange_tg_refresh_qr_without_session(
 
 
 # =============================================================================
+# Вход страничной формой (Фаза 14, план 14-01)
+# =============================================================================
+
+AUTH_LOGIN_SUBMIT = "app/pages/auth.py::login_submit"
+PAIR_LOGIN_EMAIL = "pair-login@test.com"
+PAIR_LOGIN_PASSWORD = "pair-login-pass-123"
+
+
+async def _arrange_login_success(client, db, settings, identity) -> _Arranged:
+    """Верный пароль: пользователь заводится ORM один раз на обе половины.
+
+    Кабинет после входа здесь не открывается — предмет пары только форма
+    ответа и cookie, — поэтому пробный срок, который дала бы прикладная
+    регистрация, не нужен.
+    """
+    existing = (
+        await db.execute(select(User).where(User.email == PAIR_LOGIN_EMAIL))
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(
+            User(
+                email=PAIR_LOGIN_EMAIL,
+                password_hash=hash_password(PAIR_LOGIN_PASSWORD),
+                name="Пара входа",
+            )
+        )
+        await db.commit()
+    return _Arranged(
+        url="/login",
+        data={"email": PAIR_LOGIN_EMAIL, "password": PAIR_LOGIN_PASSWORD},
+    )
+
+
+# =============================================================================
+# Регистрация: шаг адреса и повтор кода (Фаза 14, план 14-02)
+# =============================================================================
+
+AUTH_REGISTER_SEND_CODE = "app/pages/auth.py::register_send_code"
+AUTH_REGISTER_RESEND_CODE = "app/pages/auth.py::register_resend_code"
+
+# ⚠️ АДРЕС УНИКАЛЕН НА КАЖДЫЙ ВЫЗОВ ПОСЕВА. Половин у пары две, и вторая на том
+# же адресе попала бы в минуту между кодами — то есть утверждала бы другой исход,
+# чем назван случай.
+_REGISTER_PAIR_SEQUENCE = iter(range(1, 1_000_000))
+
+
+def _register_pair_email() -> str:
+    return f"pair-register-{next(_REGISTER_PAIR_SEQUENCE)}@test.com"
+
+
+async def _seed_registration_code(db: AsyncSession, email: str, *, age_seconds: int) -> None:
+    """Код регистрации, выданный `age_seconds` секунд назад."""
+    now = datetime.now(timezone.utc)
+    db.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="registration",
+            expires_at=now + timedelta(minutes=10),
+            created_at=now - timedelta(seconds=age_seconds),
+        )
+    )
+    await db.commit()
+
+
+async def _arrange_register_send_code(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/register/send-code", data={"email": _register_pair_email()})
+
+
+async def _arrange_register_code_already_sent(client, db, settings, identity) -> _Arranged:
+    email = _register_pair_email()
+    await _seed_registration_code(db, email, age_seconds=5)
+    return _Arranged(url="/register/send-code", data={"email": email})
+
+
+async def _arrange_register_resend_code(client, db, settings, identity) -> _Arranged:
+    email = _register_pair_email()
+    await _seed_registration_code(db, email, age_seconds=120)
+    token = create_verification_token(email, settings.secret_key)
+    return _Arranged(url="/register/resend-code", data={"token": token})
+
+
+async def _arrange_register_resend_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/register/resend-code", data={"token": "x"})
+
+
+# =============================================================================
+# Восстановление пароля: шаг адреса и повтор кода (Фаза 14, план 14-04)
+# =============================================================================
+
+AUTH_FORGOT_SEND_CODE = "app/pages/auth.py::forgot_password_send_code"
+AUTH_FORGOT_RESEND_CODE = "app/pages/auth.py::forgot_password_resend_code"
+PAIR_FORGOT_PASSWORD = "pair-forgot-pass-123"
+
+# ⚠️ ПОЛЬЗОВАТЕЛЬ ЗАВОДИТСЯ НА УНИКАЛЬНЫЙ АДРЕС КАЖДОГО ВЫЗОВА ПОСЕВА. Половин у
+# пары две, и вторая на том же адресе попала бы в минуту между кодами — то есть
+# утверждала бы «код уже отправлен», а не названный случаем исход.
+_FORGOT_PAIR_SEQUENCE = iter(range(1, 1_000_000))
+
+
+def _forgot_pair_email() -> str:
+    return f"pair-forgot-{next(_FORGOT_PAIR_SEQUENCE)}@test.com"
+
+
+async def _arrange_forgot_send_code(client, db, settings, identity) -> _Arranged:
+    email = _forgot_pair_email()
+    db.add(
+        User(
+            email=email,
+            password_hash=hash_password(PAIR_FORGOT_PASSWORD),
+            name="Пара восстановления",
+        )
+    )
+    await db.commit()
+    return _Arranged(url="/forgot-password/send-code", data={"email": email})
+
+
+async def _arrange_forgot_resend_code(client, db, settings, identity) -> _Arranged:
+    email = _forgot_pair_email()
+    now = datetime.now(timezone.utc)
+    db.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="password_reset",
+            expires_at=now + timedelta(minutes=10),
+            created_at=now - timedelta(seconds=120),
+        )
+    )
+    await db.commit()
+    token = create_verification_token(email, settings.secret_key, purpose="password_reset")
+    return _Arranged(url="/forgot-password/resend-code", data={"token": token})
+
+
+async def _arrange_forgot_resend_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/forgot-password/resend-code", data={"token": "x"})
+
+
+# =============================================================================
+# Восстановление пароля: подтверждение кода и новый пароль (Фаза 14, план 14-05)
+# =============================================================================
+
+AUTH_FORGOT_VERIFY = "app/pages/auth.py::forgot_password_verify"
+AUTH_FORGOT_RESET = "app/pages/auth.py::forgot_password_reset"
+PAIR_FORGOT_NEW_PASSWORD = "pair-forgot-new-456"
+
+
+# =============================================================================
+# Возврат из-под чужой личности (Фаза 14, план 14-06)
+# =============================================================================
+
+AUTH_STOP_IMPERSONATION = "app/pages/auth.py::stop_impersonation"
+
+
+async def _arrange_stop_impersonation_without_an_actor(
+    client, db, settings, identity
+) -> _Arranged:
+    """Возврат без действующего лица — ПОСЕВА НЕ ТРЕБУЕТ ВОВСЕ.
+
+    ⚠️ ЭТО ЕДИНСТВЕННАЯ ИЗ ТРЁХ ВЕТОК ВОЗВРАТА, КОТОРУЮ ОБХОД МОЖЕТ ПРОЙТИ, И
+    ГРАНИЦА НАЗВАНА ЗДЕСЬ, А НЕ ОСТАВЛЕНА ЧИТАТЕЛЮ. Обе остальные ветки требуют
+    cookie ИМПЕРСОНАЦИИ — то есть подписанного токена с признаком действующего
+    лица, — а обход ходит под обычной личностью случая; подсунуть ему такой
+    токен значило бы завести в реестре подмену, которой у прочих случаев нет.
+    Обе утверждены ТРОЙНЫМИ парами поимённо в
+    `tests/test_pages/test_impersonation.py`: успех — заголовком, cookie без
+    признака действующего лица и фактически открывшейся админкой; закрытое
+    действующее лицо — заголовком полной перезагрузки, снятием cookie тем же
+    набором атрибутов и закрытой админкой.
+
+    ⚠️ ОТКАЗ ПО ИСТОЧНИКУ В РЕЕСТР НЕ ВХОДИТ И ПО ДРУГОЙ ПРИЧИНЕ: он отвечает
+    ГОЛЫМ 403 на ОБОИХ транспортах (D-01 Фазы 14) — третьей формы ответа у
+    обхода нет, и подогнать её под имеющиеся значило бы утверждать не тот код.
+    Обе его стороны утверждены в том же файле.
+    """
+    return _Arranged(url="/impersonation/stop", data={})
+
+
+async def _arrange_forgot_verify_right_code(client, db, settings, identity) -> _Arranged:
+    """Верный код: живой код и токен восстановления на СВОЙ адрес каждой половины.
+
+    Верный код помечается подтверждённым, и вторая половина на том же адресе
+    не нашла бы живого кода — то есть утверждала бы исход «код истёк».
+    """
+    email = _forgot_pair_email()
+    now = datetime.now(timezone.utc)
+    db.add(
+        EmailVerificationCode(
+            email=email,
+            code="123456",
+            purpose="password_reset",
+            expires_at=now + timedelta(minutes=10),
+        )
+    )
+    await db.commit()
+    token = create_verification_token(email, settings.secret_key, purpose="password_reset")
+    return _Arranged(url="/forgot-password/verify", data={"token": token, "code": "123456"})
+
+
+async def _arrange_forgot_verify_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/forgot-password/verify", data={"token": "x", "code": "123456"})
+
+
+async def _arrange_forgot_reset_success(client, db, settings, identity) -> _Arranged:
+    """Успех нового пароля: пользователь и подтверждённый токен на СВОЙ адрес каждой половины."""
+    email = _forgot_pair_email()
+    db.add(
+        User(
+            email=email,
+            password_hash=hash_password(PAIR_FORGOT_PASSWORD),
+            name="Пара восстановления",
+        )
+    )
+    await db.commit()
+    token = create_verification_token(
+        email, settings.secret_key, verified=True, purpose="password_reset"
+    )
+    return _Arranged(
+        url="/forgot-password/reset",
+        data={"token": token, "password": PAIR_FORGOT_NEW_PASSWORD},
+    )
+
+
+async def _arrange_forgot_reset_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url="/forgot-password/reset",
+        data={"token": "x", "password": PAIR_FORGOT_NEW_PASSWORD},
+    )
+
+
+async def _arrange_forgot_reset_vanished_user(client, db, settings, identity) -> _Arranged:
+    """Подтверждённый токен на адрес, пользователя у которого нет."""
+    token = create_verification_token(
+        _forgot_pair_email(), settings.secret_key, verified=True, purpose="password_reset"
+    )
+    return _Arranged(
+        url="/forgot-password/reset",
+        data={"token": token, "password": PAIR_FORGOT_NEW_PASSWORD},
+    )
+
+
+# =============================================================================
+# Регистрация: подтверждение кода и завершение (Фаза 14, план 14-03)
+# =============================================================================
+
+AUTH_REGISTER_VERIFY = "app/pages/auth.py::register_verify"
+AUTH_REGISTER_COMPLETE = "app/pages/auth.py::register_complete"
+PAIR_REGISTER_PASSWORD = "pair-register-pass-123"
+
+
+async def _arrange_register_verify_right_code(client, db, settings, identity) -> _Arranged:
+    """Верный код: живой код и токен шага на СВОЙ адрес каждой половины.
+
+    Верный код помечается подтверждённым, и вторая половина на том же адресе
+    не нашла бы живого кода — то есть утверждала бы исход «код истёк».
+    """
+    email = _register_pair_email()
+    await _seed_registration_code(db, email, age_seconds=5)
+    token = create_verification_token(email, settings.secret_key)
+    return _Arranged(url="/register/verify", data={"token": token, "code": "123456"})
+
+
+async def _arrange_register_verify_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(url="/register/verify", data={"token": "x", "code": "123456"})
+
+
+async def _arrange_register_complete_success(client, db, settings, identity) -> _Arranged:
+    """Успех завершения: подтверждённый токен на СВОЙ адрес каждой половины.
+
+    Первая половина заводит пользователя, и вторая на том же адресе попала бы на
+    занятый адрес — то есть утверждала бы другой исход, чем назван случай.
+    """
+    token = create_verification_token(
+        _register_pair_email(), settings.secret_key, verified=True
+    )
+    return _Arranged(
+        url="/register/complete",
+        data={"token": token, "name": "Пара регистрации", "password": PAIR_REGISTER_PASSWORD},
+    )
+
+
+async def _arrange_register_complete_stale_link(client, db, settings, identity) -> _Arranged:
+    return _Arranged(
+        url="/register/complete",
+        data={"token": "x", "name": "Пара регистрации", "password": PAIR_REGISTER_PASSWORD},
+    )
+
+
+async def _arrange_register_complete_taken(client, db, settings, identity) -> _Arranged:
+    """Адрес занят к завершению: пользователь заведён ORM между шагами."""
+    email = _register_pair_email()
+    db.add(
+        User(
+            email=email,
+            password_hash=hash_password(PAIR_REGISTER_PASSWORD),
+            name="Успевший раньше",
+        )
+    )
+    await db.commit()
+    token = create_verification_token(email, settings.secret_key, verified=True)
+    return _Arranged(
+        url="/register/complete",
+        data={"token": token, "name": "Пара регистрации", "password": PAIR_REGISTER_PASSWORD},
+    )
+
+
+# =============================================================================
 # РЕЕСТР
 # =============================================================================
 
@@ -1689,6 +2018,222 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/login",
         transport=LOCATION,
     ),
+    # Фаза 14, план 14-01. Вход страничной формой: ПЕРВЫЙ случай ветки FULL_LOAD.
+    # Успех меняет личность и уходит полной загрузкой кабинета с cookie на том же
+    # ответе (D-10).
+    # ⚠️ ВЕТКА 422 (неверная пара, заблокированный) В РЕЕСТР НЕ ВХОДИТ, И ЭТО
+    # ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: она отвечает 422 на обоих транспортах, а
+    # половины пары ждут 302 и 204. Обе её стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py` — по той же границе, что записана
+    # у случаев профиля и мастера MAX.
+    _PairCase(
+        key=AUTH_LOGIN_SUBMIT,
+        name="вход — верный пароль",
+        identity=ANONYMOUS,
+        arrange=_arrange_login_success,
+        landing="/dashboard",
+        transport=FULL_LOAD,
+        sets_session_cookie=True,
+    ),
+    # Фаза 14, план 14-02. Шаг адреса регистрации и повтор кода: ПЕРВЫЕ случаи
+    # ветки SCREEN. Экран сменился — 200 на обоих транспортах (D-03), адреса у
+    # экрана нет, поэтому `landing` пуст: сличать заголовок перехода не с чем.
+    # ⚠️ ВЕТКА 422 (занятый адрес; повтор раньше минуты) В РЕЕСТР НЕ ВХОДИТ, И
+    # ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py`.
+    _PairCase(
+        key=AUTH_REGISTER_SEND_CODE,
+        name="шаг адреса регистрации — код отправлен",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_send_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/verify"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_SEND_CODE,
+        name="шаг адреса регистрации — код уже отправлен",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_code_already_sent,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Код уже отправлен",
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_RESEND_CODE,
+        name="повтор кода регистрации — новый код",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_resend_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Новый код отправлен",
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_RESEND_CODE,
+        name="повтор кода регистрации — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_resend_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/send-code"',
+    ),
+    # Фаза 14, план 14-03. Подтверждение кода и завершение регистрации. Смена
+    # экрана — ветка SCREEN (экран имени и пароля; возврат на начало при
+    # устаревшей ссылке и при адресе, занятом к завершению, — 200 по критерию
+    # D-03, RESEARCH Open Question 3). Успех завершения — ВТОРОЙ случай ветки
+    # FULL_LOAD: полная загрузка кабинета с cookie на том же ответе (D-10).
+    # ⚠️ ВЕТКА 422 (кода нет, истёк, исчерпан, неверный; короткий пароль) В
+    # РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны
+    # утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
+    _PairCase(
+        key=AUTH_REGISTER_VERIFY,
+        name="подтверждение кода регистрации — верный код",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_verify_right_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/complete"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_VERIFY,
+        name="подтверждение кода регистрации — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_verify_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_COMPLETE,
+        name="завершение регистрации — успех",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_complete_success,
+        landing="/dashboard",
+        transport=FULL_LOAD,
+        sets_session_cookie=True,
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_COMPLETE,
+        name="завершение регистрации — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_complete_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/register/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_REGISTER_COMPLETE,
+        name="завершение регистрации — адрес занят",
+        identity=ANONYMOUS,
+        arrange=_arrange_register_complete_taken,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Этот email уже зарегистрирован",
+    ),
+    # Фаза 14, план 14-04. Шаг адреса восстановления пароля и повтор кода
+    # восстановления — ветка SCREEN: экран сменился, 200 на обоих транспортах
+    # (D-03), адреса у экрана нет, `landing` пуст.
+    # ⚠️ ВЕТКА 422 (неизвестный адрес; повтор раньше минуты) В РЕЕСТР НЕ ВХОДИТ, И
+    # ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py`.
+    # ⚠️ ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ В РЕЕСТР ТОЖЕ НЕ ВХОДИТ: его половины (403 без
+    # htmx; 204 и `HX-Location` на домашний экран с кодом отказа с ним)
+    # утверждены правилом
+    # `test_the_first_recovery_steps_are_refused_under_another_identity_on_both_transports`
+    # там же — вместе с тем, что кода восстановления не заводится.
+    _PairCase(
+        key=AUTH_FORGOT_SEND_CODE,
+        name="шаг адреса восстановления — код отправлен",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_send_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/verify"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESEND_CODE,
+        name="повтор кода восстановления — новый код",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_resend_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Новый код отправлен",
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESEND_CODE,
+        name="повтор кода восстановления — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_resend_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/send-code"',
+    ),
+    # Фаза 14, план 14-05. Подтверждение кода восстановления и новый пароль.
+    # Смена экрана — ветка SCREEN (экран нового пароля; возврат на начало
+    # восстановления при устаревшей ссылке и при исчезнувшем пользователе).
+    # Успех нового пароля — ТРЕТИЙ случай ветки FULL_LOAD: полная загрузка
+    # экрана входа с кодом исхода; cookie сессии он НЕ выдаёт (D-10).
+    # ⚠️ ВЕТКА 422 (кода нет, истёк, исчерпан, неверный; короткий пароль) И
+    # ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ В РЕЕСТР НЕ ВХОДЯТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ
+    # ПРОПУСК: их стороны утверждены поимённо в
+    # `tests/test_pages/test_auth_transport.py`.
+    _PairCase(
+        key=AUTH_FORGOT_VERIFY,
+        name="подтверждение кода восстановления — верный код",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_verify_right_code,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/reset"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_VERIFY,
+        name="подтверждение кода восстановления — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_verify_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESET,
+        name="новый пароль — успех",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_reset_success,
+        landing="/login?notice=" + notices.PASSWORD_RESET_DONE,
+        transport=FULL_LOAD,
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESET,
+        name="новый пароль — устаревшая ссылка",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_reset_stale_link,
+        landing="",
+        transport=SCREEN,
+        fragment_mark='action="/forgot-password/send-code"',
+    ),
+    _PairCase(
+        key=AUTH_FORGOT_RESET,
+        name="новый пароль — пользователь не найден",
+        identity=ANONYMOUS,
+        arrange=_arrange_forgot_reset_vanished_user,
+        landing="",
+        transport=SCREEN,
+        fragment_mark="Пользователь не найден.",
+    ),
+    # Фаза 14, план 14-06. Возврат из-под чужой личности — ветка «действующего
+    # лица нет»: человек уходит туда же, откуда пришёл, и НИ ОДНОГО токена ему
+    # не выдаётся. Приземление лежит в ТОМ ЖЕ шелле, поэтому ветка `LOCATION`, а
+    # не `FULL_LOAD`. Две остальные ветки и отказ по источнику в реестр не
+    # входят — границы названы у посева.
+    _PairCase(
+        key=AUTH_STOP_IMPERSONATION,
+        name="возврат из-под чужой личности — действующего лица нет",
+        identity="user",
+        arrange=_arrange_stop_impersonation_without_an_actor,
+        landing="/dashboard",
+        transport=LOCATION,
+    ),
 )
 
 # ЛЕТОПИСЬ ЧИСЛА (каждое движение — запись, число ставится ПРОГОНОМ):
@@ -1800,11 +2345,88 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   `tests/test_routes/test_tg_user_auth.py`.
 #   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 13, план 13-03): `случаев пар в реестре 58,
 #   объявлено 56`.
-POST_PAIR_CASES_DECLARED = 58
+#   58 → 59, Фаза 14, план 14-01: успех ВХОДА страничной формой — первый случай
+#   ветки FULL_LOAD (204 и заголовок полной перезагрузки на кабинет) и первый
+#   случай, утверждающий cookie сессии на обеих половинах (D-10); личность —
+#   аноним.
+#   ⚠️ ВЕТКА 422 ВХОДА В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК:
+#   обе её стороны утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-01): `случаев пар в реестре 59,
+#   объявлено 58` / `assert 59 == 58`.
+#   59 → 63, Фаза 14, план 14-02: четыре исхода РЕГИСТРАЦИИ — ПЕРВЫЕ случаи
+#   ветки SCREEN (200 и экран шага на обоих транспортах): шаг адреса — код
+#   отправлен и «код уже отправлен»; повтор кода — новый код и устаревшая
+#   ссылка (экран начала регистрации). Личность — аноним.
+#   ⚠️ ВЕТКА 422 (занятый адрес; повтор раньше минуты) В РЕЕСТР НЕ ВХОДИТ, И ЭТО
+#   ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+#   `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-02): `случаев пар в реестре 63,
+#   объявлено 59` / `assert 63 == 59`.
+#   63 → 68, Фаза 14, план 14-03: пять исходов РЕГИСТРАЦИИ. Подтверждение кода —
+#   верный код (экран имени и пароля) и устаревшая ссылка (экран начала);
+#   завершение — успех (ВТОРОЙ случай ветки FULL_LOAD: 204 и заголовок полной
+#   перезагрузки на кабинет, cookie на обеих половинах), устаревшая ссылка и
+#   адрес, занятый к завершению (оба — экран начала, 200 по критерию D-03).
+#   Личность — аноним. Посевы верного кода и успеха завершения берут СВОЙ адрес
+#   на каждую половину: вторая на том же адресе нашла бы код подтверждённым или
+#   адрес занятым.
+#   ⚠️ ВЕТКА 422 (код; короткий пароль) В РЕЕСТР НЕ ВХОДИТ, И ЭТО ГРАНИЦА
+#   ОБХОДА, А НЕ ПРОПУСК: обе её стороны утверждены поимённо в
+#   `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-03): `случаев пар в реестре 68,
+#   объявлено 63` / `assert 68 == 63`.
+#   68 → 71, Фаза 14, план 14-04: три исхода ВОССТАНОВЛЕНИЯ ПАРОЛЯ, ветка
+#   SCREEN (200 и экран шага на обоих транспортах): шаг адреса — код отправлен;
+#   повтор кода — новый код и устаревшая ссылка (экран начала восстановления).
+#   Личность — аноним. Посев шага адреса заводит пользователя на СВОЙ адрес
+#   каждой половины: вторая на том же адресе попала бы в минуту между кодами.
+#   ⚠️ ВЕТКА 422 (неизвестный адрес; повтор раньше минуты) И ОТКАЗ ПОД ЧУЖОЙ
+#   ЛИЧНОСТЬЮ В РЕЕСТР НЕ ВХОДЯТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: их стороны
+#   утверждены поимённо в `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-04): `случаев пар в реестре 71,
+#   объявлено 68. Поставьте число ПРОГОНОМ этого отказа`.
+#   71 → 76, Фаза 14, план 14-05: пять исходов ВОССТАНОВЛЕНИЯ ПАРОЛЯ.
+#   Подтверждение кода — верный код (экран нового пароля) и устаревшая ссылка
+#   (экран начала восстановления); новый пароль — успех (ТРЕТИЙ случай ветки
+#   FULL_LOAD: 204 и заголовок полной перезагрузки на экран входа с кодом исхода,
+#   cookie сессии НЕ выдаётся), устаревшая ссылка и исчезнувший пользователь (оба
+#   — экран начала, 200 по критерию D-03). Личность — аноним. Посевы верного кода
+#   и успеха берут СВОЙ адрес на каждую половину: вторая на том же адресе нашла
+#   бы код подтверждённым.
+#   ⚠️ ВЕТКА 422 (код; короткий пароль) И ОТКАЗ ПОД ЧУЖОЙ ЛИЧНОСТЬЮ В РЕЕСТР НЕ
+#   ВХОДЯТ, И ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК: их стороны утверждены поимённо в
+#   `tests/test_pages/test_auth_transport.py`.
+#   ПОСТАВЛЕНО ПРОГОНОМ (Фаза 14, план 14-05): `случаев пар в реестре 76,
+#   объявлено 71. Поставьте число ПРОГОНОМ этого отказа`.
+#
+#   76 → 77, Фаза 14, план 14-06: ОДИН случай ВОЗВРАТА ИЗ-ПОД ЧУЖОЙ ЛИЧНОСТИ —
+#   ветка «действующего лица нет» (`LOCATION`, приземление в кабинете, токена не
+#   выдаётся). Личность — обычный пользователь, посев пуст: ветка тем и
+#   определяется, что действующего лица у предъявителя НЕТ.
+#   ⚠️ ОДИН СЛУЧАЙ НА ТРИ ВЕТКИ И ОТКАЗ — ЭТО ГРАНИЦА ОБХОДА, А НЕ ПРОПУСК, и
+#   названа она у посева поимённо: успех и закрытое действующее лицо требуют
+#   cookie ИМПЕРСОНАЦИИ, которой у обхода нет, и утверждены ТРОЙНЫМИ парами в
+#   `tests/test_pages/test_impersonation.py`; отказ по источнику отвечает голым
+#   403 на ОБОИХ транспортах (D-01), а третьей формы ответа у обхода нет.
+#   ⚠️ ЭТИМ СЛУЧАЕМ ЗАКРЫТ ВЕСЬ ДЕСЯТОК ФАЗЫ: у каждого из десяти переведённых
+#   обработчиков авторизации есть пара, и `test_every_converted_handler_has_a_pair`
+#   это утверждает замером, а не перечнем.
+#   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 77, объявлено 76. Поставьте
+#   число ПРОГОНОМ этого отказа`.
+POST_PAIR_CASES_DECLARED = 77
 
 
 def _case_id(case: _PairCase) -> str:
     return f"{case.handler}-{case.name}"
+
+
+def _sets_session_cookie(response) -> bool:
+    """Выставил ли ответ cookie сессии с НЕПУСТЫМ значением (Фаза 14, план 14-01)."""
+    for raw in response.headers.get_list("set-cookie"):
+        name, _, rest = raw.partition("=")
+        if name.strip() == "access_token" and rest.partition(";")[0].strip():
+            return True
+    return False
 
 
 async def _landing_args(
@@ -1832,7 +2454,10 @@ async def test_every_pair_case_answers_both_transports(
     case: _PairCase, client: AsyncClient, db_session: AsyncSession, test_settings
 ):
     """Без признака — 302 на адрес посимвольно; с признаком — форма по ветке."""
-    await _identify(client, case.identity, test_settings)
+    if case.identity == ANONYMOUS:
+        client.cookies.clear()
+    else:
+        await _identify(client, case.identity, test_settings)
 
     degraded = await case.arrange(client, db_session, test_settings, case.identity)
     with degraded.context():
@@ -1842,14 +2467,37 @@ async def test_every_pair_case_answers_both_transports(
     # Подстановки добираются ПОСЛЕ запроса: у создающего действия строки, чей
     # идентификатор называет адрес, до запроса не существует (см. `_PairCase`).
     expected = case.landing.format(**await _landing_args(case, db_session, degraded))
-    assert without.status_code == 302, (
-        f"{case.name}: путь деградации ответил {without.status_code} вместо 302"
-    )
-    assert without.headers["location"] == expected, (
-        f"{case.name}: адрес деградации {without.headers['location']!r} не совпал "
-        f"с ожидаемым {expected!r} ПОСИМВОЛЬНО"
-    )
+    # ⚠️ Фаза 14, план 14-02: утверждение 302 перенесено ВНУТРЬ ветвей, ждущих
+    # перенаправления, — прежние случаи проходят его байт-в-байт тем же путём.
+    # Смена экрана перенаправления не ждёт: без признака htmx она отвечает 200 и
+    # страницей следующего экрана (D-03, RESEARCH Находка 1).
+    if case.transport is SCREEN:
+        assert without.status_code == 200, (
+            f"{case.name}: путь деградации смены экрана ответил "
+            f"{without.status_code} вместо 200 — токен шага потерялся бы на "
+            "перенаправлении"
+        )
+        assert DOCUMENT_MARK in without.text, (
+            f"{case.name}: путь деградации получил не страницу"
+        )
+        assert case.fragment_mark in without.text, (
+            f"{case.name}: на странице следующего экрана нет метки {case.fragment_mark!r}"
+        )
+    else:
+        assert without.status_code == 302, (
+            f"{case.name}: путь деградации ответил {without.status_code} вместо 302"
+        )
+        assert without.headers["location"] == expected, (
+            f"{case.name}: адрес деградации {without.headers['location']!r} не совпал "
+            f"с ожидаемым {expected!r} ПОСИМВОЛЬНО"
+        )
+    if case.sets_session_cookie:
+        assert _sets_session_cookie(without), (
+            f"{case.name}: путь деградации не выдал cookie сессии"
+        )
 
+    if case.identity == ANONYMOUS:
+        client.cookies.clear()
     arranged = await case.arrange(client, db_session, test_settings, case.identity)
     with arranged.context():
         with_layer = await client.post(
@@ -1876,6 +2524,20 @@ async def test_every_pair_case_answers_both_transports(
         )
         return
 
+    if case.transport is SCREEN:
+        assert with_layer.status_code == 200, (
+            f"{case.name}: смена экрана на htmx ответила {with_layer.status_code} "
+            "вместо 200"
+        )
+        assert case.fragment_mark in with_layer.text, (
+            f"{case.name}: во фрагменте экрана нет метки {case.fragment_mark!r}"
+        )
+        assert with_layer.text.lstrip().startswith("<title>"), (
+            f"{case.name}: первый узел фрагмента экрана — не `<title>`: вкладка не "
+            "сменит заголовок"
+        )
+        return
+
     if case.transport is LOCATION:
         assert with_layer.status_code == 204, (
             f"{case.name}: слою письма ответили {with_layer.status_code} вместо 204"
@@ -1885,6 +2547,30 @@ async def test_every_pair_case_answers_both_transports(
             f"не совпал с адресом деградации {expected!r}"
         )
         assert with_layer.content == b"", f"{case.name}: у ответа 204 появилось тело"
+        return
+
+    if case.transport is FULL_LOAD:
+        # Фаза 14, план 14-01 (D-10). Утверждается САМ заголовок и cookie на ЭТОМ
+        # ответе: заголовок без cookie — вход, молча не состоявшийся (Landmine
+        # CONTEXT), а 204 без заголовка — экран, который никуда не ушёл.
+        assert with_layer.status_code == 204, (
+            f"{case.name}: слою письма ответили {with_layer.status_code} вместо 204"
+        )
+        assert with_layer.headers.get("HX-Redirect") == expected, (
+            f"{case.name}: заголовок полной перезагрузки "
+            f"{with_layer.headers.get('HX-Redirect')!r} не совпал с адресом "
+            f"деградации {expected!r} ПОСИМВОЛЬНО"
+        )
+        assert "HX-Location" not in with_layer.headers, (
+            f"{case.name}: ответ несёт заголовок частичного перехода — смена "
+            "личности уехала бы XHR-подменой"
+        )
+        assert with_layer.content == b"", f"{case.name}: у ответа 204 появилось тело"
+        if case.sets_session_cookie:
+            assert _sets_session_cookie(with_layer), (
+                f"{case.name}: cookie сессии не стоит на ответе 204 — браузер уйдёт "
+                "по заголовку, а вход не состоится"
+            )
         return
 
     assert case.transport is EXTERNAL, f"{case.name}: неизвестная ветка {case.transport!r}"
@@ -2410,6 +3096,11 @@ UNATTRIBUTED_302_ASSERTIONS: dict[str, _Unattributed] = {
         (),
         "не HTTP-запрос: прямой вызов `redirect_external` — утверждение о слое ответа",
     ),
+    # Фаза 14, план 14-01.
+    "tests/test_pages/test_htmx_response_layer.py::test_an_internal_full_load_answers_302_without_htmx_and_204_with_the_redirect_header": _Unattributed(
+        (),
+        "не HTTP-запрос: прямой вызов `redirect_internal` — утверждение о слое ответа",
+    ),
     "tests/test_pages/test_notices_surface.py::test_without_the_htmx_flag_the_fragment_is_never_built": _Unattributed(
         (),
         "не HTTP-запрос: прямой вызов `respond` — утверждение о приклейке уведомления",
@@ -2611,7 +3302,82 @@ def _number_complaints(
 # аргументом `.post(…)`, как у записей планов 13-01 и 13-02.
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 167, объявлено 165`.
-PAIRED_302_ASSERTIONS_DECLARED = 167
+#
+# 167 → 176, Фаза 14, план 14-01: вход страничной формой стал переведённым
+# (выход ошибки поля и выход полной перезагрузки, узнавание по семейству выходов
+# слоя — RESEARCH Находка 2), и девять утверждений 302 о нём вошли во
+# вселенную правила: восемь прежних — `test_blocked_user.py`,
+# `test_confirm_delete_transport.py` (помощник входа), два в
+# `test_cookie_flags.py`, два в `test_impersonation.py`, `test_password_reset.py`,
+# `tests/test_routes/test_tg_user_auth.py` — и одно новое, половина деградации
+# успеха в `tests/test_pages/test_auth_transport.py`. Прогноз планирования
+# «+8 прежних плюс новые» совпал с замером. Пара у всех — случай реестра выше.
+# Утверждение 302 прямого вызова выхода полной перезагрузки
+# (`test_htmx_response_layer.py`) в счёт не входит — оно названо в
+# `UNATTRIBUTED_302_ASSERTIONS` как утверждение о слое, а не о маршруте.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 176, объявлено 167`.
+#
+# 176 → 176, Фаза 14, план 14-02: ДВИЖЕНИЯ НЕТ, И ЭТО ЗАМЕР, А НЕ ПРОПУСК. Шаг
+# адреса регистрации и повтор кода вошли во вселенную правила переводом, но
+# исхода 302 у них нет ни одного: смена экрана отвечает 200, ошибка на том же
+# экране — 422, и утверждений 302 о них в суите нет. Утверждение 302 драйвера
+# пар перенесено внутрь ветвей, ждущих перенаправления, — прогон правила числа
+# после переноса и перевода зелен на прежнем 176
+# (`test_the_number_of_paired_302_assertions_is_the_declared_one` — passed).
+#
+# 176 → 181, Фаза 14, план 14-03: завершение регистрации стало переведённым
+# (выход ошибки поля, выход смены экрана и выход полной перезагрузки) и получило
+# пары, и пять утверждений 302 о нём вошли во вселенную правила: четыре прежних —
+# `test_access_lifecycle.py` (помощник `_register_through_the_pages`),
+# `test_cookie_flags.py`, `test_registration.py`
+# (`test_complete_registration_creates_user`), `test_trial.py` — и одно новое,
+# половина деградации успеха в `tests/test_pages/test_auth_transport.py`.
+# Прогноз планирования «+4 прежних плюс новые» совпал с замером. Подтверждение
+# кода исхода 302 не имеет (смена экрана — 200, ошибка — 422) и числа не двигает.
+# Пара у всех — случай реестра выше.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 181, объявлено 176`.
+#
+# 181 → 181, Фаза 14, план 14-04: ДВИЖЕНИЯ НЕТ, И ЭТО ЗАМЕР, А НЕ ПРОПУСК. Шаг
+# адреса восстановления пароля и повтор кода восстановления вошли во вселенную
+# правила переводом, но исхода 302 у них нет ни одного: смена экрана отвечает
+# 200, ошибка на том же экране — 422, отказ под чужой личностью — 403 и 204.
+# Прогон после перевода и снятия ключей из отставания зелен на прежнем 181
+# (`test_the_number_of_paired_302_assertions_is_the_declared_one` — passed).
+#
+# 181 → 184, Фаза 14, план 14-05: новый пароль стал переведённым (выход смены
+# экрана, выход ошибки поля и выход полной перезагрузки на экран входа с кодом
+# исхода) и получил пары, и два утверждения 302 о нём вошли во вселенную
+# правила: одно прежнее — `test_password_reset.py` (`test_complete_password_reset`)
+# — и одно новое, половина деградации успеха в
+# `tests/test_pages/test_auth_transport.py`
+# (`test_a_new_password_leaves_for_the_login_by_a_full_load_with_the_notice`).
+# ТРЕТЬЕ — не перевод, а новое правило о давно переведённом входе: тот же тест
+# утверждает 302 входа новым паролем, и во вселенную оно вошло вместе с правилом
+# (вход переведён планом 14-01). Разбор вселенной по записям: `test_auth_transport.py`
+# строки 1724 (новый пароль) и 1768 (вход), `test_password_reset.py` строка 165.
+# Прогноз планирования «+1 прежнее плюс новые» совпал с замером. Подтверждение
+# кода исхода 302 не имеет (смена экрана — 200, ошибка — 422) и числа не двигает.
+# Пара у всех — случай реестра выше.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 184, объявлено 181. Поставьте число ПРОГОНОМ этого отказа`.
+#
+# 184 → 188, Фаза 14, план 14-06: возврат из-под чужой личности стал переведённым
+# и получил пару, и ЧЕТЫРЕ утверждения 302 о нём вошли во вселенную правила.
+# ДВА ПРЕЖНИХ — они стояли в суите задолго до фазы и числа не двигали, потому что
+# обработчик был непереведённым: `tests/test_pages/test_impersonation.py` строка
+# 421 (`test_the_return_rewrites_the_cookie_with_the_same_attribute_set`) и строка
+# 1648 (`test_a_blocked_actor_is_logged_out_by_the_return_not_re_admitted`, WR-02).
+# ДВА НОВЫХ — половины деградации правил этого плана: строка 1761 («действующего
+# лица нет») и строка 1846 («закрытое действующее лицо»). Прогноз планирования
+# «+2 прежних плюс новые» совпал с замером ровно: 2 + 2.
+# ⚠️ ПОЛОВИНЫ ДЕГРАДАЦИИ УСПЕХА СРЕДИ НИХ НЕТ, И ЭТО НЕ ПРОПУСК: успех возврата
+# утверждается ТРОЙНОЙ парой, чья половина деградации живёт в прежнем правиле
+# (строка 421) — второе утверждение 302 о том же исходе было бы его копией.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 188, объявлено 184. Поставьте число ПРОГОНОМ этого отказа`.
+PAIRED_302_ASSERTIONS_DECLARED = 188
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:
@@ -2740,10 +3506,19 @@ async def test_synthetic_converted_toggle(client):
 async def test_control_a_get_or_unconverted_302_stays_out_of_the_count(
     tmp_path, test_settings
 ):
-    """GET и обработчик из `NOT_YET_CONVERTED` в счёт не входят; переведённый — входит."""
+    """GET и обработчик из отставания в счёт не входят; переведённый — входит.
+
+    ⚠️ ЛЕТОПИСЬ, Фаза 14, план 14-01. Прежняя редакция строила контроль на ЖИВОМ
+    отставании: вход стоял в `NOT_YET_CONVERTED` и был непереведённым членом
+    вселенной. Вход переведён, живое отставание этой фазой доходит до нуля
+    (D-14), и контроль на живом члене стал бы вакуумным — поэтому отставание
+    здесь СИНТЕТИЧЕСКОЕ: вход объявлен непереведённым параметром, а не
+    перечнем, и синтетический исходник прежний.
+    """
     root = _synthetic_root(tmp_path, "test_synthetic_out.py", SYNTHETIC_OUT_OF_COUNT)
     traversal = _post_302_assertions(root, _routes(test_settings))
-    converted = _converted(_pages_sources())
+    not_yet = frozenset({AUTH_LOGIN_SUBMIT})
+    converted = _converted(_pages_sources()) - not_yet
 
     assert traversal.visited == 4, f"обход встретил {traversal.visited} сравнений из 4"
     assert [record.handler for record in traversal.records] == [
@@ -2751,12 +3526,12 @@ async def test_control_a_get_or_unconverted_302_stays_out_of_the_count(
         SCHEDULES_TOGGLE,
     ], f"POST-записи обхода: {traversal.records}"
 
-    counted = _in_universe(traversal, converted, NOT_YET_CONVERTED)
+    counted = _in_universe(traversal, converted, not_yet)
     assert [record.handler for record in counted] == [SCHEDULES_TOGGLE], (
         f"в счёт вошло не ровно утверждение о переведённом тумблере: {counted}"
     )
     assert not _in_universe(
-        traversal, converted, NOT_YET_CONVERTED | {SCHEDULES_TOGGLE}
+        traversal, converted, not_yet | {SCHEDULES_TOGGLE}
     ), "обработчик, возвращённый в отставание, остался в счёте"
 
 
