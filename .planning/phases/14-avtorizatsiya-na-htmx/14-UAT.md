@@ -1,9 +1,10 @@
 ---
-status: testing
+status: complete
 phase: 14-avtorizatsiya-na-htmx
 requirement: [SIGN-01, SIGN-02, SIGN-03]
 source: [14-VALIDATION.md, 14-RESEARCH.md, 14-VERIFICATION.md, 14-UI-REVIEW.md]
 created: 2026-09-22
+updated: 2026-09-23
 created_by: план 14-07 (D-02 — предусловия обхода выписывает планировщик)
 checks_declared: 9
 ---
@@ -43,53 +44,56 @@ checks_declared: 9
 
 ## Current Test
 
-number: 1
-name: Критерий 4a — вход
-expected: |
-  Неверный пароль оставляет email в поле и не стирает форму; пароль приходит пустым; вкладка —
-  «Вход — Broadcaster». Заблокированный с верным паролем видит причину отказа. Верный пароль
-  уводит в кабинет ПОЛНОЙ загрузкой, cookie `access_token` сменилась, вкладка — заголовок кабинета.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
 ### 1. Критерий 4a — вход
 expected: неверный пароль — email остался, поле пароля пустое, вкладка «Вход — Broadcaster»; заблокированный видит причину; верный пароль — кабинет полной загрузкой и новая cookie `access_token`
-result: [pending]
+result: pass
+reported: "pass"
 
 ### 2. Критерий 4b — регистрация до экрана кода и завершение
 expected: новый адрес — экран кода БЕЗ перезагрузки, адресная строка осталась `/register`; короткий пароль оставляет имя; завершение открывает кабинет с пробным сроком
-result: [pending]
+result: pass
+reported: "pass"
 
 ### 3. Критерий 4c — подтверждение почты НАСТОЯЩИМ письмом
 expected: код пришёл письмом; неверный код — «Неверный код. Осталось попыток: N» и набранный код в поле; «Отправить код повторно» — новое письмо, обе формы живы; F5 на шаге возвращает к началу пути (D-08)
-result: [pending]
+result: pass
+reported: "pass"
 
 ### 4. Критерий 4d — восстановление пароля НАСТОЯЩИМ письмом
 expected: код из письма → экран нового пароля → `/login` с плашкой «Пароль успешно изменён. Войдите с новым паролем.» → вход новым паролем проходит
-result: [pending]
+result: pass
+reported: "pass"
 
 ### 5. Возврат из-под чужой личности (D-12)
 expected: «ВЕРНУТЬСЯ В АДМИНА» приводит в админку: адрес `/admin`, вкладка — заголовок админки, полосы имперсонации нет, cookie без признака действующего лица
-result: [pending]
+result: pass
+reported: "pass"
 
 ### 6. Менеджер паролей (RESEARCH Находка 7)
 expected: пять наблюдений в Chrome и Firefox; база сравнения — вход и завершение регистрации с ВЫКЛЮЧЕННЫМ JavaScript; регрессия относительно пути без JS выносится владельцу, а не глушится
-result: [pending]
+result: pass
+reported: "pass"
 
 ### 7. Вёрстка карточки авторизации (A4)
 expected: подзаголовок сразу под брендом, промежутки как до фазы, индикатор запроса у кнопки; 375px и десктоп
-result: [pending]
+result: pass
+reported: "pass"
 
 ---
 
 ### 8. Фокус и объявление после подмены (14-UI-REVIEW WARNING 2)
 expected: наблюдаемо, куда попадает фокус после `hx-swap="innerHTML"` в `#auth-step` и что слышит скринридер; в дереве шаблонов авторизации нет ни `autofocus`, ни `tabindex`, ни `aria-live` (подтверждено машиной) — предмет проверки в том, чем это оборачивается для человека
-result: [pending]
+result: pass
+reported: "pass"
 
 ### 9. Вторая кнопка экрана кода в полёте запроса (14-UI-REVIEW WARNING 3)
 expected: наблюдаемо, выглядит ли вторая кнопка живой, пока первый запрос в полёте; сам запрос отбрасывается `hx-sync` (доказано правилом `test_both_code_forms_ride_the_anchor_and_drop_a_second_request`), поэтому действие не теряется — вопрос в видимости
-result: [pending]
+result: pass
+reported: "pass"
 
 ## Проверка 1 — критерий 4a: вход (тест 1)
 
@@ -303,9 +307,9 @@ result: [pending]
 ## Summary
 
 total: 9
-passed: 0
+passed: 9
 issues: 0
-pending: 9
+pending: 0
 skipped: 0
 blocked: 0
 
