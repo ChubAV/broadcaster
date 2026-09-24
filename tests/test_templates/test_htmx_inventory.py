@@ -1567,6 +1567,264 @@ def test_control_positive_an_empty_tree_satisfies_the_fetch_prohibition_only_vac
 
 
 # =============================================================================
+# ГРУППА: ИНВЕНТАРЬ ПРОСТЫХ АТРИБУТОВ-ОБРАБОТЧИКОВ СОБЫТИЯ (Фаза 15, план 15-04)
+#
+# ПРЕДМЕТ ПЕРЕДАН ФАЗЕ ДОЛГОМ Фазы 13-05 дословно (`STATE.md`, раздел решений):
+# «components/thumb.html onerror is named in the R-08-02 prose as outside its
+# subject; counting plain event attributes in an inventory is left to Phase 15»,
+# — и решение владельца `chubav` 2026-09-23 ввело его в фазу работой.
+#
+# ⚠️ ПРЕДМЕТ — ИНВЕНТАРЬ, А НЕ УДАЛЕНИЕ. Долг просит СЧЁТ. Атрибут `onerror` в
+# `components/thumb.html` законен и работает: единственное, что он делает, —
+# подменяет упавшую миниатюру полным изображением, и первым же действием
+# снимает себя (`this.onerror=null`), поэтому зациклиться на битом полном
+# изображении не может. Разметка этим планом не правится. Правило объявляет
+# число, называет место с основанием и краснеет на ВТОРОМ таком атрибуте.
+#
+# ЧИСЛО — ОТДЕЛЬНОЙ КОНСТАНТОЙ (форма `tests/test_pages/test_account_groups.py`,
+# `OOB_TARGET_EXCEPTIONS_DECLARED`). Беззвучно выросшее означает, что
+# атрибут-обработчик завёлся, а решения о нём никто не принимал; беззвучно
+# упавшее — что место снято, и это обязано быть записано строкой летописи, а не
+# обнаружено через фазу.
+#
+# СЧЁТ ИДЁТ ПО ИСХОДНИКУ БЕЗ КОММЕНТАРИЕВ, И ВОТ ЧТО ИМЕННО ИЗМЕРЕНО. Грубый греп
+# слова `onerror` по `app/templates/` даёт ДВЕ строки: атрибут
+# `components/thumb.html:34` и упоминание внутри Jinja-комментария
+# `components/modal.html:234` (по вхождениям — три: `this.onerror` в теле самого
+# атрибута тоже слово). Грубый греп всего перечня имён находит в комментариях
+# `modal.html` ДВА слова — ещё и `xhr.onload` на `:126`, которого замер плана не
+# называл (перезамер 2026-09-24). Сама сеть этой группы требует `=` после имени
+# и отсекает точку просмотром назад, поэтому СЕГОДНЯШНИЕ комментарии её не
+# обманывают — на `modal.html` она даёт ноль и с вырезанием, и без. Вырезание
+# (`_strip_comments` этого модуля, тот же порядок «сперва Jinja, потом HTML», что
+# у `tests/test_templates/test_htmx_markup_gates.py`) стережёт ЗАВТРАШНИЙ
+# комментарий-обоснование, выписывающий атрибут вместе со знаком равенства, — и
+# это доказывается синтетикой в правиле о комментариях.
+#
+# ПЕРЕЧЕНЬ ИМЁН СОБЫТИЙ ОБЪЯВЛЕН КОНСТАНТОЙ С ЧИСЛОМ, А НЕ ЗАШИТ В ВЫРАЖЕНИЕ
+# РОССЫПЬЮ: выражение собирается из перечня, поэтому убрать одно имя значит
+# сузить сеть — и это краснит утверждение числа. Иначе сеть можно было бы молча
+# ослепить.
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ. Зелёный цвет означает: простых
+# атрибутов-обработчиков события восьми объявленных имён в
+# `app/templates/**/*.html` ровно одно место, и оно названо с основанием. Он НЕ
+# означает, что обработчик `thumb.html` РАБОТАЕТ: суита не исполняет JS и
+# картинок не грузит. Он НЕ означает, что обработчиков нет в ДРУГОЙ форме:
+# `hx-on:` и `hx-vals='js:'` запрещены правилами GATE-07 в другом файле —
+# `tests/test_templates/test_htmx_markup_security.py::test_no_markup_declares_request_parameters_or_event_handlers`
+# (и его отрицательный контроль
+# `::test_control_negative_an_inline_event_handler_reddens_the_gate`), а атрибуты
+# рантайма клиентского состояния (`x-on:`, краткая форма `@`) — предмет других
+# гейтов и в эту вселенную не входят ПО ОБЪЯВЛЕНИЮ: просмотр назад отсекает
+# `-`, `:` и `@`. Он НЕ означает, что сеть видит имена ВНЕ перечня
+# (`onkeydown=`, `onmouseover=` и прочие): перечень восемь имён, и расширение до
+# полного списка событий HTML предметом долга не было; замер 2026-09-24 сетью
+# «`on` плюс любое имя» по тому же исходнику дал то же одно место, то есть
+# сегодня перечень ничего не прячет. И он НЕ означает, что присваивание
+# обработчика без точки в теле `<script>` (`onload = …`) не посчитается — оно
+# посчитается; сегодня таких нет.
+# =============================================================================
+
+
+class InlineEventSite(NamedTuple):
+    """Объявленное место атрибута-обработчика: какой атрибут и почему он законен."""
+
+    attribute: str
+    reason: str
+
+
+# Перечень имён событий сети и его число. Выражение ниже собирается ИЗ перечня.
+INLINE_EVENT_NAMES = ("error", "click", "load", "change", "submit", "input", "focus", "blur")
+INLINE_EVENT_NAMES_DECLARED = 8
+
+# Атрибут-обработчик: `on` + имя из перечня + `=`. Просмотр назад отсекает
+# свойство чужого объекта (`this.onerror=`), атрибуты с префиксом (`data-onclick`,
+# `hx-on:`, `x-on:`) и краткую форму `@`. Регистр не значим: имена атрибутов в
+# HTML регистронезависимы, и `onClick=` есть тот же обработчик.
+INLINE_EVENT_ATTRIBUTE = re.compile(
+    r"(?<![-\w.:@])(on(?:" + "|".join(INLINE_EVENT_NAMES) + r"))\s*=",
+    re.IGNORECASE,
+)
+
+# Грубый греп замера плана — слово `onerror` без знака равенства. Заведён ТОЛЬКО
+# для правила о комментариях, чтобы разность «сырой текст / без комментариев»
+# утверждалась на измеренном примере, а не пересказывалась.
+NAIVE_ONERROR_GREP = re.compile(r"onerror")
+
+# ЛЕТОПИСЬ ЧИСЛА:
+#   → 1, Фаза 15, план 15-04, задача 2 (RED) — число поставлено ИЗМЕРЕНИЕМ, а не
+#     арифметикой плана: сеть `INLINE_EVENT_ATTRIBUTE` по исходнику без
+#     комментариев, 2026-09-24 — 1 вхождение в 1 файле из 113 шаблонов. Перечень
+#     мест ниже объявлен ПУСТЫМ намеренно, чтобы правило о местах покраснело на
+#     дереве и НАЗВАЛО место, которое сеть действительно видит.
+INLINE_EVENT_ATTRIBUTE_PLACES = 1
+
+INLINE_EVENT_ATTRIBUTE_SITES: dict[str, InlineEventSite] = {
+}
+
+
+def _inline_event_attribute_places(templates_: dict[str, str]) -> dict[str, str]:
+    """Места атрибутов-обработчиков: ключ `путь#индекс` → имя атрибута строчными.
+
+    Чистая функция от поданного отображения; комментарии обоих видов вырезаются
+    до счёта. Ключ — путь плюс порядковый номер, по тому же доводу, что у
+    `_manual_fetch_places`: два атрибута одного файла остаются двумя записями.
+    """
+    found: dict[str, str] = {}
+    for rel, source in templates_.items():
+        body = _strip_comments(source)
+        for ordinal, match in enumerate(INLINE_EVENT_ATTRIBUTE.finditer(body)):
+            found[f"{rel}#{ordinal}"] = match.group(1).lower()
+    return found
+
+
+def test_inline_event_attribute_places_are_the_declared_ones() -> None:
+    """Мест атрибутов-обработчиков РОВНО объявленное число, и перечень мест — объявленный.
+
+    Антивакуум здесь же: число равно длине перечня и больше нуля — перечень,
+    опустевший молча, оставил бы правило зелёным ровно тогда, когда его записи
+    тихо отменили.
+    """
+    found = _inline_event_attribute_places(_template_sources())
+    declared = {key: site.attribute for key, site in INLINE_EVENT_ATTRIBUTE_SITES.items()}
+
+    assert len(found) == INLINE_EVENT_ATTRIBUTE_PLACES, (
+        f"мест атрибутов-обработчиков события {len(found)}, объявлено "
+        f"{INLINE_EVENT_ATTRIBUTE_PLACES}: {found} — атрибут заведён или снят без "
+        f"решения; обнови число, перечень и строку летописи одним коммитом"
+    )
+    assert found == declared, (
+        f"перечень мест разошёлся с найденным: найдено, но не объявлено "
+        f"{ {k: v for k, v in found.items() if declared.get(k) != v} }; объявлено, "
+        f"но не найдено { {k: v for k, v in declared.items() if found.get(k) != v} }"
+    )
+    assert len(INLINE_EVENT_ATTRIBUTE_SITES) == INLINE_EVENT_ATTRIBUTE_PLACES, (
+        f"записей в перечне {len(INLINE_EVENT_ATTRIBUTE_SITES)}, объявлено "
+        f"{INLINE_EVENT_ATTRIBUTE_PLACES}"
+    )
+    assert INLINE_EVENT_ATTRIBUTE_PLACES > 0, (
+        "число мест объявлено нулём, а `components/thumb.html` несёт `onerror` — "
+        "долг Фазы 13-05 закрыт пустотой, а не инвентарём"
+    )
+    assert all(site.reason.strip() for site in INLINE_EVENT_ATTRIBUTE_SITES.values()), (
+        "у места нет основания — объявлено число, а не решение"
+    )
+
+
+def test_inline_event_attribute_count_ignores_comments() -> None:
+    """Счёт идёт по исходнику БЕЗ комментариев — на измеренном примере и на синтетике.
+
+    Измеренный пример — `components/modal.html:234`: слово `onerror` внутри
+    Jinja-комментария. Грубый греп даёт на файле одно место, тот же греп по
+    исходнику без комментариев — ноль, разность — единица. Грубый греп ВСЕГО
+    перечня имён даёт на том же файле два (ещё `xhr.onload`, `:126`) и тоже ноль
+    без комментариев. Если комментарии `modal.html` перепишут, правило
+    покраснеет — перемерьте и допишите, а не подгоняйте.
+
+    Сама сеть группы сегодняшними комментариями не обманывается (знак равенства
+    после имени обязателен), поэтому НЕСУЩЕСТЬ вырезания доказывается синтетикой:
+    комментарий, выписывающий атрибут со знаком равенства, сеть по сырому тексту
+    посчитала бы, а по исходнику без комментариев — нет.
+    """
+    key = "components/modal.html"
+    modal = _template_sources()[key]
+
+    naive_raw = len(NAIVE_ONERROR_GREP.findall(modal))
+    naive_stripped = len(NAIVE_ONERROR_GREP.findall(_strip_comments(modal)))
+    assert naive_raw == 1, f"грубый греп `onerror` на {key}: {naive_raw}, замер давал 1"
+    assert naive_stripped == 0, (
+        f"грубый греп `onerror` по {key} без комментариев: {naive_stripped}, замер давал 0"
+    )
+    assert naive_raw - naive_stripped == 1, "разность сырого текста и исходника без комментариев не 1"
+
+    family = re.compile(r"\bon(?:" + "|".join(INLINE_EVENT_NAMES) + r")\b")
+    assert len(family.findall(modal)) == 2, (
+        f"грубый греп перечня имён на {key}: {family.findall(modal)}, замер давал 2"
+    )
+    assert family.findall(_strip_comments(modal)) == [], "имя события вне комментариев modal.html"
+
+    assert _inline_event_attribute_places({key: modal}) == {}, (
+        f"сеть нашла атрибут-обработчик в {key}, где его нет"
+    )
+
+    commented = modal + (
+        '\n{# проза-обоснование: <img onerror="this.src=x"> #}\n'
+        '<!-- и в HTML-комментарии: <button onclick="f()"> -->\n'
+    )
+    assert commented != modal, "подмена ничего не изменила"
+    assert len(INLINE_EVENT_ATTRIBUTE.findall(commented)) == 2, (
+        "сеть по СЫРОМУ тексту не увидела атрибуты в комментариях — синтетика не "
+        "доказывает несущесть вырезания"
+    )
+    assert _inline_event_attribute_places({key: commented}) == {}, (
+        "КОММЕНТАРИЙ ПОСЧИТАН МЕСТОМ: проза объявила атрибут-обработчик там, где "
+        "его нет"
+    )
+
+
+def test_inline_event_attribute_net_covers_the_declared_event_names() -> None:
+    """Вселенная сети объявлена: восемь имён, каждое ловится, двойники — нет.
+
+    Сужение перечня краснит утверждение числа; каждое имя перечня подаётся
+    синтетическим тегом и обязано дать ровно одно место с этим именем, поэтому
+    выражение не может разойтись с перечнем незаметно.
+    """
+    assert len(INLINE_EVENT_NAMES) == INLINE_EVENT_NAMES_DECLARED, (
+        f"имён событий в перечне {len(INLINE_EVENT_NAMES)}, объявлено "
+        f"{INLINE_EVENT_NAMES_DECLARED} — сеть сужена или расширена без решения"
+    )
+    assert len(set(INLINE_EVENT_NAMES)) == len(INLINE_EVENT_NAMES), (
+        "имя в перечне повторено — число держится повтором, а не охватом"
+    )
+    for name in INLINE_EVENT_NAMES:
+        caught = _inline_event_attribute_places({"synthetic/net.html": f'<b on{name}="f()">'})
+        assert caught == {"synthetic/net.html#0": f"on{name}"}, (
+            f"сеть не поймала `on{name}=`: {caught}"
+        )
+
+    assert _inline_event_attribute_places({"synthetic/case.html": '<b onClick="f()">'}) == {
+        "synthetic/case.html#0": "onclick"
+    }, "сеть зависит от регистра имени атрибута"
+
+    for form in ("this.onerror=null", 'data-onclick="f()"', 'hx-on:click="f()"',
+                 'x-on:click="f()"', '@click="f()"'):
+        leaked = _inline_event_attribute_places({"synthetic/lookalike.html": f"<b {form}>"})
+        assert leaked == {}, f"форма {form!r} просочилась в сеть атрибутов-обработчиков: {leaked}"
+
+
+def test_control_negative_a_synthetic_onclick_grows_the_inline_event_attribute_count() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: ВТОРОЙ атрибут-обработчик сеть ВИДИТ и НАЗЫВАЕТ."""
+    key = "synthetic/second_inline_handler.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    changed = dict(sources)
+    changed[key] = '<button type="button" onclick="doSomething()">кнопка будущей фазы</button>\n'
+    assert changed != sources, "подмена ничего не изменила"
+
+    before = _inline_event_attribute_places(sources)
+    after = _inline_event_attribute_places(changed)
+
+    assert len(after) == len(before) + 1, (
+        f"ВТОРОЙ АТРИБУТ-ОБРАБОТЧИК ПРОШЁЛ МИМО СЕТИ: было {len(before)}, стало {len(after)}"
+    )
+    assert {k: v for k, v in after.items() if k not in before} == {f"{key}#0": "onclick"}, (
+        f"сеть не назвала новое место: {after}"
+    )
+
+
+def test_control_positive_the_untouched_tree_keeps_the_inline_event_attribute_count() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на НЕИЗМЕНЁННОМ дереве число сходится — и на непустой вселенной."""
+    sources = _template_sources()
+
+    assert len(sources) > 50, (
+        f"обход нашёл всего {len(sources)} шаблонов — инвентарь мог сойтись на пустоте"
+    )
+    assert len(_inline_event_attribute_places(sources)) == INLINE_EVENT_ATTRIBUTE_PLACES
+
+
+# =============================================================================
 # КОНТРОЛИ ОБЕИХ ГРУПП: доказательство того, что гейты КРАСНЕЮТ (`-k control`)
 #
 # ⚠️ ЗАЧЕМ ОНИ. Классификация десяти фрагментов и счётчик, равный шести, зелены
