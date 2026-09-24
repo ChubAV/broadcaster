@@ -214,6 +214,7 @@ DISPOSITIONS = frozenset(
 )
 DISPOSITIONS_DECLARED = 4
 PARTIALLY_ENFORCED = "partially-enforced"
+PERMITTED = "permitted"
 # Поле строки реестра, называющее НЕПОКРЫТУЮ часть предмета у диспозиции «принуждается частично».
 # ⚠️ В `REGISTRY_ROW_FIELDS` оно НЕ внесено: ни одна строка его сегодня не несёт, и внесёт его план
 # 15-13 вместе с первой такой диспозицией и летописью числа полей — по общему правилу перечня.
@@ -274,6 +275,8 @@ PROHIBITION_CLASSES_DECLARED = 11
 # НАМЕРЕННО: их заводит ответ владельца на чекпойнте плана 15-12, а записывает по классам план
 # 15-13; исполнитель, поставивший такое поле сам, вынес бы вердикт вместо владельца. Поле,
 # пришедшее в реестр, вносится сюда ВМЕСТЕ С ЛЕТОПИСЬЮ — иначе оно войдёт в реестр незаметно.
+# Сам ответ владельца (план 15-12, задача 3) записан НЕ в строки, а блоком документа
+# `class_decisions` — его ключ и форма объявлены ниже (`REGISTRY_DOCUMENT_KEYS`).
 #
 # ЛЕТОПИСЬ ЧИСЛА: 7 → 8, план 15-01, задача 2 — пришло поле `declared_rule` (группа D-05 ниже).
 # Оно есть ОБЪЯВЛЕНИЕ, снятое засевом с формулировки запрета, а не вердикт: имя правила, которое
@@ -291,6 +294,59 @@ REGISTRY_ROW_FIELDS = frozenset(
     }
 )
 REGISTRY_ROW_FIELDS_DECLARED = 8
+
+# ПЕРЕЧЕНЬ КЛЮЧЕЙ ДОКУМЕНТА РЕЕСТРА. ЛЕТОПИСЬ ЧИСЛА: 3 → 4, план 15-12, задача 3 — пришёл блок
+# `class_decisions` с ОТВЕТОМ ВЛАДЕЛЬЦА по классам (`chubav`, 2026-09-24T16:45Z). До ответа документ
+# нёс три ключа — `measured`, `rows_declared`, `rows`, — и засев писал ровно их; ответ владельца
+# записан не в строки (поле строки разрешения ставит план 15-13 вместе с диспозицией), а отдельным
+# блоком после шапки замера, по форме образца `10-PROHIBITIONS-SUBJECT.md:1-36`. ⚠️ Ключ, пришедший
+# в документ и не внесённый сюда, краснит правило ниже — в том числе поле вердикта, поставленное
+# шапкой реестра: исполнитель, поставивший его сам, вынес бы вердикт вместо владельца.
+REGISTRY_DOCUMENT_KEYS = frozenset({"measured", "rows_declared", "class_decisions", "rows"})
+REGISTRY_DOCUMENT_KEYS_DECLARED = 4
+
+# ВЕТВИ РЕШЕНИЯ ПО КЛАССУ — три ветви чекпойнта плана 15-12 (задача 3), дословно их `option id`.
+# ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ: ветвь `permit-class` закрывает долг класса РЕШЕНИЕМ, а не
+# работой, и запреты класса остаются непринуждёнными машинно.
+CLASS_DECISION_BRANCHES = frozenset({"permit-class", "require-enforcement", "row-by-row"})
+CLASS_DECISION_BRANCHES_DECLARED = 3
+PERMIT_CLASS_BRANCH = "permit-class"
+
+# ФОРМА ЗАПИСИ РАЗРЕШЕНИЯ КЛАССА — поля образца `10-PROHIBITIONS-SUBJECT.md:1-36`, кроме
+# `permit_covers_plans`: область здесь — КЛАСС (D-04), а не партия планов, и перечень планов
+# разрешения не сужал бы, а читался бы как вторая область. Оба флага распространения обязаны быть
+# `false`: разрешение класса не распространяется ни на фазу целиком, ни на веху.
+PERMIT_DECISION_FIELDS = frozenset(
+    {
+        "permit_branch",
+        "permitted_by",
+        "permitted_on",
+        "permit_basis",
+        "permit_scope",
+        "permit_applies_to_phase",
+        "permit_applies_to_milestone",
+        "permit_covers_prohibitions",
+    }
+)
+PERMIT_DECISION_FIELDS_DECLARED = 8
+PERMIT_SPREAD_FLAGS = ("permit_applies_to_phase", "permit_applies_to_milestone")
+
+# ФОРМА ЗАПИСИ ИНОГО РЕШЕНИЯ ПО КЛАССУ (`require-enforcement`, `row-by-row`). ⚠️ Признака разрешения
+# в именах её полей НЕТ НАМЕРЕННО: решение «требовать принуждения» разрешением не является, и
+# машинный потребитель, считающий ключи `permit*`, не должен прочесть его как разрешение.
+# `work_addressee` — адресат работы, которую решение оставляет открытой.
+OTHER_DECISION_FIELDS = frozenset(
+    {
+        "decision_branch",
+        "decided_by",
+        "decided_on",
+        "decision_basis",
+        "decision_scope",
+        "decision_covers_prohibitions",
+        "work_addressee",
+    }
+)
+OTHER_DECISION_FIELDS_DECLARED = 7
 
 # --- группа D-05: объявленные числа поля `verification` Фазы 10 ----------------------------
 # Замер 2026-09-23 (15-CONTEXT.md D-05, воспроизведён разведкой Ф-02), воспроизведён прибором
@@ -449,6 +505,115 @@ def class_distribution(rows) -> str:
     """Распределение классов — ДОКЛАДЫВАЕТСЯ в отказе, в утверждения не входит."""
     counts = Counter(str(row.get("class")) for row in rows)
     return ", ".join(f"{name}: {count}" for name, count in sorted(counts.items()))
+
+
+def _decision_class(decision) -> object:
+    """Класс, который решение называет своей областью, — из поля своей формы."""
+    return decision.get("permit_scope", decision.get("decision_scope"))
+
+
+def _class_decision_offences(decisions, rows) -> list[str]:
+    """Нарушения формы ответа владельца по классам — ВСЕ, с номером решения, а не первое.
+
+    Предметы: (1) поля решения совпадают с одной из двух объявленных форм; (2) ветвь принадлежит
+    своей форме; (3) класс решения принадлежит `PROHIBITION_CLASSES` и решён не дважды; (4) кто,
+    когда и основание — непустые строки; (5) у разрешения оба флага распространения — `false`;
+    (6) объявленное число покрываемых запретов равно числу строк области решений с этим классом —
+    число решения и реестр не расходятся молча. Ни одно из них не знает, СКОЛЬКО классов
+    разрешено: это ответ владельца, а не свойство формы.
+    """
+    covered = Counter(str(row.get("class")) for row in _decision_scope_rows(rows))
+    offences: list[str] = []
+    seen: Counter = Counter()
+    for position, decision in enumerate(decisions):
+        name = f"решение #{position}"
+        fields = set(decision)
+        if fields == PERMIT_DECISION_FIELDS:
+            branch, who, when, basis, covers = (
+                decision[field]
+                for field in (
+                    "permit_branch",
+                    "permitted_by",
+                    "permitted_on",
+                    "permit_basis",
+                    "permit_covers_prohibitions",
+                )
+            )
+            if branch != PERMIT_CLASS_BRANCH:
+                offences.append(f"{name}: форма разрешения при ветви `{branch}`")
+            for flag in PERMIT_SPREAD_FLAGS:
+                if decision[flag] is not False:
+                    offences.append(
+                        f"{name}: `{flag}` = `{decision[flag]}` — разрешение класса читалось бы "
+                        f"шире класса"
+                    )
+        elif fields == OTHER_DECISION_FIELDS:
+            branch, who, when, basis, covers = (
+                decision[field]
+                for field in (
+                    "decision_branch",
+                    "decided_by",
+                    "decided_on",
+                    "decision_basis",
+                    "decision_covers_prohibitions",
+                )
+            )
+            if branch not in CLASS_DECISION_BRANCHES - {PERMIT_CLASS_BRANCH}:
+                offences.append(f"{name}: ветвь `{branch}` вне ветвей иного решения")
+            addressee = decision["work_addressee"]
+            if not isinstance(addressee, str) or not addressee.strip():
+                offences.append(f"{name}: адресат работы не назван")
+        else:
+            offences.append(
+                f"{name}: поля {sorted(fields)} не совпадают ни с формой разрешения, ни с формой "
+                f"иного решения"
+            )
+            continue
+        klass = _decision_class(decision)
+        if klass not in PROHIBITION_CLASSES:
+            offences.append(f"{name}: класс `{klass}` вне объявленного перечня")
+        seen[klass] += 1
+        for label, value in (("кто", who), ("когда", when), ("основание", basis)):
+            if not isinstance(value, str) or not value.strip():
+                offences.append(f"{name}: поле «{label}» пусто или не строка")
+        if type(covers) is not int or covers != covered[str(klass)]:
+            offences.append(
+                f"{name}: класс `{klass}` объявляет покрытыми {covers!r} запретов, в реестре "
+                f"строк области решений с этим классом {covered[str(klass)]}"
+            )
+    for klass, times in sorted(seen.items(), key=lambda item: str(item[0])):
+        if times > 1:
+            offences.append(f"класс `{klass}` решён {times} раза — ответ владельца двузначен")
+    return offences
+
+
+def _permitted_classes(decisions) -> frozenset:
+    return frozenset(
+        decision["permit_scope"]
+        for decision in decisions
+        if set(decision) == PERMIT_DECISION_FIELDS
+        and decision["permit_branch"] == PERMIT_CLASS_BRANCH
+    )
+
+
+def _permitted_without_permission(rows, decisions) -> list[str]:
+    """Строки с диспозицией «разрешено», чей класс РАЗРЕШЕНИЯ владельца не получил."""
+    permitted = _permitted_classes(decisions)
+    return [
+        f"{_row_name(row)}: диспозиция `{PERMITTED}` при классе `{row.get('class')}` без "
+        f"разрешения владельца"
+        for row in rows
+        if row.get("disposition") == PERMITTED and row.get("class") not in permitted
+    ]
+
+
+def decision_distribution(decisions) -> str:
+    """Ветви ответа владельца по классам — ДОКЛАДЫВАЮТСЯ в отказе, в утверждения не входят."""
+    return ", ".join(
+        f"{_decision_class(decision)}: "
+        f"{decision.get('permit_branch', decision.get('decision_branch'))}"
+        for decision in decisions
+    )
 
 
 def _before_phase_15(sources):
@@ -873,6 +1038,141 @@ def test_the_declared_vocabularies_and_numbers_agree():
         PROHIBITIONS_DECLARED_AT_PHASE_15 - PROHIBITIONS_BY_PHASE_DECLARED[PHASE_15]
         == PROHIBITIONS_BEFORE_PHASE_15_PLANS
     )
+
+
+# --- ответ владельца по классам: форма записи, а не её содержание ---------------------------
+#
+# ЧЕГО ГРУППА НЕ УТВЕРЖДАЕТ. Она не знает, СКОЛЬКО классов разрешено и какие: это ответ владельца,
+# и правило, знающее его, переписывалось бы при каждом новом ответе. Она не утверждает, что КАЖДЫЙ
+# класс получил ответ: `resume-signal` чекпойнта прямо разрешает не отвечать, и класс без ответа
+# есть законное состояние (его запреты остаются «неразобрано», и план 15-13 называет их числом).
+# И она не утверждает, что хоть один запрет СОБЛЮДЁН: РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ.
+
+
+def test_the_registry_document_carries_only_declared_keys(registry_document):
+    """Ключ документа реестра принадлежит объявленному перечню; ключ вне перечня называется."""
+    strays = sorted(set(registry_document) - REGISTRY_DOCUMENT_KEYS)
+    assert not strays, f"ключи документа реестра вне объявленного перечня: {strays}"
+
+
+def test_the_class_decision_vocabularies_agree():
+    """Объявленные перечни ответа владельца согласны со своими числами и между собой."""
+    assert len(REGISTRY_DOCUMENT_KEYS) == REGISTRY_DOCUMENT_KEYS_DECLARED
+    assert tool.CLASS_DECISIONS_KEY in REGISTRY_DOCUMENT_KEYS
+    assert len(CLASS_DECISION_BRANCHES) == CLASS_DECISION_BRANCHES_DECLARED
+    assert PERMIT_CLASS_BRANCH in CLASS_DECISION_BRANCHES
+    assert len(PERMIT_DECISION_FIELDS) == PERMIT_DECISION_FIELDS_DECLARED
+    assert len(OTHER_DECISION_FIELDS) == OTHER_DECISION_FIELDS_DECLARED
+    assert set(PERMIT_SPREAD_FLAGS) <= PERMIT_DECISION_FIELDS
+    assert all(field.startswith(tool.PERMIT_PREFIX) for field in PERMIT_DECISION_FIELDS)
+    assert not any(field.startswith(tool.PERMIT_PREFIX) for field in OTHER_DECISION_FIELDS)
+
+
+def test_every_class_decision_has_the_declared_form_and_agrees_with_the_registry(
+    registry_document,
+):
+    """Каждое решение по классу — одной из двух форм, по классу перечня, с числом по реестру.
+
+    Антивакуум: блок ответа непуст — ответ владельца получен 2026-09-24, и его исчезновение из
+    реестра молча сняло бы все разрешения. Ветви ДОКЛАДЫВАЮТСЯ в отказе.
+    """
+    decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    assert decisions, "блок ответа владельца по классам пуст или отсутствует"
+    offences = _class_decision_offences(decisions, registry_document["rows"])
+    assert not offences, (
+        "нарушения формы ответа владельца по классам:\n"
+        + "\n".join(offences)
+        + f"\n\nветви ответа: {decision_distribution(decisions)}"
+    )
+
+
+def test_no_row_is_permitted_unless_its_class_was_permitted(registry_document):
+    """«Разрешено» стоит только там, где владелец разрешил КЛАСС: иначе это вердикт за него."""
+    rows = registry_document["rows"]
+    decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    offences = _permitted_without_permission(rows, decisions)
+    assert not offences, (
+        "\n".join(offences)
+        + f"\n\nраспределение диспозиций реестра: {disposition_distribution(rows)}"
+        + f"\nветви ответа: {decision_distribution(decisions)}"
+    )
+
+
+def test_control_class_decision_offences_are_named_for_every_kind():
+    """Синтетические решения — по одному на каждый вид нарушения; каждое НАЗЫВАЕТСЯ."""
+    klass, other = sorted(PROHIBITION_CLASSES)[:2]
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "phase": DECISION_SCOPE_PHASE, "class": klass},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "phase": DECISION_SCOPE_PHASE, "class": other},
+    ]
+    good_permit = {
+        "permit_branch": PERMIT_CLASS_BRANCH,
+        "permitted_by": "синтетика",
+        "permitted_on": "1999-01-01",
+        "permit_basis": "синтетика",
+        "permit_scope": klass,
+        "permit_applies_to_phase": False,
+        "permit_applies_to_milestone": False,
+        "permit_covers_prohibitions": 1,
+    }
+    good_other = {
+        "decision_branch": "require-enforcement",
+        "decided_by": "синтетика",
+        "decided_on": "1999-01-01",
+        "decision_basis": "синтетика",
+        "decision_scope": other,
+        "decision_covers_prohibitions": 1,
+        "work_addressee": "синтетика",
+    }
+    assert _class_decision_offences([good_permit, good_other], rows) == []
+
+    broken = [
+        {**good_permit, "permit_applies_to_milestone": True},
+        {**good_other, "decision_branch": PERMIT_CLASS_BRANCH},
+        {**good_permit, "permit_scope": "no-such-class", "permit_covers_prohibitions": 0},
+        {**good_other, "decision_covers_prohibitions": True},
+        {**good_other, "work_addressee": " ", "decided_by": ""},
+        {**good_permit, "verdict_of_the_phase": "синтетика"},
+    ]
+    offences = _class_decision_offences(broken, rows)
+    named = sorted({offence.split(":")[0] for offence in offences})
+    assert named == sorted(
+        [f"решение #{position}" for position in range(6)]
+        + [f"класс `{other}` решён 3 раза — ответ владельца двузначен"]
+    ), offences
+
+
+def test_control_a_permitted_row_without_a_permitted_class_is_named():
+    """Две строки «разрешено»: класс с разрешением — молчит, класс без разрешения — назван."""
+    klass, other = sorted(PROHIBITION_CLASSES)[:2]
+    decisions = [
+        {
+            "permit_branch": PERMIT_CLASS_BRANCH,
+            "permitted_by": "синтетика",
+            "permitted_on": "1999-01-01",
+            "permit_basis": "синтетика",
+            "permit_scope": klass,
+            "permit_applies_to_phase": False,
+            "permit_applies_to_milestone": False,
+            "permit_covers_prohibitions": 1,
+        }
+    ]
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "class": klass, "disposition": PERMITTED},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "class": other, "disposition": PERMITTED},
+    ]
+    offences = _permitted_without_permission(rows, decisions)
+    assert [offence.split(":")[0] for offence in offences] == [f"{SYNTHETIC_PLAN}#1"], offences
+
+
+def test_control_the_seed_carries_the_owner_answer_and_never_writes_it(live_census):
+    """Засев переносит блок ответа как есть и НЕ заводит его там, где ответа не было."""
+    answer = [{"decision_scope": "синтетика"}]
+    carried = tool.seed_registry(live_census, {"rows": [], tool.CLASS_DECISIONS_KEY: answer}, "x")
+    assert carried[tool.CLASS_DECISIONS_KEY] is answer
+    assert list(carried) == ["measured", "rows_declared", tool.CLASS_DECISIONS_KEY, "rows"]
+    fresh = tool.seed_registry(live_census, None, "x")
+    assert tool.CLASS_DECISIONS_KEY not in fresh
 
 
 # --- зубы: подмена словаря исходников, а не правка дерева -------------------------------

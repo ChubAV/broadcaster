@@ -18,14 +18,15 @@
 
 Режимы:
   --check           число элементов и разбивка по фазам; код 1, если перепись разошлась с
-                    реестром (число, `rows_declared`, биекция тождеств)
+                    реестром (число, `rows_declared`, биекция тождеств); печатает число ключей
+                    разрешения в строках и ответ владельца по классам (`class_decisions`)
   --list [--phase N] [--class NAME]
                     перечень записей глазам человека: тождество, фаза, `verification`, класс и
                     диспозиция из реестра, первые ~100 символов формулировки; `--class` —
                     перечень одного класса предмета
   --breakdown       разбивка по фазам, по значениям `verification`, по диспозициям и по КЛАССАМ
-                    реестра; для области решений (Фаза 10) — число запретов класса и число
-                    среди них с `verification: test`
+                    реестра; для области решений (Фаза 10) — число запретов класса, число
+                    среди них с `verification: test` и ветвь ответа владельца по классу
   --draft-classes   ЧЕРНОВАЯ разбивка области решений по классам ключевыми словами: по каждому
                     запрету печатаются ВСЕ классы-кандидаты, а не первый, рядом — класс,
                     записанный в реестр. ⚠️ Режим — для человека и для улики в сводке; гейт
@@ -34,7 +35,8 @@
                     четыре исторические сети над планами Фазы 10 — каждая со СЛАГАЕМЫМИ
                     своего расхождения с переписью, а не только с разностью
   --seed-registry   засев скелета реестра; идемпотентен по тождествам — уже записанные поля
-                    строк не двигаются, новые строки получают засеянные значения
+                    строк не двигаются, новые строки получают засеянные значения; блок ответа
+                    владельца по классам (`class_decisions`) переносится как есть, не пишется
 
 Зависимость: PyYAML приходит транзитивно (`uvicorn[standard]`), объявленной не является; риск
 назван в модуле теста.
@@ -82,6 +84,16 @@ SEED_DISPOSITION = "unresolved"
 # Признак ключа разрешения. Такие ключи заводит ОТВЕТ ВЛАДЕЛЬЦА; `--check` их только считает.
 PERMIT_PREFIX = "permit"
 
+# Блок документа реестра с ОТВЕТОМ ВЛАДЕЛЬЦА по классам (план 15-12, задача 3). Засев его НЕ
+# пишет и не правит — только переносит из существующего документа: иначе перезасев стёр бы
+# решение владельца, а идемпотентность засева краснела бы на законной записи ответа.
+CLASS_DECISIONS_KEY = "class_decisions"
+# Поля, которыми решение называет свой класс: у разрешения — поле образца, у иного решения —
+# своё, без признака разрешения в имени. Прибор их только ПЕЧАТАЕТ; форму судит модуль теста.
+PERMIT_SCOPE_FIELD = "permit_scope"
+DECISION_SCOPE_FIELD = "decision_scope"
+DECISION_BRANCH_FIELD = "decision_branch"
+
 # Порядок полей строки реестра — ради воспроизводимого вывода засева.
 REGISTRY_FIELD_ORDER = (
     "plan",
@@ -118,10 +130,24 @@ REGISTRY_HEADER = """\
 # а не ключеванию. `verification` отсутствует там, где элемент ключа не несёт: отсутствие
 # есть признак «не объявлено», а не значение `none`.
 #
-# ⚠️ ПОЛЕЙ `permit_*` И ЛЮБОГО ПОЛЯ ВЕРДИКТА ЗДЕСЬ НЕТ НАМЕРЕННО. `class: unclassified` и
-# `disposition: unresolved` — засеянный ПРЕДМЕТ решения, а не решение: класс пишет план
-# 15-12, диспозицию по ответу владельца — план 15-13. Исполнитель, поставивший поле вердикта
-# сам, вынес бы вердикт вместо владельца.
+# ⚠️ ПОЛЯ ВЕРДИКТА ЗДЕСЬ НЕТ НАМЕРЕННО, и полей разрешения в СТРОКАХ исполнитель не пишет.
+# `class: unclassified` и `disposition: unresolved` — засеянный ПРЕДМЕТ решения, а не решение:
+# класс пишет план 15-12, диспозицию по ответу владельца — план 15-13. Исполнитель, поставивший
+# поле вердикта сам, вынес бы вердикт вместо владельца. (Летопись абзаца: до ответа владельца
+# 2026-09-24 он начинался словами «ПОЛЕЙ `permit_*` И ЛЮБОГО ПОЛЯ ВЕРДИКТА ЗДЕСЬ НЕТ НАМЕРЕННО» —
+# верными на день засева; поля разрешения с тех пор есть, но их завёл ОТВЕТ ВЛАДЕЛЬЦА, и стоят
+# они только в блоке `class_decisions` ниже.)
+#
+# ⚠️ БЛОК `class_decisions` ЗАВОДИТ ОТВЕТ ВЛАДЕЛЬЦА, И ИДЁТ ОН СВЕРХ ШАПКИ ЗАМЕРА И ПОСЛЕ НЕЁ.
+# Форма полей разрешения — образца `10-PROHIBITIONS-SUBJECT.md:1-36`; область разрешения —
+# ИМЯ КЛАССА (D-04), и оно не распространяется ни на фазу целиком, ни на веху. Ответ `chubav`
+# на чекпойнте плана 15-12 (задача 3), 2026-09-24T16:45Z, по классу: `product-invariant` (70) —
+# требовать принуждения; остальные десять классов (251) — разрешить класс; построчного разбора
+# не выбрано ни по одному. Основания СВОИМИ СЛОВАМИ владелец не дал — только выбор варианта;
+# слова варианта принадлежат оркестратору, а не владельцу, и записаны дословно в
+# `15-12-SUMMARY.md`. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ: запреты разрешённого класса остаются
+# непринуждёнными машинно. Засев блок не пишет и не правит — только переносит; диспозиции строк
+# по этому ответу ставит план 15-13.
 #
 # `declared_rule` стоит только у запретов Фазы 10 с `verification: test` (группа D-05): имя
 # правила, названное формулировкой запрета, либо `<undeclared>` — признак «имя не объявлено».
@@ -431,6 +457,9 @@ def seed_registry(
     согласия строки с элементом. Недостающие поля строки добавляются засеянными. Строка
     реестра, чьего тождества в переписи нет, — отказ: снять её молча значило бы потерять
     записанное решение, и это решает человек.
+
+    Блок `CLASS_DECISIONS_KEY` (ответ владельца по классам) ПЕРЕНОСИТСЯ как есть и встаёт
+    после шапки замера, перед строками; засев его не пишет, не дополняет и не правит.
     """
     old_rows = _registry_rows(existing or {})
     current = {record.identity for record in records}
@@ -454,11 +483,14 @@ def seed_registry(
             merged.setdefault(field, value)
         rows.append(_ordered(merged))
     keep_date = existing and not added and existing.get("measured")
-    return {
+    document: dict = {
         "measured": str(existing["measured"]) if keep_date else measured,
         "rows_declared": len(rows),
-        "rows": rows,
     }
+    if existing and CLASS_DECISIONS_KEY in existing:
+        document[CLASS_DECISIONS_KEY] = existing[CLASS_DECISIONS_KEY]
+    document["rows"] = rows
+    return document
 
 
 def dump_registry(document: Mapping) -> str:
@@ -808,6 +840,25 @@ def _check(root: Path) -> int:
         1 for row in registry.values() for field in row if str(field).startswith(PERMIT_PREFIX)
     )
     print(f"ключей разрешения (`{PERMIT_PREFIX}*`) в строках реестра: {permit_keys}")
+    # Ответ владельца по классам — ПЕЧАТАЕТСЯ, а не судится: форму судит модуль теста.
+    decisions = document.get(CLASS_DECISIONS_KEY) or []
+    permitted = sorted(
+        str(decision[PERMIT_SCOPE_FIELD])
+        for decision in decisions
+        if PERMIT_SCOPE_FIELD in decision
+    )
+    print(
+        f"решений владельца по классам (`{CLASS_DECISIONS_KEY}`): {len(decisions)}; "
+        f"разрешённых классов (`{PERMIT_SCOPE_FIELD}`): {len(permitted)}"
+    )
+    for name in permitted:
+        print(f"  разрешён класс: {name}")
+    for decision in decisions:
+        if DECISION_SCOPE_FIELD in decision:
+            print(
+                f"  класс {decision[DECISION_SCOPE_FIELD]}: "
+                f"{decision.get(DECISION_BRANCH_FIELD)}"
+            )
     if problems:
         print("РАСХОЖДЕНИЕ переписи с реестром:")
         for problem in problems:
@@ -835,9 +886,24 @@ def _list(root: Path, phase: str | None, klass: str | None = None) -> int:
     return 0
 
 
+def _branch_by_class(document: Mapping) -> dict[str, str]:
+    """Ветвь ответа владельца по имени класса — для глаз человека, не для гейта."""
+    branches: dict[str, str] = {}
+    for decision in document.get(CLASS_DECISIONS_KEY) or []:
+        if PERMIT_SCOPE_FIELD in decision:
+            branches[str(decision[PERMIT_SCOPE_FIELD])] = str(decision.get("permit_branch"))
+        elif DECISION_SCOPE_FIELD in decision:
+            branches[str(decision[DECISION_SCOPE_FIELD])] = str(
+                decision.get(DECISION_BRANCH_FIELD)
+            )
+    return branches
+
+
 def _breakdown(root: Path) -> int:
     records = census(_plan_sources(root))
-    registry = _registry_rows(load_registry(root / REGISTRY_RELATIVE_PATH))
+    document = load_registry(root / REGISTRY_RELATIVE_PATH)
+    registry = _registry_rows(document)
+    branches = _branch_by_class(document)
     print("по фазам:")
     for phase, count in phase_breakdown(records).items():
         print(f"  фаза {phase}: {count}")
@@ -861,14 +927,16 @@ def _breakdown(root: Path) -> int:
     scope = _decision_scope(records)
     print(
         f"по классам области решений (фаза {DECISION_SCOPE_PHASE}): запретов / из них с "
-        f"`verification: {DECLARED_RULE_VERIFICATION}`"
+        f"`verification: {DECLARED_RULE_VERIFICATION}` — ветвь ответа владельца "
+        f"(`{CLASS_DECISIONS_KEY}`; «—» — ответа нет)"
     )
     by_class = Counter(class_of(record) for record in scope)
     tested = Counter(
         class_of(record) for record in scope if record.verification == DECLARED_RULE_VERIFICATION
     )
     for value in sorted(by_class):
-        print(f"  {value}: {by_class[value]} / {tested[value]}")
+        branch = branches.get(value, "—")
+        print(f"  {value}: {by_class[value]} / {tested[value]} — {branch}")
     print(
         f"  сумма по классам области решений: {sum(by_class.values())} "
         f"(классов {len(by_class)})"

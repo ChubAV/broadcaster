@@ -7,10 +7,24 @@
 # а не ключеванию. `verification` отсутствует там, где элемент ключа не несёт: отсутствие
 # есть признак «не объявлено», а не значение `none`.
 #
-# ⚠️ ПОЛЕЙ `permit_*` И ЛЮБОГО ПОЛЯ ВЕРДИКТА ЗДЕСЬ НЕТ НАМЕРЕННО. `class: unclassified` и
-# `disposition: unresolved` — засеянный ПРЕДМЕТ решения, а не решение: класс пишет план
-# 15-12, диспозицию по ответу владельца — план 15-13. Исполнитель, поставивший поле вердикта
-# сам, вынес бы вердикт вместо владельца.
+# ⚠️ ПОЛЯ ВЕРДИКТА ЗДЕСЬ НЕТ НАМЕРЕННО, и полей разрешения в СТРОКАХ исполнитель не пишет.
+# `class: unclassified` и `disposition: unresolved` — засеянный ПРЕДМЕТ решения, а не решение:
+# класс пишет план 15-12, диспозицию по ответу владельца — план 15-13. Исполнитель, поставивший
+# поле вердикта сам, вынес бы вердикт вместо владельца. (Летопись абзаца: до ответа владельца
+# 2026-09-24 он начинался словами «ПОЛЕЙ `permit_*` И ЛЮБОГО ПОЛЯ ВЕРДИКТА ЗДЕСЬ НЕТ НАМЕРЕННО» —
+# верными на день засева; поля разрешения с тех пор есть, но их завёл ОТВЕТ ВЛАДЕЛЬЦА, и стоят
+# они только в блоке `class_decisions` ниже.)
+#
+# ⚠️ БЛОК `class_decisions` ЗАВОДИТ ОТВЕТ ВЛАДЕЛЬЦА, И ИДЁТ ОН СВЕРХ ШАПКИ ЗАМЕРА И ПОСЛЕ НЕЁ.
+# Форма полей разрешения — образца `10-PROHIBITIONS-SUBJECT.md:1-36`; область разрешения —
+# ИМЯ КЛАССА (D-04), и оно не распространяется ни на фазу целиком, ни на веху. Ответ `chubav`
+# на чекпойнте плана 15-12 (задача 3), 2026-09-24T16:45Z, по классу: `product-invariant` (70) —
+# требовать принуждения; остальные десять классов (251) — разрешить класс; построчного разбора
+# не выбрано ни по одному. Основания СВОИМИ СЛОВАМИ владелец не дал — только выбор варианта;
+# слова варианта принадлежат оркестратору, а не владельцу, и записаны дословно в
+# `15-12-SUMMARY.md`. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ: запреты разрешённого класса остаются
+# непринуждёнными машинно. Засев блок не пишет и не правит — только переносит; диспозиции строк
+# по этому ответу ставит план 15-13.
 #
 # `declared_rule` стоит только у запретов Фазы 10 с `verification: test` (группа D-05): имя
 # правила, названное формулировкой запрета, либо `<undeclared>` — признак «имя не объявлено».
@@ -27,6 +41,18 @@
 
 measured: '2026-09-24'
 rows_declared: 697
+class_decisions:
+- {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он'}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: gate-integrity, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 61}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: self-certification, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 45}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: plan-file-scope, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 39}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: owner-decision-reserved, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 23}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: record-immutability, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 22}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: superseded-text-kept, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 20}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: work-owned-elsewhere, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 17}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: requirement-flag, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 12}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: vendored-runtime-and-dependencies, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 7}
+- {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: live-environment-safety, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 5}
 rows:
 - {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-01-PLAN.md, index: 0, phase: '07', statement_digest: 49e7a84b226b, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-01-PLAN.md, index: 1, phase: '07', statement_digest: 81fc289ee3a0, class: unclassified, disposition: unresolved}
