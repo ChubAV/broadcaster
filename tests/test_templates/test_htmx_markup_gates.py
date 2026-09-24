@@ -8503,3 +8503,522 @@ def test_control_negative_conditional_hx_post_prohibition_on_an_empty_universe_i
     offence = _conditional_universe_offence(empty)
     assert offence != "", "пустая вселенная не засечена: зелень запрета на ней неотличима от слепоты"
     assert "0 шаблонов" in offence
+
+
+# =============================================================================
+# Фаза 15, план 15-05: ИНВЕНТАРЬ НАСТОЯЩЕЙ СЛЕПОЙ ЗОНЫ — УСЛОВНЫЕ ПРОЧИЕ `hx-*`
+# =============================================================================
+#
+# Предикат «место условной сборки» объявлен шапкой группы выше (условный
+# `hx-post`) и действует здесь без изменений. Эта группа считает ПРОЧИЕ `hx-*`:
+# место, несущее и условный `hx-post`, и условный `hx-swap`, посчитали бы ОБЕ
+# группы — два РАЗДЕЛЬНЫХ утверждения над одним исходником без комментариев, без
+# дедупликации (`test_blind_zone_adjacency_counts_a_doubly_conditional_site_in_both_gates`).
+#
+# СОСТАВ, СНЯТЫЙ СЧЁТОМ ПО ПРЕДИКАТУ (замер разведки Ф-08 `15-RESEARCH.md`,
+# перезамеренный планированием и исполнением плана 15-05 2026-09-24).
+# Вне макроса — 12 мест в ТРЁХ классах:
+#   • класс 1, ВООРУЖЕНИЕ ОПРОСА — 2 места: `account_groups/partials/sync_result.html:50`,
+#     `accounts/partials/sync_status_card.html:48`. `hx-get` + `hx-trigger="every 5s"`
+#     + `hx-swap` появляются ТОЛЬКО при `{% if status == 'syncing' %}`;
+#   • класс 2, ВНЕПОЛОСНАЯ ОБЛАСТЬ — 2 места: `ads/includes/autosave.html:28`,
+#     `ads/includes/media_add_tile.html:55`. `hx-swap-oob="true"` под
+#     `{% if oob is defined and oob %}`;
+#   • класс 3, КАСКАДНАЯ СТРОКА ЗАПРОСА — 8 мест: `ads/partial_cards.html:7`,
+#     `ads/list.html:61`, `schedules/list.html:66`, `schedules/partial_cards.html:12`,
+#     `history/list.html:119`, `history/partial_cards.html:6`,
+#     `admin/history_partial_cards.html:7`, `admin/user_history.html:63`. `hx-get`,
+#     чья строка запроса собрана `{% for %}`-циклом по `filter_params`.
+# Внутри макроса — класс 4, ТЕЛО `form_wrapper`, 6 ветвей `{%- if %}`, раздающих
+# `hx-*` (`components/form_wrapper.html`): `:189` (`hx-target` + `hx-swap`), `:191`
+# (`hx-trigger`), `:192` (`hx-sync`), `:193` (`hx-encoding` + `enctype`), `:194`
+# (`hx-include`), `:195` (`hx-disabled-elt`). Ветвь `:189` печатает `hx-swap` ОБЕИМИ
+# сторонами `if`/`else`: присутствие `hx-swap` безусловно, условно лишь значение,
+# и в перечне раздаваемых он стоит потому, что ветвь печатает его текстом (сеть
+# строже предиката — см. шапку группы выше). Номера строк — на 2026-09-24.
+#
+# ⚠️ ДОВОД, СВЯЗЫВАЮЩИЙ ДВЕ ГРУППЫ В ОДНО ОБЪЯСНЕНИЕ. `hx-post` и `hx-indicator`
+# в `form_wrapper` БЕЗУСЛОВНЫ — они стоят в теге вне всякой ветви, — и именно это
+# делает правило группы выше («условный `hx-post` == 0») законно пустым: макрос,
+# через который рождаются формы вехи, условием собирает ШЕСТЬ прочих свойств
+# запроса, но не адрес отправки. Утверждается машинно в
+# `test_form_wrapper_branches_dispensing_htmx_are_the_declared_six`.
+#
+# ЛЕТОПИСЬ ПЕРВАЯ: «12 мест в ЧЕТЫРЁХ классах» → «12 мест в ТРЁХ классах вне
+# макроса + 6 ветвей внутри макроса, всего 18» (Фаза 15, план 15-05, 2026-09-24).
+# Замер Ф-08 верен по числу 12 и по составу трёх классов; ярлык «четыре класса»
+# относил к двенадцати четвёртый класс, который в двенадцать НЕ ВХОДИЛ (макрос
+# считался отдельной строкой «плюс 8 ветвей»). ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН
+# УСТАРЕЛ: на момент своей записи он был верным, и правится не он, а числа,
+# которые он пережил. Новое число снято СЧЁТОМ ПО ОБЪЯВЛЕННОМУ ПРЕДИКАТУ
+# (`_conditional_hx_sites` + `_form_wrapper_branches`), а не переписано.
+#
+# ЛЕТОПИСЬ ВТОРАЯ: «8 ветвей `{%- if %}` в `form_wrapper`» → «6 раздающих `hx-*`»
+# (Фаза 15, план 15-05, 2026-09-24). Наивный `grep -c '{%- if'` даёт 8, и это
+# ВЕРНЫЙ замер своей сети; но две ветви `hx-*` не раздают — `:182` лежит ВНУТРИ
+# докстринга макроса (проза `{%- if caller is defined %}`, приём компонента
+# модального окна), `:196` есть `{%- if caller is defined %}{{ caller() }}` (ветвь
+# без единого `hx-*`). ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи
+# он был верным, и правится не он, а числа, которые он пережил. Разность 8 − 6 = 2
+# ДОКАЗАНА МАШИННО, а не объявлена: обе исключённые строки находятся и называются
+# `test_form_wrapper_branches_naive_count_exceeds_the_dispensing_by_the_two_named_lines`.
+# Это ровно тот приём, которым эта фаза отличает «число совпало» от «сеть верна».
+#
+# ⚠️ ПРИОРИТЕТ НАБЛЮДЕНИЯ ОБЪЯВЛЕН ПОЛЕМ И УТВЕРЖДАЕТСЯ, А НЕ ОСТАЁТСЯ В ПРОЗЕ:
+# сперва 2 места вооружения опроса, потом 2 внеполосных, потом 8 каскадных.
+# ОСНОВАНИЕ ИЗМЕРЕНО: класс 1 несёт `hx-trigger="every 5s"`, появляющийся только в
+# одной ветке, то есть исправность контракта останова опроса GATE-08 («каждый
+# фрагмент с `hx-trigger="every "` имеет парный без него») зависит от ветвления,
+# которого гейт разметки по определению не видит. Если условие сломается, опрос
+# либо НЕ НАЧНЁТСЯ (человек смотрит на застывший экран), либо НЕ КОНЧИТСЯ
+# (бесконечный опрос — нагрузка на сервер от каждого открытого клиента). Ни того
+# ни другого суита увидеть не может: JS не исполняется. Этот абзац — основание
+# того, что человек в пункте 9 ручного UAT смотрит ИМЕННО эти места и ИМЕННО в
+# этом порядке; раздел улики `15-UAT.md` пишет план 15-14.
+#
+# ГРАНИЦА КОДИРОВКИ. Шаблоны читаются как UTF-8 (`_all_templates`), значения
+# атрибутов и имена классов сравниваются ТОЧНЫМ равенством кодовых точек, без
+# нормализации: имена классов и значения условий здесь русскоязычны, и
+# нормализация молча склеила бы различные строки. Различие узкого пробела и
+# обычного считается различием
+# (`test_blind_zone_compares_attribute_values_by_exact_code_points`).
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ. Зелёный цвет означает, что мест условной сборки
+# прочих `hx-*` ровно 12 вне макроса и 6 ветвей внутри, и что каждое отнесено к
+# классу. Он НЕ означает, что хоть одно условие ВЕРНО ВЫЧИСЛЯЕТСЯ на рантайме —
+# суита Jinja рендерит, но JS не исполняет и состояния `syncing` в браузере не
+# наблюдает; НЕ означает, что опрос стартует и останавливается (это контракт
+# GATE-08 и пункт ручного обхода); и НЕ означает, что 12 мест ИСЧЕРПЫВАЮТ слепую
+# зону — сеть видит только Jinja-ветвление в тексте шаблона, а атрибут, пришедший
+# готовой строкой из `app/pages/`, ей не виден ни в каком случае (граница названа
+# шапкой группы выше и перезамерена там же: таких атрибутов сегодня НОЛЬ). ⚠️
+# Зелень этой группы пункт 9 тоже НЕ закрывает: она объявляет, ЧТО смотреть, а
+# отметку о закрытии ставит человек (D-17).
+
+BLIND_ZONE_POLLING = "вооружение опроса"
+BLIND_ZONE_OOB = "внеполосная область"
+BLIND_ZONE_CASCADE = "каскадная строка запроса"
+# Порядок классов есть порядок приоритета наблюдения.
+BLIND_ZONE_CLASS_ORDER = (BLIND_ZONE_POLLING, BLIND_ZONE_OOB, BLIND_ZONE_CASCADE)
+
+POLLING_TRIGGER_PREFIX = "every "
+HX_TRIGGER_VALUE = _value_pattern("hx-trigger")
+HX_ANY_VALUE = re.compile(r"(?<![-\w])(hx-[-\w:]+)\s*=\s*(\"([^\"]*)\"|'([^']*)')")
+FOR_STATEMENT = re.compile(r"\{%-?\s*for\b")
+MACRO_BODY = re.compile(r"\{%-?\s*macro\b.*?\{%-?\s*endmacro\s*-?%\}", re.DOTALL)
+
+
+class ConditionalHxSite(NamedTuple):
+    """Объявленное место слепой зоны.
+
+    kind — класс (`BLIND_ZONE_CLASS_ORDER`); attributes — атрибуты `hx-*`, чьё
+    присутствие или строка запроса зависят от ветвления; priority — место в
+    порядке наблюдения пункта 9 (1 — смотреть первым); reason — чем поломка
+    условия видна ЧЕЛОВЕКУ, раз суита её не видит.
+    """
+
+    kind: str
+    attributes: tuple[str, ...]
+    priority: int
+    reason: str
+
+
+# Разбивка по классам — ОТДЕЛЬНЫМИ константами: сумма утверждается равной
+# общему числу, то есть одно множество считается дважды разными путями.
+CONDITIONAL_HX_CLASS_POLLING = 2
+CONDITIONAL_HX_CLASS_OOB = 2
+CONDITIONAL_HX_CLASS_CASCADE = 8
+CONDITIONAL_HX_SITES_OUTSIDE_MACRO = 12
+
+_POLLING_ATTRIBUTES = ("hx-get", "hx-trigger", "hx-swap")
+_CASCADE_REASON = (
+    "вторая и следующие порции бесконечной подгрузки теряют фильтр — в ленте "
+    "появляются записи вне выбранного фильтра, или подгрузка уходит с пустой строкой"
+)
+
+# Ключ `путь#порядковый_номер`; гейт сравнивает МНОЖЕСТВА ключей, поэтому
+# текстовый порядок записей ниже не несущий — несущий порядок задаёт поле
+# `priority`.
+CONDITIONAL_HX_SITES: dict[str, ConditionalHxSite] = {
+    "account_groups/partials/sync_result.html#0": ConditionalHxSite(
+        BLIND_ZONE_POLLING,
+        _POLLING_ATTRIBUTES,
+        1,
+        ":50 — статус синхронизации групп аккаунта. Опрос вооружается только при "
+        "`status == 'syncing'`: сломанное условие даёт застывший «Синхронизация...» "
+        "(опрос не начался) либо бесконечный опрос после завершения",
+    ),
+    "accounts/partials/sync_status_card.html#0": ConditionalHxSite(
+        BLIND_ZONE_POLLING,
+        _POLLING_ATTRIBUTES,
+        2,
+        ":48 — карточка аккаунта в списке. Опрос вооружается только при "
+        "`status == 'syncing'`: застывшая карточка либо бесконечный опрос",
+    ),
+    "ads/includes/autosave.html#0": ConditionalHxSite(
+        BLIND_ZONE_OOB,
+        ("hx-swap-oob",),
+        3,
+        ":28 — индикатор автосохранения. Без признака ответ на форму с "
+        "`hx-swap=\"none\"` узел не обновит: человек видит устаревший статус сохранения",
+    ),
+    "ads/includes/media_add_tile.html#0": ConditionalHxSite(
+        BLIND_ZONE_OOB,
+        ("hx-swap-oob",),
+        4,
+        ":55 — плитка «+ ДОБАВИТЬ» полосы вложений. Без признака плитка не "
+        "переиздаётся: видна при достигнутом потолке вложений или скрыта ниже него",
+    ),
+    "ads/list.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 5, ":61 — лента объявлений; " + _CASCADE_REASON
+    ),
+    "ads/partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 6, ":7 — порция ленты объявлений; " + _CASCADE_REASON
+    ),
+    "schedules/list.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 7, ":66 — лента расписаний; " + _CASCADE_REASON
+    ),
+    "schedules/partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 8, ":12 — порция ленты расписаний; " + _CASCADE_REASON
+    ),
+    "history/list.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 9, ":119 — история рассылок; " + _CASCADE_REASON
+    ),
+    "history/partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 10, ":6 — порция истории рассылок; " + _CASCADE_REASON
+    ),
+    "admin/user_history.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE,
+        ("hx-get",),
+        11,
+        ":63 — история пользователя в админке; " + _CASCADE_REASON,
+    ),
+    "admin/history_partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE,
+        ("hx-get",),
+        12,
+        ":7 — порция истории пользователя в админке; " + _CASCADE_REASON,
+    ),
+}
+
+# Класс 4 — ветви тела `form_wrapper`: условие ветви → раздаваемые `hx-*`.
+FORM_WRAPPER_CONDITIONAL_BRANCHES = 6
+FORM_WRAPPER_CONDITIONAL_ATTRIBUTES: dict[str, tuple[str, ...]] = {
+    "target": ("hx-target", "hx-swap"),
+    "trigger": ("hx-trigger",),
+    "sync": ("hx-sync",),
+    "encoding": ("hx-encoding",),
+    "include": ("hx-include",),
+    "disabled_elt": ("hx-disabled-elt",),
+}
+# Безусловные атрибуты тега макроса, на которых держится довод «условный
+# `hx-post` законно пуст».
+FORM_WRAPPER_UNCONDITIONAL_ATTRIBUTES = ("hx-post", "hx-indicator")
+
+# Наивная сеть второй летописи и её число — ВЕРНЫЙ замер своей сети.
+FORM_WRAPPER_NAIVE_BRANCH_NET = "{%- if"
+FORM_WRAPPER_NAIVE_BRANCHES = 8
+# Исключённые наивной сетью ветви: причина → условие. Номера строк (`:182`,
+# `:196` на 2026-09-24) называет отказ, но не утверждение: правка шапки макроса
+# двигала бы их, не меняя предмета.
+FORM_WRAPPER_EXCLUDED_BRANCHES: dict[str, str] = {
+    "внутри докстринга макроса": "caller is defined",
+    "ветвь без единого `hx-*`": "caller is defined",
+}
+
+SYNTHETIC_CONDITIONAL_OOB_TEMPLATE = "synthetic/conditional_oob.html"
+SYNTHETIC_CONDITIONAL_OOB = '<div id="z" {% if q %}hx-swap-oob="true"{% endif %}></div>'
+SYNC_RESULT_TEMPLATE = "account_groups/partials/sync_result.html"
+SYNC_RESULT_POLLING_BRANCH = (
+    "{% if status == 'syncing' %} hx-get=\"/accounts/{{ account_id }}/groups/sync-status\""
+    ' hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}'
+)
+SYNC_RESULT_POLLING_UNCONDITIONAL = (
+    ' hx-get="/accounts/{{ account_id }}/groups/sync-status"'
+    ' hx-trigger="every 5s" hx-swap="outerHTML"'
+)
+
+
+def _conditional_hx_sites(sources: dict[str, str]) -> dict[str, Site]:
+    """Места условной сборки ПРОЧИХ `hx-*` ВНЕ тела макроса: ключ `путь#индекс` → место.
+
+    Чистая функция от поданного отображения. Место — тег, у которого
+    `_blind_zone_attributes` непуст; тег, лежащий внутри `{% macro %}…
+    {% endmacro %}`, сюда не входит — это класс 4, и считается он ветвями
+    (`_form_wrapper_branches`), а не тегами.
+    """
+    found: dict[str, Site] = {}
+    return found
+
+
+def _macro_conditional_hx_sites(sources: dict[str, str]) -> dict[str, Site]:
+    """Места условной сборки прочих `hx-*` ВНУТРИ тела макроса — та же сеть, другая сторона."""
+    found: dict[str, Site] = {}
+    return found
+
+
+def _blind_zone_classes(tag: str) -> set[str]:
+    """Классы, к которым относится место; полнота требует РОВНО одного."""
+    classes: set[str] = set()
+    return classes
+
+
+def _form_wrapper_branches(source: str) -> dict[str, tuple[str, ...]]:
+    """Ветви `{% if %}` исходника (без комментариев), раздающие `hx-*`: условие → атрибуты."""
+    branches: dict[str, tuple[str, ...]] = {}
+    return branches
+
+
+def _form_wrapper_excluded_branches(source: str) -> list[tuple[str, str, int]]:
+    """Ветви наивной сети, `hx-*` не раздающие: (причина, условие, строка сырого исходника)."""
+    excluded: list[tuple[str, str, int]] = []
+    return excluded
+
+
+def _blind_zone_offence(found: dict[str, Site], declared: dict[str, ConditionalHxSite]) -> str:
+    """Пустая строка, если множества ключей совпали; иначе — отказ с именами мест."""
+    if set(found) == set(declared):
+        return ""
+    return (
+        f"мест условной сборки прочих `hx-*` вне макроса найдено {len(found)}, "
+        f"объявлено {len(declared)} — новые: {sorted(set(found) - set(declared))}, "
+        f"пропавшие: {sorted(set(declared) - set(found))}. Число двигается ЗАМЕРОМ "
+        f"и строкой летописи, а не сужением сети"
+    )
+
+
+def _blind_zone_class_offences(found: dict[str, Site]) -> dict[str, list[str]]:
+    """Места, отнесённые не ровно к одному классу: ключ → найденные классы."""
+    return {
+        key: sorted(classes)
+        for key, site in found.items()
+        if len(classes := _blind_zone_classes(site.tag)) != 1
+    }
+
+
+def test_conditional_hx_attributes_outside_the_macro_are_the_declared_twelve() -> None:
+    """Мест условной сборки прочих `hx-*` вне макроса ровно 12, и это объявленные ключи."""
+    sources = dict(_all_templates())
+    found = _conditional_hx_sites(sources)
+
+    assert len(found) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO, _blind_zone_offence(
+        found, CONDITIONAL_HX_SITES
+    )
+    assert set(found) == set(CONDITIONAL_HX_SITES), _blind_zone_offence(found, CONDITIONAL_HX_SITES)
+    assert len(CONDITIONAL_HX_SITES) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO
+    for key, site in found.items():
+        assert _blind_zone_attributes(site.tag) == CONDITIONAL_HX_SITES[key].attributes, (
+            f"{key}: раздаваемые атрибуты {_blind_zone_attributes(site.tag)}, объявлено "
+            f"{CONDITIONAL_HX_SITES[key].attributes}"
+        )
+
+
+def test_blind_zone_class_breakdown_is_the_declared_two_two_eight() -> None:
+    """Разбивка 2 / 2 / 8 — объявленная и измеренная; сумма равна 12."""
+    declared = {
+        BLIND_ZONE_POLLING: CONDITIONAL_HX_CLASS_POLLING,
+        BLIND_ZONE_OOB: CONDITIONAL_HX_CLASS_OOB,
+        BLIND_ZONE_CASCADE: CONDITIONAL_HX_CLASS_CASCADE,
+    }
+    assert sum(declared.values()) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO, (
+        f"сумма разбивки {sum(declared.values())} ≠ {CONDITIONAL_HX_SITES_OUTSIDE_MACRO}"
+    )
+    by_declaration = {
+        kind: sum(1 for entry in CONDITIONAL_HX_SITES.values() if entry.kind == kind)
+        for kind in BLIND_ZONE_CLASS_ORDER
+    }
+    assert by_declaration == declared, f"перечень разбит {by_declaration}, объявлено {declared}"
+
+    found = _conditional_hx_sites(dict(_all_templates()))
+    measured = {kind: 0 for kind in BLIND_ZONE_CLASS_ORDER}
+    for key, site in found.items():
+        for kind in _blind_zone_classes(site.tag):
+            measured[kind] += 1
+            assert key not in CONDITIONAL_HX_SITES or CONDITIONAL_HX_SITES[key].kind == kind, (
+                f"{key}: измеренный класс «{kind}», объявлен «{CONDITIONAL_HX_SITES[key].kind}»"
+            )
+    assert measured == declared, f"измеренная разбивка {measured}, объявлено {declared}"
+
+
+def test_form_wrapper_branches_dispensing_htmx_are_the_declared_six() -> None:
+    """Раздающих `hx-*` ветвей в теле `form_wrapper` ровно 6; `hx-post` и `hx-indicator` безусловны."""
+    sources = dict(_all_templates())
+    branches = _form_wrapper_branches(sources[FORM_WRAPPER_DEFINITION])
+
+    assert len(branches) == FORM_WRAPPER_CONDITIONAL_BRANCHES, (
+        f"раздающих ветвей {len(branches)}, объявлено {FORM_WRAPPER_CONDITIONAL_BRANCHES}: {branches}"
+    )
+    assert branches == FORM_WRAPPER_CONDITIONAL_ATTRIBUTES, (
+        f"ветви раздают {branches}, объявлено {FORM_WRAPPER_CONDITIONAL_ATTRIBUTES}"
+    )
+
+    macro_sites = _macro_conditional_hx_sites(sources)
+    wrapper = [site for site in macro_sites.values() if site.template == FORM_WRAPPER_DEFINITION]
+    assert len(wrapper) == 1, f"тег макроса `form_wrapper` среди мест тела макроса: {sorted(macro_sites)}"
+    printed = HX_ANY_ATTR.findall(wrapper[0].tag)
+    conditional = _conditional_attributes(wrapper[0].tag)
+    for name in FORM_WRAPPER_UNCONDITIONAL_ATTRIBUTES:
+        assert name in printed and name not in conditional, (
+            f"`{name}` в `form_wrapper` перестал быть безусловным (печатается: "
+            f"{name in printed}, под ветвью: {name in conditional}) — довод «условный "
+            f"`hx-post` законно пуст» потерял основание"
+        )
+
+
+def test_form_wrapper_branches_naive_count_exceeds_the_dispensing_by_the_two_named_lines() -> None:
+    """Летопись 8 → 6 доказана машинно: наивных 8, раздающих 6, разность 2 — названа."""
+    source = dict(_all_templates())[FORM_WRAPPER_DEFINITION]
+    naive = source.count(FORM_WRAPPER_NAIVE_BRANCH_NET)
+    dispensing = len(_form_wrapper_branches(source))
+    excluded = _form_wrapper_excluded_branches(source)
+
+    assert naive == FORM_WRAPPER_NAIVE_BRANCHES, f"наивная сеть даёт {naive}"
+    assert dispensing == FORM_WRAPPER_CONDITIONAL_BRANCHES, f"раздающих ветвей {dispensing}"
+    assert naive - dispensing == len(FORM_WRAPPER_EXCLUDED_BRANCHES) == 2, (
+        f"разность наивного счёта и раздающих {naive - dispensing}, объявлено 2"
+    )
+    assert {(reason, condition) for reason, condition, _ in excluded} == set(
+        FORM_WRAPPER_EXCLUDED_BRANCHES.items()
+    ), (
+        f"исключённые ветви {excluded} разошлись с объявленными "
+        f"{FORM_WRAPPER_EXCLUDED_BRANCHES} — летопись 8 → 6 надлежит перезамерить"
+    )
+    assert len(excluded) == naive - dispensing, (
+        f"названо исключённых {len(excluded)} при разности {naive - dispensing}: {excluded}"
+    )
+
+
+def test_blind_zone_every_site_falls_into_exactly_one_class() -> None:
+    """Полнота: каждое место — ровно в одном классе; место без класса НАЗЫВАЕТСЯ."""
+    sources = dict(_all_templates())
+    found = _conditional_hx_sites(sources)
+    assert found, "мест слепой зоны не найдено — полнота утверждала бы пустоту"
+    assert _blind_zone_class_offences(found) == {}, (
+        f"места не ровно в одном классе: {_blind_zone_class_offences(found)}"
+    )
+    assert set(_macro_conditional_hx_sites(sources)) == {f"{FORM_WRAPPER_DEFINITION}#0"}, (
+        f"внутри тел макросов условную сборку несёт не только `form_wrapper`: "
+        f"{sorted(_macro_conditional_hx_sites(sources))} — класса для этого места нет"
+    )
+
+    key = "synthetic/unclassified.html"
+    synthetic = {key: '<div id="u" {% if q %}hx-target="#u"{% endif %}></div>'}
+    offences = _blind_zone_class_offences(_conditional_hx_sites(synthetic))
+    assert offences == {f"{key}#0": []}, (
+        f"место без класса не названо правилом полноты: {offences}"
+    )
+
+
+def test_blind_zone_observation_priority_puts_polling_first() -> None:
+    """Приоритет — ПОЛЕ: 1…12 без пропусков, первые два — вооружение опроса."""
+    ordered = sorted(CONDITIONAL_HX_SITES.items(), key=lambda item: item[1].priority)
+    priorities = [entry.priority for _, entry in ordered]
+    assert priorities == list(range(1, len(CONDITIONAL_HX_SITES) + 1)), (
+        f"приоритеты {priorities} — не 1…{len(CONDITIONAL_HX_SITES)} без повторов"
+    )
+    assert [entry.kind for _, entry in ordered[:2]] == [BLIND_ZONE_POLLING, BLIND_ZONE_POLLING], (
+        f"первые два по приоритету — {[key for key, _ in ordered[:2]]}, а не вооружение опроса"
+    )
+    ranks = [BLIND_ZONE_CLASS_ORDER.index(entry.kind) for _, entry in ordered]
+    assert ranks == sorted(ranks), f"порядок приоритета нарушает порядок классов: {ordered}"
+
+    found = _conditional_hx_sites(dict(_all_templates()))
+    for key, entry in CONDITIONAL_HX_SITES.items():
+        if entry.kind == BLIND_ZONE_POLLING:
+            assert key in found, f"место вооружения опроса {key} не найдено"
+            trigger = _attr_value(found[key].tag, HX_TRIGGER_VALUE)
+            assert trigger is not None and trigger.startswith(POLLING_TRIGGER_PREFIX), (
+                f"{key}: основание приоритета (`hx-trigger=\"every …\"` под ветвью) не "
+                f"измеряется — значение {trigger!r}"
+            )
+
+
+def test_control_negative_a_synthetic_oob_site_grows_the_conditional_hx_attributes() -> None:
+    """Контроль ДОБАВЛЕНИЯ: синтетический условный `hx-swap-oob` — 13 мест, класс назван."""
+    sources = dict(_all_templates())
+    key = SYNTHETIC_CONDITIONAL_OOB_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_CONDITIONAL_OOB}
+    assert changed != sources
+
+    found = _conditional_hx_sites(changed)
+
+    assert len(found) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO + 1, (
+        f"мест после добавления {len(found)}, ожидалось {CONDITIONAL_HX_SITES_OUTSIDE_MACRO + 1}"
+    )
+    assert f"{key}#0" in found, f"добавленное место не найдено: {sorted(found)}"
+    assert _blind_zone_classes(found[f"{key}#0"].tag) == {BLIND_ZONE_OOB}, (
+        f"класс добавленного места {_blind_zone_classes(found[f'{key}#0'].tag)}, ожидался "
+        f"«{BLIND_ZONE_OOB}»"
+    )
+    assert f"{key}#0" in _blind_zone_offence(found, CONDITIONAL_HX_SITES)
+
+
+def test_control_negative_a_cut_branch_shrinks_the_conditional_hx_attributes(tmp_path: Path) -> None:
+    """Контроль СНЯТИЯ: у места вооружения опроса вырезано ветвление — 11 мест, равенство краснеет."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            SYNC_RESULT_TEMPLATE, SYNC_RESULT_POLLING_BRANCH, SYNC_RESULT_POLLING_UNCONDITIONAL
+        ),
+    )
+    found = _conditional_hx_sites(dict(_all_templates(root)))
+    key = f"{SYNC_RESULT_TEMPLATE}#0"
+
+    assert len(found) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO - 1, (
+        f"мест после снятия ветвления {len(found)}, ожидалось "
+        f"{CONDITIONAL_HX_SITES_OUTSIDE_MACRO - 1}"
+    )
+    assert key not in found
+    assert not (set(found) == set(CONDITIONAL_HX_SITES)), (
+        "утверждение равенства перечню осталось истинным при исчезнувшем месте — "
+        "правило краснеет только вверх"
+    )
+    assert key in _blind_zone_offence(found, CONDITIONAL_HX_SITES)
+
+
+def test_control_positive_blind_zone_universe_is_nonempty_and_every_hx_attribute_is_parsed() -> None:
+    """Положительный контроль: `len(sources) > 50`, и каждое вхождение `hx-*` лежит в разобранном теге."""
+    sources = dict(_all_templates())
+    assert len(sources) > CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR, (
+        f"вселенная {len(sources)} шаблонов — обход сломан"
+    )
+    templates = list(sources.items())
+    in_tags = sum(len(HX_ANY_ATTR.findall(site.tag)) for site in _sites(templates, HX_ANY_TAG))
+    total = _attribute_count(templates, HX_ANY_ATTR)
+    assert in_tags == total, (
+        f"вхождений `hx-*` {total}, из них в разобранных тегах {in_tags} — граница "
+        f"тега разобрана неверно, и место слепой зоны может потеряться молча"
+    )
+    assert _conditional_hx_sites(sources), "на непустой вселенной слепая зона пуста — сеть слепа"
+
+
+def test_blind_zone_adjacency_counts_a_doubly_conditional_site_in_both_gates() -> None:
+    """Смежность: место с условными `hx-post` и `hx-swap` считают ОБЕ группы, без дедупликации."""
+    key = "synthetic/doubly_conditional.html"
+    sources = {
+        key: '<form method="post" action="/y" {% if x %}hx-post="/y" hx-swap="none"{% endif %}></form>'
+    }
+    post_sites = _conditional_hx_post_sites(sources)
+    other_sites = _conditional_hx_sites(sources)
+
+    assert f"{key}#0" in post_sites, f"группа условного `hx-post` место не увидела: {post_sites}"
+    assert f"{key}#0" in other_sites, f"группа прочих `hx-*` место не увидела: {other_sites}"
+    assert _blind_zone_attributes(other_sites[f"{key}#0"].tag) == ("hx-swap",), (
+        "группа прочих `hx-*` приписала себе `hx-post` — утверждения перестали быть раздельными"
+    )
+
+
+def test_blind_zone_compares_attribute_values_by_exact_code_points() -> None:
+    """Кодировка: `every` + узкий неразрывный пробел + `5s` — НЕ вооружение опроса."""
+    regular = '<div id="p" {% if s %}hx-get="/p" hx-trigger="every 5s"{% endif %}></div>'
+    narrow = regular.replace("every 5s", "every 5s")
+    assert narrow != regular, "подмена пробела ничего не изменила"
+
+    [regular_site] = _conditional_hx_sites({"synthetic/regular.html": regular}).values()
+    [narrow_site] = _conditional_hx_sites({"synthetic/narrow.html": narrow}).values()
+
+    assert _blind_zone_classes(regular_site.tag) == {BLIND_ZONE_POLLING}
+    assert _blind_zone_classes(narrow_site.tag) == set(), (
+        "значение с узким пробелом приравнено к обычному — сравнение нормализует строки"
+    )
