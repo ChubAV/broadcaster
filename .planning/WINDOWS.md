@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 75
+open_count: 76
 waived_count: 3
 fixed_count: 21
-total_count: 99
-last_updated: 2026-09-22T20:26:22.104Z
+total_count: 100
+last_updated: 2026-09-24T06:15:54.449Z
 ---
 
 # Broken Windows Ledger
@@ -114,6 +114,7 @@ last_updated: 2026-09-22T20:26:22.104Z
 | 97 | 12 | deviation | app/pages/ads.py |  | D-17: объекты-сироты при обрыве партии и межвкладочный счёт свободных мест — принятое допущение (deferred-items.md, источник IN-05) | open |  | 2026-09-19T09:39:39.599Z |  |
 | 98 | 12 | deviation | tests/test_pages/test_htmx_gates.py |  | Три правки сверх двух плановых в задаче 3: HX_HEADER_WRITES 4->5 и два контроля, сравнивавших боевое чтение перечня точечных заголовков с ПУСТЫМ словарём | fixed |  | 2026-09-19T10:21:29.006Z | 2026-09-19T10:21:51.385Z |
 | 99 | 12 | deviation | tests/test_pages/test_htmx_gates.py |  | План 12-10 не называет этот модуль в files_modified: вызов гарды источника завёл собственный выход Response(403) у уже переведённого обработчика, и гейт OWN_RESPONSE_EXITS потребовал записи с новым состоянием решения (D-15) — D-08 этой записи не называет | fixed |  | 2026-09-19T10:47:53.255Z | 2026-09-19T10:48:08.772Z |
+| 100 | 15 | todo | .planning/REQUIREMENTS.md | 73 | GATE-08 name chronicle (plan 15-06) awaits the FETCH-03 prohibition function name from plan 15-04's summary — not invented | open |  | 2026-09-24T06:15:54.449Z |  |
 
 ````json
 [
@@ -1319,6 +1320,19 @@ last_updated: 2026-09-22T20:26:22.104Z
     "reason": "",
     "recorded_at": "2026-09-19T10:47:53.255Z",
     "resolved_at": "2026-09-19T10:48:08.772Z",
+    "milestone": "v2.1"
+  },
+  {
+    "id": 100,
+    "kind": "todo",
+    "phase": "15",
+    "file": ".planning/REQUIREMENTS.md",
+    "line": 73,
+    "description": "GATE-08 name chronicle (plan 15-06) awaits the FETCH-03 prohibition function name from plan 15-04's summary — not invented",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-24T06:15:54.449Z",
+    "resolved_at": null,
     "milestone": "v2.1"
   }
 ]
