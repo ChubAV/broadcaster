@@ -33,7 +33,7 @@ from httpx import AsyncClient
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import AD_STATUS_PUBLISHED
+from app.constants import AD_STATUS_PUBLISHED, VALID_TIMEZONES
 from app.pages.common import format_datetime_for_user, templates
 from app.pages.schedules import ID_MAX
 from app.models.ad import Ad
@@ -42,6 +42,11 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
 from tests.conftest import a_future_run_moment
+from tests.test_schedules_out_of_domain_resume import (
+    MALFORMED_STORED_FORMS,
+    MALFORMED_STORED_FORMS_BY_LABEL,
+    MalformedStoredForm,
+)
 
 FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -3870,3 +3875,370 @@ async def test_the_transition_branch_sends_no_summary_node(
     assert _oob_node(response.text, AD_SUMMARY_NODE_ID) is None, (
         "узел сводки приехал на ПЕРЕХОДНОЙ ветке, где тела нет вовсе"
     )
+
+
+# --- Фаза 15, план 15-08: CR-01 на ЧЕТВЁРТОМ входе — правка из редактора -------
+#
+# ПРЕДМЕТ. Три обработчика (страничный тумблер, тумблер JSON-API, частичное
+# обновление JSON-API) починены 2026-09-12: их отказ на испорченной сохранённой
+# строке предписывает человеку «откройте расписание в редакторе объявления и
+# сохраните дни и время заново». Четвёртый вход — ТА САМАЯ правка из редактора,
+# `schedules_update` — на форме `tz-mars-phobos` отвечал пятисоткой (зонд
+# 13-го круга: 5 passed / 1 failed). Предписание вело человека ровно туда, где
+# пути восстановления не было.
+#
+# ⚠️ У ДЕФЕКТА ДВА КОРНЯ, И ЭТА ЧАСТЬ ФАЙЛА ЗАКРЫВАЕТ ПЕРВЫЙ. Откат невалидной
+# зоны шёл на СОХРАНЁННОЕ значение: проверка `tz not in VALID_TIMEZONES`
+# не отсекала невалидную зону строки, а ПОДТВЕРЖДАЛА её, и запись зоны в
+# строку её же и перезаписывала. Починка одним лишь помощником расчёта сняла бы
+# пятисотку и оставила бы строку испорченной МОЛЧА — поэтому правило ниже
+# читает зону ИЗ СУБД после правки, а не довольствуется кодом ответа.
+#
+# ⚠️ ПЕРЕЧЕНЬ ФОРМ ВВЕЗЁН, А НЕ ЗАВЕДЁН. `MALFORMED_STORED_FORMS` живёт в
+# КОРНЕ `tests/` (`tests/test_schedules_out_of_domain_resume.py`), и его поле
+# `measured` есть ЗАМЕРЕННЫЙ текст отказа вычислителя, а не предсказанный.
+# Второй перечень разошёлся бы с первым немедленно. Форма берётся по МЕТКЕ: по
+# индексу правило молча переехало бы на соседнюю форму при любой перестановке.
+#
+# ⚠️ МАРКЕР `characterisation` ЗДЕСЬ НЕ СТАВИТСЯ, И ЭТО РЕШЕНИЕ, А НЕ
+# УПУЩЕНИЕ. Он объявлен для правил, ОПИСЫВАЮЩИХ непочиненное (`tests/conftest.py`:
+# «красный при починке предмета означает „перепиши слепок“, а не „откати
+# починку“»). Правила ниже утверждают ПОЧИНЕННОЕ поведение и обязаны краснеть
+# при ОТКАТЕ починки — маркер обратил бы их смысл.
+#
+# ⚠️ ПОРЧА СТРОКИ ИДЁТ ЧЕРЕЗ `db_session`, А НЕ ЗАПРОСОМ: отсечка входов
+# создания и обновления не даёт РОДИТЬ такую строку через API — образец
+# `tests/test_pages/test_schedules_poisoned_row.py`. Миграции данных нет
+# (решение владельца `chubav` 2026-09-23 «только код»): уже испорченную строку
+# человек перезаписывает сам через редактор — и эти правила проверяют, что
+# теперь это работает.
+
+ZONE_FORM_LABEL = "tz-mars-phobos"
+ALL_WEEK = [0, 1, 2, 3, 4, 5, 6]
+# Зона профиля, ЗАВЕДОМО отличная от умолчания `UTC`: при равенстве двух
+# значений правило «откат идёт на профиль» было бы неотличимо от правила
+# «откат идёт на литерал».
+PROFILE_ZONE = "Europe/Moscow"
+
+
+def _malformed_stored_form(label: str) -> MalformedStoredForm:
+    """Форма перечня по МЕТКЕ — с отказом, называющим метку и весь перечень."""
+    assert label in MALFORMED_STORED_FORMS_BY_LABEL, (
+        f"в перечне MALFORMED_STORED_FORMS нет формы {label!r}; метки перечня: "
+        f"{[form.label for form in MALFORMED_STORED_FORMS]}"
+    )
+    return MALFORMED_STORED_FORMS_BY_LABEL[label]
+
+
+class _SeededRow(NamedTuple):
+    schedule_id: int
+    ad_id: int
+    account_id: int
+    group_id: int
+
+
+async def _seed_malformed_stored_row(
+    db: AsyncSession, owner: User, form: MalformedStoredForm, *, is_active: bool = True
+) -> _SeededRow:
+    """Полная ЗАКОННАЯ строка, затем испорченная значениями формы через СУБД.
+
+    ⚠️ АНТИВАКУУМНЫЙ ЗУБ ПОСЕВА: строка перечитывается, и утверждается, что
+    порча ПРИЗЕМЛИЛАСЬ, — иначе правила ниже зеленели бы на неиспорченной строке.
+    """
+    ad = await _seed_ad(db, owner.id, f"Объявление формы {form.label}")
+    account = await _seed_account(db, owner.id)
+    group = await _seed_group(db, owner.id, account.id, name=f"Группа {form.label}")
+    schedule = await _seed_schedule(
+        db,
+        ad.id,
+        account.id,
+        group_ids=[group.id],
+        days=list(ALL_WEEK),
+        times=["10:00"],
+        is_active=is_active,
+    )
+    schedule.days_of_week = list(form.days_of_week)
+    schedule.times_of_day = list(form.times_of_day)
+    schedule.timezone = form.timezone
+    await db.commit()
+
+    landed = await _reload(db, schedule.id)
+    assert (landed.days_of_week, landed.times_of_day, landed.timezone) == (
+        list(form.days_of_week),
+        list(form.times_of_day),
+        form.timezone,
+    ), f"порча формы {form.label} не приземлилась — правило измеряло бы чистую строку"
+    return _SeededRow(schedule.id, ad.id, account.id, group.id)
+
+
+def _editor_save_pairs(
+    row: _SeededRow,
+    *,
+    days: list,
+    times: list,
+    timezone_field: str | None,
+) -> list[tuple[str, str]]:
+    """Поля ровно той формы, что шлёт карточка редактора (`sched_card.html`).
+
+    Скрытое поле зоны карточка печатает ИЗ СОХРАНЁННОЙ строки
+    (`value="{{ s.timezone }}"`), поэтому на испорченной строке человек,
+    исполнивший предписание трёх починенных обработчиков, шлёт ЕЁ ЖЕ
+    невалидную зону. `timezone_field=None` — форма без поля зоны вовсе.
+    """
+    pairs = [
+        ("ad_id", str(row.ad_id)),
+        ("account_id", str(row.account_id)),
+        ("group_ids", str(row.group_id)),
+        *[("days_of_week", str(day)) for day in days],
+        *[("times_of_day", str(moment)) for moment in times],
+        ("return_to", "editor"),
+    ]
+    if timezone_field is not None:
+        pairs.append(("timezone", timezone_field))
+    return pairs
+
+
+async def _save_from_editor(client: AsyncClient, row: _SeededRow, pairs) -> int:
+    """Код ответа правки; исключение, дошедшее до клиента, есть та же пятисотка.
+
+    Общий обработчик `app/main.py` отвечает человеку 500, а транспорт теста
+    вдобавок пробрасывает исключение наружу. Оно переводится в код здесь, чтобы
+    отказ правила был УТВЕРЖДЕНИЕМ о коде ответа с названным исключением, а не
+    обрывом теста посреди запроса.
+    """
+    try:
+        response = await client.post(
+            f"/schedules/{row.schedule_id}/edit",
+            content=_form(pairs),
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — перевод обрыва в код ответа
+        pytest.fail(
+            f"правка из редактора ответила пятисоткой: {type(exc).__name__}: {exc}"
+        )
+    return response.status_code
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_edit_from_the_editor_does_not_answer_500(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 1: правка строки с зоной `Mars/Phobos` из редактора — не пятисотка."""
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    status = await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field=form.timezone
+        ),
+    )
+
+    assert status == 302, (
+        f"форма {form.label}: правка ответила {status}, а не прежним переходом "
+        f"в редактор (замер вычислителя: {form.measured})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_edit_writes_a_valid_zone_back(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 2: после правки зона, ПРОЧИТАННАЯ ИЗ СУБД, принадлежит перечню.
+
+    ⚠️ ЭТО УТВЕРЖДЕНИЕ ОТЛИЧАЕТ ПОЧИНКУ ОТ СНЯТИЯ СИМПТОМА. Без него правило
+    зеленело бы и на починке одним лишь помощником расчёта: пятисотки нет, а
+    строка испорчена по-прежнему — только теперь МОЛЧА.
+    """
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field=form.timezone
+        ),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone in VALID_TIMEZONES, (
+        f"после правки из редактора в строке лежит зона {stored.timezone!r} — "
+        f"путь восстановления не возвращён: невалидная зона записана обратно"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile_zone", "expected"),
+    [(PROFILE_ZONE, PROFILE_ZONE), ("Mars/Phobos", "UTC")],
+    ids=["valid-profile-zone", "invalid-profile-zone"],
+)
+async def test_malformed_stored_zone_without_the_field_falls_back_to_the_checked_zone(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    profile_zone: str,
+    expected: str,
+):
+    """Тест 3: форма без поля зоны — откат на ПРОВЕРЕННОЕ, а не на сохранённое.
+
+    Проверенное значение — зона профиля, если она сама принадлежит перечню, и
+    литерал `UTC` последним рубежом (образец `schedules_create`). Утверждаются
+    ОБА случая: без второго правило не отличило бы проверку профиля от слепого
+    копирования его значения.
+    """
+    owner.timezone = profile_zone
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(row, days=[1], times=["10:00"], timezone_field=None),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == expected, (
+        f"профиль {profile_zone!r}: в строку записана зона {stored.timezone!r}, "
+        f"ожидалась {expected!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_valid_form_zone_is_written_as_is(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 4: валидная зона из формы записывается как есть, профилем не подменяется."""
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field="Asia/Vladivostok"
+        ),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == "Asia/Vladivostok", (
+        f"валидная зона формы подменена на {stored.timezone!r} — починка отняла "
+        f"у поля формы его смысл"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_invalid_form_zone_never_lands(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 5: невалидная зона из формы откатывается на проверенную и в строку не попадает."""
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field="Venus/Maxwell"
+        ),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == PROFILE_ZONE, (
+        f"невалидная зона формы откатилась на {stored.timezone!r}, а не на "
+        f"проверенную зону профиля {PROFILE_ZONE!r}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("denial", ["foreign-schedule", "foreign-account"])
+async def test_malformed_stored_zone_access_predicate_is_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, denial: str
+):
+    """Тест 6: предикат доступа не сдвинут — отказы прежние, зона не тронута.
+
+    Утверждения ответов взяты из действующих правил
+    `tests/test_pages/test_schedule_ownership.py`
+    (`test_update_of_a_foreign_schedule_with_a_foreign_ad_stays_silent`,
+    `test_page_update_rejects_swapping_in_foreign_account`). Сверх них
+    утверждается, что испорченная зона ОСТАЛАСЬ в строке: откат зоны стои́т
+    ПОСЛЕ проверок владения, и отказ по доступу не имеет права писать в строку.
+    """
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    if denial == "foreign-schedule":
+        stranger = await _stranger(db_session)
+        row = await _seed_malformed_stored_row(db_session, stranger, form)
+        pairs = _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field="UTC"
+        )
+    else:
+        row = await _seed_malformed_stored_row(db_session, owner, form)
+        stranger = await _stranger(db_session)
+        foreign_account = await _seed_account(db_session, stranger.id)
+        pairs = _editor_save_pairs(
+            row._replace(account_id=foreign_account.id),
+            days=[1],
+            times=["10:00"],
+            timezone_field="UTC",
+        )
+
+    response = await authed_client.post(
+        f"/schedules/{row.schedule_id}/edit",
+        content=_form(pairs),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    if denial == "foreign-schedule":
+        assert location == "/schedules", location
+    else:
+        assert location.startswith(f"/ads/{row.ad_id}/edit"), location
+        assert "notice=schedule_account_gone" in location, location
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == form.timezone, (
+        f"{denial}: отказ по доступу записал в строку зону {stored.timezone!r} — "
+        f"откат зоны встал ДО проверок владения"
+    )
+    assert stored.account_id == row.account_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [True, False], ids=["complete", "incomplete"])
+async def test_malformed_stored_zone_next_run_agrees_with_completeness(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, complete: bool
+):
+    """Тест 7: при валидной зоне полное расписание получает момент, неполное — нет.
+
+    Правило прежнее (D-08) и не переписывается: здесь оно лишь повторено на
+    строке, чья сохранённая зона была испорчена.
+    """
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+    pairs = _editor_save_pairs(
+        row, days=[1], times=["10:00"], timezone_field="Europe/Samara"
+    )
+    if not complete:
+        pairs = [pair for pair in pairs if pair[0] != "group_ids"]
+
+    status = await _save_from_editor(authed_client, row, pairs)
+
+    assert status == 302
+    stored = await _reload(db_session, row.schedule_id)
+    if complete:
+        assert stored.is_active is True
+        assert stored.next_run_at is not None, (
+            "полное расписание с валидной зоной сохранено без момента запуска"
+        )
+    else:
+        assert stored.is_active is False
+        assert stored.next_run_at is None
