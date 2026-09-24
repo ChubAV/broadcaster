@@ -8256,6 +8256,47 @@ def _conditional_universe_offence(sources: dict[str, str]) -> str:
     )
 
 
+# Оператор ветвления Jinja: открывающий `if` и закрывающий `endif`. `elif` и
+# `else` блок не открывают и не закрывают — они делят его на ветви, и все ветви
+# блока входят в его текст. Условие берётся из группы 2.
+IF_STATEMENT = re.compile(r"\{%-?\s*(if|endif)\b(.*?)-?%\}", re.DOTALL)
+
+
+def _if_blocks(source: str) -> list[tuple[int, str, str]]:
+    """Блоки `{% if %}…{% endif %}`: (позиция `if`, условие, текст блока со всеми ветвями).
+
+    Вложенность учитывается стеком: внутренний блок входит в текст внешнего.
+    Блок, чей `endif` в поданном тексте не нашёлся, тянется до конца текста —
+    незакрытое ветвление сеть считает ветвлением, а не пропускает.
+    """
+    blocks: list[tuple[int, str, str]] = []
+    stack: list[tuple[int, int, str]] = []
+    for match in IF_STATEMENT.finditer(source):
+        if match.group(1) == "if":
+            stack.append((match.start(), match.end(), match.group(2).strip()))
+        elif stack:
+            start, body_start, condition = stack.pop()
+            blocks.append((start, condition, source[body_start : match.start()]))
+    for start, body_start, condition in stack:
+        blocks.append((start, condition, source[body_start:]))
+    return sorted(blocks)
+
+
+def _conditional_attributes(tag: str) -> tuple[str, ...]:
+    """Атрибуты `hx-*`, напечатанные ВНУТРИ блока `{% if %}` тега, в порядке появления.
+
+    Тег приходит УЖЕ без комментариев (его отдаёт `_sites`). Значение атрибута,
+    собранное тернарником `{{ … if … else … }}`, сюда не попадает: тернарник —
+    выражение, а не оператор ветвления, и атрибут остаётся безусловным.
+    """
+    names: list[str] = []
+    for _, _, body in _if_blocks(tag):
+        for name in HX_ANY_ATTR.findall(body):
+            if name not in names:
+                names.append(name)
+    return tuple(names)
+
+
 def _conditional_hx_post_sites(sources: dict[str, str]) -> dict[str, str]:
     """Места условной сборки `hx-post`: ключ `путь#индекс` → текст тега.
 
@@ -8266,6 +8307,14 @@ def _conditional_hx_post_sites(sources: dict[str, str]) -> dict[str, str]:
     Индекс — порядковый среди мест условного `hx-post` своего шаблона.
     """
     found: dict[str, str] = {}
+    for rel, source in sorted(sources.items()):
+        conditional = [
+            site
+            for site in _sites([(rel, source)], HX_ANY_TAG)
+            if HX_POST_NAME in _conditional_attributes(site.tag)
+        ]
+        for key, site in zip(_ordinal_keys(conditional), conditional):
+            found[key] = " ".join(site.tag.split())
     return found
 
 
