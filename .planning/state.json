@@ -51,8 +51,8 @@
   ],
   "next": {
     "command": "/gsd:progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 15 of 9 · 89% · executing"
+    "label": "Advance to the next step (verify)",
+    "reason": "Phase 15 of 9 · 89% · ready to verify"
   },
-  "updated_at": "2026-09-24T17:59:57.186Z"
+  "updated_at": "2026-09-24T18:15:00.373Z"
 }
