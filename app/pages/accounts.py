@@ -168,6 +168,11 @@ async def accounts_partial(
             "account_stats": account_stats,
             "has_next": has_next,
             "next_offset": offset + limit,
+            # Размер страницы ДОЕЗЖАЕТ ДО РАЗМЕТКИ ИЗ КОНТЕКСТА, А НЕ НАБИРАЕТСЯ
+            # В НЕЙ ЛИТЕРАЛОМ (DEF-09-03, план 15-09): второй экземпляр числа
+            # разъехался бы с `PAGE_SIZE` молча. Кладётся ИМЕННО константа, а
+            # не присланный `limit`: адрес следующей порции прежний до символа.
+            "page_size": PAGE_SIZE,
         },
     )
 
@@ -203,6 +208,9 @@ async def accounts_list(
             "account_stats": account_stats,
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
+            # То же значение, что кладёт порция: размер, объявленный ОДИН раз
+            # (DEF-09-03, план 15-09).
+            "page_size": PAGE_SIZE,
             "active_page": "accounts",
         },
     )

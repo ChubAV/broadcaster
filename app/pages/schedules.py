@@ -869,6 +869,12 @@ async def schedules_partial(
             # номер: строки — кортежи выдачи, поэтому идентификатор берётся у
             # `page[-1].Schedule`, а не у самой строки кортежа.
             "next_after_id": page[-1].Schedule.id if page else None,
+            # Размер страницы ДОЕЗЖАЕТ ДО РАЗМЕТКИ ИЗ КОНТЕКСТА, А НЕ НАБИРАЕТСЯ
+            # В НЕЙ ЛИТЕРАЛОМ (DEF-09-03, план 15-09): второй экземпляр числа
+            # разъехался бы с `PAGE_SIZE` молча. Кладётся ИМЕННО константа, а
+            # не присланный `limit`: адрес следующей порции прежний до символа.
+            # Курсор остаётся КЛЮЧЕВЫМ (`next_after_id`), правка его не трогает.
+            "page_size": PAGE_SIZE,
             "filter_params": _filter_params(channel, state, search),
         },
     )
@@ -927,6 +933,9 @@ async def schedules_list(
             # способ, что у порции выше (D-11). Прежде здесь стоял размер
             # страницы: он был верен ровно до первого тумблера под фильтром.
             "next_after_id": page[-1].Schedule.id if page else None,
+            # То же значение, что кладёт порция: размер, объявленный ОДИН раз
+            # (DEF-09-03, план 15-09).
+            "page_size": PAGE_SIZE,
             "active_page": "schedules",
             "total": total,
             "filters_active": filters_active,

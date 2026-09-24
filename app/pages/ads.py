@@ -243,6 +243,11 @@ async def ads_partial(
             "ads": ads,
             "has_next": has_next,
             "next_offset": offset + limit,
+            # Размер страницы ДОЕЗЖАЕТ ДО РАЗМЕТКИ ИЗ КОНТЕКСТА, А НЕ НАБИРАЕТСЯ
+            # В НЕЙ ЛИТЕРАЛОМ (DEF-09-03, план 15-09): второй экземпляр числа
+            # разъехался бы с `PAGE_SIZE` молча. Кладётся ИМЕННО константа, а
+            # не присланный `limit`: адрес следующей порции прежний до символа.
+            "page_size": PAGE_SIZE,
             "filter_params": _ads_filter_params(search),
         },
     )
@@ -290,6 +295,9 @@ async def ads_list(
             "ads": ads,
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
+            # То же значение, что кладёт порция: размер, объявленный ОДИН раз
+            # (DEF-09-03, план 15-09).
+            "page_size": PAGE_SIZE,
             "active_page": "ads",
             "total": total,
             "filters_active": filters_active,
