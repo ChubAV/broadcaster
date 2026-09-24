@@ -183,7 +183,7 @@ status: complete
 
 ## Verification
 
-- `uv run pytest tests/test_templates/test_banner_dismiss.py -q -p no:randomly` → 20 passed; `-k control` → 10 passed (≥ 3).
+- `uv run pytest tests/test_templates/test_banner_dismiss.py -q -p no:randomly` → 20 passed; `-k control` → 12 passed (≥ 3).
 - `uv run pytest tests/ -q -p no:randomly -k "banner or failure_stack or selector_lifts or display_mode or stack_block"` → 61 passed (до правки 41).
 - `uv run pytest tests/test_pages/test_shell.py tests/test_templates/ -q -p no:randomly` на итоговом дереве кода → 572 passed (245 + 327; порог каталога шаблонов 236 перекрыт).
 - `grep -c 'aria-label="Скрыть сообщение"' app/templates/includes/htmx_error_banner.html` → 0; `grep -c 'failure-banner-top' app/static/css/app.css` → 5 (= до правки).
@@ -226,7 +226,7 @@ status: complete
 
 ## Issues Encountered
 
-- `-k control` отбирает 10, а не 3: подстрока `control` есть и в именах правил об органе (`dismiss_control`). Порог плана (≥ 3) выполнен; три объявленных контроля задачи 1 (`test_control_repeated_accessible_names_redden`, `test_control_a_control_without_an_accessible_name_reddens`, `test_control_the_untouched_tree_is_a_nonempty_universe`) входят в отбор.
+- `-k control` отбирает 12, а не 3: подстрока `control` есть и в именах правил об органе (`dismiss_control`). Порог плана (≥ 3) выполнен; три объявленных контроля задачи 1 (`test_control_repeated_accessible_names_redden`, `test_control_a_control_without_an_accessible_name_reddens`, `test_control_the_untouched_tree_is_a_nonempty_universe`) входят в отбор.
 
 ## Known Stubs
 
