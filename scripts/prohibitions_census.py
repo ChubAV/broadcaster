@@ -74,7 +74,22 @@ REGISTRY_FIELD_ORDER = (
     "statement_digest",
     "class",
     "disposition",
+    "declared_rule",
 )
+
+# Группа D-05: у запрета Фазы 10 с `verification: test` реестр несёт `declared_rule` — имя
+# правила, которое НАЗВАЛ автор запрета, либо признак «имя не объявлено». Признак — отдельное
+# значение, не пустая строка и не ноль, и именем Python-функции или модуля быть не может
+# (угловые скобки): спутать его с объявленным именем нечем.
+DECLARED_RULE_PHASE = "10"
+DECLARED_RULE_VERIFICATION = "test"
+RULE_UNDECLARED = "<undeclared>"
+# Объявленное имя — формулировка запрета, ЦЕЛИКОМ заключённая в обратные кавычки и
+# являющаяся голым идентификатором `test_…`. Путь (`tests/…/test_x.py`) и имя каталога внутри
+# пути объявлением правила не считаются: они называют место, а не правило. Снимается ОДИН РАЗ
+# засевом и коммитится; гейт предъявляет существование имени разбором `ast`, а не этим
+# выражением.
+DECLARED_RULE_TOKEN = re.compile(r"`(test_\w+)`")
 
 REGISTRY_HEADER = """\
 # Реестр тождеств запретов планов вехи v2.1 — строка на каждый элемент переписи.
@@ -90,6 +105,10 @@ REGISTRY_HEADER = """\
 # `disposition: unresolved` — засеянный ПРЕДМЕТ решения, а не решение: класс пишет план
 # 15-12, диспозицию по ответу владельца — план 15-13. Исполнитель, поставивший поле вердикта
 # сам, вынес бы вердикт вместо владельца.
+#
+# `declared_rule` стоит только у запретов Фазы 10 с `verification: test` (группа D-05): имя
+# правила, названное формулировкой запрета, либо `<undeclared>` — признак «имя не объявлено».
+# Это ОБЪЯВЛЕНИЕ автора запрета, снятое засевом, а не вердикт о соблюдении.
 #
 # `rows_declared` — второй носитель числа переписи (первый — литерал модуля теста);
 # перегенерация реестра в другой размер краснит модуль.
@@ -337,6 +356,25 @@ def _registry_rows(document: Mapping) -> dict[ProhibitionIdentity, dict]:
     return rows
 
 
+def declared_rule_of(record: ProhibitionRecord) -> str:
+    """Имя правила, объявленное формулировкой запрета, либо `RULE_UNDECLARED`.
+
+    Больше одного объявленного имени — отказ: какое из них стережёт запрет, решает человек,
+    и засев молча выбрать не вправе.
+    """
+    names = DECLARED_RULE_TOKEN.findall(record.statement)
+    if len(names) > 1:
+        raise CensusError(f"`{record.identity}` объявляет больше одного правила: {names}")
+    return names[0] if names else RULE_UNDECLARED
+
+
+def _carries_declared_rule(record: ProhibitionRecord) -> bool:
+    return (
+        record.phase == DECLARED_RULE_PHASE
+        and record.verification == DECLARED_RULE_VERIFICATION
+    )
+
+
 def registry_row(record: ProhibitionRecord) -> dict:
     """Засеянная строка реестра для записи переписи."""
     row: dict = {
@@ -349,6 +387,8 @@ def registry_row(record: ProhibitionRecord) -> dict:
     row["statement_digest"] = record.digest
     row["class"] = SEED_CLASS
     row["disposition"] = SEED_DISPOSITION
+    if _carries_declared_rule(record):
+        row["declared_rule"] = declared_rule_of(record)
     return row
 
 

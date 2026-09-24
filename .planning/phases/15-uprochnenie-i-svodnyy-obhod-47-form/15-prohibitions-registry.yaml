@@ -12,6 +12,10 @@
 # 15-12, диспозицию по ответу владельца — план 15-13. Исполнитель, поставивший поле вердикта
 # сам, вынес бы вердикт вместо владельца.
 #
+# `declared_rule` стоит только у запретов Фазы 10 с `verification: test` (группа D-05): имя
+# правила, названное формулировкой запрета, либо `<undeclared>` — признак «имя не объявлено».
+# Это ОБЪЯВЛЕНИЕ автора запрета, снятое засевом, а не вердикт о соблюдении.
+#
 # `rows_declared` — второй носитель числа переписи (первый — литерал модуля теста);
 # перегенерация реестра в другой размер краснит модуль.
 
@@ -381,56 +385,56 @@ rows:
 - {plan: .planning/phases/10-rychag-components-modal-html/10-32-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: edfa88f52706, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-32-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 9a89e0e1b59c, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 56111570f87c, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: c8e3ccae6843, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 483f9844bfa8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: c8e3ccae6843, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 483f9844bfa8, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 4a4b695b3cf5, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: fbf07b591c01, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: fca6300706d9, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 31b6536668ee, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: fca6300706d9, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 31b6536668ee, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: f52e39c8f176, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: a28144d413fb, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 996f9c7dd054, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: c2ced3f1db5d, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 20a2d98d8619, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 7, phase: '10', verification: none, statement_digest: 09767fff78e1, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: e2a466001aa8, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: c9d91fbf5eea, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 47b746630534, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: e2a466001aa8, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: c9d91fbf5eea, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 47b746630534, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 59fa8dd9bbc6, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 26358d723ee6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 26358d723ee6, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 67c50e421423, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 0d090d88e21d, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 4e033dca83f7, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 21867b246325, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: e592796868bc, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 7fbeccdbf5cf, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 4e033dca83f7, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 21867b246325, class: unclassified, disposition: unresolved, declared_rule: test_control_a_missing_anchor_is_named_by_the_rule}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: e592796868bc, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 7fbeccdbf5cf, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 7b566c7ab7a4, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: d81bd351b853, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: ff079d1797a5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: ff079d1797a5, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: b556cb3a802b, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 14bc45da55f9, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: c9edcfa21e81, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: c9edcfa21e81, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 6f9583048927, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 2530ecfc02d8, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 1a67f7279829, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 9b08efe82dad, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 9e938c7ff5ff, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 387edf9e5ed5, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 0b47cee9cf53, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: db0753ce61f5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 2530ecfc02d8, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 1a67f7279829, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 9b08efe82dad, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 9e938c7ff5ff, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 387edf9e5ed5, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 0b47cee9cf53, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: db0753ce61f5, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: fb5c3a5410f2, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 6735681f1025, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 62025ea32411, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 6735681f1025, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 62025ea32411, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: ebad2a68f0ac, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 2a5ac78434d4, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 117641b88f37, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 2a5ac78434d4, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 117641b88f37, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 0d9a71e9b814, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 7, phase: '10', verification: none, statement_digest: 233b0fb11a00, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: a748f4ed8d96, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 41c04b47e363, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 2b7e4f3b342a, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 9edc0a894491, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: be89b6820843, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 41c04b47e363, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 2b7e4f3b342a, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 9edc0a894491, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: be89b6820843, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 6c2d2b64dd32, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-41-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: c809b67bbd1e, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-41-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: b5f3181e8cea, class: unclassified, disposition: unresolved}
@@ -442,48 +446,48 @@ rows:
 - {plan: .planning/phases/10-rychag-components-modal-html/10-42-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 4496fa22fc96, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 40143230925d, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: a7327afc2484, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: a7327afc2484, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 4c5792d2705c, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: d406717e52f8, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 21ee2e2e169e, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 4f29232bb39d, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 118d274508ef, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 21ee2e2e169e, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 4f29232bb39d, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 118d274508ef, class: unclassified, disposition: unresolved, declared_rule: test_requirement_completion_follows_verification}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 58bc75b63477, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: ace8ed036251, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: a860083be67f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: ace8ed036251, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: a860083be67f, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: f5bf9a7c09f4, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 52f9ded37a4e, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: c0cef810fe6f, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 79f61186f4a3, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 65d85f1354c4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: c0cef810fe6f, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 79f61186f4a3, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 65d85f1354c4, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: deedcc46cb47, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 1df8e31d3590, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 1df8e31d3590, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: d406717e52f8, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: ec14d5aa61a9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: ec14d5aa61a9, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 46983ac8b469, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 48c4e3accea2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 48c4e3accea2, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 93d32a9ca7c3, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 1f317a464b52, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 53cb3937c3b4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 1f317a464b52, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 53cb3937c3b4, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: d46707e41203, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 79b5b8cb6e37, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: cb834b1ef5fd, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 71d8e232a801, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: f869a93d437c, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 451b9403b8e0, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: f782a1374393, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 2607a2b52deb, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 8da2952d11c3, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 69ec10bf905c, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 390a7d5a6c41, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 9a6676c36905, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: d649243f1ef4, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 0fbc6456d88e, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: f00fd51ef638, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 6cc274ecf9eb, class: unclassified, disposition: unresolved}
-- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 16f20f3045b9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 79b5b8cb6e37, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: cb834b1ef5fd, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 71d8e232a801, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: f869a93d437c, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 451b9403b8e0, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: f782a1374393, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 2607a2b52deb, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 8da2952d11c3, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 69ec10bf905c, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 390a7d5a6c41, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 9a6676c36905, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: d649243f1ef4, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 0fbc6456d88e, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: f00fd51ef638, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 6cc274ecf9eb, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 16f20f3045b9, class: unclassified, disposition: unresolved, declared_rule: <undeclared>}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: a62a624e27dc, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 8e8e7ffa1b73, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 0, phase: '10', statement_digest: b6979c68d504, class: unclassified, disposition: unresolved}

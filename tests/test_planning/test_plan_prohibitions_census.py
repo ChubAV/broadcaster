@@ -739,9 +739,9 @@ def test_every_declared_rule_exists_in_the_suite_tree(
 ):
     """У каждого ОБЪЯВЛЕННОГО имени правила предъявлено существование в дереве суиты.
 
-    ЧЕГО ГРУППА НЕ УТВЕРЖДАЕТ. Совпадение имени не есть совпадение предмета: группа НЕ
+    ЧЕГО ГРУППА НЕ УТВЕРЖДАЕТ. Первое: совпадение имени не есть совпадение предмета — группа НЕ
     утверждает, что найденное правило действительно СТЕРЕЖЁТ предмет своего запрета, — это
-    предмет человеческого суждения по D-33. И о `verification: none` группа не судит: она не
+    предмет человеческого суждения по D-33. Второе: о `verification: none` группа не судит — она не
     утверждает, что у таких запретов правила быть не должно, — это предмет решения владельца в
     плане 15-13. Число запретов БЕЗ объявленного имени не знает ни одно утверждение: это
     литерал сегодняшнего незакрытого состояния, и оно ДОКЛАДЫВАЕТСЯ в сообщении об отказе.
@@ -774,7 +774,9 @@ def test_control_negative_a_declared_rule_absent_from_the_suite_is_named(suite_s
         f"{SYNTHETIC_PLAN}#0: объявлено правило `test_no_such_rule_was_ever_written`"
     ], missing
 
-    holder = [path for path, text in suite_sources.items() if f"def {live_name}(" in text]
+    holder = [
+        path for path, text in suite_sources.items() if live_name in _functions_defined_in(text)
+    ]
     assert len(holder) == 1, holder
     doctored = {path: text for path, text in suite_sources.items() if path not in holder}
     assert sorted(_declared_rule_missing(declared, doctored)) == [
