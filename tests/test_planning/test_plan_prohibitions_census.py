@@ -306,9 +306,19 @@ REGISTRY_ROW_FIELDS = frozenset(
         "rule_name",
         "rule_site",
         "coverage_note",
+        "unresolved_reason",
+        "permit_scope",
     }
 )
-REGISTRY_ROW_FIELDS_DECLARED = 11
+# ЛЕТОПИСЬ ЧИСЛА: 11 → 13, план 15-13, задача 2 — пришли `unresolved_reason` (названная причина
+# у каждой строки области решений, оставшейся «неразобрано»; значение — из `UNRESOLVED_REASONS`)
+# и `permit_scope` (ИМЯ КЛАССА у строки «разрешено», D-04). ⚠️ Летопись абзаца выше: он говорит
+# «Полей `permit_*` … здесь НЕТ НАМЕРЕННО: их заводит ответ владельца … а записывает по классам
+# план 15-13» — верно на день плана 15-12. Поле `permit_scope` в СТРОКАХ пришло ровно так, как тот
+# абзац и предсказал: ответ владельца записан блоком `class_decisions` (план 15-12, задача 3), и
+# строка несёт `permit_scope` ТОЛЬКО если её класс получил ветвь `permit-class`; поля вердикта нет
+# по-прежнему.
+REGISTRY_ROW_FIELDS_DECLARED = 13
 RULE_NAME_FIELD = "rule_name"
 RULE_SITE_FIELD = "rule_site"
 # Диспозиции, при которых правило СУЩЕСТВУЕТ: только у них стоят поля правила. Непокрытая часть
@@ -316,6 +326,45 @@ RULE_SITE_FIELD = "rule_site"
 COVERED_DISPOSITIONS = frozenset({"enforced", "partially-enforced"})
 # Координата правила — путь от корня дерева, начинающийся каталогом суиты, и номер строки.
 SUITE_PREFIX = "tests/"
+
+# ДИСПОЗИЦИИ, ПРИ КОТОРЫХ РЕШЕНИЕ ПРИНЯТО: машинным правилом (полностью или частично) либо
+# разрешением владельца. ⚠️ Нетерминальность строки выражается ОТРИЦАНИЕМ ПРИНАДЛЕЖНОСТИ этому
+# перечню, а не именем сегодняшнего состояния (форма `TERMINAL_WALKTHROUGH_STATES`): правило,
+# знающее имя «неразобрано», легко стало бы правилом, знающим его ЧИСЛО.
+DECIDED_DISPOSITIONS = frozenset({"enforced", "partially-enforced", "permitted"})
+UNRESOLVED_REASON_FIELD = "unresolved_reason"
+PERMIT_SCOPE_FIELD = "permit_scope"
+
+# ПЕРЕЧЕНЬ ПРИЧИН «НЕРАЗОБРАНО» В ОБЛАСТИ РЕШЕНИЙ (план 15-13, задача 2). Каждая строка Фазы 10,
+# не получившая решения, несёт ОДНУ причину из перечня, и причина СОГЛАСНА со строкой:
+UNRESOLVED_REASONS = frozenset(
+    {
+        # D-05: запрет объявил `verification: test`, а правила с таким предметом в дереве нет. ⚠️ ЭТО
+        # НАХОДКА ФАЗЫ, А НЕ РАЗНОВИДНОСТЬ РАЗРЕШЕНИЯ — объявление о правиле, которого нет, есть класс
+        # «зелено вакуумом». Законна только у строки с `verification: test`;
+        "declared-rule-absent",
+        # класс получил ответ владельца `require-enforcement`: решено ТРЕБОВАТЬ ПРИНУЖДЕНИЯ, а правила
+        # ещё не написаны. Адресат работы — поле `work_addressee` решения класса (на 2026-09-24 не
+        # назначен: владелец фазы не назвал). Законна только у строки такого класса;
+        "enforcement-required",
+        # класс ответа владельца не получил (`resume-signal` чекпойнта 15-12 разрешал не отвечать):
+        # молчаливого разрешения не ставится. Законна только у строки класса без решения.
+        "awaiting-owner-decision",
+    }
+)
+UNRESOLVED_REASONS_DECLARED = 3
+REASON_DECLARED_RULE_ABSENT = "declared-rule-absent"
+REASON_ENFORCEMENT_REQUIRED = "enforcement-required"
+REASON_AWAITING_OWNER = "awaiting-owner-decision"
+REQUIRE_ENFORCEMENT_BRANCH = "require-enforcement"
+# Поля РЕШЕНИЯ строки: вне области решений (D-02) не стоит ни одно — область не расширяется.
+ROW_DECISION_FIELDS = (
+    "rule_name",
+    "rule_site",
+    "coverage_note",
+    "unresolved_reason",
+    "permit_scope",
+)
 
 # ПЕРЕЧЕНЬ КЛЮЧЕЙ ДОКУМЕНТА РЕЕСТРА. ЛЕТОПИСЬ ЧИСЛА: 3 → 4, план 15-12, задача 3 — пришёл блок
 # `class_decisions` с ОТВЕТОМ ВЛАДЕЛЬЦА по классам (`chubav`, 2026-09-24T16:45Z). До ответа документ
@@ -1057,6 +1106,20 @@ def test_the_declared_vocabularies_and_numbers_agree():
     """Объявленные перечни и числа модуля согласны между собой."""
     assert len(DISPOSITIONS) == DISPOSITIONS_DECLARED, sorted(DISPOSITIONS)
     assert len(REGISTRY_ROW_FIELDS) == REGISTRY_ROW_FIELDS_DECLARED, sorted(REGISTRY_ROW_FIELDS)
+    assert len(UNRESOLVED_REASONS) == UNRESOLVED_REASONS_DECLARED, sorted(UNRESOLVED_REASONS)
+    assert {
+        REASON_DECLARED_RULE_ABSENT,
+        REASON_ENFORCEMENT_REQUIRED,
+        REASON_AWAITING_OWNER,
+    } == UNRESOLVED_REASONS
+    # Решённые диспозиции — собственное подмножество перечня: хотя бы одно значение ему не
+    # принадлежит, иначе «неразобрано» нечем было бы выразить, кроме имени.
+    assert DECIDED_DISPOSITIONS < DISPOSITIONS
+    assert COVERED_DISPOSITIONS < DECIDED_DISPOSITIONS
+    assert PERMITTED in DECIDED_DISPOSITIONS - COVERED_DISPOSITIONS
+    assert set(ROW_DECISION_FIELDS) <= REGISTRY_ROW_FIELDS
+    assert UNCOVERED_PART_FIELD in ROW_DECISION_FIELDS
+    assert REQUIRE_ENFORCEMENT_BRANCH in CLASS_DECISION_BRANCHES
     assert sum(PROHIBITIONS_BY_PHASE_DECLARED.values()) == PROHIBITIONS_DECLARED_AT_PHASE_15
     assert (
         PROHIBITIONS_DECLARED_AT_PHASE_15 - PROHIBITIONS_BY_PHASE_DECLARED[PHASE_15]
@@ -1197,6 +1260,268 @@ def test_control_the_seed_carries_the_owner_answer_and_never_writes_it(live_cens
     assert list(carried) == ["measured", "rows_declared", tool.CLASS_DECISIONS_KEY, "rows"]
     fresh = tool.seed_registry(live_census, None, "x")
     assert tool.CLASS_DECISIONS_KEY not in fresh
+
+
+# --- закрывающее утверждение критерия 6 (план 15-13, задача 2) ---------------------------------
+#
+# КРИТЕРИЙ 6, ПОЛОВИНА (б): по каждому запрету области решений стои́т ЛИБО предъявленное машинное
+# принуждение, ЛИБО явное человеческое разрешение с машинно читаемой областью — а что осталось
+# без того и другого, названо ПРИЧИНОЙ, а не растворено в диспозиции. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ
+# СОБЛЮДЕНИЕ: строка `permitted` закрыта РЕШЕНИЕМ владельца, а не правилом, и ни одно правило
+# ниже не читает её как соблюдённую.
+
+
+def _branch_of_class(decisions) -> dict:
+    """Ветвь ответа владельца по имени класса — из полей обеих форм решения."""
+    return {
+        _decision_class(decision): decision.get("permit_branch", decision.get("decision_branch"))
+        for decision in decisions
+    }
+
+
+def _closing_offences(rows, decisions) -> list[str]:
+    """Нарушения закрывающего утверждения критерия 6 — ВСЕ, с тождествами, а не первое.
+
+    В области решений: строка, чья диспозиция НЕ ПРИНАДЛЕЖИТ `DECIDED_DISPOSITIONS`, несёт
+    причину из `UNRESOLVED_REASONS`, и причина согласна со строкой (объявленный тест — у
+    `verification: test`; требование принуждения — у класса с ветвью `require-enforcement`;
+    ожидание владельца — у класса без решения); решённая строка причины не несёт. Вне области
+    решений не стоит ни одного поля решения — D-02, принадлежностью, а не числом.
+    """
+    branches = _branch_of_class(decisions)
+    offences = []
+    for row in rows:
+        name = _row_name(row)
+        if str(row.get("phase")) != DECISION_SCOPE_PHASE:
+            strays = [field for field in ROW_DECISION_FIELDS if field in row]
+            if strays:
+                offences.append(f"{name}: поля решения {strays} вне области решений (D-02)")
+            continue
+        disposition = row.get("disposition")
+        reason = row.get(UNRESOLVED_REASON_FIELD)
+        if disposition in DECIDED_DISPOSITIONS:
+            if UNRESOLVED_REASON_FIELD in row:
+                offences.append(f"{name}: причина `{reason}` при решённой диспозиции `{disposition}`")
+            continue
+        if reason not in UNRESOLVED_REASONS:
+            offences.append(
+                f"{name}: диспозиция `{disposition}` без названной причины из перечня "
+                f"(причина `{reason}`)"
+            )
+            continue
+        klass = row.get("class")
+        if reason == REASON_DECLARED_RULE_ABSENT and row.get("verification") != VERIFICATION_TEST:
+            offences.append(f"{name}: причина `{reason}` у строки без `verification: test`")
+        elif (
+            reason == REASON_ENFORCEMENT_REQUIRED
+            and branches.get(klass) != REQUIRE_ENFORCEMENT_BRANCH
+        ):
+            offences.append(
+                f"{name}: причина `{reason}` у класса `{klass}` с ветвью `{branches.get(klass)}`"
+            )
+        elif reason == REASON_AWAITING_OWNER and klass in branches:
+            offences.append(
+                f"{name}: причина `{reason}` у класса `{klass}`, получившего ответ "
+                f"`{branches[klass]}` — ответ есть, и «ожидание» было бы неправдой"
+            )
+    return offences
+
+
+def _permit_scope_offences(rows) -> list[str]:
+    """Строка «разрешено» несёт `permit_scope` ИМЕНЕМ СВОЕГО КЛАССА; иная строка — не несёт."""
+    offences = []
+    for row in rows:
+        scope = row.get(PERMIT_SCOPE_FIELD)
+        if row.get("disposition") == PERMITTED:
+            if scope != row.get("class") or scope not in PROHIBITION_CLASSES:
+                offences.append(
+                    f"{_row_name(row)}: `{PERMIT_SCOPE_FIELD}` = `{scope}` при классе "
+                    f"`{row.get('class')}` — область разрешения не есть имя класса строки"
+                )
+        elif PERMIT_SCOPE_FIELD in row:
+            offences.append(
+                f"{_row_name(row)}: `{PERMIT_SCOPE_FIELD}` при диспозиции `{row.get('disposition')}`"
+            )
+    return offences
+
+
+def _disposition_distribution(rows) -> str:
+    """ВСЕ четыре диспозиции области решений с разбивкой по классам и причинам — ДОКЛАДЫВАЕТСЯ.
+
+    В утверждения не входит: отказ закрывающего правила обязан быть читаем без прибора.
+    """
+    scope = _decision_scope_rows(rows)
+    lines = [f"область решений: {len(scope)} строк; {disposition_distribution(scope)}"]
+    for klass in sorted({str(row.get("class")) for row in scope}):
+        members = [row for row in scope if str(row.get("class")) == klass]
+        cells = Counter(str(row.get("disposition")) for row in members)
+        reasons = Counter(
+            str(row.get(UNRESOLVED_REASON_FIELD))
+            for row in members
+            if row.get("disposition") not in DECIDED_DISPOSITIONS
+        )
+        listed = ", ".join(f"{value} {cells[value]}" for value in sorted(DISPOSITIONS))
+        why = ", ".join(f"{value} {count}" for value, count in sorted(reasons.items()))
+        lines.append(f"  {klass}: {listed}" + (f"; причины: {why}" if why else ""))
+    return "\n".join(lines)
+
+
+def test_the_closing_rule_of_criterion_6_every_phase_10_row_is_decided_or_names_its_reason(
+    registry_document,
+):
+    """ЗАКРЫВАЮЩЕЕ УТВЕРЖДЕНИЕ КРИТЕРИЯ 6: ни одной строки «неразобрано» БЕЗ названной причины.
+
+    КАКАЯ ИЗ ДВУХ ФОРМ ВЫБРАНА И ПОЧЕМУ (план 15-13, задача 2 — объявлено здесь, а не оставлено
+    на догадку проверяющему). Сильная форма — «ни один запрет Фазы 10 не несёт `unresolved`
+    вовсе» — по букве плана допустима лишь тогда, когда ВСЕ классы получили ответ владельца. Ответ
+    получили все одиннадцать (`chubav`, 2026-09-24, блок `class_decisions`), и тем не менее
+    сильная форма НЕ ЗАВЕДЕНА: ответ по классу `product-invariant` — `require-enforcement`, то
+    есть владелец РЕШИЛ оставить его запреты открытыми до написания правил, а запреты,
+    объявившие `verification: test` при отсутствующем правиле, по D-05 разрешением не
+    закрываются вовсе. Сильная форма стояла бы красной на законном состоянии дерева и зеленела бы
+    только после работы будущих фаз, адресат которой не назначен. Выбрана БЕЗУСЛОВНАЯ форма:
+    каждая строка области решений либо РЕШЕНА (правилом — полностью или частично — либо
+    разрешением класса), либо несёт причину из объявленного перечня, СОГЛАСНУЮ со строкой.
+    Критерий 6 закрыт настолько, насколько получены ответы и написаны правила; остаток НАЗВАН
+    причиной и ДОКЛАДЫВАЕТСЯ в отказе числом — но ни в одном утверждении числом не стоит.
+
+    НАПРАВЛЕНИЕ КРАСНЕНИЯ. Правило красно на засеянном реестре (все строки «неразобрано» без
+    причины) и зеленеет работой — то есть краснеет в ПРАВИЛЬНУЮ сторону; возврат работы назад
+    его не зеленит (контроль ниже). Нетерминальность выражена ОТРИЦАНИЕМ принадлежности
+    `DECIDED_DISPOSITIONS`, литерала сегодняшнего состояния в исполняемых строках нет.
+
+    Антивакуум: область решений в реестре непуста и равна объявленной, а блок ответа
+    владельца непуст — без него «ожидание владельца» стало бы законным у любой строки.
+    """
+    rows = registry_document["rows"]
+    decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    assert len(_decision_scope_rows(rows)) == PROHIBITIONS_IN_DECISION_SCOPE
+    assert decisions, "блок ответа владельца по классам пуст или отсутствует"
+    offences = _closing_offences(rows, decisions)
+    assert not offences, (
+        f"нарушения закрывающего утверждения критерия 6 ({len(offences)}):\n"
+        + "\n".join(offences)
+        + f"\n\nраспределение диспозиций:\n{_disposition_distribution(rows)}"
+        + f"\nветви ответа: {decision_distribution(decisions)}"
+    )
+
+
+def test_every_permitted_disposition_carries_its_class_as_permit_scope(registry_document):
+    """Разрешение строки — с машинно читаемой областью: `permit_scope` есть ИМЯ КЛАССА (D-04).
+
+    Что класс строки действительно получил разрешение, судит соседнее правило
+    `test_no_row_is_permitted_unless_its_class_was_permitted`.
+    """
+    rows = registry_document["rows"]
+    offences = _permit_scope_offences(rows)
+    assert not offences, "\n".join(offences) + f"\n\n{_disposition_distribution(rows)}"
+
+
+def test_control_the_closing_rule_reddens_on_the_seeded_registry_and_on_a_reasonless_row(
+    registry_document,
+):
+    """НАПРАВЛЕНИЕ КРАСНЕНИЯ — на КОПИЯХ живого реестра; дерево не правится.
+
+    (а) Засеянное состояние (решений нет ни одного) краснит правило на КАЖДОЙ строке области
+    решений — правило красно ДО работы. (б) Подмена диспозиции одной решённой строки на
+    засеянную без причины краснит ровно её. (в) Причина, не согласная со строкой, называется.
+    (г) Поле решения, поставленное строке вне области, называется.
+    """
+    rows = registry_document["rows"]
+    decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    assert _closing_offences(rows, decisions) == []
+
+    seeded = [
+        {
+            **{key: value for key, value in row.items() if key not in ROW_DECISION_FIELDS},
+            "disposition": tool.SEED_DISPOSITION,
+        }
+        for row in rows
+    ]
+    offences = _closing_offences(seeded, decisions)
+    assert len(offences) == PROHIBITIONS_IN_DECISION_SCOPE, offences[:3]
+
+    decided = next(row for row in _decision_scope_rows(rows) if row["disposition"] == PERMITTED)
+    reverted = [
+        {
+            **{key: value for key, value in row.items() if key != PERMIT_SCOPE_FIELD},
+            "disposition": tool.SEED_DISPOSITION,
+        }
+        if row is decided
+        else row
+        for row in rows
+    ]
+    named = [offence.split(":")[0] for offence in _closing_offences(reverted, decisions)]
+    assert named == [_row_name(decided)], named
+
+    required = next(
+        row
+        for row in _decision_scope_rows(rows)
+        if row.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
+    )
+    assert required.get("verification") != VERIFICATION_TEST
+    swapped = [
+        {**row, UNRESOLVED_REASON_FIELD: REASON_DECLARED_RULE_ABSENT} if row is required else row
+        for row in rows
+    ]
+    named = [offence.split(":")[0] for offence in _closing_offences(swapped, decisions)]
+    assert named == [_row_name(required)], named
+
+    outside = next(row for row in rows if str(row.get("phase")) != DECISION_SCOPE_PHASE)
+    widened = [
+        {**row, UNRESOLVED_REASON_FIELD: REASON_AWAITING_OWNER} if row is outside else row
+        for row in rows
+    ]
+    named = [offence.split(":")[0] for offence in _closing_offences(widened, decisions)]
+    assert named == [_row_name(outside)], named
+
+
+def test_control_every_reason_is_judged_against_its_row():
+    """Синтетика: по одной строке на каждую несогласную причину и на каждый вид нарушения."""
+    enforced_class, permitted_class, silent_class = sorted(PROHIBITION_CLASSES)[:3]
+    decisions = [
+        {"decision_branch": REQUIRE_ENFORCEMENT_BRANCH, "decision_scope": enforced_class},
+        {"permit_branch": PERMIT_CLASS_BRANCH, "permit_scope": permitted_class},
+    ]
+
+    def row(index, klass, disposition, reason=None, verification=VERIFICATION_NONE):
+        built = {"plan": SYNTHETIC_PLAN, "index": index, "phase": DECISION_SCOPE_PHASE,
+                 "class": klass, "verification": verification, "disposition": disposition}
+        if reason is not None:
+            built[UNRESOLVED_REASON_FIELD] = reason
+        return built
+
+    rows = [
+        row(0, enforced_class, tool.SEED_DISPOSITION, REASON_ENFORCEMENT_REQUIRED),
+        row(1, permitted_class, tool.SEED_DISPOSITION, REASON_DECLARED_RULE_ABSENT,
+            VERIFICATION_TEST),
+        row(2, silent_class, tool.SEED_DISPOSITION, REASON_AWAITING_OWNER),
+        row(3, permitted_class, PERMITTED),
+        row(4, permitted_class, tool.SEED_DISPOSITION, REASON_ENFORCEMENT_REQUIRED),
+        row(5, permitted_class, tool.SEED_DISPOSITION, REASON_DECLARED_RULE_ABSENT),
+        row(6, enforced_class, tool.SEED_DISPOSITION, REASON_AWAITING_OWNER),
+        row(7, permitted_class, tool.SEED_DISPOSITION),
+        row(8, permitted_class, tool.SEED_DISPOSITION, "waived"),
+        row(9, permitted_class, PERMITTED, REASON_AWAITING_OWNER),
+    ]
+    named = [offence.split(":")[0] for offence in _closing_offences(rows, decisions)]
+    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in range(4, 10)], named
+
+
+def test_control_a_permit_scope_other_than_the_row_class_is_named():
+    """«Разрешено» без области, с чужим классом и область у неразрешённой строки — названы."""
+    klass, other = sorted(PROHIBITION_CLASSES)[:2]
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "class": klass, "disposition": PERMITTED,
+         PERMIT_SCOPE_FIELD: klass},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "class": klass, "disposition": PERMITTED},
+        {"plan": SYNTHETIC_PLAN, "index": 2, "class": klass, "disposition": PERMITTED,
+         PERMIT_SCOPE_FIELD: other},
+        {"plan": SYNTHETIC_PLAN, "index": 3, "class": klass, "disposition": tool.SEED_DISPOSITION,
+         PERMIT_SCOPE_FIELD: klass},
+    ]
+    named = [offence.split(":")[0] for offence in _permit_scope_offences(rows)]
+    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (1, 2, 3)], named
 
 
 # --- зубы: подмена словаря исходников, а не правка дерева -------------------------------
