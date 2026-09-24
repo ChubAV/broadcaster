@@ -9108,3 +9108,138 @@ def test_blind_zone_compares_attribute_values_by_exact_code_points() -> None:
     assert _blind_zone_classes(narrow_site.tag) == set(), (
         "значение с узким пробелом приравнено к обычному — сравнение нормализует строки"
     )
+
+
+# =============================================================================
+# Фаза 15, план 15-05: ОБВОД ФОКУСА ОРГАНА СНЯТИЯ ОБЪЯВЛЕН В CSS — МАШИННАЯ
+# ПОЛОВИНА ПУНКТА 2 ПЕРЕЧНЯ `human_verification`
+# =============================================================================
+#
+# Пункт 2 перечня `human_verification` пятнадцатого круга Фазы 10 спрашивал:
+# «виден ли фокус (`outline: 2px solid var(--focus-ring)`) и срабатывает ли
+# пробел». Первая половина утверждается МАШИННО: правило в дереве СУЩЕСТВУЕТ
+# (`app/static/css/app.css:1329` на 2026-09-24, перезамер Ф-19 `15-RESEARCH.md`),
+# и его существование — предмет гейта ниже.
+#
+# ⚠️ ГРАНИЦА ЭТОГО ГЕЙТА. Зелень означает РОВНО одно: правило объявлено в
+# таблице стилей — с `outline` на переменной `var(--focus-ring)` и с
+# `outline-offset`. Она НЕ означает, что обвод ВИДЕН глазом, что он не перекрыт,
+# что он достаточного контраста и что пробел на `<input type="checkbox">`
+# срабатывает: суита CSS не раскладывает, страниц браузером не рендерит и клавиш
+# не нажимает. ВТОРАЯ ПОЛОВИНА ПУНКТА 2 ОСТАЁТСЯ ЧЕЛОВЕКУ. Сам файл стилей
+# запрещает подмену, дословно (`app/static/css/app.css:1255-1258`):
+#
+#   «положение прокрутки, движка раскладки в суите нет, браузерного привода нет ни
+#   одного. Отрисовка остаётся шагам 2.8 и 4.4 ручного обхода, и объявлять их
+#   пройденными по зелени правил НЕЛЬЗЯ — окно 77 журнала записывает, чем такая
+#   подмена уже обошлась фазе.»
+#
+# ⚠️ ЧИСЛО ПРАВИЛ `.failure-stack` ЗДЕСЬ НЕ ОБЪЯВЛЯЕТСЯ, И АДРЕСАТ НАЗЫВАЕТСЯ
+# ПРЯМО (граница FAILURE_STACK_SELECTOR_BOUNDARY_NOTE — только эта запись, без
+# литерала числа). Перезамер Ф-19 даёт ЧЕТЫРЕ селектора (`app.css:1259, 1263,
+# 1266, 1330`) против «шести» записи долга D-18.3, и летопись нужна, — но
+# объявить число ЗДЕСЬ значило бы завести литерал в файле, чей предмет CSS не
+# правит, тогда как план 15-07 в ту же волну ДОБАВЛЯЕТ блок компенсации
+# перекрытия и число сдвинет. Два носителя одного числа в двух файлах — ровно
+# тот дефект «четыре сети», от которого защищается фаза. Поэтому число правил
+# `.failure-stack`, их перечень и летопись `6 → 4 → 5` объявляет план 15-07 в
+# `tests/test_templates/test_banner_dismiss.py` — рядом с правкой CSS, потому что
+# таблицу стилей правит именно он.
+#
+# ⚠️ ПРАВКУ САМОЙ РАЗМЕТКИ ОРГАНА СНЯТИЯ И CSS ЭТОТ ПЛАН НЕ ДЕЛАЕТ — ни строки в
+# `app/templates/includes/htmx_error_banner.html`, ни в `app/static/css/app.css`.
+# Её делает план 15-07 (два различимых доступных имени и объявленная компенсация
+# перекрытия). Здесь — только машинное утверждение существующего правила.
+
+FOCUS_RING_SELECTOR = ".banner-dismiss:focus-visible"
+FOCUS_RING_VARIABLE = "var(--focus-ring)"
+FOCUS_RING_RULE_OPEN = f"{FOCUS_RING_SELECTOR} {{ outline: 2px solid {FOCUS_RING_VARIABLE};"
+FOCUS_RING_LITERAL_COLOUR = "#4d8dff"
+
+
+def _focus_ring_offence(css: str) -> str:
+    """Пустая строка, если обвод фокуса органа снятия объявлен; иначе — что не сошлось.
+
+    Принимает ТЕКСТ таблицы стилей без комментариев (как отдаёт `_app_css`), а
+    не путь: иначе контроль от вакуума на синтетическом CSS невыразим. Правила
+    разбирает общий `_css_rules`, объявления — общий `_declaration`; второго
+    разборщика CSS здесь не заводится.
+    """
+    bodies = [
+        body
+        for selector, body in _css_rules(css)
+        if FOCUS_RING_SELECTOR in [part.strip() for part in selector.split(",")]
+    ]
+    if not bodies:
+        return (
+            f"правила для селектора `{FOCUS_RING_SELECTOR}` в таблице стилей нет — "
+            f"обвод фокуса органа снятия не объявлен"
+        )
+    outline = next(
+        (value for body in bodies if (value := _declaration(body, "outline")) is not None), None
+    )
+    offset = next(
+        (value for body in bodies if (value := _declaration(body, "outline-offset")) is not None),
+        None,
+    )
+    problems: list[str] = []
+    if outline is None:
+        problems.append("нет объявления `outline`")
+    elif FOCUS_RING_VARIABLE not in outline:
+        problems.append(
+            f"`outline: {outline}` не несёт `{FOCUS_RING_VARIABLE}` — цвет обвода задан "
+            f"литералом, а не переменной темы"
+        )
+    if offset is None:
+        problems.append("нет объявления `outline-offset`")
+    if not problems:
+        return ""
+    return f"правило `{FOCUS_RING_SELECTOR}`: " + "; ".join(problems)
+
+
+def test_focus_ring_rule_is_declared_for_the_banner_dismiss() -> None:
+    """Правило обвода фокуса органа снятия объявлено: `outline` на `var(--focus-ring)` и `outline-offset`.
+
+    ⚠️ Зелень — ТОЛЬКО объявление. Видимость обвода и работа пробела остаются
+    человеку (`app/static/css/app.css:1255-1258`: «объявлять их пройденными по
+    зелени правил НЕЛЬЗЯ»).
+    """
+    css = _app_css()
+    assert _focus_ring_offence(css) == "", _focus_ring_offence(css)
+
+
+def test_control_negative_focus_ring_rule_without_its_selector_is_named() -> None:
+    """Контроль исчезновения первого рода: селектора нет — отказ называет его."""
+    css = _app_css()
+    assert css.count(FOCUS_RING_SELECTOR) == 1, (
+        f"селектор `{FOCUS_RING_SELECTOR}` встречается {css.count(FOCUS_RING_SELECTOR)} раз(а), "
+        f"а не один — подмена меняет не то место"
+    )
+    changed = css.replace(FOCUS_RING_SELECTOR, ".banner-dismiss:focus")
+    assert changed != css, "подмена селектора ничего не изменила"
+
+    offence = _focus_ring_offence(changed)
+
+    assert offence != "", "правило зелено без своего селектора — гейт слеп"
+    assert FOCUS_RING_SELECTOR in offence, f"отказ не называет отсутствующий селектор: {offence}"
+
+
+def test_control_negative_focus_ring_rule_with_a_literal_colour_is_named() -> None:
+    """Контроль исчезновения второго рода: цвет обвода литералом — отказ называет переменную."""
+    css = _app_css()
+    assert css.count(FOCUS_RING_RULE_OPEN) == 1, (
+        f"начало правила {FOCUS_RING_RULE_OPEN!r} встречается {css.count(FOCUS_RING_RULE_OPEN)} "
+        f"раз(а), а не один"
+    )
+    changed = css.replace(
+        FOCUS_RING_RULE_OPEN,
+        FOCUS_RING_RULE_OPEN.replace(FOCUS_RING_VARIABLE, FOCUS_RING_LITERAL_COLOUR),
+    )
+    assert changed != css, "подмена цвета ничего не изменила"
+
+    offence = _focus_ring_offence(changed)
+
+    assert offence != "", "правило зелено при литеральном цвете обвода — гейт слеп"
+    assert FOCUS_RING_VARIABLE in offence and FOCUS_RING_LITERAL_COLOUR in offence, (
+        f"отказ не называет, что именно не сошлось: {offence}"
+    )
