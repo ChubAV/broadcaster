@@ -43,6 +43,7 @@ from app.models.schedule import Schedule
 from app.models.user import User
 from tests.conftest import a_future_run_moment
 from tests.test_schedules_out_of_domain_resume import (
+    LEGAL_STORED_FORM,
     MALFORMED_STORED_FORMS,
     MALFORMED_STORED_FORMS_BY_LABEL,
     MalformedStoredForm,
@@ -4244,3 +4245,274 @@ async def test_malformed_stored_zone_next_run_agrees_with_completeness(
     else:
         assert stored.is_active is False
         assert stored.next_run_at is None
+
+
+# --- Фаза 15, план 15-08, задача 2: ВТОРОЙ корень — вопрос к помощнику ---------
+#
+# ⚠️ ПОСЫЛКА ПЛАНА ПЕРЕЗАМЕРЕНА, И ЗАМЕР РАСХОДИТСЯ С НЕЙ. План называл прочие
+# пять форм перечня неисполнимыми на этом входе «исключением, которое уходит
+# мимо обработчика». Прогон по ВСЕМУ перечню путём карточки редактора
+# (`test_malformed_stored_form_saved_from_the_editor_never_answers_500` ниже)
+# ЗЕЛЁН уже после задачи 1, до всякой правки расчёта: правка ПЕРЕПИСЫВАЕТ дни
+# и времена значениями ФОРМЫ, а страничные санитайзеры (`_clean_ints`,
+# `_clean_times`) отбрасывают негодное ДО расчёта. Пять форм зонда 13-го круга
+# проходили ровно поэтому; шестая, зона, — единственное поле, которое
+# санитайзером не было, — и её закрыла задача 1.
+#
+# ЗНАЧИТ ПОМОЩНИК НА ЭТОМ ВХОДЕ — ВТОРАЯ ЛИНИЯ, И ИЗМЕРЯТЬ ЕГО НАДО, ОТКРЫВ
+# ПЕРВУЮ. Правила «второй линии» ниже подменяют оба санитайзера пропуском
+# СОХРАНЁННЫХ значений формы как есть — ровно та форма отказа первой линии, от
+# которой помощник и защищает (регрессия санитайзера, новое поле формы, новый
+# вход в обход разбора). Решение владельца `chubav` 2026-09-23 «четвёртый вход
+# спрашивает `next_run_or_none`, как три починенных» исполняется, а его
+# необходимость доказывается прогоном, а не пересказом: без помощника пять форм
+# из шести дают на второй линии пятисотку.
+#
+# ⚠️ ИСХОД ОДИН И НА ДВУХ СПОСОБАХ СКАЗАТЬ «НЕТ». Вычислитель сообщает о
+# неисполнимости исключением (четыре формы времени) и значением `None`
+# (`days-str-1`); обработчик получает от помощника ОДИН ответ, и полное
+# включённое расписание без момента сохраняется ВЫКЛЮЧЕННЫМ — пару «включено +
+# нет момента» схема не примет (`ck_schedules_active_requires_next_run`).
+
+# ⚠️ ЧИСЛО ФОРМ ПЕРЕЧНЯ ОБЪЯВЛЕНО ЛИТЕРАЛОМ, А НЕ ВЫВЕДЕНО (идиома SP-1).
+# Параметризованное правило над ОПУСТЕВШИМ перечнем собрало бы ноль случаев, и
+# его зелень совпала бы посимвольно с зеленью соблюдённого правила.
+MALFORMED_STORED_FORMS_DECLARED = 6
+
+# Форма, которую закрывает ПЕРВЫЙ корень: после задачи 1 записываемая зона
+# валидна на любом пути, и значения этой формы становятся ИСПОЛНИМЫМИ. На
+# второй линии она обязана получить момент, а не `None`.
+REPAIRED_BY_THE_ZONE_ROLLBACK = frozenset({"tz-mars-phobos"})
+
+FORM_IDS = [form.label for form in MALFORMED_STORED_FORMS]
+
+
+def _open_the_first_line(monkeypatch, form: MalformedStoredForm) -> None:
+    """Санитайзеры страницы пропускают СОХРАНЁННЫЕ значения формы как есть.
+
+    Подменяются только дни и времена; группы (`_clean_ints` без границ) идут
+    прежним разбором — их форма перечня не портит.
+    """
+    import app.pages.schedules as page
+
+    original_clean_ints = page._clean_ints
+
+    def _days_verbatim(values, low=None, high=None):
+        if low is None and high is None:
+            return original_clean_ints(values)
+        return list(form.days_of_week)
+
+    monkeypatch.setattr(page, "_clean_ints", _days_verbatim)
+    monkeypatch.setattr(page, "_clean_times", lambda values: list(form.times_of_day))
+
+
+async def _save_on_the_second_line(
+    client: AsyncClient,
+    db: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+) -> tuple[int, Schedule]:
+    row = await _seed_malformed_stored_row(db, owner, form)
+    _open_the_first_line(monkeypatch, form)
+    status = await _save_from_editor(
+        client,
+        row,
+        _editor_save_pairs(
+            row,
+            days=list(form.days_of_week),
+            times=list(form.times_of_day),
+            timezone_field=form.timezone,
+        ),
+    )
+    return status, await _reload(db, row.schedule_id)
+
+
+def test_malformed_stored_forms_list_is_declared_and_not_empty():
+    """Тест 5: перечень не опустел и не разошёлся с объявленным числом."""
+    assert MALFORMED_STORED_FORMS_DECLARED > 0
+    assert len(MALFORMED_STORED_FORMS) == MALFORMED_STORED_FORMS_DECLARED, (
+        f"в перечне {len(MALFORMED_STORED_FORMS)} форм, объявлено "
+        f"{MALFORMED_STORED_FORMS_DECLARED}: {FORM_IDS}"
+    )
+    assert REPAIRED_BY_THE_ZONE_ROLLBACK <= set(FORM_IDS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_malformed_stored_form_saved_from_the_editor_never_answers_500(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    form: MalformedStoredForm,
+):
+    """ЗАМЕР посылки: путь карточки редактора, санитайзеры на месте.
+
+    Карточка шлёт значения сохранённой строки строками формы; правка их
+    переписывает. Сравнение с зондом 13-го круга (5 passed / 1 failed на
+    `tz-mars-phobos`): после задачи 1 — 6 из 6.
+    """
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    status = await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row,
+            days=list(form.days_of_week),
+            times=list(form.times_of_day),
+            timezone_field=form.timezone,
+        ),
+    )
+
+    assert status == 302, f"форма {form.label}: правка ответила {status}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_malformed_stored_form_on_the_second_line_never_answers_500(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+):
+    """Тест 1: сохранённые значения дошли до расчёта — пятисотки нет ни на одной форме."""
+    status, _ = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+
+    assert status == 302, (
+        f"форма {form.label} ({form.description}): правка ответила {status}; "
+        f"замер вычислителя: {form.measured}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_malformed_stored_form_on_the_second_line_lands_one_outcome(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+):
+    """Тест 2: неисполнимая форма — `next_run_at` пуст и строка выключена.
+
+    Оба способа сказать «нет» (значение и исключение) пришли обработчику ОДНИМ
+    исходом. Форма, исправленная откатом зоны, обязана получить момент.
+    """
+    _, stored = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+
+    if form.label in REPAIRED_BY_THE_ZONE_ROLLBACK:
+        assert stored.next_run_at is not None, (
+            f"форма {form.label}: зона исправлена откатом, значения исполнимы, "
+            f"а момента нет — защита проглотила исправный случай"
+        )
+        assert stored.is_active is True
+    else:
+        assert stored.next_run_at is None, (
+            f"форма {form.label}: у неисполнимой строки момент {stored.next_run_at!r}"
+        )
+        assert stored.is_active is False, (
+            f"форма {form.label}: неисполнимая строка осталась включённой"
+        )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_legal_form_on_the_second_line_gets_a_moment(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Тест 3: обратное направление — ИСПРАВНАЯ строка получает момент.
+
+    Без этого правила тесты 1–2 зеленели бы и у обработчика, выключающего
+    расписание ВСЕГДА, то есть у защиты, проглотившей исправный случай.
+    """
+    status, stored = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, LEGAL_STORED_FORM
+    )
+
+    assert status == 302
+    assert stored.is_active is True
+    assert stored.next_run_at is not None, (
+        "исправная полная строка сохранена без момента запуска"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_days_str_form_goes_the_same_way(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Тест 4: `days-str-1` — ЕДИНСТВЕННАЯ форма, где вычислитель отвечает `None`.
+
+    Утверждается отдельно, потому что она и до починки шла через значение, а не
+    через исключение: без помощника `None` на полной включённой строке уходил в
+    СУБД парой «включено + нет момента» и ронял фиксацию ограничением.
+    """
+    form = _malformed_stored_form("days-str-1")
+    assert form.measured.startswith("None"), form.measured
+
+    status, stored = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+
+    assert status == 302, f"форма {form.label}: правка ответила {status}"
+    assert stored.next_run_at is None
+    assert stored.is_active is False
+
+
+def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save():
+    """`schedules_update` спрашивает `next_run_or_none` и не зовёт вычислитель сам.
+
+    По ДЕРЕВУ, а не по строке: комментарии и импорт имени вычислителя в модуле
+    остаются, и счёт вхождений текста различал бы их с вызовом не лучше грепа.
+    Прямой вызов вычислителя в модуле обязан остаться РОВНО ОДИН — в
+    `schedules_create`, где входы отсекаются на создании.
+    """
+    import ast
+
+    source = Path(__file__).resolve().parents[2].joinpath(
+        "app", "pages", "schedules.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    def calls_in(node: ast.AST) -> list[tuple[str, int]]:
+        return [
+            (sub.func.id, sub.lineno)
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+        ]
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    update_calls = [name for name, _ in calls_in(functions["schedules_update"])]
+    module_direct = [
+        (name, line) for name, line in calls_in(tree) if name == "compute_next_run_at"
+    ]
+    create_direct = [
+        name
+        for name, _ in calls_in(functions["schedules_create"])
+        if name == "compute_next_run_at"
+    ]
+
+    assert "next_run_or_none" in update_calls, (
+        "schedules_update не спрашивает next_run_or_none"
+    )
+    assert "compute_next_run_at" not in update_calls, (
+        "schedules_update по-прежнему зовёт вычислитель напрямую"
+    )
+    assert len(module_direct) == 1 and create_direct == ["compute_next_run_at"], (
+        f"прямых вызовов вычислителя в модуле {module_direct}, ожидался один — "
+        f"в schedules_create"
+    )
