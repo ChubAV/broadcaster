@@ -6613,6 +6613,8 @@ def test_control_a_computed_full_load_address_reddens_the_literal_rule(tmp_path)
 # комментарий шаблона `app/templates/ads/includes/autosave_response.html:146`.
 # Запись контекста НЕ ПРАВИТСЯ. Третий случай заголовком `HX-Push-Url`
 # применён в дереве ОДИН раз, и от этой базы считается работа фазы.
+# Формула оговорки та же, что у летописи 47 → 49 плана 15-02, одной строкой:
+# «ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ».
 #
 # ⚠️ ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ (D-16). Зелёный цвет означает: по каждому
 # POST-обработчику и каждому месту письма решение ЗАПИСАНО, принадлежит
@@ -6930,6 +6932,9 @@ def _post_function_nodes(sources: dict[str, str]):
 def _transition_branch_handlers(sources: dict[str, str]) -> set[str]:
     """POST-обработчики, в теле которых есть ВЫЗОВ ветки перехода — по дереву."""
     found: set[str] = set()
+    for key, function in _post_function_nodes(sources):
+        if any(_is_transition_call(node) for node in ast.walk(function)):
+            found.add(key)
     return found
 
 
@@ -7117,12 +7122,25 @@ def _place_handlers(
     обработчики форм-триггеров, которые её открывают.
     """
     resolved: dict[str, frozenset[str]] = {}
+    routes = _post_route_skeletons(page_sources)
+    for place in _write_form_places(template_sources):
+        handlers: set[str] = set()
+        for skeleton in _place_address_skeletons(place):
+            handlers |= routes.get(skeleton, set())
+        resolved[place.key] = frozenset(handlers)
+    if PANEL_FORM_PLACE in resolved and not resolved[PANEL_FORM_PLACE]:
+        resolved[PANEL_FORM_PLACE] = frozenset().union(
+            *(resolved.get(trigger, frozenset()) for trigger in ALPINE_TRIGGER_PLACES)
+        )
     return resolved
 
 
 def _push_url_sender_sites(sources: dict[str, str]) -> list[str]:
     """Реальные отправители `HX-Push-Url` — ключ `модуль::функция` на присваивание."""
     sites: list[str] = []
+    for write in _header_writes(sources):
+        if write.header.lower() == HX_PUSH_URL_HEADER.lower():
+            sites.append(write.key)
     return sites
 
 
@@ -7136,6 +7154,15 @@ def _push_url_prose_mentions(
     имя в комментарии есть проза, а атрибут вне комментария считает правило нуля.
     """
     mentions: list[str] = []
+    name = HX_PUSH_URL_HEADER.lower()
+    written = {(write.module, write.lineno) for write in _header_writes(app_sources)}
+    for module, text in sorted(app_sources.items()):
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if name in line.lower() and (module, lineno) not in written:
+                mentions.append(f"{module}:{lineno}")
+    for template, source in sorted(template_sources.items()):
+        in_prose = source.lower().count(name) - _strip_comments(source).lower().count(name)
+        mentions.extend(f"{template} (комментарий)" for _ in range(in_prose))
     return mentions
 
 
