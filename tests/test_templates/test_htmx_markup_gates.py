@@ -10008,3 +10008,263 @@ def test_control_positive_modal_linkage_untouched_tree_keeps_all_four_counts_sil
     assert all(_linkage_counts(sources)[name] for name in LINKAGE_COUNT_NAMES), (
         "один из счетов пуст на дереве — молчание гейта вакуумно"
     )
+
+
+# =============================================================================
+# Фаза 15, план 15-10: ГРАНИЦЫ СВЯЗКИ — НЕВИДИМАЯ ГЕЙТУ ФОРМА ЗАПРЕЩЕНА
+# =============================================================================
+#
+# Приём второго уровня — `tests/test_pages/test_impersonation_gate.py`
+# (названные границы разборщика маршрутов и правило
+# `test_no_route_is_declared_in_a_form_the_gate_cannot_see`): «гейт, который
+# чего-то не видит, обязан требовать, чтобы этого и не было». Границы связки
+# здесь не только НАЗВАНЫ: формы, которых её счёты не видят, ЗАПРЕЩЕНЫ
+# отдельными правилами. Так закрывается критерий 5 ROADMAP Фазы 15 — по каждой
+# слепой зоне либо запрет гейтом, либо проверка глазами. Границ ТРИ.
+#
+# 1. ТРИГГЕР, ЧЕЙ `action` ПРИЕЗЖАЕТ ГОТОВОЙ СТРОКОЙ ИЗ `app/pages/`. Счёт IV
+#    сверяет СКЕЛЕТ адреса, а скелет значения `{{ delete_url }}` есть `{}`: что
+#    за строку положит в контекст обработчик, по тексту шаблона не узнать, и
+#    связка «адрес триггера = адрес модалки» стала бы недоказуемой. → ЗАПРЕТ
+#    `test_linkage_boundary_no_trigger_action_arrives_ready_made_the_gate_cannot_see`:
+#    `action` каждой формы-триггера начинается литеральным сегментом маршрута
+#    (`/` и буква) и не несёт операторов `{% … %}`; перечень изъятий
+#    `MODAL_TRIGGER_ACTION_FROM_PAGES_SITES` объявлен пустым. ЗАМЕР 2026-09-24,
+#    снятый исполнением правила и грепом: форм-триггеров 18, из них с `action`,
+#    приезжающим готовой строкой из `app/pages/`, — 0 (НОЛЬ); строк
+#    `modal-open` и `modal_id` в `app/pages/` — 0.
+#
+# 2. ВЫЗОВ СОБЫТИЯ ОТКРЫТИЯ НЕ ЧЕРЕЗ `x-on:submit.prevent` — `x-on:click`,
+#    сокращение `@submit.prevent`, программный `$dispatch` из другого выражения
+#    Alpine. Счёт I ищет форму по атрибуту `x-on:submit.prevent` и такого вызова
+#    не видит: модалка открылась бы кнопкой, а у действия письма не осталось бы
+#    формы-триггера — то есть пути деградации без JS. → ЗАПРЕТ
+#    `test_linkage_boundary_no_open_event_outside_submit_prevent_the_gate_cannot_see`:
+#    каждое вхождение префикса `modal-open-` в исходниках шаблонов без
+#    комментариев стои́т внутри значения `x-on:submit.prevent`; единственное
+#    изъятие — слушатель компонента `x-on:modal-open-{{ id }}.window` (он не
+#    вызов). ЗАМЕР 2026-09-24: вхождений префикса вне комментариев 19 — 18 в
+#    значениях `x-on:submit.prevent` и 1 слушатель; вне их — 0. Пример с
+#    `x-on:click` в шапке `components/modal.html` лежит в комментарии Jinja и
+#    вырезается до счёта.
+#    ⚠️ ВСЕЛЕННАЯ ЭТОГО ЗАПРЕТА — ШАБЛОНЫ. Скрипты `app/static/js/` в неё не
+#    входят: там лежат только вендорные `htmx.min.js` и `alpine.min.js`, и
+#    вхождений `modal-open` в них 0 (замер 2026-09-24). Собственный скрипт
+#    проекта, зовущий событие, этот запрет НЕ увидит — это названная граница, а
+#    не покрытие.
+#
+# 3. ВТОРАЯ ФОРМА КОМПОНЕНТА МОДАЛКИ. Счёт II сверяет `hx-post` с `action` у
+#    ЕДИНСТВЕННОЙ формы; появись вторая, «ровно одна» перестало бы быть
+#    истинным, и выведенное из дерева число сломало бы счёт молча. Счёт II
+#    объявляет число (`MODAL_COMPONENT_POST_FORMS`) и краснеет на нём; здесь
+#    добавлен КОНТРОЛЬ: синтетическая копия компонента с двумя формами,
+#    несущими `hx-post`, краснит счёт II и называет вторую ключом
+#    `components/modal.html#1`.
+#
+# ЧТО ОСТАЁТСЯ ГЛАЗАМ, С АДРЕСАТАМИ. Перехватывает ли Alpine submit на
+# рантайме, открывается ли модалка, доезжает ли её submit до сервера — ни
+# одного из этого суита не видит: она не исполняет ни строчки JS и не рендерит
+# страниц браузером. Это пункты 3 и 5 ручного обхода, закрытые глазами Фазами 9
+# и 11, и по решению D-15 они ПРИНИМАЮТСЯ ЗАПИСЬЮ СВОИХ ФАЗ, а не
+# переподтверждаются. Зелень связки и её границ — утверждение о ТЕКСТЕ
+# шаблонов; наблюдением рантайма её не читать.
+
+# Триггеры, чей `action` приезжает готовой строкой, — ИМЕНОВАННЫЙ НОЛЬ.
+#
+# ⚠️ ПЕРЕЧЕНЬ ПУСТ — ИМЕНОВАННЫЙ НОЛЬ, А НЕ ЗАБЫТОЕ ОБЪЯВЛЕНИЕ. Утверждается
+# РАВЕНСТВО множества найденных ключей множеству ключей перечня, а не `== 0`
+# (форма — `MANUAL_FETCH_SITES`, `test_htmx_inventory.py`).
+MODAL_TRIGGER_ACTION_FROM_PAGES_SITES: dict[str, str] = {}
+
+# Вызовы события открытия вне `x-on:submit.prevent` — ИМЕНОВАННЫЙ НОЛЬ.
+#
+# ⚠️ ПЕРЕЧЕНЬ ПУСТ — ИМЕНОВАННЫЙ НОЛЬ, А НЕ ЗАБЫТОЕ ОБЪЯВЛЕНИЕ. Пустой словарь
+# стережёт появление первого места: оно покраснеет расхождением перечня с
+# найденным обходом, а не пройдёт молча. Правило ИСТИННО и на пустом дереве —
+# поэтому при нём стоят контроль с синтетическим вызовом вне
+# `x-on:submit.prevent` и контроль пустой вселенной; без них оно зелено по
+# построению.
+MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES: dict[str, str] = {}
+
+LITERAL_ROUTE_START = re.compile(r"/[A-Za-z]")
+MODAL_OPEN_PREFIX = re.compile(re.escape(MODAL_OPEN_EVENT_PREFIX))
+MODAL_LISTENER_OFFSET = MODAL_LISTENER.index(MODAL_OPEN_EVENT_PREFIX)
+MODAL_MACRO_END = "{%- endmacro %}"
+
+SYNTHETIC_OPEN_EVENT_OUTSIDE_TEMPLATE = "synthetic/open_event_outside_submit.html"
+SYNTHETIC_OPEN_EVENT_OUTSIDE = (
+    '<button type="button" x-data '
+    "x-on:click=\"$dispatch('modal-open-synthetic-click-{{ x.id }}')\">Удалить</button>"
+)
+SYNTHETIC_READY_MADE_ACTION_TEMPLATE = "synthetic/ready_made_action.html"
+SYNTHETIC_READY_MADE_ACTION = (
+    '<form method="post" action="{{ delete_url }}" '
+    "x-data x-on:submit.prevent=\"$dispatch('modal-open-ad-del-{{ ad.id }}')\"></form>"
+)
+SYNTHETIC_SECOND_COMPONENT_FORM = (
+    '<form method="post" action="/synthetic/second" hx-post="/synthetic/second"></form>'
+)
+
+
+def _trigger_actions_the_gate_cannot_see(sources: dict[str, str]) -> dict[str, str]:
+    """Формы-триггеры, чей ``action`` не начинается литеральным сегментом маршрута."""
+    found: dict[str, str] = {}
+    for key, site in _modal_trigger_forms(sources).items():
+        action = _attr_value(site.tag, ACTION_VALUE)
+        if action is None or not LITERAL_ROUTE_START.match(action) or "{%" in action:
+            found[key] = f"action={action!r}"
+    return found
+
+
+def _open_event_calls_outside_submit(sources: dict[str, str]) -> dict[str, str]:
+    """Вхождения ``modal-open-`` вне значения ``x-on:submit.prevent`` и вне слушателя компонента.
+
+    Ключ — ``путь#номер`` среди таких вхождений файла, значение — окрестность
+    вхождения одной строкой (номер строки исходника без комментариев не совпал
+    бы с номером в файле).
+    """
+    found: dict[str, str] = {}
+    for rel, source in sources.items():
+        body = _strip_comments(source)
+        inside = [value.span(0) for value in SUBMIT_PREVENT_VALUE.finditer(body)]
+        ordinal = 0
+        for match in MODAL_OPEN_PREFIX.finditer(body):
+            start = match.start()
+            if any(low <= start < high for low, high in inside):
+                continue
+            if rel == MODAL_LINKAGE_COMPONENT and body.startswith(
+                MODAL_LISTENER, start - MODAL_LISTENER_OFFSET
+            ):
+                continue
+            found[f"{rel}#{ordinal}"] = " ".join(body[max(0, start - 60) : start + 60].split())
+            ordinal += 1
+    return found
+
+
+def _modal_open_prefix_occurrences(sources: dict[str, str]) -> int:
+    """Все вхождения ``modal-open-`` в исходниках шаблонов без комментариев."""
+    return sum(len(MODAL_OPEN_PREFIX.findall(_strip_comments(source))) for source in sources.values())
+
+
+def _boundary_offence(found: dict[str, str], declared: dict[str, str], subject: str) -> str:
+    """Пустая строка, если найденное равно перечню; иначе — лишние и пропавшие поимённо."""
+    if set(found) == set(declared):
+        return ""
+    extra = {key: found[key] for key in sorted(set(found) - set(declared))}
+    missing = sorted(set(declared) - set(found))
+    return f"{subject}: не объявлены {extra}, объявлены, но не найдены {missing}"
+
+
+def test_linkage_boundary_no_trigger_action_arrives_ready_made_the_gate_cannot_see() -> None:
+    """ЗАПРЕТ границы 1: ``action`` триггера собран в шаблоне, а не приехал готовой строкой."""
+    sources = dict(_all_templates())
+    assert _linkage_universe_offence(sources) == "", _linkage_universe_offence(sources)
+    assert len(_modal_trigger_forms(sources)) == MODAL_TRIGGER_FORMS, (
+        "вселенная запрета — не объявленные 18 триггеров: правило утверждало бы не про них"
+    )
+
+    found = _trigger_actions_the_gate_cannot_see(sources)
+
+    assert set(found) == set(MODAL_TRIGGER_ACTION_FROM_PAGES_SITES), _boundary_offence(
+        found,
+        MODAL_TRIGGER_ACTION_FROM_PAGES_SITES,
+        "триггер, чей адрес гейт связки сверить не может",
+    )
+
+
+def test_linkage_boundary_no_open_event_outside_submit_prevent_the_gate_cannot_see() -> None:
+    """ЗАПРЕТ границы 2: событие открытия зовётся только из ``x-on:submit.prevent`` формы."""
+    sources = dict(_all_templates())
+    assert _linkage_universe_offence(sources) == "", _linkage_universe_offence(sources)
+
+    found = _open_event_calls_outside_submit(sources)
+
+    assert set(found) == set(MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES), _boundary_offence(
+        found,
+        MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES,
+        "вызов события открытия, невидимый счёту I",
+    )
+    assert _modal_open_prefix_occurrences(sources) == MODAL_TRIGGER_FORMS + 1, (
+        "вхождений `modal-open-` не 18 вызовов + 1 слушатель — замер границы 2 устарел"
+    )
+
+
+def test_control_negative_linkage_boundary_a_synthetic_open_event_outside_submit_prevent_is_named() -> (
+    None
+):
+    """Контроль от вакуума: синтетический вызов события из ``x-on:click`` НАЙДЕН И НАЗВАН.
+
+    И одновременно доказано, что это настоящая слепая зона: счёт I такой вызов
+    не видит, поэтому без запрета связка осталась бы зелёной.
+    """
+    sources = dict(_all_templates())
+    key = SYNTHETIC_OPEN_EVENT_OUTSIDE_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_OPEN_EVENT_OUTSIDE}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    found = _open_event_calls_outside_submit(changed)
+
+    assert f"{key}#0" in found, f"синтетический вызов вне `x-on:submit.prevent` не найден: {found}"
+    assert set(found) != set(MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES)
+    offence = _boundary_offence(found, MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES, "вызов")
+    assert f"{key}#0" in offence, f"отказ не называет вызов ключом: {offence}"
+    assert not any(k.startswith(key) for k in _linkage_counts(changed)["I"]), (
+        "счёт I видит вызов из `x-on:click` — граница названа неверно"
+    )
+
+
+def test_control_negative_linkage_boundary_a_ready_made_trigger_action_is_named() -> None:
+    """Контроль от вакуума: триггер с ``action="{{ delete_url }}"`` краснит запрет границы 1."""
+    sources = dict(_all_templates())
+    key = SYNTHETIC_READY_MADE_ACTION_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_READY_MADE_ACTION}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    found = _trigger_actions_the_gate_cannot_see(changed)
+
+    assert f"{key}#0" in found, f"триггер с готовым адресом не найден: {found}"
+    assert "delete_url" in found[f"{key}#0"], "отказ не показывает, откуда взят адрес"
+    assert f"{key}#0" in _boundary_offence(found, MODAL_TRIGGER_ACTION_FROM_PAGES_SITES, "адрес")
+
+
+def test_control_negative_linkage_boundary_a_second_component_post_form_is_named_by_count_ii() -> (
+    None
+):
+    """Контроль границы 3: вторая форма компонента с ``hx-post`` краснит счёт II и названа."""
+    sources = dict(_all_templates())
+    component = sources[MODAL_LINKAGE_COMPONENT]
+    assert component.count(MODAL_MACRO_END) == 1, (
+        "конец макроса модалки встречается не один раз — подмена меняет не то место"
+    )
+    changed = {
+        **sources,
+        MODAL_LINKAGE_COMPONENT: component.replace(
+            MODAL_MACRO_END, f"{SYNTHETIC_SECOND_COMPONENT_FORM}\n{MODAL_MACRO_END}", 1
+        ),
+    }
+    assert changed != sources, "подмена ничего не изменила"
+
+    forms = _modal_component_post_forms(changed)
+    offence = _component_post_form_offence(forms)
+
+    assert len(forms) == MODAL_COMPONENT_POST_FORMS + 1, f"вторая форма не найдена: {sorted(forms)}"
+    assert "components/modal.html#1" in offence and "лишние" in offence, (
+        f"счёт II не называет вторую форму: {offence!r}"
+    )
+    assert _linkage_counts(changed)["II"] == set(), "счёт II связывает триггеры при двух формах"
+
+
+def test_control_negative_linkage_boundary_prohibitions_on_an_empty_universe_are_caught() -> None:
+    """Контроль пустоты: на пустом словаре оба запрета формально истинны — и это ЗАСЕКАЕТСЯ."""
+    empty: dict[str, str] = {}
+
+    assert set(_open_event_calls_outside_submit(empty)) == set(MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES)
+    assert set(_trigger_actions_the_gate_cannot_see(empty)) == set(
+        MODAL_TRIGGER_ACTION_FROM_PAGES_SITES
+    )
+    offence = _linkage_universe_offence(empty)
+    assert "0 шаблонов" in offence, (
+        "пустая вселенная не засечена: зелень запретов на ней неотличима от слепоты"
+    )
