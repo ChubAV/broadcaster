@@ -92,8 +92,9 @@ Alpine-триггеры модалки, по D-07 считающиеся пер�
 деревьями, а не прирост одного множества: 47 — сеть сырых вхождений на дереве
 2026-08-26, 49 — сеть мест письма на дереве 2026-09-24.
 
-⚠️ ЛЕТОПИСИ «27 → 29» НЕТ — И ЭТО ЗАПИСАНО ОТДЕЛЬНОЙ СТРОКОЙ. Под определением «место письма» файлов ровно 27, столько же, сколько объявил прогноз.
-29 получается только если включить GET-поиск и параметрический макрос фильтров,
+⚠️ ЛЕТОПИСИ «27 → 29» НЕТ — И ЭТО ЗАПИСАНО ОТДЕЛЬНОЙ СТРОКОЙ.
+Под определением «место письма» файлов ровно 27, столько же, сколько объявил
+прогноз. 29 получается только если включить GET-поиск и параметрический макрос фильтров,
 то есть ровно то, что граница фазы исключает; летопись 27 → 29 записала бы
 расхождение объявленного числа, которого нет, и превратила бы верный прогноз в
 ошибку (идиома D-30/D-32 охраняет ровно от этого).
@@ -261,13 +262,52 @@ def _template_sources() -> dict[str, str]:
 
 
 def _classify_form_place(tag: str) -> PlaceKind | None:
-    """Класс СЫРОГО тега формы; ``None`` — ни один объявленный класс."""
+    """Класс СЫРОГО тега формы; ``None`` — ни один объявленный класс.
+
+    Метод читается как СЫРОЕ значение атрибута: выражение шаблонизатора в нём —
+    отдельный класс, а не догадка о том, во что оно вычислится. Тег без
+    ``method`` и тег с методом, отличным от ``post``/``get``, не классифицируются
+    — их называет правило полноты.
+    """
+    method = _attr_value(tag, METHOD_VALUE)
+    if method is None:
+        return None
+    if "{{" in method or "{%" in method:
+        return PlaceKind.VARIABLE_METHOD
+    if method.strip().lower() == "get":
+        return PlaceKind.GET_LITERAL
+    if method.strip().lower() == "post":
+        if HX_POST_ATTR.search(tag):
+            return PlaceKind.RAW_POST_WITH_HX_POST
+        return PlaceKind.RAW_POST_WITHOUT_HX_POST
     return None
 
 
 def _form_places(sources: dict[str, str]) -> list[WriteFormPlace]:
-    """Все места формы дерева — письма и изъятия, без провайдера."""
-    return []
+    """Все места формы дерева — письма и изъятия, без провайдера.
+
+    Исходник каждого шаблона читается БЕЗ комментариев (``_strip_comments``:
+    сначала Jinja, потом HTML). Места файла — вызовы ``form_wrapper`` и сырые
+    теги формы — упорядочены по позиции в этом исходнике, и порядковый номер
+    идёт сквозной по обоим видам. Тег, лежащий внутри блока определения
+    ``form_wrapper``, — провайдер: номера он не получает.
+    """
+    found: list[WriteFormPlace] = []
+    for rel, source in sources.items():
+        body = _strip_comments(source)
+        provider_spans = [m.span() for m in FORM_WRAPPER_MACRO.finditer(body)]
+        events: list[tuple[int, PlaceKind | None, str]] = []
+        for match in FORM_WRAPPER_CALL.finditer(body):
+            events.append((match.start(), PlaceKind.FORM_WRAPPER_CALL, match.group(0)))
+        for match in FORM_TAG.finditer(body):
+            if any(start <= match.start() < end for start, end in provider_spans):
+                continue
+            tag = match.group(0)
+            events.append((match.start(), _classify_form_place(tag), tag))
+        events.sort(key=lambda event: event[0])
+        for ordinal, (_, kind, text) in enumerate(events):
+            found.append(WriteFormPlace(f"{rel}#{ordinal}", rel, ordinal, kind, text))
+    return found
 
 
 def _write_form_places(sources: dict[str, str]) -> list[WriteFormPlace]:
@@ -277,11 +317,17 @@ def _write_form_places(sources: dict[str, str]) -> list[WriteFormPlace]:
 
 def _provider_tags(sources: dict[str, str]) -> list[Site]:
     """Теги формы, лежащие в теле макроса ``form_wrapper``."""
-    return []
+    found: list[Site] = []
+    for rel, source in sources.items():
+        for macro in FORM_WRAPPER_MACRO.finditer(_strip_comments(source)):
+            found.extend(Site(rel, tag) for tag in FORM_TAG.findall(macro.group(0)))
+    return found
 
 
 def _inventory_offence(declared: int, measured: int) -> str:
     """Пустая строка, если замеренное равно объявленному; иначе текст нарушения."""
+    if measured != declared:
+        return f"замерено {measured}, объявлено {declared}"
     return ""
 
 
@@ -466,8 +512,8 @@ def test_two_paths_agree_on_the_tags_the_parser_found() -> None:
 def test_place_keys_are_path_and_ordinal_and_never_collapse() -> None:
     """Ключ ``путь#индекс``: два места одного файла — два ключа.
 
-    ``accounts/list.html`` несёт три посимвольно одинаковых тега; ключ по тексту
-    схлопнул бы их в один.
+    ``accounts/list.html`` несёт три посимвольно одинаковых тега сырого POST
+    (плюс один вызов ``form_wrapper``); ключ по тексту схлопнул бы три в один.
     """
     places = _form_places(_template_sources())
     keys = [p.key for p in places]
@@ -475,8 +521,14 @@ def test_place_keys_are_path_and_ordinal_and_never_collapse() -> None:
     assert len(set(keys)) == len(places), "два места схлопнулись в один ключ"
     assert all(p.key == f"{p.template}#{p.ordinal}" for p in places)
 
-    same_file = [p for p in places if p.template == "accounts/list.html"]
-    assert len(same_file) == 3, f"в accounts/list.html мест {len(same_file)}, ожидалось 3"
+    same_file = [
+        p
+        for p in places
+        if p.template == "accounts/list.html" and p.kind is PlaceKind.RAW_POST_WITHOUT_HX_POST
+    ]
+    assert len(same_file) == 3, (
+        f"сырых POST без hx-post в accounts/list.html {len(same_file)}, ожидалось 3"
+    )
     assert len({p.text for p in same_file}) == 1, (
         "три места accounts/list.html перестали совпадать посимвольно — "
         "довод о ключе по тексту здесь больше не показан"
