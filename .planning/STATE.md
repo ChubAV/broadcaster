@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 15
 current_phase_name: Упрочнение и сводный обход 47 форм
 status: executing
-stopped_at: Completed 15-10-PLAN.md
-last_updated: "2026-09-24T13:18:21.143Z"
+stopped_at: Completed 15-11-PLAN.md
+last_updated: "2026-09-24T16:16:13.040Z"
 last_activity: 2026-09-24
 last_activity_desc: Phase 15 execution started
-state_head: 472e2ec391836bcb4dce19cb7dfb1caaded81f1d
+state_head: 9c52361c82844cd601cae105039e95ce1cd69b0d
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 156
-  completed_plans: 152
+  completed_plans: 153
   percent: 89
 ---
 
@@ -55,10 +55,11 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 15 (Упрочнение и сводный обход 47 форм) — EXECUTING
-Plan: 11 of 14
+Plan: 12 of 14
 Total Plans in Phase: 14
-Completed Plans in Phase: 10
+Completed Plans in Phase: 11
 Status: Executing Phase 15
+⚠️ После плана 15-11 (2026-09-24) `state.advance-plan` в одиннадцатый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 10»; фаза исполняется (исполнено 11 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md`, `15-09-SUMMARY.md`, `15-10-SUMMARY.md` и `15-11-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 12 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-11; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-10 (2026-09-24) `state.advance-plan` в десятый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 9»; фаза исполняется (исполнено 10 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md`, `15-09-SUMMARY.md` и `15-10-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 11 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-10; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-09 (2026-09-24) `state.advance-plan` в девятый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 8»; фаза исполняется (исполнено 9 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md` и `15-09-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 10 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-09; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-08 (2026-09-24) `state.advance-plan` в восьмой раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 7»; фаза исполняется (исполнено 8 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md` и `15-08-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 9 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-08; по идиоме D-30/D-32 названы, а не вычеркнуты.
@@ -278,6 +279,7 @@ Progress: [████████████████████] 116/116
 | Phase 15 P08 | 76 min | 3 tasks | 5 files |
 | Phase 15 P09 | 1h 43m | 3 tasks | 12 files |
 | Phase 15 P10 | 25 min | 2 tasks | 1 files |
+| Phase 15 P11 | 2h 52m | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -612,6 +614,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 15]: 15-09: all four OOB target exceptions carry Phase 15 disposition 'reassigned' with the product owner as addressee; removal is the owner's decision on the task 3 measurement (mutant: 13 rules redden, 9 of them indistinguishability D-04-A) — the executor may not undo D-04-A, and leaving the assignment with the closing phase leaves a debt without an addressee
 - [Phase 15]: 15-10: связка D-07 проверяется по всему дереву по основе события и скелету адреса — модалка часто собирается не в файле триггера (sync_status_card, user_actions, worker_row, queue_row) — четыре счёта (тег, форма компонента, прямой текст атрибута, адрес по сигнатуре) дают множества ключей; расхождение называет пару
 - [Phase 15]: 15-10: косвенное имя события строки очереди (modal-open-{{ modal_id }}) разрешено объявленным отображением на тело макроса queue_drop_modal_id, а не литералом — правка макроса рвёт связку вслух; имя без основы вне отображения счёт III не связывает
+- [Phase 15]: 15-11: признак переходной ветки — вызов respond без fragment=, redirect_internal, redirect_external (не respond_screen/location_response по букве плана); дуальных обработчиков 19, спорных мест 20, все — случай третий — буква плана дала бы 8 дуальных, все из авторизации, и ни одного из четырёх, названных обоснованиями FRAGMENT_RESPONSE_HANDLERS
+- [Phase 15]: 15-11: владелец (chubav, 2026-09-24, AskUserQuestion в /gsd-execute-phase 15) выбрал одну ветвь на все 19 дуальных обработчиков — case-three-server-header; своих слов обоснования не дал; шесть экранов кода авторизации (случай второй) ему не выносились — выбран вариант, предъявленный как «Сервер решает — адрес меняется только когда сервер уводит человека на другой экран. Так это работает сегодня, и нового кода не нужно»
 
 ### Pending Todos
 
@@ -796,8 +800,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-24T13:18:20.454Z
-Stopped at: Completed 15-10-PLAN.md
+Last session: 2026-09-24T16:16:12.350Z
+Stopped at: Completed 15-11-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
