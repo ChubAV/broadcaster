@@ -1,0 +1,372 @@
+"""Фаза 15, план 15-09: литерал размера страницы в разметке. Правило утверждает его ОТСУТСТВИЕ.
+
+Долг ``DEF-09-03`` (``.planning/REQUIREMENTS.md``, запись «закрытие WR-05 ТРЕТЬЕГО
+круга не держит НИ ОДНО правило») назначен этой фазе поимённо. Размер страницы
+бесконечной прокрутки объявлен в Python ОДИН раз, константой ``PAGE_SIZE`` в
+каждом из трёх модулей (``app/pages/ads.py``, ``app/pages/accounts.py``,
+``app/pages/schedules.py``). Шаблон, набирающий то же число литералом, заводит
+ВТОРОЙ его носитель, и тот разойдётся с первым молча: правка константы изменит
+выборку, а адрес следующей порции продолжит просить прежнее число.
+
+Предмет правила — ОТСУТСТВИЕ литерала в ИСХОДНИКЕ шаблона, а не отрендеренный
+адрес. Отрендеренный адрес одинаков и при значении контекста, и при вернувшемся
+литерале, пока оба равны тридцати. Поэтому правило, сверяющее адрес, различить
+эти два состояния не может по построению.
+
+ЛЕТОПИСЬ ЧИСЛА МЕСТ: 6 → 0 (план 15-09, задача 1, 2026-09-24).
+
+- БЫЛО: шесть мест, все в строке сборки адреса порции, три пары «страница +
+  карточки порции»:
+  ``app/templates/ads/list.html:61``, ``app/templates/ads/partial_cards.html:7``,
+  ``app/templates/accounts/list.html:203``,
+  ``app/templates/accounts/partial_cards.html:146``,
+  ``app/templates/schedules/list.html:66``,
+  ``app/templates/schedules/partial_cards.html:12``.
+  Замер: ``grep -rc 'limit=30' app/templates/`` на дереве ``f532fe8a``: шесть
+  файлов по одному вхождению.
+- ЧЕМ СНЯТО: литерал заменён значением контекста ``page_size``. Оба обработчика
+  каждого модуля (страница и порция) кладут в контекст ИМЕННО ``PAGE_SIZE``.
+  Новых носителей числа не заведено. Пара правлена одним ходом в обе половины.
+  Экран групп аккаунта (``account_groups/includes/sentinel.html``) и оба экрана
+  истории несли значение контекста и до этой фазы. Образец взят оттуда, а имя
+  ключа совпадает.
+- ⚠️ ПРЕЖНЕЕ ПРИНУЖДЕНИЕ ИЗМЕРЕНО И ПРИЗНАНО НЕДОСТАТОЧНЫМ, А НЕ ЗАБЫТО.
+  Вхождений ``limit=30`` в ``tests/`` до этого файла было 30 (``grep -rc``,
+  шесть модулей), и ни одно не утверждает ОТСУТСТВИЯ. Ближайшее из них,
+  ``test_page_shows_thirty_rows_and_a_sentinel``
+  (``tests/test_pages/test_account_groups.py``), сверяет ОТРЕНДЕРЕННЫЙ адрес и
+  остаётся зелёным и при параметре, и при вернувшемся литерале. Запись
+  ``DEF-09-03`` говорит это дословно. Правила адреса этот файл не отменяет:
+  они остаются в силе наравне с новым (правило 7 ниже).
+- Оговорка к прежним записям, называвшим шесть живых мест: ПРОГНОЗ НЕ БЫЛ
+  ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи он был верным, и правится не он,
+  а числа, которые он пережил.
+
+ЧЕГО ЭТОТ ФАЙЛ НЕ УТВЕРЖДАЕТ. Зелёный цвет означает ровно две вещи: литерала
+размера страницы в исходниках шаблонов нет, и сеть, которая его ищет, не слепа.
+Он НЕ означает, что бесконечная прокрутка РАБОТАЕТ. Суита не исполняет JS и не
+наблюдает ``revealed``. Поведение закрыто ручным обходом, пункт 2 перечня Фазы 7.
+Он НЕ означает, что размер страницы ВЕРЕН: тридцать — решение продукта, а не
+предмет гейта. Он НЕ означает, что литерала нет в ``app/static/`` или в
+``tests/``. Вселенная обхода объявлена как ``app/templates/**/*.html``, и это её
+граница. Обход и вырезание комментариев ввезены из
+``tests/test_templates/test_htmx_markup_gates.py``, а не написаны заново:
+второй обход того же дерева разошёлся бы с первым молча.
+"""
+
+from __future__ import annotations
+
+import re
+from importlib import import_module
+
+import pytest
+from httpx import AsyncClient
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.schedule import Schedule
+from tests.test_pages.test_htmx_preserved import _seed_section, _sentinel_urls
+from tests.test_templates.test_htmx_markup_gates import _all_templates, _strip_comments
+
+# --- ОБЪЯВЛЕННЫЕ ЛИТЕРАЛЫ -----------------------------------------------------
+#
+# Число выписано здесь, а не выведено из дерева в момент прогона: правило,
+# считающее ожидание по коду, согласится с любой правкой.
+
+PAGE_SIZE_LITERAL_PLACES = 0
+
+# ⚠️ ПЕРЕЧЕНЬ ПУСТ — ИМЕНОВАННЫЙ НОЛЬ, А НЕ ЗАБЫТОЕ ОБЪЯВЛЕНИЕ. Форма взята у
+# `MANUAL_FETCH_SITES` (tests/test_templates/test_htmx_inventory.py). Место,
+# которое когда-нибудь понадобится объявить законным, встанет сюда ключом
+# `путь#индекс` с причиной, и число выше поднимется записью летописи.
+PAGE_SIZE_LITERAL_SITES: dict[str, str] = {}
+
+PAGE_SIZE_CONTEXT_KEY = "page_size"
+
+# Литерал размера страницы: параметр `limit`, значение которого набрано ЦИФРАМИ.
+# Граница слова слева отсекает имена, у которых `limit` лишь хвост. Шаблонное
+# выражение (`limit={{ page_size }}`) под образец не попадает: после знака
+# равенства у него стоит скобка, а не цифра.
+PAGE_SIZE_LITERAL = re.compile(r"(?<![-\w])limit=\d")
+
+# Три пары «страница + карточки порции». Строка сборки адреса порции в обеих
+# половинах пары ОДНА И ТА ЖЕ посимвольно: страница отдаёт первую порцию, а
+# порция — все следующие (tests/test_templates/test_htmx_inventory.py, механизм 1:
+# «мест 12, а экранов ручного обхода 6»).
+PORTION_PAIRS: dict[str, tuple[str, str, str]] = {
+    "ads": ("ads/list.html", "ads/partial_cards.html", 'hx-get="/ads/partial?'),
+    "accounts": (
+        "accounts/list.html",
+        "accounts/partial_cards.html",
+        'hx-get="/accounts/partial?',
+    ),
+    "schedules": (
+        "schedules/list.html",
+        "schedules/partial_cards.html",
+        'hx-get="/schedules/partial?',
+    ),
+}
+PORTION_PAIRS_DECLARED = 3
+
+# Какой модуль `app/pages/` кормит какой шаблон. Значение в контексте сверяется
+# с константой, прочитанной ИЗ МОДУЛЯ, а не с числом, переписанным в тест.
+CONTEXT_CARRIERS: dict[str, str] = {
+    "ads/list.html": "app.pages.ads",
+    "ads/partial_cards.html": "app.pages.ads",
+    "accounts/list.html": "app.pages.accounts",
+    "accounts/partial_cards.html": "app.pages.accounts",
+    "schedules/list.html": "app.pages.schedules",
+    "schedules/partial_cards.html": "app.pages.schedules",
+}
+
+# Синтетический шаблон контролей. Такого файла в дереве нет: контроль кладёт в
+# словарь исходников НОВЫЙ ключ, а не портит живой экран.
+SYNTHETIC_TEMPLATE = "a_screen_some_future_phase_will_add/list.html"
+SYNTHETIC_SENTINEL = (
+    '<div hx-get="/future/partial?offset={{ next_offset }}&limit=30"'
+    ' hx-trigger="revealed" hx-swap="outerHTML">Загрузка...</div>\n'
+)
+
+
+# --- РАЗБОРЩИКИ ---------------------------------------------------------------
+
+
+def _template_sources() -> dict[str, str]:
+    """Исходники `app/templates/**/*.html`: путь относительно каталога → текст."""
+    return dict(_all_templates())
+
+
+def _page_size_literal_places(
+    sources: dict[str, str], *, strip_comments: bool = True
+) -> list[str]:
+    """Места литерала размера страницы ключами `путь#индекс`, отсортированно.
+
+    Исходники приходят СЛОВАРЁМ, чтобы контроли могли подать изменённую копию
+    дерева. Индекс — порядковый номер вхождения внутри файла. Номер строки не
+    берётся: переформатирование разметки меняло бы ключ, хотя место то же.
+    """
+    places: list[str] = []
+    for path in sorted(sources):
+        text = _strip_comments(sources[path]) if strip_comments else sources[path]
+        for index, _ in enumerate(PAGE_SIZE_LITERAL.finditer(text)):
+            places.append(f"{path}#{index}")
+    return places
+
+
+def _portion_url_line(source: str, mark: str) -> str:
+    """Строка сборки адреса порции: единственная строка исходника с `mark`.
+
+    Отступ слева отрезается: страница аккаунтов несёт строку внутри блока с
+    отступом, а карточки порции — без него. Предмет сверки — сама разметка
+    адреса, а не её положение в файле.
+    """
+    lines = [line.strip() for line in _strip_comments(source).splitlines() if mark in line]
+    assert len(lines) == 1, (
+        f"строка сборки адреса порции `{mark}` найдена {len(lines)} раз, ожидалась одна"
+    )
+    return lines[0]
+
+
+def _diverged_pairs(sources: dict[str, str]) -> list[str]:
+    """Имена пар, чьи половины собирают адрес порции РАЗНЫМИ строками."""
+    return [
+        name
+        for name, (page, portion, mark) in sorted(PORTION_PAIRS.items())
+        if _portion_url_line(sources[page], mark) != _portion_url_line(sources[portion], mark)
+    ]
+
+
+# --- ПРАВИЛА ------------------------------------------------------------------
+
+
+def test_no_page_size_literal_is_left_in_the_template_sources():
+    """Правило 1: литерала размера страницы в исходниках шаблонов НЕТ.
+
+    Утверждение сформулировано как отсутствие предмета. Отказ называет каждое
+    найденное место ключом `путь#индекс`.
+    """
+    places = _page_size_literal_places(_template_sources())
+
+    assert len(PAGE_SIZE_LITERAL_SITES) == PAGE_SIZE_LITERAL_PLACES
+    assert places == sorted(PAGE_SIZE_LITERAL_SITES), (
+        "ЛИТЕРАЛ РАЗМЕРА СТРАНИЦЫ В РАЗМЕТКЕ — второй носитель числа, который "
+        "разойдётся с `PAGE_SIZE` молча. Места: "
+        + ", ".join(places)
+    )
+    assert len(places) == PAGE_SIZE_LITERAL_PLACES
+
+
+def test_control_negative_a_synthetic_template_with_the_literal_is_found_and_named():
+    """Правило 2, контроль от вакуума: СИНТЕТИЧЕСКИЙ ключ с литералом найден и назван.
+
+    ⚠️ Утверждение отсутствия истинно и на сломанной сети. Контроль кладёт в
+    словарь исходников шаблон, которого в дереве нет, и требует, чтобы та же
+    сеть нашла его и назвала по ключу. Иначе ноль правила 1 был бы неотличим от
+    слепоты измерителя.
+    """
+    sources = _template_sources()
+    assert SYNTHETIC_TEMPLATE not in sources, "синтетический ключ совпал с живым шаблоном"
+    sources[SYNTHETIC_TEMPLATE] = SYNTHETIC_SENTINEL
+
+    places = _page_size_literal_places(sources)
+
+    assert f"{SYNTHETIC_TEMPLATE}#0" in places, (
+        "СЕТЬ НЕ НАШЛА ЛИТЕРАЛ В СИНТЕТИЧЕСКОМ ШАБЛОНЕ — ноль правила 1 доказывал "
+        "бы слепоту измерителя, а не отсутствие литерала"
+    )
+    assert not (places == sorted(PAGE_SIZE_LITERAL_SITES)), (
+        "утверждение отсутствия осталось истинным при литерале в дереве"
+    )
+
+
+def test_control_positive_the_walked_universe_is_not_empty_and_the_rule_is_silent():
+    """Правило 3, контроль от вакуума: обход видит дерево, и правило молчит на нём.
+
+    Молчание правила 1 имеет цену, только если молчит оно не на пустоте. Обход
+    обязан видеть больше пятидесяти шаблонов, и все шесть шаблонов трёх пар
+    обязаны лежать в его вселенной.
+    """
+    sources = _template_sources()
+
+    assert len(sources) > 50, f"вселенная обхода подозрительно мала: {len(sources)}"
+    assert set(CONTEXT_CARRIERS) <= set(sources), (
+        "шаблоны трёх пар выпали из вселенной обхода: "
+        + ", ".join(sorted(set(CONTEXT_CARRIERS) - set(sources)))
+    )
+    assert _page_size_literal_places(sources) == []
+
+
+def test_control_a_literal_inside_a_comment_is_not_counted():
+    """Правило 4, контроль: литерал внутри комментария Jinja не считается местом.
+
+    Тот же синтетический исходник считается дважды: с вырезанием комментариев и
+    без. Оба числа и их разность утверждаются. Так видно, что ноль первого счёта
+    дало вырезание, а не промах образца.
+    """
+    commented = "{#- " + SYNTHETIC_SENTINEL + " -#}\n"
+    sources = {SYNTHETIC_TEMPLATE: commented}
+
+    stripped = _page_size_literal_places(sources)
+    raw = _page_size_literal_places(sources, strip_comments=False)
+
+    assert stripped == []
+    assert raw == [f"{SYNTHETIC_TEMPLATE}#0"]
+    assert len(raw) - len(stripped) == 1
+
+
+def test_both_halves_of_every_pair_build_the_portion_url_with_the_same_line():
+    """Правило 5: внутри каждой пары строка сборки адреса порции ОДНА посимвольно.
+
+    Это машинная защита от правки одной половины. Разошедшаяся пара
+    обнаружилась бы только на второй порции прокрутки, то есть глазом.
+    """
+    assert len(PORTION_PAIRS) == PORTION_PAIRS_DECLARED
+    diverged = _diverged_pairs(_template_sources())
+
+    assert diverged == [], (
+        "ПОЛОВИНЫ ПАРЫ СОБИРАЮТ АДРЕС ПОРЦИИ РАЗНЫМИ СТРОКАМИ: "
+        + ", ".join(diverged)
+    )
+
+
+def test_control_negative_a_diverged_pair_is_named():
+    """Контроль к правилу 5: правка одной половины пары краснеет и НАЗЫВАЕТ пару."""
+    sources = _template_sources()
+    page, _portion, mark = PORTION_PAIRS["accounts"]
+    original = _portion_url_line(sources[page], mark)
+    sources[page] = sources[page].replace(original, original.replace("&", "&amp;", 1))
+
+    assert _portion_url_line(sources[page], mark) != original, "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ"
+    assert _diverged_pairs(sources) == ["accounts"]
+
+
+def _capture_contexts(monkeypatch) -> dict[str, dict]:
+    """Контексты, с которыми обработчики зовут `TemplateResponse`: имя шаблона → контекст."""
+    from app.pages import common
+
+    original = common.templates.TemplateResponse
+    seen: dict[str, dict] = {}
+
+    def spy(*args, **kwargs):
+        name = next(arg for arg in args if isinstance(arg, str))
+        context = kwargs.get("context")
+        if context is None:
+            context = next(arg for arg in args if isinstance(arg, dict))
+        seen[name] = context
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(common.templates, "TemplateResponse", spy)
+    return seen
+
+
+# Порция запрашивается с РАЗМЕРОМ, ОТЛИЧНЫМ от страничного: так правило
+# различает носителя. Контекст, подставивший присланный клиентом `limit` вместо
+# `PAGE_SIZE`, дал бы здесь семь, и правило назвало бы это.
+PORTION_PROBE_LIMIT = 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("section", ["ads", "accounts", "schedules"])
+async def test_the_page_size_in_the_context_is_the_module_constant(
+    authed_client: AsyncClient, db_session: AsyncSession, monkeypatch, section: str
+):
+    """Правило 6: значение, приезжающее в шаблон, — `PAGE_SIZE` своего модуля.
+
+    Константа читается ИЗ МОДУЛЯ, а не переписывается в тест. Утверждается для
+    обоих обработчиков раздела: страницы и порции.
+    """
+    base = await _seed_section(db_session, section)
+    seen = _capture_contexts(monkeypatch)
+
+    page = await authed_client.get(base)
+    portion = await authed_client.get(f"{base}/partial?limit={PORTION_PROBE_LIMIT}")
+    assert page.status_code == 200 and portion.status_code == 200, section
+
+    for template in (f"{section}/list.html", f"{section}/partial_cards.html"):
+        module = import_module(CONTEXT_CARRIERS[template])
+        assert template in seen, f"{template}: обработчик не отрисовал шаблон"
+        assert PAGE_SIZE_CONTEXT_KEY in seen[template], (
+            f"{template}: в контексте нет `{PAGE_SIZE_CONTEXT_KEY}` — число "
+            f"набирается в разметке, а не приходит из `PAGE_SIZE`"
+        )
+        assert seen[template][PAGE_SIZE_CONTEXT_KEY] == module.PAGE_SIZE, (
+            f"{template}: в контексте {seen[template][PAGE_SIZE_CONTEXT_KEY]!r}, "
+            f"а `{module.__name__}.PAGE_SIZE` = {module.PAGE_SIZE}"
+        )
+
+
+async def _schedule_ids(db: AsyncSession) -> list[int]:
+    return list((await db.execute(select(Schedule.id).order_by(Schedule.id))).scalars())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("section", ["ads", "accounts", "schedules"])
+async def test_the_rendered_portion_url_is_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession, section: str
+):
+    """Правило 7 (страховочное): отрендеренный адрес порции прежний, до символа.
+
+    Замена литерала значением контекста не должна менять адреса. Правило зелено
+    и до правки, и после неё. Оно стоит рядом с прежними правилами адреса
+    (`test_infinite_scroll_chain` и `test_infinite_scroll_keeps_filters` в
+    tests/test_pages/test_htmx_preserved.py) и их не заменяет. Предмет
+    ``DEF-09-03`` оно не держит: его держит правило 1.
+    """
+    base = await _seed_section(db_session, section)
+    size = import_module(CONTEXT_CARRIERS[f"{section}/list.html"]).PAGE_SIZE
+
+    page = await authed_client.get(base)
+    portion = await authed_client.get(f"{base}/partial?limit={PORTION_PROBE_LIMIT}")
+
+    if section == "schedules":
+        ids = await _schedule_ids(db_session)
+        expected_page = f"/schedules/partial?after_id={ids[size - 1]}&limit={size}"
+        expected_portion = (
+            f"/schedules/partial?after_id={ids[PORTION_PROBE_LIMIT - 1]}&limit={size}"
+        )
+    else:
+        expected_page = f"/{section}/partial?offset={size}&limit={size}"
+        expected_portion = f"/{section}/partial?offset={PORTION_PROBE_LIMIT}&limit={size}"
+
+    assert _sentinel_urls(page.text)[-1] == expected_page
+    assert _sentinel_urls(portion.text)[-1] == expected_portion
