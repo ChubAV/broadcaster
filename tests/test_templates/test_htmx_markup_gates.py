@@ -9588,12 +9588,22 @@ def _modal_trigger_forms(sources: dict[str, str]) -> dict[str, Site]:
     нет: число одинаково под ``-p no:randomly`` и при любом порядке сбора.
     """
     found: dict[str, Site] = {}
+    sites = [
+        site
+        for site in _sites(list(sources.items()), SUBMIT_PREVENT_TAG)
+        if _tag_name(site.tag) == "form"
+        and MODAL_OPEN_DISPATCH_CALL.search(_attr_value(site.tag, SUBMIT_PREVENT_VALUE) or "")
+    ]
+    found.update(zip(_ordinal_keys(sites), sites))
     return found
 
 
 def _modal_component_post_forms(sources: dict[str, str]) -> dict[str, Site]:
     """СЧЁТ II: формы компонента модалки, несущие ``hx-post``; ключ ``путь#номер``."""
     found: dict[str, Site] = {}
+    component = [(MODAL_LINKAGE_COMPONENT, sources.get(MODAL_LINKAGE_COMPONENT, ""))]
+    sites = [site for site in _sites(component, HX_POST_TAG) if _tag_name(site.tag) == "form"]
+    found.update(zip(_ordinal_keys(sites), sites))
     return found
 
 
@@ -9605,6 +9615,13 @@ def _modal_open_event_calls(sources: dict[str, str]) -> dict[str, str]:
     ``путь#номер`` среди таких вызовов файла, значение — имя после префикса.
     """
     found: dict[str, str] = {}
+    for rel, source in sources.items():
+        ordinal = 0
+        for value in SUBMIT_PREVENT_VALUE.finditer(_strip_comments(source)):
+            text = value.group(2) if value.group(2) is not None else value.group(3)
+            for call in MODAL_OPEN_DISPATCH_CALL.finditer(text):
+                found[f"{rel}#{ordinal}"] = call.group(2)
+                ordinal += 1
     return found
 
 
@@ -9616,6 +9633,21 @@ def _modal_calls(sources: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
     сам себя своим вызывающим.
     """
     calls: list[tuple[str, dict[str, str]]] = []
+    for rel, source in sources.items():
+        body = _strip_comments(source)
+        for match in MODAL_MACRO_CALL.finditer(body):
+            if body[: match.start()].rstrip().endswith("macro"):
+                continue
+            close = _scan_to_close(body, match.end())
+            if close < 0:
+                calls.append((rel, {}))
+                continue
+            arguments: dict[str, str] = {}
+            for part in _split_top_level(body[match.end() : close], ","):
+                name, separator, value = part.partition("=")
+                if separator and KEYWORD_NAME.fullmatch(name) and not value.startswith("="):
+                    arguments[name.strip()] = value.strip()
+            calls.append((rel, arguments))
     return calls
 
 
