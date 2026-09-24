@@ -1,0 +1,717 @@
+# Реестр тождеств запретов планов вехи v2.1 — строка на каждый элемент переписи.
+#
+# Источник строк — `scripts/prohibitions_census.py --seed-registry`; принуждение биекции
+# «перепись ↔ реестр» — `tests/test_planning/test_plan_prohibitions_census.py`.
+# Тождество строки — `plan` + `index` (порядковый номер элемента в блоке
+# `must_haves.prohibitions`). `statement_digest` служит ОБНАРУЖЕНИЮ ПРАВКИ формулировки,
+# а не ключеванию. `verification` отсутствует там, где элемент ключа не несёт: отсутствие
+# есть признак «не объявлено», а не значение `none`.
+#
+# ⚠️ ПОЛЕЙ `permit_*` И ЛЮБОГО ПОЛЯ ВЕРДИКТА ЗДЕСЬ НЕТ НАМЕРЕННО. `class: unclassified` и
+# `disposition: unresolved` — засеянный ПРЕДМЕТ решения, а не решение: класс пишет план
+# 15-12, диспозицию по ответу владельца — план 15-13. Исполнитель, поставивший поле вердикта
+# сам, вынес бы вердикт вместо владельца.
+#
+# `rows_declared` — второй носитель числа переписи (первый — литерал модуля теста);
+# перегенерация реестра в другой размер краснит модуль.
+
+measured: '2026-09-24'
+rows_declared: 697
+rows:
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-01-PLAN.md, index: 0, phase: '07', statement_digest: 49e7a84b226b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-01-PLAN.md, index: 1, phase: '07', statement_digest: 81fc289ee3a0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-01-PLAN.md, index: 2, phase: '07', statement_digest: 9026a6360ea8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-01-PLAN.md, index: 3, phase: '07', statement_digest: e1e1a9791ffb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-02-PLAN.md, index: 0, phase: '07', statement_digest: 193e40f00b7a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-02-PLAN.md, index: 1, phase: '07', statement_digest: 30d081f15b44, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-03-PLAN.md, index: 0, phase: '07', statement_digest: ee888bb45776, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-03-PLAN.md, index: 1, phase: '07', statement_digest: 23497e4bfcc5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-03-PLAN.md, index: 2, phase: '07', statement_digest: 37d0a8cd6d5c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-04-PLAN.md, index: 0, phase: '07', statement_digest: 1cdc3238448e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-04-PLAN.md, index: 1, phase: '07', statement_digest: 7d347cf9d64e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-04-PLAN.md, index: 2, phase: '07', statement_digest: 037e789097dc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-04-PLAN.md, index: 3, phase: '07', statement_digest: e34e7b4a8b32, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-04-PLAN.md, index: 4, phase: '07', statement_digest: 6b06fd554cb7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-04-PLAN.md, index: 5, phase: '07', statement_digest: ce5667452722, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-05-PLAN.md, index: 0, phase: '07', statement_digest: 595c17bc9047, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-05-PLAN.md, index: 1, phase: '07', statement_digest: 4dcbd83fb0d3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-05-PLAN.md, index: 2, phase: '07', statement_digest: 409484e9869a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-05-PLAN.md, index: 3, phase: '07', statement_digest: ecd886dea653, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-05-PLAN.md, index: 4, phase: '07', statement_digest: d0ffbd2b7814, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-06-PLAN.md, index: 0, phase: '07', statement_digest: 1c40f98a56c9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-06-PLAN.md, index: 1, phase: '07', statement_digest: 38bdba455649, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-06-PLAN.md, index: 2, phase: '07', statement_digest: '302412380874', class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-06-PLAN.md, index: 3, phase: '07', statement_digest: f1cf2b1cccf6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-06-PLAN.md, index: 4, phase: '07', statement_digest: e0fac91540a3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-06-PLAN.md, index: 5, phase: '07', statement_digest: 708c07de7b2d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-07-PLAN.md, index: 0, phase: '07', statement_digest: bdfdb00897f0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-07-PLAN.md, index: 1, phase: '07', statement_digest: ce2594bf121c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-07-PLAN.md, index: 2, phase: '07', statement_digest: 321a4c8b93dd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-07-PLAN.md, index: 3, phase: '07', statement_digest: 0145a149d4e7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/07-obnovlenie-htmx-do-2-0-10-i-blok-konfiguratsii/07-07-PLAN.md, index: 4, phase: '07', statement_digest: 40cc7f51f38f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-01-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 40d5ac83dfd0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-01-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: 132e3632178f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-02-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 2eccb3e94c1a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-02-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: 158576d8b936, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-03-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: edb95ea7e3ab, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-03-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: 00437a6c9433, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-04-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 4634047c9bf4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-04-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: a8c770236027, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-05-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 3db867c8cf04, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-05-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: df4046727ba2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-06-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 37be3a21b2b5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-06-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: c4c4d144f990, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-07-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: fc940ad31c1f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-08-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 8e5a0b670776, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-08-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: bcf44400ef84, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-09-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 9da6ddcbac91, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-09-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: 04b118a6018d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-10-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: c9fa5b227f59, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-10-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: 1f2b1f8f58c5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-11-PLAN.md, index: 0, phase: 08, verification: judgment, statement_digest: 624779c69a1a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-11-PLAN.md, index: 1, phase: 08, verification: judgment, statement_digest: d4f77d1d5bff, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-11-PLAN.md, index: 2, phase: 08, verification: judgment, statement_digest: 9647cdc0de30, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-11-PLAN.md, index: 3, phase: 08, verification: judgment, statement_digest: 9b1bed681040, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/08-fundament-otveta-kanal-uvedomleniy-paket-geytov-i-denezhnyy/08-11-PLAN.md, index: 4, phase: 08, verification: judgment, statement_digest: 6f1b720c7150, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-01-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 8b275209a625, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-01-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: a8775768a7bd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-01-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 08ae6171284c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-01-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: d00a426fbe65, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-01-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: ea8334aac775, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-01-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 1061b0c972b1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-01-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: 6381a50e4a72, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-02-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: c94339533aa2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-02-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: d6b241d639b8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-02-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 0a8e00ee6e6a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-02-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 1940ebc9b70c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-02-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 4c1ebe17df9b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-03-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: a8378b26d9b0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-03-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 2b3b7acd8f82, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-03-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: bc4448b28986, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-03-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 2606ed686213, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-04-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 39d9a77c083a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-04-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: e9fb3fd5d5ba, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-04-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 092a22fc4ae1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-04-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: fe6f70b0223e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: c78a3974cda2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 9ccf81e6cc42, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 159883574db0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: cfd12d2e802c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: c610a90b7b99, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 8e2ce55f34e6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: a36709c1cdf4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-05-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: abcfe765cc26, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-06-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: cd3e8f0570fe, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-06-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: ff86a7333de9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-06-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: b716f7245692, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-06-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 6c106855c7f9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-07-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: ac99955a375a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-07-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: d7c6e0498094, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-07-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: c439a9fd2670, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-07-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 7fa09cbdd1e5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-08-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 4b1af9682d97, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-08-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 5d9abc418c83, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-08-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 6065188284fe, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-08-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 858d55363210, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-08-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 010df2a24828, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-09-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 6d8ce89f9fe5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-09-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 7f2031e9c48d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-09-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 98f571d69570, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-09-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 57f69ddf1072, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-09-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: e7be6a0b9bc4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: f24b4598a7f0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: a310a8f43e91, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 110f751a08b4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 814cdde54e0e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 133903f66776, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 26d7d04125b0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: f6d66a863b24, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: e587c6d52dfd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-10-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: f086dc66fa29, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 05ebeecd3737, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 45da715e783f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 27b912138484, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: bc9cd7ff1963, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: b11b9892329e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: b80e5eb6997a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: 949c5ee5edc8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-11-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: 7ac6f9a6ab62, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 155bfb219de7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 57bbd838e747, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 16c08b991d9d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: fb8ac2eb01ab, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 4c790cb63f2f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 8d8477f6e464, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: cc55e502dda8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-12-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: f0a4fe137237, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: b46ecf478435, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 97f5e64e190b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 10ecad4e6d56, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 9c99337e837b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 80cece08da59, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: 53adb8cf85da, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: db14d105db4e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: f9fe259e4496, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-13-PLAN.md, index: 9, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 7f82b553295d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 736539900cc7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: b4990c6d2ec8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 39d5c3dd71da, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 4a9acd21ddfe, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 449b2da254eb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: a2738b7eb58f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: f9fe259e4496, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-14-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 0a71e8a51008, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 4560d12a2e49, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 99101d5a0eaa, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 8d7883209da7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: e859f4f2ebfe, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 5fa942dfdce3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: cc5d2014544b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: 12c0d3d1f996, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: f9fe259e4496, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-15-PLAN.md, index: 9, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 664f3c6368bc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 37e9b7114a6e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: ef93c62ac2cf, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 97624dbf6633, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 105b2c29d047, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: fdc5371977f1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: 59d86f316f3e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: 41c06888fd93, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-16-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 1347b12528ad, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: c9911eca3130, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 715b8a11ae2b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 107b69a5cb43, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 77f5bfe62798, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 6be073cf23c7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: 0acca8edf68e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: f942a9e8fb9b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: cc5d2014544b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 9, phase: 09, verification: none, statement_digest: 48ff50073a44, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 10, phase: 09, verification: none, statement_digest: f9fe259e4496, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 11, phase: 09, verification: none, statement_digest: 58330ca57779, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-17-PLAN.md, index: 12, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 34f7d2535677, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 3d7a4efdbed9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 6852f09a3014, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 796fc8a12564, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 1464dfc33d26, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: c47c4eef6be1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: 0acca8edf68e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: 91133570f8fa, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: 1f936805579c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 9, phase: 09, verification: none, statement_digest: 89b9bfeae926, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 10, phase: 09, verification: none, statement_digest: f9fe259e4496, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-18-PLAN.md, index: 11, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 8cd12f5c97ed, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 665b961350c1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: cc8485fe8dd1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: b70fa491b38e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: c1f547c5958f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: 9d177f6ac795, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: f9fe259e4496, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: d07803ebe8ab, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: 9be83cb21da3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-19-PLAN.md, index: 9, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 0, phase: 09, verification: none, statement_digest: 2300277b5013, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 1, phase: 09, verification: none, statement_digest: 250b870bce8c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 2, phase: 09, verification: none, statement_digest: 1fe0baca511b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 3, phase: 09, verification: none, statement_digest: 92bf95b0a149, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 4, phase: 09, verification: none, statement_digest: 978d21541031, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 5, phase: 09, verification: none, statement_digest: fbfb308a7f56, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 6, phase: 09, verification: none, statement_digest: 48d05b09a89c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 7, phase: 09, verification: none, statement_digest: 2d650405395b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/09-pilot-na-account-groups-skvoznoy-kontrakt-formy/09-20-PLAN.md, index: 8, phase: 09, verification: none, statement_digest: 68d59e44626d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: bc2873de02db, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 4c32640f417c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: d6b241d639b8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: cfa9ac2ebed4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 79657527e952, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: f8479ada54a7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 9092cc681c54, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-01-PLAN.md, index: 7, phase: '10', verification: none, statement_digest: 3160633fbb60, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-02-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: cce73ebdd259, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-02-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: f33d623481d4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-02-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 038243ba94ea, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-02-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: d798ba1e91e3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-02-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 7f5d46c66ee9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-02-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 015e0948f83a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-03-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 7c3a0e95077c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-03-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: cb5cbc84b841, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-03-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 44b34e1325d3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-03-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 565e791dfe1b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-03-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 223c5057ba0e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-03-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: f63a56c1a1ce, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-03-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 567a58e33d9e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-04-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 076b6fd54add, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-04-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 1811e6f11bed, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-04-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 5a934bc784b6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-04-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 29243d17db69, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-04-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 569df97acede, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-04-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 8b4bd1d038bd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 141765a317a5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 3740a2c5a8d1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: a6c48927e2ff, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 079e2524c3c6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 3505141f1ed4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: fa4bdbd66727, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 8066631eca05, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-05-PLAN.md, index: 7, phase: '10', verification: none, statement_digest: 52465196bbc2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-06-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: ce0e8dab619a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-06-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 9cbb12cf9d09, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-06-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 5164db80eaf8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-06-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: deb73d071cbf, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-06-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: db87ddf61d76, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-07-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 607c9914f91e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-07-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: f2e73f4da581, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-07-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 17f200367da3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-07-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: afc3293564e3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-07-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 206fb4816195, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-07-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: db87ddf61d76, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-08-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 5dfdc5c3a551, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-08-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: cb4ae7c82cae, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-08-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 8095b671310f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-08-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 7e22d98dc3c2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-08-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 8324b3953be4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-09-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 1e60de6cdc0b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-09-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 8abf289f463d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-09-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: b53d3a0ade5e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-09-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 5657f68bd4b4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-09-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: b6323f6a53e5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-10-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 4be99f5fc38d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-10-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 419e4d4a8f34, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-10-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: b25e48dfff51, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-10-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 7d21dc7b66d0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-10-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: fc1cb25bbbf3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-11-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 86d61de72cc5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-11-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 04599609affb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-11-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 4eda486b531e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-11-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 35d0a604d465, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-11-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: b6323f6a53e5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-12-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 002caa989c3c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-12-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 07a01d8c39dd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-12-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: d070a764a2e6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-12-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 9b0c71109c5e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-13-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 69860a2708cb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-13-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 50c480261df3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-13-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 2ef8602befe4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-13-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: eadfb522454c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-14-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 6a8f4a589088, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-14-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 9e255a7521be, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-14-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 62a73f127bb9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-15-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 4c35b4b4df37, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-15-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 27a514888229, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-15-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 2b66b67e6b41, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-16-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 0e4ce3a0307a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-16-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 0b44a42e4b37, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-16-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 39e4fdc7fd69, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-16-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 987c915d46e6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-17-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 96f4ebc3add6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-17-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 4d17e21c1eb8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-17-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: e4c52f2dd7f6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-17-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 7b7f682580de, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-18-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: e1d63020cb50, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-18-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 826496ec5678, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-18-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 6e2ec23f159d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-18-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 52f462258a32, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-19-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: e8ff01e331c1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-19-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 55d6c35e32c9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-19-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: c1243705be6d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-19-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 13a106830c8c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-20-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: d5c032ad6ec6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-20-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: d5ed4bb790d1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-20-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 70a8966ba683, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-20-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: ae776bdd3764, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-21-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: c30590ec3530, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-21-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 683d1223788b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-21-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 894ac0d222ce, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-21-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 0101ee2bbe1a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-22-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 2e491c5928da, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-22-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 5afead8bff0e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-22-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 32ee931a4ba5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-22-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 2aca8f1ac326, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-23-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 0b2d370119c6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-23-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: c26e994e9338, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-23-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: ca3918f2dc28, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-23-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 28660e27337b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-23-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: be1731532fd9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-24-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: aa5128f547fc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-24-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 156624852d33, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-24-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 427d3bf86ff3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-24-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 6b3e096dda7d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-24-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 4861b329b456, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-24-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: ca9f7f34c8cb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-24-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 412e3355915f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-25-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 02983f77c1d4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-25-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 60c66df491a0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-25-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: adca305d538c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-25-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 1042768be4aa, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-26-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 1d6e9800df99, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-26-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 7f1fa3c6301e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-26-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 9cf076bc6508, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-26-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 2385f781b285, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-27-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 0799372ea006, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-27-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: ce344d182b2a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-27-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 642020aae9bc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-27-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 37680f58b2e8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: d7a077bcd508, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 9a2ccdeece30, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: bfd951b8ebf2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-28-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 2385f781b285, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-29-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 51abfb7d9fa1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-29-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 5c797d2371ab, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-29-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 87aede7df3c4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-29-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: d429a5d7b83a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-30-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: adce9c290574, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-30-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: f9da98c360e9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-30-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 028be0f34962, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-30-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: f12b5ae43b55, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-30-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 2385f781b285, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-31-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 65b805702694, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-31-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 8f66669b9b6e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-31-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 332c13dc8866, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-31-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 26d80e5e9757, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-32-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 6cadf332eaad, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-32-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: e5792e78a0d1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-32-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 9204b23ecef7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-32-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: edfa88f52706, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-32-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 9a89e0e1b59c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 56111570f87c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: c8e3ccae6843, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 483f9844bfa8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 4a4b695b3cf5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-33-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: fbf07b591c01, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: fca6300706d9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 31b6536668ee, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: f52e39c8f176, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: a28144d413fb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 996f9c7dd054, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: c2ced3f1db5d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 20a2d98d8619, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-34-PLAN.md, index: 7, phase: '10', verification: none, statement_digest: 09767fff78e1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: e2a466001aa8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: c9d91fbf5eea, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 47b746630534, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 59fa8dd9bbc6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 26358d723ee6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 67c50e421423, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-35-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 0d090d88e21d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 4e033dca83f7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 21867b246325, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: e592796868bc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 7fbeccdbf5cf, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 7b566c7ab7a4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-36-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: d81bd351b853, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: ff079d1797a5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: b556cb3a802b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 14bc45da55f9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: c9edcfa21e81, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 6f9583048927, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-37-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 2530ecfc02d8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 1a67f7279829, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 9b08efe82dad, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 9e938c7ff5ff, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 387edf9e5ed5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 0b47cee9cf53, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-38-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: db0753ce61f5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: fb5c3a5410f2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 6735681f1025, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 62025ea32411, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: ebad2a68f0ac, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 2a5ac78434d4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 117641b88f37, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 6, phase: '10', verification: none, statement_digest: 0d9a71e9b814, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-39-PLAN.md, index: 7, phase: '10', verification: none, statement_digest: 233b0fb11a00, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: a748f4ed8d96, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 41c04b47e363, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 2b7e4f3b342a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 9edc0a894491, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: be89b6820843, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-40-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 6c2d2b64dd32, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-41-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: c809b67bbd1e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-41-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: b5f3181e8cea, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-41-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 677194ea826e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-41-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: f9ba8e6a4702, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-42-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 7b1b598c7964, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-42-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: de684a604511, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-42-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 938db79da0cd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-42-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: 4496fa22fc96, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: 40143230925d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: a7327afc2484, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-43-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 4c5792d2705c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: d406717e52f8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 21ee2e2e169e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 4f29232bb39d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 118d274508ef, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 58bc75b63477, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-44-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: ace8ed036251, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: a860083be67f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 1, phase: '10', verification: none, statement_digest: f5bf9a7c09f4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-45-PLAN.md, index: 3, phase: '10', verification: none, statement_digest: 52f9ded37a4e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: c0cef810fe6f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 79f61186f4a3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 145677e229d3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 65d85f1354c4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: deedcc46cb47, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-46-PLAN.md, index: 5, phase: '10', verification: test, statement_digest: 1df8e31d3590, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 0, phase: '10', verification: none, statement_digest: d406717e52f8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: ec14d5aa61a9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: 46983ac8b469, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 48c4e3accea2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-47-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: 93d32a9ca7c3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 1f317a464b52, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 53cb3937c3b4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 2, phase: '10', verification: none, statement_digest: d46707e41203, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 79b5b8cb6e37, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-48-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: cb834b1ef5fd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 71d8e232a801, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: f869a93d437c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 451b9403b8e0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: f782a1374393, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-49-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: 2607a2b52deb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 8da2952d11c3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: 69ec10bf905c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 390a7d5a6c41, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 9a6676c36905, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-50-PLAN.md, index: 4, phase: '10', verification: test, statement_digest: d649243f1ef4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 0, phase: '10', verification: test, statement_digest: 0fbc6456d88e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 1, phase: '10', verification: test, statement_digest: f00fd51ef638, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 2, phase: '10', verification: test, statement_digest: 6cc274ecf9eb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 3, phase: '10', verification: test, statement_digest: 16f20f3045b9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 4, phase: '10', verification: none, statement_digest: a62a624e27dc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-51-PLAN.md, index: 5, phase: '10', verification: none, statement_digest: 8e8e7ffa1b73, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 0, phase: '10', statement_digest: b6979c68d504, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 1, phase: '10', statement_digest: 0770c2895e2e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 2, phase: '10', statement_digest: 7613b704eb61, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 3, phase: '10', statement_digest: dc7352fb103b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 4, phase: '10', statement_digest: 993875164fe2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 5, phase: '10', statement_digest: 78d3048e3657, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-52-PLAN.md, index: 6, phase: '10', statement_digest: 9cde8ea931ea, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 0, phase: '10', statement_digest: 34e5be0245eb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 1, phase: '10', statement_digest: 8141dbba1a02, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 2, phase: '10', statement_digest: 800c7f5dc9ea, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 3, phase: '10', statement_digest: 26fc332c7be5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 4, phase: '10', statement_digest: 32a618c1db3a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 5, phase: '10', statement_digest: e1437a1ba4e2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 6, phase: '10', statement_digest: a718428bf2d6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 7, phase: '10', statement_digest: 1ce5f2f95c07, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-53-PLAN.md, index: 8, phase: '10', statement_digest: c9b44e544095, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 0, phase: '10', statement_digest: b1024c3496f6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 1, phase: '10', statement_digest: fe66e05ffa16, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 2, phase: '10', statement_digest: 35222196f994, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 3, phase: '10', statement_digest: e37002246f36, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 4, phase: '10', statement_digest: 4c58a227d9e0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 5, phase: '10', statement_digest: 43ad13cc1193, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 6, phase: '10', statement_digest: 29d2417429f0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 7, phase: '10', statement_digest: a3b2782d645b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-54-PLAN.md, index: 8, phase: '10', statement_digest: e8ff2f24297e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 0, phase: '10', statement_digest: 2a6762f76b6f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 1, phase: '10', statement_digest: d99fe4c440f6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 2, phase: '10', statement_digest: 7e78b5bd4bc4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 3, phase: '10', statement_digest: 4068a5f5cc33, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 4, phase: '10', statement_digest: b948ff8769a2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 5, phase: '10', statement_digest: b526806d936e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 6, phase: '10', statement_digest: a92f139caa3f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 7, phase: '10', statement_digest: '803460738050', class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 8, phase: '10', statement_digest: 42780fcf5ecf, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-55-PLAN.md, index: 9, phase: '10', statement_digest: 64c8f52614b9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 0, phase: '10', statement_digest: 72d029d9cba1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 1, phase: '10', statement_digest: 467f3d8517ba, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 2, phase: '10', statement_digest: 08dc79e645e5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 3, phase: '10', statement_digest: b59d4f2d6296, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 4, phase: '10', statement_digest: 66b64f247c59, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 5, phase: '10', statement_digest: 141e1a9e1988, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 6, phase: '10', statement_digest: 7119d28908c4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 7, phase: '10', statement_digest: 19643ec4e8d8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 8, phase: '10', statement_digest: 6edc6ac36365, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 9, phase: '10', statement_digest: 663621932f8e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 10, phase: '10', statement_digest: 3062727f2bc8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-56-PLAN.md, index: 11, phase: '10', statement_digest: a59688a1bbe4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 0, phase: '10', statement_digest: ffca18f00632, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 1, phase: '10', statement_digest: f9448413ae8b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 2, phase: '10', statement_digest: d8744bf78bf8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 3, phase: '10', statement_digest: 1cd0c6eea40d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 4, phase: '10', statement_digest: 98629f7bd4c9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 5, phase: '10', statement_digest: f411f689bf4d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 6, phase: '10', statement_digest: 00108d1c89b7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 7, phase: '10', statement_digest: d911503910ed, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 8, phase: '10', statement_digest: 54e569fa259c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 9, phase: '10', statement_digest: '838777022249', class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 10, phase: '10', statement_digest: 312f6c39444c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 11, phase: '10', statement_digest: 3b341c1690a4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 12, phase: '10', statement_digest: 39acf26f3954, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/10-rychag-components-modal-html/10-57-PLAN.md, index: 13, phase: '10', statement_digest: 5da89ca46455, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-01-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 22ab23a6c026, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-01-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 627bc9370c46, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-01-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 4ab61c93fdfb, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-01-PLAN.md, index: 3, phase: '11', verification: none, statement_digest: 156ad190d287, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-01-PLAN.md, index: 4, phase: '11', verification: none, statement_digest: c61b6052d7f2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-02-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: b9f30dee6dc1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-02-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: e997a5a0a35b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-02-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 1399439314c7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-03-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 7884b4126b00, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-03-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: d22fc167e591, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-04-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: ca043e88cbd9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-04-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 7884b4126b00, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-04-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 5a2c0b8c49fc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-05-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 6da1703e049d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-05-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 093bc40f9e09, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-06-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: afe4c49aea28, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-06-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 1314c8bf1902, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-07-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 0e5aec2586c8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-07-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 2ab7c6acf294, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-07-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: d184cf68ee08, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-07-PLAN.md, index: 3, phase: '11', verification: none, statement_digest: eb995edbcd4e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-08-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 0e5aec2586c8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-08-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: d184cf68ee08, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-08-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: f068779ff908, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-09-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 0e5aec2586c8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-09-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 0abc9172b7df, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-09-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: f068779ff908, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-09-PLAN.md, index: 3, phase: '11', verification: none, statement_digest: 152dfaab1c13, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-09-PLAN.md, index: 4, phase: '11', verification: none, statement_digest: eb995edbcd4e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-10-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 0abc9172b7df, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-10-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 9879b365fb06, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-11-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 40f97a718a2b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-11-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 4f132d5d7225, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-11-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: e997a5a0a35b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-12-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: d32398a3fd72, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-12-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 40f97a718a2b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-12-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 4f132d5d7225, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-13-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: d32398a3fd72, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-13-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 1938b801d5d1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-13-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 4f132d5d7225, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-14-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: bb4f46d77fd7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-14-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 1e2cb657ccba, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-15-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 03c2063c6339, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-15-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: fd1a358405da, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-15-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: ceb803f3a11c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-15-PLAN.md, index: 3, phase: '11', verification: none, statement_digest: ba53848673f9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-16-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 9b3da0a8ef7c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-16-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: fb89a3d18dd9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-16-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: b3196ba29e14, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-17-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: 9b3da0a8ef7c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-17-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: fb89a3d18dd9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-17-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: b9462070afe8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-18-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: aaa5dc0c1171, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-18-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 598de52adc9d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-18-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 33ad1b6666bd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-19-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: e997a5a0a35b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-19-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 6073e36e50a3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-19-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 1399439314c7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-20-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: e9c5445bd0e1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-20-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: 3ea24150b93e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-20-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: 0f4d10047960, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-20-PLAN.md, index: 3, phase: '11', verification: none, statement_digest: 3c4d86c24327, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-21-PLAN.md, index: 0, phase: '11', verification: none, statement_digest: a068626209d4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-21-PLAN.md, index: 1, phase: '11', verification: none, statement_digest: c79ea91fce51, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-21-PLAN.md, index: 2, phase: '11', verification: none, statement_digest: c1f185c9e4f6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-21-PLAN.md, index: 3, phase: '11', verification: none, statement_digest: 01f78a7cb1c3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-21-PLAN.md, index: 4, phase: '11', verification: none, statement_digest: 3dfa67706c9a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/11-massovyy-perevod-razdelov-pisma/11-21-PLAN.md, index: 5, phase: '11', verification: none, statement_digest: 76974d4ae6a9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-01-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 78c19febf880, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-01-PLAN.md, index: 1, phase: '12', verification: none, statement_digest: 50b0e0c211d5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-02-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: aa2698bbc0b1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-03-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 836f4e6d020d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-03-PLAN.md, index: 1, phase: '12', verification: none, statement_digest: a65eef642a0f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-04-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 26f17768e59f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-04-PLAN.md, index: 1, phase: '12', verification: none, statement_digest: a4c497258973, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-05-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 9e9576b4ad45, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-05-PLAN.md, index: 1, phase: '12', verification: none, statement_digest: 5fd1511f319a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-06-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 036c96ae6df7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-07-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 3a48a3be671f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-08-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 3778fe53217b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-09-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 512ea7574303, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-11-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 021108aada82, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-11-PLAN.md, index: 1, phase: '12', verification: none, statement_digest: e602043eb03f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-11-PLAN.md, index: 2, phase: '12', verification: none, statement_digest: fc920ce019de, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-12-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 2f85d22462f6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-12-PLAN.md, index: 1, phase: '12', verification: none, statement_digest: b517a92f84c7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-12-PLAN.md, index: 2, phase: '12', verification: none, statement_digest: 879f1fdcde1e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-13-PLAN.md, index: 0, phase: '12', verification: none, statement_digest: 1df90baafbce, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-13-PLAN.md, index: 1, phase: '12', verification: none, statement_digest: b0df5e4739e5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/12-zagruzka-izobrazheniy-bez-fetch/12-13-PLAN.md, index: 2, phase: '12', verification: none, statement_digest: 6e9a006e19b9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-PLAN.md, index: 0, phase: '13', verification: none, statement_digest: 9f60ecc8912d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-PLAN.md, index: 1, phase: '13', verification: none, statement_digest: 576a650e5598, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-PLAN.md, index: 2, phase: '13', verification: none, statement_digest: cb7927030e64, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-02-PLAN.md, index: 0, phase: '13', verification: none, statement_digest: 3353a14e1cd2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-03-PLAN.md, index: 0, phase: '13', verification: none, statement_digest: cfd2d8ec6cf9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-04-PLAN.md, index: 0, phase: '13', verification: none, statement_digest: 2d14db9e61f2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-05-PLAN.md, index: 0, phase: '13', verification: none, statement_digest: e6e9e90de343, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-06-PLAN.md, index: 0, phase: '13', verification: none, statement_digest: 060d0053a2b2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-01-PLAN.md, index: 0, phase: '14', verification: none, statement_digest: 631736c48fb9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-01-PLAN.md, index: 1, phase: '14', verification: none, statement_digest: 1bf8a2c71aaa, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-01-PLAN.md, index: 2, phase: '14', verification: none, statement_digest: 5c7e8773a30d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-01-PLAN.md, index: 3, phase: '14', verification: none, statement_digest: bf75a435e256, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-01-PLAN.md, index: 4, phase: '14', verification: none, statement_digest: c283ade07311, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-02-PLAN.md, index: 0, phase: '14', verification: none, statement_digest: 1710ea6ad7e8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-02-PLAN.md, index: 1, phase: '14', verification: none, statement_digest: 215c2f4db55b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-02-PLAN.md, index: 2, phase: '14', verification: none, statement_digest: c283ade07311, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-03-PLAN.md, index: 0, phase: '14', verification: none, statement_digest: 96deff254507, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-03-PLAN.md, index: 1, phase: '14', verification: none, statement_digest: b16ffe1b42b2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-03-PLAN.md, index: 2, phase: '14', verification: none, statement_digest: c283ade07311, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-04-PLAN.md, index: 0, phase: '14', verification: none, statement_digest: c3f3bda57ad2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-04-PLAN.md, index: 1, phase: '14', verification: none, statement_digest: 90e5c5db8d92, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-04-PLAN.md, index: 2, phase: '14', verification: none, statement_digest: c283ade07311, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-05-PLAN.md, index: 0, phase: '14', verification: none, statement_digest: 7392051140f7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-05-PLAN.md, index: 1, phase: '14', verification: none, statement_digest: 4f31e72f45d9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-05-PLAN.md, index: 2, phase: '14', verification: none, statement_digest: c283ade07311, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-06-PLAN.md, index: 0, phase: '14', verification: none, statement_digest: 3b18336e833f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-06-PLAN.md, index: 1, phase: '14', verification: none, statement_digest: 2e38a90c7b26, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-06-PLAN.md, index: 2, phase: '14', verification: none, statement_digest: c283ade07311, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-07-PLAN.md, index: 0, phase: '14', verification: none, statement_digest: de7ed407cc72, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-07-PLAN.md, index: 1, phase: '14', verification: none, statement_digest: 23457cd2a05b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/14-avtorizatsiya-na-htmx/14-07-PLAN.md, index: 2, phase: '14', verification: none, statement_digest: 7693ab94b837, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-01-PLAN.md, index: 0, phase: '15', statement_digest: 2919f3ab7ee5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-01-PLAN.md, index: 1, phase: '15', statement_digest: 31b062ca64ea, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-01-PLAN.md, index: 2, phase: '15', statement_digest: 52a1cdb72c81, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-02-PLAN.md, index: 0, phase: '15', statement_digest: daab5b5618f5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-02-PLAN.md, index: 1, phase: '15', statement_digest: c9b27f20db4d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-03-PLAN.md, index: 0, phase: '15', statement_digest: 43c8d3bbfb1c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-03-PLAN.md, index: 1, phase: '15', statement_digest: f2bf0d770e00, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-03-PLAN.md, index: 2, phase: '15', statement_digest: 2d8e9fb5cf19, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-04-PLAN.md, index: 0, phase: '15', statement_digest: 5cb5ef1a774b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-04-PLAN.md, index: 1, phase: '15', statement_digest: 3cdc941fd605, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-05-PLAN.md, index: 0, phase: '15', statement_digest: e2961c2af846, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-05-PLAN.md, index: 1, phase: '15', statement_digest: 8be532da9428, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-05-PLAN.md, index: 2, phase: '15', statement_digest: 64bc532d46c1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-06-PLAN.md, index: 0, phase: '15', statement_digest: a56deaa6e84b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-06-PLAN.md, index: 1, phase: '15', statement_digest: 0297aaae0d45, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-06-PLAN.md, index: 2, phase: '15', statement_digest: b9004e99e565, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-07-PLAN.md, index: 0, phase: '15', statement_digest: 5710aa32a9df, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-07-PLAN.md, index: 1, phase: '15', statement_digest: abf50e705f5f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-07-PLAN.md, index: 2, phase: '15', statement_digest: 094a27869e06, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-08-PLAN.md, index: 0, phase: '15', statement_digest: 2bb8225c5ed9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-08-PLAN.md, index: 1, phase: '15', statement_digest: d88c286d6ce0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-08-PLAN.md, index: 2, phase: '15', statement_digest: 6ae2c3a78fc4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-08-PLAN.md, index: 3, phase: '15', statement_digest: c4e6a267e9e9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-09-PLAN.md, index: 0, phase: '15', statement_digest: 6e6693a7cfd2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-09-PLAN.md, index: 1, phase: '15', statement_digest: f7c2e0e5c0a5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-09-PLAN.md, index: 2, phase: '15', statement_digest: bd4120bb6de5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-09-PLAN.md, index: 3, phase: '15', statement_digest: 153ef9e8ccb2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-10-PLAN.md, index: 0, phase: '15', statement_digest: 97ee3078216b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-10-PLAN.md, index: 1, phase: '15', statement_digest: 2dab3e3bb8e5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-10-PLAN.md, index: 2, phase: '15', statement_digest: b88694b9a346, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-11-PLAN.md, index: 0, phase: '15', statement_digest: a103ae5a9276, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-11-PLAN.md, index: 1, phase: '15', statement_digest: 6fdfeca05119, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-11-PLAN.md, index: 2, phase: '15', statement_digest: 8314d6cfd5f1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-11-PLAN.md, index: 3, phase: '15', statement_digest: 2b09adcec00c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-12-PLAN.md, index: 0, phase: '15', statement_digest: 0bc59fbffd1b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-12-PLAN.md, index: 1, phase: '15', statement_digest: 7a5528168d54, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-12-PLAN.md, index: 2, phase: '15', statement_digest: c2874211499d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-12-PLAN.md, index: 3, phase: '15', statement_digest: de204e9c34c8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-13-PLAN.md, index: 0, phase: '15', statement_digest: 261a07d3e5a9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-13-PLAN.md, index: 1, phase: '15', statement_digest: df2e4f1181bc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-13-PLAN.md, index: 2, phase: '15', statement_digest: d352d8974fa4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-13-PLAN.md, index: 3, phase: '15', statement_digest: ac8ae21b2f24, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 0, phase: '15', statement_digest: 0a62ae89276e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 1, phase: '15', statement_digest: 19602499a577, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 2, phase: '15', statement_digest: 84739be90019, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 3, phase: '15', statement_digest: 18e93b4dfd01, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 4, phase: '15', statement_digest: acac2cc17793, class: unclassified, disposition: unresolved}
