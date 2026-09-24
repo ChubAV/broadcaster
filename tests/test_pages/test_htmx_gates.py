@@ -7577,6 +7577,21 @@ def _push_url_offenders(
     Каждое нарушение — строка `ключ места → обработчики`.
     """
     offenders: list[str] = []
+    provider_carries = any(
+        HX_PUSH_URL_ATTR.search(body.group(0))
+        for source in template_sources.values()
+        for body in FORM_WRAPPER_MACRO.finditer(_strip_comments(source))
+    )
+    resolved = _place_handlers(template_sources, page_sources)
+    for place in _write_form_places(template_sources):
+        hit = sorted(resolved.get(place.key, frozenset()) & set(forbidden))
+        if not hit:
+            continue
+        carries = bool(HX_PUSH_URL_ATTR.search(place.text)) or (
+            place.kind is PlaceKind.FORM_WRAPPER_CALL and provider_carries
+        )
+        if carries:
+            offenders.append(f"{place.key} → {', '.join(hit)}")
     return offenders
 
 
@@ -7610,6 +7625,14 @@ def _g2_universe_methods(sources: dict[str, str]) -> dict[str, frozenset[str]]:
     во вселенную своим POST, приносит с собой и соседние объявления.
     """
     methods: dict[str, frozenset[str]] = {}
+    universe = set(_post_handlers(sources))
+    for key, function in _post_function_nodes(sources):
+        if key not in universe:
+            continue
+        declared: set[str] = set()
+        for decorator in function.decorator_list:
+            declared |= _route_methods(decorator) or frozenset()
+        methods[key] = frozenset(declared)
     return methods
 
 
