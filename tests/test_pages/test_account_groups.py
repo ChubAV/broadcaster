@@ -4910,6 +4910,58 @@ _IDLE_DELETE_REASON = (
     "утонет в этих."
 )
 
+# ⚠️ ВСЕ ЗАПИСИ ПЕРЕЧНЯ БЫЛИ НАЗНАЧЕНЫ ИМЕННО ФАЗЕ 15, И `15-CONTEXT.md` ЭТОГО
+# НЕ ПЕРЕЧИСЛЯЛ. Фаза не имеет права закончиться, не сказав по каждой записи,
+# что стало с её назначением: «назначено и не упомянуто» есть ровно тот провал
+# долга, для наказания которого написан критерий 6 фазы. Поэтому у записи есть
+# поле диспозиции, и его значение принадлежит перечню ниже.
+#
+# Две диспозиции, и обе выразимы:
+#   * «снято» — отступление перестало существовать. Такая запись в ЖИВОМ
+#     перечне стоять не может: она закрывается по форме
+#     INCLUDE_TARGET_EXCEPTIONS — прежний текст записи сохраняется дословно в
+#     комментарии, число падает строкой летописи, и абзац говорит «ПРЕДМЕТ СНЯТ,
+#     А НЕ ОТЛОЖЕН», чтобы закрытие было отличимо от тихой отмены. Правило ниже
+#     краснеет на записи «снято», оставшейся в перечне;
+#   * «перезаписано» — отступление живо, назначение снято с Фазы 15 и передано
+#     НАЗВАННОМУ адресату. Поле адресата непусто и НЕ есть Фаза 15: назначение,
+#     оставленное у закрытой фазы, есть долг без адресата.
+PHASE_15_DISPOSITION_REMOVED = "снято"
+PHASE_15_DISPOSITION_REASSIGNED = "перезаписано"
+PHASE_15_DISPOSITIONS = frozenset(
+    {PHASE_15_DISPOSITION_REMOVED, PHASE_15_DISPOSITION_REASSIGNED}
+)
+PHASE_15_DISPOSITIONS_DECLARED = 2
+
+# Основание тех же двух узлов на экране РЕДАКТОРА объявления (план 15-09 ввёл
+# их в перечень: до него остаток был объявлен только прозой — в докстрингах
+# `schedules_delete`, шаблона `ads/partials/sched_delete_response.html` и
+# правила `test_repeated_editor_delete_is_harmless`).
+_EDITOR_IDLE_DELETE_REASON = (
+    "УЗЕЛ УЕЗЖАЕТ И ТОГДА, КОГДА ВЫБОРКА СО СВЯЗЬЮ `Ad.user_id` НЕ НАШЛА "
+    "СТРОКИ, И ЭТОГО ТРЕБУЕТ НЕОТЛИЧИМОСТЬ (T-10-01): условная сборка сделала "
+    "бы НАЛИЧИЕ узла признаком того, что удаление состоялось, и карту чужих "
+    "идентификаторов можно было бы составить перебором по адресу. "
+    "ЦЕНА НАЗВАНА ЧИСЛОМ: холостой путь удаления из редактора шлёт ДВА таких "
+    "узла, то есть ДВЕ строки `htmx:oobErrorNoTarget` в консоли на запрос. "
+    "ДОСТИЖИМОСТЬ: повторная отправка формы и кнопка «назад» (исполняется "
+    "test_repeated_editor_delete_is_harmless), а также удаление чужого, "
+    "несуществующего и уже удалённого расписания. "
+    "ВРЕДА ДАННЫМ И ДОКУМЕНТУ НЕТ; теряется ДИАГНОСТИЧЕСКИЙ признак «ответ 200 И "
+    "ЧИСТАЯ КОНСОЛЬ», на котором стоит приёмка вехи."
+)
+
+# Диспозиция назначения Фазе 15 у всех четырёх записей одна (план 15-09,
+# задача 2), и адресат у всех один. Отступления ЖИВЫ: снять их продуктовой
+# правкой исполнитель права не имеет (решение принадлежит владельцу), а
+# оставить назначение у Фазы 15 значило бы оставить долг у закрывающейся фазы.
+# Замер, по которому владелец решает, записан ниже у перечня (задача 3).
+_REASSIGNED_TO = (
+    "Владелец продукта — решение по замеру плана 15-09 (задача 3) при закрытии "
+    "вехи v2.1: снять отступления продуктовой правкой либо оставить их принятыми "
+    "с новым назначением"
+)
+
 # ⚠️ ЗАПИСИ ЗАПОЛНЕНЫ ПО ИЗМЕРЕНИЮ, А НЕ ПО ОЖИДАНИЮ. Прогон предыдущего
 # коммита (RED) назвал узлы холостого пути поимённо: `group-row-N` и
 # `group-del-N`. Узла линейки счётчика в разности НЕ ОКАЗАЛОСЬ, и это верно —
@@ -4927,6 +4979,8 @@ OOB_TARGET_EXCEPTIONS: dict[str, OobTargetException] = {
         reason=(
             "СНЯТИЕ СТРОКИ УДАЛЁННОЙ ГРУППЫ. " + _IDLE_DELETE_REASON
         ),
+        phase_15_disposition=PHASE_15_DISPOSITION_REASSIGNED,
+        reassigned_to=_REASSIGNED_TO,
     ),
     "group-del-{group_id}": OobTargetException(
         where_printed="app/templates/account_groups/partials/delete_response.html",
@@ -4938,6 +4992,29 @@ OOB_TARGET_EXCEPTIONS: dict[str, OobTargetException] = {
             "отдельным узлом; без него после N удалений в документе копятся N "
             "живых панелей `role=\"dialog\"`. " + _IDLE_DELETE_REASON
         ),
+        phase_15_disposition=PHASE_15_DISPOSITION_REASSIGNED,
+        reassigned_to=_REASSIGNED_TO,
+    ),
+    "sched-{schedule_id}": OobTargetException(
+        where_printed="app/templates/ads/partials/sched_delete_response.html",
+        assigned_phase="Фаза 15 — Упрочнение и сводный обход 47 форм",
+        reason=(
+            "СНЯТИЕ КАРТОЧКИ УДАЛЁННОГО РАСПИСАНИЯ В РЕДАКТОРЕ. "
+            + _EDITOR_IDLE_DELETE_REASON
+        ),
+        phase_15_disposition=PHASE_15_DISPOSITION_REASSIGNED,
+        reassigned_to=_REASSIGNED_TO,
+    ),
+    "sched-del-{schedule_id}": OobTargetException(
+        where_printed="app/templates/ads/partials/sched_delete_response.html",
+        assigned_phase="Фаза 15 — Упрочнение и сводный обход 47 форм",
+        reason=(
+            "СНЯТИЕ ОСИРОТЕВШЕЙ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ В РЕДАКТОРЕ. Панель стоит "
+            "СНАРУЖИ удаляемой карточки (T-11-04) и вместе с ней не уезжает. "
+            + _EDITOR_IDLE_DELETE_REASON
+        ),
+        phase_15_disposition=PHASE_15_DISPOSITION_REASSIGNED,
+        reassigned_to=_REASSIGNED_TO,
     ),
 }
 
@@ -4956,7 +5033,21 @@ OOB_TARGET_EXCEPTIONS: dict[str, OobTargetException] = {
 #     `group-del-N`. ДВА, а не три: четвёртый узел (ветвь `declared-cursor`) снят
 #     из дерева планом 09-13 целиком. И не три в другую сторону: узел линейки
 #     счётчика в разность не попал — его область в документе есть всегда.
-OOB_TARGET_EXCEPTIONS_DECLARED = 2
+#   2 → 4, Фаза 15, план 15-09, задача 2 — число поставлено ВВЕДЕНИЕМ ДВУХ
+#     ЗАПИСЕЙ, а не арифметикой: `sched-{schedule_id}` и
+#     `sched-del-{schedule_id}` (экран редактора объявления) были объявлены
+#     остатком «перечня `OOB_TARGET_EXCEPTIONS` с назначенной Фазой 15» только
+#     прозой — в трёх местах (app/pages/schedules.py, шаблон
+#     ads/partials/sched_delete_response.html и правило
+#     test_repeated_editor_delete_is_harmless в
+#     tests/test_pages/test_editor_schedules.py), — а записей в перечне не имели.
+#     Сироту назвало правило полноты
+#     test_every_oob_target_exception_declared_in_prose_stands_in_the_list;
+#     узлы измерены поведенческим правилом
+#     test_the_idle_editor_delete_path_really_ships_the_recorded_oob_nodes.
+#     Тем же планом у всех четырёх записей записана диспозиция назначения
+#     Фазе 15: «перезаписано», адресат — владелец продукта (_REASSIGNED_TO).
+OOB_TARGET_EXCEPTIONS_DECLARED = 4
 
 # Тег с признаком внеполосной подмены целиком: значение признака и собственный
 # идентификатор узла снимаются с ОДНОГО тега, а не с документа — иначе цель
@@ -5032,7 +5123,9 @@ def test_every_oob_target_exception_carries_a_reason_and_an_assigned_phase():
         if not printer.is_file():
             astray.append(f"{key}: файл {record.where_printed} не существует")
             continue
-        printed = f'id="{key.replace("{group_id}", "{{ group_id }}")}"'
+        # Подстановочная часть ключа в форме шаблона: `{group_id}` →
+        # `{{ group_id }}`, `{schedule_id}` → `{{ schedule_id }}` (план 15-09).
+        printed = 'id="' + re.sub(r"\{(\w+)\}", r"{{ \1 }}", key) + '"'
         if printed not in printer.read_text(encoding="utf-8"):
             astray.append(
                 f"{key}: {record.where_printed} не печатает узла {printed} — "
@@ -5109,8 +5202,12 @@ async def test_the_idle_delete_path_really_ships_the_recorded_nodes(
     )
 
     unresolved = targets - on_screen
+    # План 15-09: в перечне живут и узлы экрана редактора (`{schedule_id}`);
+    # их холостой путь измеряет своё правило в test_editor_schedules.py.
     recorded = {
-        key.format(group_id=foreign_group.id) for key in OOB_TARGET_EXCEPTIONS
+        key.format(group_id=foreign_group.id)
+        for key, record in OOB_TARGET_EXCEPTIONS.items()
+        if record.where_printed == GROUP_DELETE_RESPONSE
     }
 
     stale = recorded - unresolved
@@ -5135,28 +5232,8 @@ async def test_the_idle_delete_path_really_ships_the_recorded_nodes(
 # План 15-09, задача 2: ПЕРЕЧЕНЬ ОТСТУПЛЕНИЙ ИНВЕНТАРИЗОВАН — ПОЛНОТА И ДИСПОЗИЦИЯ.
 # =============================================================================
 #
-# ⚠️ ВСЕ ЗАПИСИ ПЕРЕЧНЯ БЫЛИ НАЗНАЧЕНЫ ИМЕННО ФАЗЕ 15, И `15-CONTEXT.md` ЭТОГО
-# НЕ ПЕРЕЧИСЛЯЛ. Фаза не имеет права закончиться, не сказав по каждой записи,
-# что стало с её назначением: «назначено и не упомянуто» есть ровно тот провал
-# долга, для наказания которого написан критерий 6 фазы. Поэтому у записи есть
-# поле диспозиции, и его значение принадлежит перечню ниже.
-#
-# Две диспозиции, и обе выразимы:
-#   * «снято» — отступление перестало существовать. Такая запись в ЖИВОМ
-#     перечне стоять не может: она закрывается по форме
-#     INCLUDE_TARGET_EXCEPTIONS — прежний текст записи сохраняется дословно в
-#     комментарии, число падает строкой летописи, и абзац говорит «ПРЕДМЕТ СНЯТ,
-#     А НЕ ОТЛОЖЕН», чтобы закрытие было отличимо от тихой отмены. Правило ниже
-#     краснеет на записи «снято», оставшейся в перечне;
-#   * «перезаписано» — отступление живо, назначение снято с Фазы 15 и передано
-#     НАЗВАННОМУ адресату. Поле адресата непусто и НЕ есть Фаза 15: назначение,
-#     оставленное у закрытой фазы, есть долг без адресата.
-PHASE_15_DISPOSITION_REMOVED = "снято"
-PHASE_15_DISPOSITION_REASSIGNED = "перезаписано"
-PHASE_15_DISPOSITIONS = frozenset(
-    {PHASE_15_DISPOSITION_REMOVED, PHASE_15_DISPOSITION_REASSIGNED}
-)
-PHASE_15_DISPOSITIONS_DECLARED = 2
+# Перечень диспозиций (PHASE_15_DISPOSITIONS) объявлен выше, рядом с записями
+# OOB_TARGET_EXCEPTIONS: записи на него ссылаются, и определён он раньше них.
 
 # Печатающие шаблоны двух экранов, чьи холостые пути удаления шлют узлы с
 # отсутствующей целью.
