@@ -77,10 +77,49 @@
 объявлен ВЕРНО: верность ключа есть человеческое суждение; гейт утверждает его
 ПОЛНОТУ (ключ есть у каждого имени) и НЕПРОТИВОРЕЧИВОСТЬ (механизм поля совпадает с
 суффиксом имени, файл поля — с файлом объявления).
+
+⚠️ НАЗВАННЫЕ ГРАНИЦЫ РАЗБОРЩИКА — их ТРИ, и каждая не только названа, но и закрыта
+отдельным правилом-ЗАПРЕТОМ: гейт, который чего-то не видит, обязан требовать, чтобы
+этого и не было (приём второго уровня, образец
+`tests/test_pages/test_impersonation_gate.py`, правило
+`test_no_route_is_declared_in_a_form_the_gate_cannot_see`).
+
+1. **Тест, объявленный не ``def``, а параметризацией или фабрикой.** Разборщик видит
+   ИМЯ функции (``ast.FunctionDef`` / ``ast.AsyncFunctionDef``), а механизм, спрятанный
+   в параметр ``pytest.mark.parametrize``, имя присвоенное (``test_x = make(...)``),
+   собранное вызовом (``setattr`` / ``globals()``) или рождённое вложенной функцией
+   фабрики, ему не видно — счёт пар не увидит такую форму ни в какую сторону. →
+   ``test_no_degradation_test_is_declared_in_a_form_the_gate_cannot_see``: такие формы
+   ЗАПРЕЩЕНЫ.
+2. **Имя, лежащее в докстринге или комментарии.** По дереву оно не считается — и это
+   ХОРОШО, но значит, что перечень основ сверяется с ДЕРЕВОМ, а не с текстом, и прозу,
+   похожую на объявление, надо замечать отдельно. →
+   ``test_no_degradation_name_lives_in_prose_where_the_gate_cannot_see``: множество
+   имён по ``ast`` и множество по наивной сети (``def test…_degrades_without_…``
+   регулярным выражением по тексту) СОВПАДАЮТ на сегодняшнем дереве; расхождение
+   читается как появление имени в прозе, и правило называет это имя.
+3. **Механизм, отключаемый не htmx и не Alpine** (суффикс ``_without_js`` и любой
+   иной), во вселенную пар не входит. Изъятие уже записано перечнем
+   ``PAIR_UNIVERSE_EXEMPTIONS``; →
+   ``test_the_pair_universe_exemptions_are_complete``: любое имя формы
+   ``_degrades_without_<нечто>``, где ``<нечто>`` не ``alpine`` и не ``htmx``, обязано
+   стоять в перечне изъятий, иначе правило краснеет и называет его. Это машинная
+   гарантия, что третье такое имя не пройдёт молча.
+
+Каждое правило-запрет несёт и контроль от вакуума: синтетический исходник запрещённой
+формы подаётся в тот же разбор В ПАМЯТИ (на диск не пишется) и обязан быть назван.
+
+МАРКЕР ``planning`` ЗДЕСЬ НЕ СТАВИТСЯ, И ЭТО РЕШЕНИЕ, А НЕ ПРОПУСК. Маркер объявлен
+(``tests/conftest.py``, ``pytest_configure``) для правил, чей предмет есть ЗАПИСЬ
+проекта (``.planning/``); предмет этого файла — СУИТА О СЕБЕ, то есть продукт
+тестирования, а не запись. Постановка маркера сюда сделала бы отрицательный отбор
+``-m "not planning"`` лгущим во вторую сторону: продуктовая половина суиты молча
+потеряла бы гейт пар. ``tests/conftest.py`` этим планом не правится.
 """
 
 import ast
 import functools
+import re
 from pathlib import Path
 from typing import NamedTuple
 
@@ -746,4 +785,191 @@ def test_the_gate_06_rule_is_still_in_the_suite():
     assert GATE_06_RULE in defined, (
         f"{GATE_06_RULE} (GATE-06) исчез из {GATE_06_FILE}: прохибиция плана 09-03 "
         f"запрещает переименовывать его и заменять предметом"
+    )
+
+
+# --- Границы разборщика: формы, которых гейт не видит, ЗАПРЕЩЕНЫ ----------------
+
+MECHANISM_WORDS = (ALPINE, HTMX)
+
+# Наивная сеть по ТЕКСТУ — второй свидетель, а не источник: она видит и объявление,
+# и прозу, похожую на объявление; разборщик по дереву — только объявление.
+NAIVE_DECLARATION_RE = re.compile(
+    r"\bdef\s+(test\w*" + re.escape(DEGRADATION_MARK) + r"\w*)"
+)
+
+
+def _mentions_mark(node: ast.AST) -> bool:
+    return any(
+        isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and DEGRADATION_MARK in n.value
+        for n in ast.walk(node)
+    )
+
+
+def _mentions_mechanism(node: ast.AST) -> bool:
+    return any(
+        isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and any(word in n.value.lower() for word in MECHANISM_WORDS)
+        for n in ast.walk(node)
+    )
+
+
+def _invisible_forms(sources: dict[str, str]) -> list[str]:
+    """Каждая форма теста деградации, которую счёт пар по имени функции не видит.
+
+    Четыре формы: функция с именем деградации, которую pytest не соберёт
+    (вложенная — продукт фабрики) либо которая параметризована; параметризация
+    теста деградации с именем механизма в параметре; имя деградации, ПРИСВОЕННОЕ
+    переменной, а не объявленное; имя, собранное вызовом ``setattr`` / записью в
+    ``globals()``.
+    """
+    offences: list[str] = []
+    for definition in _test_defs(sources):
+        if DEGRADATION_MARK not in definition.name:
+            continue
+        where = f"{definition.file}:{definition.line} {definition.name}"
+        if not definition.collectable:
+            offences.append(f"{where}: вложенная функция — продукт фабрики")
+        if definition.parametrized:
+            offences.append(f"{where}: параметризована — механизм уходит в параметр")
+
+    for path in sorted(sources):
+        tree = ast.parse(sources[path], filename=path)
+        for node in ast.walk(tree):
+            if isinstance(node, FUNCTION_NODES) and "degrad" in node.name:
+                for decorator in node.decorator_list:
+                    if _is_parametrize(decorator) and _mentions_mechanism(decorator):
+                        offences.append(
+                            f"{path}:{node.lineno} {node.name}: имя механизма в "
+                            f"параметре parametrize"
+                        )
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    for name in ast.walk(target):
+                        if isinstance(name, ast.Name) and DEGRADATION_MARK in name.id:
+                            offences.append(
+                                f"{path}:{node.lineno} {name.id}: имя деградации "
+                                f"присвоено, а не объявлено"
+                            )
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and _dotted(getattr(target.value, "func", target.value))
+                        == "globals"
+                        and _mentions_mark(target.slice)
+                    ):
+                        offences.append(
+                            f"{path}:{node.lineno}: имя деградации записано в globals()"
+                        )
+            elif (
+                isinstance(node, ast.Call)
+                and _dotted(node.func) == "setattr"
+                and any(_mentions_mark(arg) for arg in node.args[1:2])
+            ):
+                offences.append(
+                    f"{path}:{node.lineno}: имя деградации собрано вызовом setattr"
+                )
+    return offences
+
+
+def _prose_divergence(sources: dict[str, str]) -> set[tuple[str, str]]:
+    """Пары (файл, имя), где наивная сеть по тексту и разбор по дереву разошлись."""
+    by_tree = {
+        (d.file, d.name) for d in _test_defs(sources) if DEGRADATION_MARK in d.name
+    }
+    by_text = {
+        (path, match)
+        for path, text in sorted(sources.items())
+        for match in NAIVE_DECLARATION_RE.findall(text)
+    }
+    return by_tree ^ by_text
+
+
+def _unexempted(sources: dict[str, str]) -> set[str]:
+    """Имена ``_degrades_without_<не alpine и не htmx>``, не стоящие в перечне изъятий."""
+    return _exotic_names(sources) - set(PAIR_UNIVERSE_EXEMPTIONS)
+
+
+def test_no_degradation_test_is_declared_in_a_form_the_gate_cannot_see():
+    """Граница 1: тест деградации объявляется ``def`` в модуле или классе — и только так.
+
+    Контроль от вакуума: каждая из запрещённых форм, поданная синтетическим
+    исходником, обязана быть названа — иначе зелёный цвет на дереве ничего не
+    доказывает.
+    """
+    alpine = "test_synthetic" + DEGRADATION_MARK + ALPINE
+    htmx = "test_synthetic" + DEGRADATION_MARK + HTMX
+    synthetic = {
+        "tests/test_synthetic_factory.py": (
+            f"def make():\n    def {htmx}():\n        pass\n    return {htmx}\n"
+        ),
+        "tests/test_synthetic_parametrize.py": (
+            "import pytest\n"
+            f"@pytest.mark.parametrize('mechanism', ['{ALPINE}', '{HTMX}'])\n"
+            "def test_synthetic_degrades(mechanism):\n    pass\n"
+        ),
+        "tests/test_synthetic_assign.py": f"{alpine} = object()\n",
+        "tests/test_synthetic_setattr.py": (
+            f"import sys\nsetattr(sys.modules[__name__], '{htmx}', object())\n"
+        ),
+        "tests/test_synthetic_globals.py": f"globals()['{alpine}'] = object()\n",
+    }
+    named = _invisible_forms(synthetic)
+    for path in synthetic:
+        assert any(offence.startswith(path) for offence in named), (
+            f"запрещённая форма из {path} не названа — граница не принуждена:\n"
+            + "\n".join(named)
+        )
+
+    offences = _invisible_forms(_suite_sources())
+    assert not offences, (
+        "тест деградации объявлен в форме, которой счёт пар не видит:\n"
+        + "\n".join(offences)
+    )
+
+
+def test_no_degradation_name_lives_in_prose_where_the_gate_cannot_see():
+    """Граница 2: имена по дереву и по наивной сети совпадают на сегодняшнем дереве.
+
+    Расхождение читается как появление имени в прозе (докстринг, комментарий,
+    закомментированный код) либо как объявление, которого сеть по тексту не
+    узнаёт; отказ называет разошедшееся имя и файл. Контроль от вакуума: имя в
+    докстринге синтетического файла обязано разойтись.
+    """
+    name = "test_synthetic_prose" + DEGRADATION_MARK + HTMX
+    synthetic = {"tests/test_synthetic_prose.py": f'"""Пример: def {name}()."""\n'}
+    assert _prose_divergence(synthetic) == {("tests/test_synthetic_prose.py", name)}, (
+        "имя в докстринге не замечено — сравнение двух сетей ничего не доказывает"
+    )
+
+    divergence = _prose_divergence(_suite_sources())
+    assert not divergence, (
+        "имена по дереву и по тексту разошлись (имя в прозе либо невидимое "
+        f"объявление): {sorted(divergence)}"
+    )
+
+
+def test_the_pair_universe_exemptions_are_complete():
+    """Граница 3: каждое ``_degrades_without_<иное>`` стоит в перечне изъятий.
+
+    Молчаливое изъятие запрещено: третье имя такой формы краснит правило и
+    называется. Контроль от вакуума: синтетическое третье имя обязано быть
+    названо.
+    """
+    third = "test_synthetic" + DEGRADATION_MARK + "css"
+    synthetic = {
+        **_suite_sources(),
+        "tests/test_synthetic_third.py": _synthetic(third),
+    }
+    assert _unexempted(synthetic) == {third}, (
+        f"третье имя вне механизмов пары не названо: {sorted(_unexempted(synthetic))}"
+    )
+
+    unexempted = _unexempted(_suite_sources())
+    assert not unexempted, (
+        f"имена формы _degrades_without_<не alpine и не htmx> вне перечня изъятий: "
+        f"{sorted(unexempted)} — изъятие требует записанной причины"
     )
