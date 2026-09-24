@@ -216,9 +216,13 @@ DISPOSITIONS_DECLARED = 4
 PARTIALLY_ENFORCED = "partially-enforced"
 PERMITTED = "permitted"
 # Поле строки реестра, называющее НЕПОКРЫТУЮ часть предмета у диспозиции «принуждается частично».
-# ⚠️ В `REGISTRY_ROW_FIELDS` оно НЕ внесено: ни одна строка его сегодня не несёт, и внесёт его план
-# 15-13 вместе с первой такой диспозицией и летописью числа полей — по общему правилу перечня.
-UNCOVERED_PART_FIELD = "uncovered_part"
+# ЛЕТОПИСЬ ИМЕНИ: `uncovered_part` → `coverage_note`, план 15-13, задача 1. План 15-12 объявил
+# поле заранее под именем `uncovered_part` и оговорил, что в `REGISTRY_ROW_FIELDS` его внесёт план
+# 15-13 вместе с первой такой диспозицией; план 15-13 называет то же поле `coverage_note`, и его
+# проверка ищет в реестре именно это имя. Ни одна строка реестра прежнего имени не несла ни дня,
+# поэтому переименование не теряет ни одной записи; предмет поля и правило над ним
+# (`partial_disposition_offences`) не изменились. Прежнее имя названо здесь, а не стёрто.
+UNCOVERED_PART_FIELD = "coverage_note"
 
 # ПЕРЕЧЕНЬ КЛАССОВ ПРЕДМЕТА ЗАПРЕТА (D-04: владелец решает ПО КЛАССУ, `permit_scope` пишется
 # ИМЕНЕМ класса, каждый запрет несёт СВОЮ строку со своим классом). ⚠️ КЛАСС — ЗАПИСАННОЕ ПОЛЕ
@@ -281,6 +285,14 @@ PROHIBITION_CLASSES_DECLARED = 11
 # ЛЕТОПИСЬ ЧИСЛА: 7 → 8, план 15-01, задача 2 — пришло поле `declared_rule` (группа D-05 ниже).
 # Оно есть ОБЪЯВЛЕНИЕ, снятое засевом с формулировки запрета, а не вердикт: имя правила, которое
 # назвал автор запрета, либо признак «имя не объявлено».
+#
+# ЛЕТОПИСЬ ЧИСЛА: 8 → 11, план 15-13, задача 1 — пришли три поля МЕРЫ ПОКРЫТИЯ по 61 запрету D-05:
+# `rule_name` (имя правила суиты, НАЙДЕННОГО чтением предмета запрета и предмета правила),
+# `rule_site` (`tests/…/файл.py:строка` его определения на день замера) и `coverage_note`
+# (непокрытая часть предмета у «принуждается частично»). ⚠️ Сравнение предмета запрета с
+# предметом правила — ЧЕЛОВЕЧЕСКОЕ СУЖДЕНИЕ, записанное полем, а не выведенное машиной:
+# совпадение имени не есть совпадение предмета (D-33). Машина утверждает только ФОРМУ записи и
+# СУЩЕСТВОВАНИЕ названного правила в названном файле разбором `ast`.
 REGISTRY_ROW_FIELDS = frozenset(
     {
         "plan",
@@ -291,9 +303,19 @@ REGISTRY_ROW_FIELDS = frozenset(
         "class",
         "disposition",
         "declared_rule",
+        "rule_name",
+        "rule_site",
+        "coverage_note",
     }
 )
-REGISTRY_ROW_FIELDS_DECLARED = 8
+REGISTRY_ROW_FIELDS_DECLARED = 11
+RULE_NAME_FIELD = "rule_name"
+RULE_SITE_FIELD = "rule_site"
+# Диспозиции, при которых правило СУЩЕСТВУЕТ: только у них стоят поля правила. Непокрытая часть
+# стоит только у частичной — у полной её нет по определению, у прочих нет правила.
+COVERED_DISPOSITIONS = frozenset({"enforced", "partially-enforced"})
+# Координата правила — путь от корня дерева, начинающийся каталогом суиты, и номер строки.
+SUITE_PREFIX = "tests/"
 
 # ПЕРЕЧЕНЬ КЛЮЧЕЙ ДОКУМЕНТА РЕЕСТРА. ЛЕТОПИСЬ ЧИСЛА: 3 → 4, план 15-12, задача 3 — пришёл блок
 # `class_decisions` с ОТВЕТОМ ВЛАДЕЛЬЦА по классам (`chubav`, 2026-09-24T16:45Z). До ответа документ
@@ -616,8 +638,10 @@ def decision_distribution(decisions) -> str:
     )
 
 
-def _before_phase_15(sources):
-    return {path: text for path, text in sources.items() if tool.phase_of(path) != PHASE_15}
+def _before_phase_15(plan_texts):
+    return {
+        path: text for path, text in plan_texts.items() if tool.phase_of(path) != PHASE_15
+    }
 
 
 def _names(identities) -> str:
@@ -1232,16 +1256,18 @@ def _suite_sources(root: Path) -> dict[str, str]:
     }
 
 
-def _suite_function_names(sources) -> frozenset[str]:
+def _suite_function_names(suite) -> frozenset[str]:
     """Имена `ast.FunctionDef` и `ast.AsyncFunctionDef` поданных исходников — по ДЕРЕВУ.
 
     Довод «по дереву, а не по строке» — `tests/test_pages/test_impersonation_gate.py:462`,
     `:628-632`: поиск по тексту нашёл бы имя и в комментарии, и в докстринге, и в
     закомментированном коде, то есть абзац мог бы «назвать свидетеля», процитировав себя.
+    (Отображение «путь → исходник» зовётся здесь `suite`; до плана 15-13 параметр звался иначе,
+    и сеть приёмки «нет проверки вхождением подстроки» ложно цепляла сам обход словаря.)
     """
     names: set[str] = set()
-    for source in sources.values():
-        names |= _functions_defined_in(source)
+    for text in suite.values():
+        names |= _functions_defined_in(text)
     return frozenset(names)
 
 
@@ -1260,7 +1286,7 @@ def _functions_defined_in(source: str) -> frozenset[str]:
     )
 
 
-def _suite_module_names(sources) -> frozenset[str]:
+def _suite_module_names(suite) -> frozenset[str]:
     """Имена модулей суиты, чей исходник РАЗБИРАЕТСЯ деревом: основа имени файла.
 
     Правило в дереве суиты бывает функцией и бывает МОДУЛЕМ правил, и запреты называют оба:
@@ -1270,20 +1296,20 @@ def _suite_module_names(sources) -> frozenset[str]:
     бы существующий модуль отсутствующим — то есть краснела бы на работе, а не на дефекте.
     """
     names: set[str] = set()
-    for path, source in sources.items():
-        _functions_defined_in(source)  # исходник, не разбирающийся деревом, — отказ, а не модуль
+    for path, text in suite.items():
+        _functions_defined_in(text)  # исходник, не разбирающийся деревом, — отказ, а не модуль
         names.add(Path(path).stem)
     return frozenset(names)
 
 
-def _declared_rule_missing(declared, sources) -> list[str]:
+def _declared_rule_missing(declared, suite) -> list[str]:
     """Объявленные имена правил, которых в поданной вселенной суиты НЕТ — все, а не первое.
 
     `declared` — отображение «тождество запрета → объявленное имя»; признак «имя не
     объявлено» сюда не подаётся. Вселенная суиты приходит ПАРАМЕТРОМ, чтобы контроль мог
     подать изменённую копию.
     """
-    universe = _suite_function_names(sources) | _suite_module_names(sources)
+    universe = _suite_function_names(suite) | _suite_module_names(suite)
     return sorted(
         f"{identity.plan_path}#{identity.index}: объявлено правило `{name}`"
         for identity, name in declared.items()
@@ -1443,6 +1469,205 @@ def test_control_negative_a_declared_rule_absent_from_the_suite_is_named(suite_s
 def test_control_positive_the_suite_function_universe_is_not_empty(suite_sources):
     """На неизменённом дереве вселенная имён функций суиты непуста — больше 1000 имён."""
     assert len(_suite_function_names(suite_sources)) > SUITE_FUNCTION_NAMES_FLOOR
+
+
+# --- мера покрытия по 61 запрету D-05: «полностью» против «частично», и отсутствие правила ------
+#
+# ПРЕДМЕТ ГРУППЫ (план 15-13, задача 1). По каждому запрету Фазы 10 с `verification: test`
+# человек прочёл предмет запрета и предмет правила суиты и записал ИТОГ полем реестра:
+# `enforced` — правило закрывает ВЕСЬ предмет; `partially-enforced` — закрывает часть, и
+# непокрытая часть НАЗВАНА строкой (`coverage_note`) в форме образца
+# `10-PROHIBITIONS-SUBJECT.md:118-160` («половина „…“ не покрыта ничем»); `unresolved` — правила
+# с таким предметом в дереве нет. ⚠️ ПОСЛЕДНЕЕ ЕСТЬ НАХОДКА ФАЗЫ, А НЕ РАЗНОВИДНОСТЬ РАЗРЕШЕНИЯ:
+# объявление о правиле, которого нет, — ровно класс «зелено вакуумом» (D-05), и диспозиции
+# `permitted` у этих 61 не стоит ни одной — её не даёт ни ответ владельца по классу, ни исполнитель.
+#
+# ЧЕГО ГРУППА НЕ УТВЕРЖДАЕТ. Верности итога — это человеческое суждение (D-33 не переоткрывается):
+# машина утверждает ФОРМУ записи (у «частично» названа непокрытая часть, у правила есть имя и
+# координата) и СУЩЕСТВОВАНИЕ названного правила в названном файле разбором `ast`, а не текстом.
+# Номер строки координаты есть координата ДНЯ ЗАМЕРА и не утверждается: правка файла выше
+# определения сдвинула бы его, и правило краснело бы на чужой законной работе (прецедент
+# `test_the_lever_note_points_by_name_and_not_by_line_number`). Числа запретов без правила не
+# знает ни одно утверждение: это литерал сегодняшнего незакрытого состояния, и он
+# ДОКЛАДЫВАЕТСЯ в отказе.
+
+
+def _coverage_offences(rows) -> list[str]:
+    """Нарушения ФОРМЫ записи меры покрытия — все, с тождествами, а не первое.
+
+    (1) у `enforced` и `partially-enforced` названы и имя правила, и его координата — непустыми
+    строками; (2) у прочих диспозиций полей правила нет: правила при них нет по определению, и
+    поле при `permitted` читалось бы как принуждение; (3) непокрытая часть стоит только у
+    частичной (её отсутствие у частичной судит `partial_disposition_offences`).
+    """
+    offences = []
+    for row in rows:
+        disposition = row.get("disposition")
+        if disposition in COVERED_DISPOSITIONS:
+            for field in (RULE_NAME_FIELD, RULE_SITE_FIELD):
+                value = row.get(field)
+                if not isinstance(value, str) or not value.strip():
+                    offences.append(
+                        f"{_row_name(row)}: диспозиция `{disposition}` без поля `{field}`"
+                    )
+        else:
+            for field in (RULE_NAME_FIELD, RULE_SITE_FIELD):
+                if field in row:
+                    offences.append(
+                        f"{_row_name(row)}: поле `{field}` при диспозиции `{disposition}` — "
+                        f"правило стоит только у принуждения"
+                    )
+        if UNCOVERED_PART_FIELD in row and disposition != PARTIALLY_ENFORCED:
+            offences.append(
+                f"{_row_name(row)}: поле `{UNCOVERED_PART_FIELD}` при диспозиции "
+                f"`{disposition}` — непокрытая часть есть только у частичной"
+            )
+    return offences
+
+
+def _rule_site_offences(rows, suite) -> list[str]:
+    """Координаты правил, чей файл или чьё имя в поданной вселенной суиты НЕ найдены — все.
+
+    Существование — по ДЕРЕВУ файла, названного координатой: множество имён `ast.FunctionDef` /
+    `ast.AsyncFunctionDef` его исходника. Имя в докстринге, комментарии или закомментированном
+    коде в счёт не идёт; имя из ДРУГОГО файла — тоже. `suite` — отображение «путь от каталога
+    суиты → исходник», чтобы контроль мог подать изменённую копию.
+    """
+    offences = []
+    for row in rows:
+        site = row.get(RULE_SITE_FIELD)
+        if not isinstance(site, str) or not site.strip():
+            continue  # отсутствие координаты — предмет `_coverage_offences`, а не этого
+        path, _, line = site.rpartition(":")
+        if not path.startswith(SUITE_PREFIX) or not line.isdigit() or int(line) < 1:
+            offences.append(f"{_row_name(row)}: координата `{site}` не в форме `tests/…:строка`")
+            continue
+        text = suite.get(path[len(SUITE_PREFIX):])
+        if text is None:
+            offences.append(f"{_row_name(row)}: файла `{path}` в дереве суиты нет")
+        elif row.get(RULE_NAME_FIELD) not in _functions_defined_in(text):
+            offences.append(
+                f"{_row_name(row)}: правила `{row.get(RULE_NAME_FIELD)}` в `{path}` по разбору "
+                f"`ast` нет"
+            )
+    return offences
+
+
+def _permitted_verification_test_rows(rows) -> list[str]:
+    """Строки области решений с `verification: test` и диспозицией «разрешено» (D-05)."""
+    return [
+        f"{_row_name(row)}: `verification: test` при диспозиции `{PERMITTED}` — по такому запрету "
+        f"предъявляется существование правила, а не разрешение"
+        for row in _decision_scope_rows(rows)
+        if row.get("verification") == VERIFICATION_TEST and row.get("disposition") == PERMITTED
+    ]
+
+
+def coverage_distribution(rows) -> str:
+    """Итоги меры покрытия по 61 запрету D-05 — ДОКЛАДЫВАЮТСЯ в отказе, не утверждаются."""
+    subject = [
+        row for row in _decision_scope_rows(rows) if row.get("verification") == VERIFICATION_TEST
+    ]
+    return f"запретов D-05 {len(subject)}; " + disposition_distribution(subject)
+
+
+def test_every_phase_10_declared_test_exists_or_is_recorded_absent(registry_document):
+    """По каждому из 61 запрета с `verification: test` — итог меры покрытия, и НЕ «разрешено».
+
+    Антивакуум: множество D-05 в реестре непусто и равно объявленному числу. Сколько из них без
+    правила, правило не знает — это ДОКЛАДЫВАЕТСЯ.
+    """
+    rows = registry_document["rows"]
+    subject = [
+        row for row in _decision_scope_rows(rows) if row.get("verification") == VERIFICATION_TEST
+    ]
+    assert len(subject) == PHASE_10_VERIFICATION_TEST, coverage_distribution(rows)
+    offences = _permitted_verification_test_rows(rows) + disposition_offences(subject)
+    assert not offences, "\n".join(offences) + f"\n\n{coverage_distribution(rows)}"
+
+
+def test_every_coverage_disposition_names_its_rule_and_its_site(registry_document):
+    """У «полностью» и «частично» — имя правила и координата; у прочих — ни того, ни другого."""
+    rows = registry_document["rows"]
+    offences = _coverage_offences(rows)
+    assert not offences, (
+        "нарушения формы записи меры покрытия:\n"
+        + "\n".join(offences)
+        + f"\n\n{coverage_distribution(rows)}"
+    )
+
+
+def test_every_coverage_rule_exists_at_its_site_by_the_tree(registry_document, suite_sources):
+    """Названное правило СУЩЕСТВУЕТ в названном файле — разбором `ast`, а не текстом.
+
+    Антивакуум: координат в реестре не ноль — иначе правило зеленело бы на реестре, где
+    принуждения не записано ни одного, и было бы неотличимо от «все правила найдены».
+    """
+    rows = registry_document["rows"]
+    sited = [row for row in rows if RULE_SITE_FIELD in row]
+    assert sited, f"в реестре нет ни одной координаты правила; {coverage_distribution(rows)}"
+    offences = _rule_site_offences(rows, suite_sources)
+    assert not offences, "\n".join(offences) + f"\n\n{coverage_distribution(rows)}"
+
+
+def test_control_coverage_offences_are_named_for_every_kind():
+    """Синтетические строки — по одной на каждый вид нарушения формы; каждая НАЗЫВАЕТСЯ."""
+    site = "tests/test_planning/test_plan_prohibitions_census.py:1"
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "disposition": "enforced",
+         RULE_NAME_FIELD: "test_x", RULE_SITE_FIELD: site},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "disposition": "enforced", RULE_NAME_FIELD: "test_x"},
+        {"plan": SYNTHETIC_PLAN, "index": 2, "disposition": PARTIALLY_ENFORCED,
+         RULE_SITE_FIELD: site, UNCOVERED_PART_FIELD: "половина"},
+        {"plan": SYNTHETIC_PLAN, "index": 3, "disposition": PERMITTED,
+         RULE_NAME_FIELD: "test_x", RULE_SITE_FIELD: site},
+        {"plan": SYNTHETIC_PLAN, "index": 4, "disposition": "enforced",
+         RULE_NAME_FIELD: "test_x", RULE_SITE_FIELD: site, UNCOVERED_PART_FIELD: "половина"},
+        {"plan": SYNTHETIC_PLAN, "index": 5, "disposition": tool.SEED_DISPOSITION},
+    ]
+    named = sorted({offence.split(":")[0] for offence in _coverage_offences(rows)})
+    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (1, 2, 3, 4)], named
+
+
+def test_control_a_coverage_rule_absent_from_its_site_is_named(suite_sources):
+    """Координата называется, когда имени нет в ЕЁ файле, файла нет или форма не та.
+
+    Живое имя в чужом файле — отказ: существование судится по файлу координаты, а не по суите
+    целиком. Дерево не правится — подаётся копия вселенной без одного модуля.
+    """
+    live = "test_the_failure_banner_guard_lives_on_the_node_it_wires"
+    holder = [path for path, text in suite_sources.items() if live in _functions_defined_in(text)]
+    assert len(holder) == 1, holder
+    good = f"{SUITE_PREFIX}{holder[0]}:1"
+    elsewhere = f"{SUITE_PREFIX}test_planning/test_plan_prohibitions_census.py:1"
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, RULE_NAME_FIELD: live, RULE_SITE_FIELD: good},
+        {"plan": SYNTHETIC_PLAN, "index": 1, RULE_NAME_FIELD: live, RULE_SITE_FIELD: elsewhere},
+        {"plan": SYNTHETIC_PLAN, "index": 2, RULE_NAME_FIELD: live,
+         RULE_SITE_FIELD: f"{SUITE_PREFIX}no_such_module.py:1"},
+        {"plan": SYNTHETIC_PLAN, "index": 3, RULE_NAME_FIELD: live, RULE_SITE_FIELD: holder[0]},
+    ]
+    named = [offence.split(":")[0] for offence in _rule_site_offences(rows, suite_sources)]
+    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (1, 2, 3)], named
+
+    doctored = {path: text for path, text in suite_sources.items() if path not in holder}
+    assert [
+        offence.split(":")[0] for offence in _rule_site_offences(rows[:1], doctored)
+    ] == [f"{SYNTHETIC_PLAN}#0"]
+
+
+def test_control_a_permitted_verification_test_row_is_named():
+    """Строка D-05 с «разрешено» называется; та же диспозиция у `none` — законна."""
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "phase": DECISION_SCOPE_PHASE,
+         "verification": VERIFICATION_TEST, "disposition": PERMITTED},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "phase": DECISION_SCOPE_PHASE,
+         "verification": VERIFICATION_NONE, "disposition": PERMITTED},
+        {"plan": SYNTHETIC_PLAN, "index": 2, "phase": DECISION_SCOPE_PHASE,
+         "verification": VERIFICATION_TEST, "disposition": tool.SEED_DISPOSITION},
+    ]
+    named = [offence.split(":")[0] for offence in _permitted_verification_test_rows(rows)]
+    assert named == [f"{SYNTHETIC_PLAN}#0"], named
 
 
 # --- группа согласия с четырьмя историческими сетями ---------------------------------------

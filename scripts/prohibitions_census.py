@@ -104,6 +104,12 @@ REGISTRY_FIELD_ORDER = (
     "class",
     "disposition",
     "declared_rule",
+    # Мера покрытия по 61 запрету D-05 (план 15-13, задача 1): имя найденного правила, его
+    # координата на день замера и непокрытая часть у «принуждается частично». Засев этих полей
+    # не пишет — их пишет человеческое суждение, а засев только сохраняет их порядок.
+    "rule_name",
+    "rule_site",
+    "coverage_note",
 )
 
 # Группа D-05: у запрета Фазы 10 с `verification: test` реестр несёт `declared_rule` — имя
@@ -941,6 +947,44 @@ def _breakdown(root: Path) -> int:
         f"  сумма по классам области решений: {sum(by_class.values())} "
         f"(классов {len(by_class)})"
     )
+
+    def row_of(record: ProhibitionRecord) -> Mapping:
+        return registry.get(record.identity, {})
+
+    # Диспозиции ОБЛАСТИ РЕШЕНИЙ (план 15-13) — для глаз человека: сумма обязана быть числом
+    # области, а распределение ПЕЧАТАЕТСЯ, а не судится (судит его модуль теста принадлежностью).
+    print(f"по диспозициям области решений (фаза {DECISION_SCOPE_PHASE}):")
+    scope_dispositions = Counter(str(row_of(record).get("disposition", "?")) for record in scope)
+    for value, count in sorted(scope_dispositions.items()):
+        print(f"  {value}: {count}")
+    print(f"  сумма по диспозициям области решений: {sum(scope_dispositions.values())}")
+    print(
+        f"по диспозициям области решений и классам (класс: диспозиция — число; "
+        f"`verification: {DECLARED_RULE_VERIFICATION}` — в скобках):"
+    )
+    for value in sorted(by_class):
+        members = [record for record in scope if class_of(record) == value]
+        cells = Counter(str(row_of(record).get("disposition", "?")) for record in members)
+        tested_cells = Counter(
+            str(row_of(record).get("disposition", "?"))
+            for record in members
+            if record.verification == DECLARED_RULE_VERIFICATION
+        )
+        listed = ", ".join(
+            f"{name} {count} ({tested_cells[name]})" for name, count in sorted(cells.items())
+        )
+        print(f"  {value}: {listed}")
+    tested_scope = [
+        record for record in scope if record.verification == DECLARED_RULE_VERIFICATION
+    ]
+    print(
+        f"мера покрытия запретов с `verification: {DECLARED_RULE_VERIFICATION}` "
+        f"(D-05, {len(tested_scope)}):"
+    )
+    for value, count in sorted(
+        Counter(str(row_of(record).get("disposition", "?")) for record in tested_scope).items()
+    ):
+        print(f"  {value}: {count}")
     print(f"итого элементов блока must_haves.prohibitions: {len(records)}")
     return 0
 
