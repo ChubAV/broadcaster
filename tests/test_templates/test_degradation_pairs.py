@@ -172,13 +172,27 @@ UNPAIRED_HTMX_TESTS: dict[str, str] = {
 # ЛЕТОПИСЬ: 3, Фаза 15, план 15-03, задача 1 — замер D-14 от 2026-09-23.
 UNPAIRED_HTMX_TESTS_DECLARED = 3
 
-# htmx-тесты, заведённые ПАРОЙ к alpine-тесту по совпадающему ключу предмета.
-PAIRED_HTMX_TESTS: tuple[str, ...] = ()
+# htmx-тесты, заведённые ПАРОЙ к alpine-тесту по совпадающему ключу предмета
+# (Фаза 15, план 15-03, задача 2). Каждый стоит в файле своей alpine-пары СРАЗУ
+# после неё. Основа имени НЕ совпадает с основой пары намеренно: htmx-тест смотрит
+# на ФОРМУ ПАНЕЛИ ПОДТВЕРЖДЕНИЯ (ту, что несёт `hx-post`), alpine-тест — на
+# форму-триггер строки; предмет у них один, а пару держит записанный ключ.
+PAIRED_HTMX_TESTS: tuple[str, ...] = (
+    "test_the_payment_form_keeps_its_route_and_degrades_without_htmx",
+    "test_accounts_delete_confirm_degrades_without_htmx",
+    "test_ads_delete_confirm_degrades_without_htmx",
+    "test_admin_user_delete_confirm_degrades_without_htmx",
+    "test_editor_ad_delete_confirm_degrades_without_htmx",
+)
 
 HTMX_DEGRADATION_TESTS = (*UNPAIRED_HTMX_TESTS, *PAIRED_HTMX_TESTS)
 
-# ЛЕТОПИСЬ: 3, Фаза 15, план 15-03, задача 1 — замер D-14 от 2026-09-23.
-HTMX_DEGRADATION_TESTS_DECLARED = 3
+# ЛЕТОПИСЬ:
+#   3, Фаза 15, план 15-03, задача 1 — замер D-14 от 2026-09-23.
+#   3 → 8, Фаза 15, план 15-03, задача 2 — пять пар к пяти alpine-тестам. Число
+#     поставлено ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА, а не арифметикой плана: см.
+#     летопись `DEGRADATION_PAIRS_DECLARED` ниже.
+HTMX_DEGRADATION_TESTS_DECLARED = 8
 
 PAIR_UNIVERSE_EXEMPTIONS: dict[str, Exemption] = {
     "test_subsection_navigation_degrades_without_js": Exemption(
@@ -254,6 +268,40 @@ DEGRADATION_SUBJECTS: dict[str, DegradationSubject] = {
         mechanism=HTMX,
         file=EDITOR_SCHEDULES_FILE,
     ),
+    # --- htmx, пары к alpine (план 15-03, задача 2) ---------------------------
+    # ⚠️ Ключ каждой записи ниже ПОСИМВОЛЬНО равен ключу её alpine-пары выше.
+    "test_the_payment_form_keeps_its_route_and_degrades_without_htmx": (
+        DegradationSubject(
+            screen="/billing",
+            action="POST /billing/subscribe",
+            mechanism=HTMX,
+            file=BILLING_FILE,
+        )
+    ),
+    "test_accounts_delete_confirm_degrades_without_htmx": DegradationSubject(
+        screen="/accounts",
+        action="POST /accounts/{account_id}/delete",
+        mechanism=HTMX,
+        file=RESPONSIVE_FILE,
+    ),
+    "test_ads_delete_confirm_degrades_without_htmx": DegradationSubject(
+        screen="/ads",
+        action="POST /ads/{ad_id}/delete",
+        mechanism=HTMX,
+        file=RESPONSIVE_FILE,
+    ),
+    "test_admin_user_delete_confirm_degrades_without_htmx": DegradationSubject(
+        screen="/admin/users/{user_id}",
+        action="POST /admin/users/{user_id}/delete",
+        mechanism=HTMX,
+        file=RESPONSIVE_FILE,
+    ),
+    "test_editor_ad_delete_confirm_degrades_without_htmx": DegradationSubject(
+        screen="/ads/{ad_id}/edit",
+        action="POST /ads/{ad_id}/delete",
+        mechanism=HTMX,
+        file=ADS_EDITOR_FILE,
+    ),
 }
 
 # ЧИСЛО ПАР ПО ОБЪЯВЛЕННОМУ ПРЕДИКАТУ.
@@ -263,7 +311,13 @@ DEGRADATION_SUBJECTS: dict[str, DegradationSubject] = {
 #     объявленных ключей пяти alpine-тестов и трёх htmx-тестов ПУСТО. Ноль здесь
 #     честный: правило ниже зелено на нём потому, что пар действительно нет, а не
 #     потому, что их никто не считал.
-DEGRADATION_PAIRS_DECLARED = 0
+#   0 → 5, Фаза 15, план 15-03, задача 2 — пять ключей записаны ПОСИМВОЛЬНО
+#     равными ключам alpine-пар ДО того, как функции появились в дереве (RED), и
+#     правило покраснело, назвав всех пятерых БЕЗ ПАРЫ. Число поставлено ПРОГОНОМ
+#     ПОКРАСНЕВШЕГО ПРАВИЛА, а не арифметикой плана, дословно:
+#     `пар по объявленному предикату 0, объявлено 5:` — далее пять строк
+#     `<alpine-имя> (<экран>, <действие>): БЕЗ ПАРЫ` — и `assert 0 == 5`.
+DEGRADATION_PAIRS_DECLARED = 5
 
 # Правило GATE-06, стоящее адресно этой фазе прохибицией плана 09-03 (элемент #0):
 # «не переименовывается и не заменяется предметом».
