@@ -242,3 +242,8 @@ None - no external service configuration required.
 ---
 *Phase: 15-uprochnenie-i-svodnyy-obhod-47-form*
 *Completed: 2026-09-24*
+
+## Self-Check: PASSED
+
+- Файлы `tests/test_templates/test_htmx_markup_gates.py` и `15-10-SUMMARY.md` на месте; коммиты 74ec8bc3, c48880f9, f4b359cd, 6fa370c5, 472e2ec3 найдены.
+- `tests/test_planning/` перед коммитом учёта — зелёный (прогон ниже в истории коммита учёта).
