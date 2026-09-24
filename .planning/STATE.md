@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 15
 current_phase_name: Упрочнение и сводный обход 47 форм
 status: executing
-stopped_at: Phase 15 context gathered
-last_updated: "2026-09-24T06:05:15.080Z"
+stopped_at: Completed 15-06-PLAN.md
+last_updated: "2026-09-24T06:14:41.027Z"
 last_activity: 2026-09-24
 last_activity_desc: Phase 15 execution started
-state_head: cbbf9690bd0093fc5558cedb45e46cc3e47fdc9d
+state_head: e099620a351955aa7b01acdfd8059127562e253c
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 156
-  completed_plans: 142
+  completed_plans: 143
   percent: 89
 ---
 
@@ -55,10 +55,11 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 15 (Упрочнение и сводный обход 47 форм) — EXECUTING
-Plan: 1 of 14
+Plan: 2 of 14
 Total Plans in Phase: 14
-Completed Plans in Phase: 0
+Completed Plans in Phase: 1
 Status: Executing Phase 15
+⚠️ После плана 15-06 (2026-09-24) `state.advance-plan` записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 0»; фаза исполняется (исполнен 1 план из 14 — сводка `15-06-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Прежние значения названы здесь, а не вычеркнуты молча.
 ⚠️ При старте исполнения Фазы 15 (2026-09-24) `state.begin-phase` оставил «Completed Plans in Phase: 7» — счёт Фазы 14 под именем Фазы 15; поставлено 0 рукой замером (сводок `15-*-SUMMARY.md` на диске нет).
 ⚠️ Прежняя формулировка «ждёт верификации» ошибкой не была — она устарела 2026-09-23, когда верификация прошла и вернула `human_needed`; по идиоме D-30/D-32 названа, а не вычеркнута.
 ⚠️ Строка Status исправлена вручную планом 14-07: `state.advance-plan` записал «Phase complete —
@@ -258,6 +259,7 @@ Progress: [████████████████████] 116/116
 | Phase 14 P05 | 46 min | 2 tasks | 11 files |
 | Phase 14 P06 | 79 min | 3 tasks | 7 files |
 | Phase 14 P07 | 50 min | 2 tasks | 5 files |
+| Phase 15 P06 | 4 min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -564,6 +566,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 14]: Закрытие фазы 2026-09-23: обход человека 9/9 без единой находки — раздел `## Gaps` в `14-UAT.md` остался пустым, поток `--gaps` не запускался; вердикт по каждой проверке дан словом, таблицы «Отметка о закрытии» НЕ заполнены
 - [Phase 14]: Закрытие фазы: отпечаток покрытия пересчитан ВТОРОЙ раз — `phase.complete` правит `.planning/REQUIREMENTS.md`, который входит в 46 покрытых файлов; пересчёт доказан воспроизведением прежнего значения на прежнем содержимом, `score`, `verified` и `covered_files` не тронуты
 - [Phase 14]: Закрытие фазы: предупреждение `phase.complete` о CR-01 и CR-02, «отсутствующих в таблице прослеживаемости», — ЛОЖНОЕ СРАБАТЫВАНИЕ сканера REQ-ID по образцу `CR-\d\d` в летописной прозе; это идентификаторы находок ревизии кода, а не требования, и вписывать их в таблицу нельзя
+- [Phase 15]: 15-06: 14-UAT.md header returned to non-terminal `human_needed` (owner chubav 2026-09-23); marks left empty, `checks_declared: 9` and 9 tables kept — tests/test_planning/ 1 failed/43 passed -> 44 passed
+- [Phase 15]: 15-06: REQUIREMENTS.md stale claims chronicled by pure addition (group-list-sentinel closed by 09-13; GATE-08 name `test_no_manual_fetch_remains`); GATE-08 mark NOT removed, requirement text unmoved
+- [Phase 15]: 15-06: name of the FETCH-03 prohibition function left unwritten in the GATE-08 chronicle (REQUIREMENTS.md:73) until plan 15-04 summary exists — not invented
 
 ### Pending Todos
 
@@ -748,9 +753,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-23T15:53:17.413Z
-Stopped at: Phase 15 context gathered
-Resume file: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-CONTEXT.md
+Last session: 2026-09-24T06:14:31.918Z
+Stopped at: Completed 15-06-PLAN.md
+Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 
