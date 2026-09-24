@@ -65,8 +65,12 @@ from pathlib import Path
 from typing import NamedTuple
 
 from tests.test_templates.test_htmx_markup_gates import (
+    APP_CSS,
     TEMPLATES_DIR,
     _all_templates,
+    _app_css,
+    _css_rules,
+    _declaration,
     _strip_comments,
 )
 
@@ -406,3 +410,242 @@ def test_control_exact_code_point_comparison_is_not_normalised() -> None:
     assert _distinctness_findings(source) == (), (
         "имена с узким и обычным пробелом приравнены — сравнение нормализует строки"
     )
+
+
+# =============================================================================
+# Задача 2 плана 15-07: КОМПЕНСАЦИЯ ПЕРЕКРЫТИЯ ОБЪЯВЛЕНА ВЕЛИЧИНОЙ ИЗ ЗАМЕРА
+# =============================================================================
+#
+# ПОВОД (запись долга D-18.3). Коробка органа снятия занимает 885→909 при
+# содержимом `.alert`, кончающемся на 900: перекрытие 15 px, и компенсации
+# `padding-right` не было ни в одном правиле `failure-stack`. ⚠️ Нарисованная
+# половина замерена четвёртым обходом и оказалась у́же объявленной: видимого
+# столкновения текста с крестиком НЕТ (снимок 2026-09-14, окно 1280 px). Блок
+# компенсации поэтому объявляется ПО ЗАМЕРУ КОРОБКИ, а не по наблюдённому
+# столкновению, — и утверждается ОБЪЯВЛЕНИЕ, а не отрисовка.
+#
+# ЛЕТОПИСЬ ЧИСЛА ПРАВИЛ `.failure-stack`: 6 → 4 → 5 (идиома D-30/D-32; носитель
+# числа ОДИН — этот файл: план 15-05 своего литерала не заводит и адресата
+# называет, `tests/test_templates/test_htmx_markup_gates.py`, граница
+# FAILURE_STACK_SELECTOR_BOUNDARY_NOTE).
+#   «6» — запись долга D-18.3 и `15-CONTEXT.md`: «компенсации `padding-right`
+#         нет ни в одном из шести правил `failure-stack`».
+#   «4» — перезамер планирования Фазы 15 (Ф-19 `15-RESEARCH.md`), снят ЧТЕНИЕМ
+#         ФАЙЛА, а не вычитанием: селекторы `app.css:1259, 1263, 1266, 1330`.
+#   «5» — правка плана 15-07, задача 2: добавлен ПЯТЫЙ селектор — блок
+#         компенсации перекрытия.
+# ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи он был верным, и
+# правится не он, а числа, которые он пережил. Записи разведки
+# (`.planning/research/*`) НЕ ПРАВЯТСЯ. ⚠️ Утверждение записи долга «компенсации
+# нет ни в одном из шести» верно ПО СУЩЕСТВУ — её не было ни в одном из
+# ЧЕТЫРЁХ; расходится число, не вывод.
+#
+# ⚠️ ПЕРЕСБОРКА `asset_version` — ОЖИДАЕМОЕ СЛЕДСТВИЕ, А НЕ ПОЛОМКА (FOUND-03):
+# правка `app.css` сдвигает `?v=` на теге стилей, потому что версия выводится из
+# байтов охвата (`app/pages/common.py`, `_compute_asset_version`).
+
+STACK_CLASS_SELECTOR = f".{BANNER_NODE_CLASS}"
+
+# Правил, чей селектор несёт класс стопки, — ровно пять; перечень выписан, а не
+# выведен (основание — докстринг модуля).
+FAILURE_STACK_RULES = 5
+FAILURE_STACK_SELECTORS: tuple[str, ...] = (
+    ".failure-stack",
+    ".failure-stack + .failure-stack",
+    ".failure-stack[hidden] + .failure-stack",
+    ".failure-stack:has(> .banner-dismiss:checked)",
+    ".failure-stack > .alert",
+)
+
+# Селектор блока компенсации: содержимое заготовки ПО КЛАССУ стопки, без адреса
+# заготовки (`_selector_lifts_banner` требует ровно одного блока подъёма).
+CLEARANCE_SELECTOR = ".failure-stack > .alert"
+CLEARANCE_PROPERTY = "padding-right"
+
+# Селектор коробки органа, из которой читаются слагаемые величины.
+DISMISS_BOX_SELECTOR = f".{BANNER_DISMISS_CLASS}"
+
+# Зазор между правым краем текста и коробкой органа. ⚠️ Рамка `.alert` (1px)
+# в сумму НЕ входит нарочно: она лишь прибавляет пиксель к видимому зазору, и
+# сумма остаётся наименьшей величиной, которая точно не перекрывается.
+BANNER_DISMISS_CLEARANCE_GAP_PX = 8
+
+# Объявленная компенсация: ширина органа (24px) + его отступ справа (6px) + зазор
+# (8px) = 38px. Равенство этой сумме ЧИТАЕТСЯ из `.banner-dismiss` той же
+# таблицы правилом ниже: правка коробки органа немедленно его краснит.
+BANNER_DISMISS_CLEARANCE_PX = 38
+
+# Блоков, ОБЪЯВЛЯЮЩИХ `--failure-banner-top`, — снято ДО правки плана 15-07
+# (`app.css:1259, 1263, 1266` — роли base / offset / reset `_stack_blocks`).
+BANNER_TOP_VARIABLE = "--failure-banner-top"
+BANNER_TOP_VARIABLE_BLOCKS = 3
+
+# Порог длины исходника для положительного контроля: правила молчат не на пустоте.
+APP_CSS_LINE_FLOOR = 1000
+
+_PX_RE = re.compile(r"^(-?\d+(?:\.\d+)?)px$")
+
+
+def _px(value: str | None) -> float | None:
+    match = _PX_RE.match(value.strip()) if value else None
+    return float(match.group(1)) if match else None
+
+
+def _failure_stack_selectors(css: str) -> tuple[str, ...]:
+    """Селекторы правил, несущие класс стопки, в порядке файла (CSS без комментариев)."""
+    return tuple(selector for selector, _body in _css_rules(css) if STACK_CLASS_SELECTOR in selector)
+
+
+def _clearance_declaration(css: str) -> str | None:
+    """Значение отступа справа у содержимого заготовки, объявленное по классу стопки."""
+    for selector, body in _css_rules(css):
+        if selector == CLEARANCE_SELECTOR:
+            return _declaration(body, CLEARANCE_PROPERTY)
+    return None
+
+
+def _dismiss_box_metrics(css: str) -> dict[str, float | None]:
+    """Ширина и отступ справа коробки органа, ПРОЧИТАННЫЕ из блока `.banner-dismiss`."""
+    for selector, body in _css_rules(css):
+        if selector == DISMISS_BOX_SELECTOR:
+            return {"width": _px(_declaration(body, "width")), "right": _px(_declaration(body, "right"))}
+    return {"width": None, "right": None}
+
+
+def _banner_top_blocks(css: str) -> tuple[str, ...]:
+    """Селекторы блоков, ОБЪЯВЛЯЮЩИХ величину `--failure-banner-top` (не читающих её)."""
+    return tuple(
+        selector for selector, body in _css_rules(css) if _declaration(body, BANNER_TOP_VARIABLE) is not None
+    )
+
+
+def _clearance_findings(css: str) -> tuple[str, ...]:
+    """Расхождения компенсации. Пусто — объявлена и равна выведенной из замера величине."""
+    declared = _clearance_declaration(css)
+    if declared is None:
+        return (
+            f"объявления `{CLEARANCE_SELECTOR} {{ {CLEARANCE_PROPERTY}: … }}` в таблице НЕТ — "
+            "компенсации перекрытия органом снятия не объявлено",
+        )
+    metrics = _dismiss_box_metrics(css)
+    if metrics["width"] is None or metrics["right"] is None:
+        return (
+            f"коробка органа `{DISMISS_BOX_SELECTOR}` не читается: получено {metrics} — "
+            "вывести величину компенсации не из чего",
+        )
+    derived = metrics["width"] + metrics["right"] + BANNER_DISMISS_CLEARANCE_GAP_PX
+    findings: list[str] = []
+    if derived != BANNER_DISMISS_CLEARANCE_PX:
+        findings.append(
+            f"объявленная `BANNER_DISMISS_CLEARANCE_PX = {BANNER_DISMISS_CLEARANCE_PX}` разошлась с "
+            f"выводом из коробки органа: width {metrics['width']:g} + right {metrics['right']:g} + "
+            f"зазор {BANNER_DISMISS_CLEARANCE_GAP_PX} = {derived:g}"
+        )
+    if _px(declared) != derived:
+        findings.append(
+            f"`{CLEARANCE_SELECTOR}`: объявлено `{CLEARANCE_PROPERTY}: {declared}`, а выведенная из "
+            f"замера коробки величина — {derived:g}px (width {metrics['width']:g} + right "
+            f"{metrics['right']:g} + зазор {BANNER_DISMISS_CLEARANCE_GAP_PX})"
+        )
+    return tuple(findings)
+
+
+def test_failure_stack_rule_count_is_declared() -> None:
+    """Правил класса стопки ровно `FAILURE_STACK_RULES`, перечень — объявленный (летопись 6 → 4 → 5)."""
+    assert FAILURE_STACK_RULES > 0, "объявлено ноль правил стопки — утверждение вакуумно"
+    assert len(FAILURE_STACK_SELECTORS) == FAILURE_STACK_RULES
+    found = _failure_stack_selectors(_app_css())
+
+    assert len(found) > 0, "правил класса стопки в таблице НЕТ — разбор ослеп"
+    assert found == FAILURE_STACK_SELECTORS, (
+        "перечень правил `.failure-stack` разошёлся с объявленным\n"
+        f"      получено ({len(found)}):  {found}\n"
+        f"      ожидалось ({FAILURE_STACK_RULES}): {FAILURE_STACK_SELECTORS}"
+    )
+
+
+def test_the_overlap_clearance_is_declared() -> None:
+    """Содержимое заготовки объявляет отступ справа, равный `BANNER_DISMISS_CLEARANCE_PX`."""
+    declared = _clearance_declaration(_app_css())
+
+    assert declared is not None, (
+        f"объявления `{CLEARANCE_SELECTOR} {{ {CLEARANCE_PROPERTY}: … }}` нет — компенсация "
+        "перекрытия органом снятия не объявлена"
+    )
+    assert _px(declared) == BANNER_DISMISS_CLEARANCE_PX, (
+        f"`{CLEARANCE_SELECTOR}`: `{CLEARANCE_PROPERTY}: {declared}`, объявлено "
+        f"{BANNER_DISMISS_CLEARANCE_PX}px"
+    )
+
+
+def test_the_clearance_is_derived_from_the_dismiss_box() -> None:
+    """Величина ВЫВЕДЕНА: равна ширине органа + его отступу справа + зазору, прочитанным из CSS."""
+    findings = _clearance_findings(_app_css())
+
+    assert findings == (), "app.css:\n" + "\n".join(f"  — {line}" for line in findings)
+
+
+def test_no_block_declaring_the_banner_top_is_added() -> None:
+    """Блоков, объявляющих `--failure-banner-top`, — ровно снятое ДО правки число."""
+    found = _banner_top_blocks(_app_css())
+
+    assert len(found) == BANNER_TOP_VARIABLE_BLOCKS, (
+        f"блоков, объявляющих `{BANNER_TOP_VARIABLE}`, {len(found)}, объявлено "
+        f"{BANNER_TOP_VARIABLE_BLOCKS}: {found}\n"
+        "      следствие: `_stack_blocks` отнёс бы новый блок к роли смещения, и правила "
+        "стопки плана 10-56 покраснели бы за ФОРМУ правки"
+    )
+
+
+def test_the_clearance_block_declares_no_display_mode_and_no_banner_address() -> None:
+    """Блок компенсации не объявляет способа отображения и не несёт адреса заготовки."""
+    bodies = [body for selector, body in _css_rules(_app_css()) if selector == CLEARANCE_SELECTOR]
+
+    assert len(bodies) == 1, f"блоков `{CLEARANCE_SELECTOR}` {len(bodies)}, а не один"
+    assert _declaration(bodies[0], "display") is None, (
+        f"`{CLEARANCE_SELECTOR}` объявляет способ отображения — блок попал бы во вселенную "
+        "`test_no_banner_rule_declares_a_display_mode_that_shows`"
+    )
+    assert _declaration(bodies[0], BANNER_TOP_VARIABLE) is None
+    assert "htmx-failure" not in CLEARANCE_SELECTOR
+
+
+def test_control_a_stylesheet_without_the_clearance_block_reddens() -> None:
+    """Синтетический CSS без блока компенсации — правило называет отсутствующее объявление."""
+    css = _app_css()
+    block = f"{CLEARANCE_SELECTOR} {{ {CLEARANCE_PROPERTY}: {BANNER_DISMISS_CLEARANCE_PX}px; }}"
+    assert css.count(block) == 1, (
+        f"блок {block!r} встречается {css.count(block)} раз(а), а не один — подмена меняет не то место"
+    )
+    changed = css.replace(block, "")
+    assert changed != css
+
+    findings = _clearance_findings(changed)
+
+    assert findings, "правило компенсации зелено на таблице без блока — гейт слеп"
+    assert any("НЕТ" in line and CLEARANCE_PROPERTY in line for line in findings), (
+        f"отказ не назвал отсутствующее объявление: {findings}"
+    )
+
+
+def test_control_an_understated_clearance_by_one_pixel_reddens() -> None:
+    """Компенсация, заниженная на 1 px, — правило называет расхождение с выведенной величиной."""
+    css = _app_css()
+    exact = f"{CLEARANCE_PROPERTY}: {BANNER_DISMISS_CLEARANCE_PX}px;"
+    assert css.count(exact) == 1, f"{exact!r} встречается {css.count(exact)} раз(а), а не один"
+    changed = css.replace(exact, f"{CLEARANCE_PROPERTY}: {BANNER_DISMISS_CLEARANCE_PX - 1}px;")
+
+    findings = _clearance_findings(changed)
+
+    assert findings, "правило вывода зелено на величине, заниженной на 1 px — подобранное число прошло"
+    assert any(f"{BANNER_DISMISS_CLEARANCE_PX - 1}px" in line and f"{BANNER_DISMISS_CLEARANCE_PX}px" in line
+               for line in findings), f"отказ не назвал расхождение: {findings}"
+
+
+def test_control_the_real_stylesheet_is_not_empty_and_the_rules_are_silent() -> None:
+    """На необойдённом файле оба правила молчат, и молчат НЕ на пустоте."""
+    lines = APP_CSS.read_text(encoding="utf-8").count("\n")
+    assert lines > APP_CSS_LINE_FLOOR, f"в таблице стилей {lines} строк, не больше {APP_CSS_LINE_FLOOR}"
+    css = _app_css()
+    assert _clearance_findings(css) == ()
+    assert len(_banner_top_blocks(css)) == BANNER_TOP_VARIABLE_BLOCKS
