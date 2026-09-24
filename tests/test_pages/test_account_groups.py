@@ -4862,11 +4862,18 @@ class OobTargetException:
     назначенной фазы есть бессрочный долг, а не принятое решение.
     ``reason`` — обоснование: почему узел уезжает безусловно и чем за это
     платят.
+    ``phase_15_disposition`` — что стало с назначением Фазе 15 (план 15-09):
+    значение из PHASE_15_DISPOSITIONS. Пустое значение есть назначение,
+    оставленное без ответа, и правило диспозиции его называет.
+    ``reassigned_to`` — адресат перезаписанного назначения. Непуст и не есть
+    Фаза 15 у каждой записи с диспозицией «перезаписано».
     """
 
     where_printed: str
     assigned_phase: str
     reason: str
+    phase_15_disposition: str = ""
+    reassigned_to: str = ""
 
 
 # ⚠️ ПЕРЕЧЕНЬ ОБЪЯВЛЕН, А НЕ ВЫВЕДЕН ИЗ ФАКТА РАСХОЖДЕНИЯ (идиома SP-1, образец —
@@ -5122,6 +5129,297 @@ async def test_the_idle_delete_path_really_ships_the_recorded_nodes(
         f"чистой консоли стоит приёмочный признак вехи, наследуемый Фазами "
         f"10-15."
     )
+
+
+# =============================================================================
+# План 15-09, задача 2: ПЕРЕЧЕНЬ ОТСТУПЛЕНИЙ ИНВЕНТАРИЗОВАН — ПОЛНОТА И ДИСПОЗИЦИЯ.
+# =============================================================================
+#
+# ⚠️ ВСЕ ЗАПИСИ ПЕРЕЧНЯ БЫЛИ НАЗНАЧЕНЫ ИМЕННО ФАЗЕ 15, И `15-CONTEXT.md` ЭТОГО
+# НЕ ПЕРЕЧИСЛЯЛ. Фаза не имеет права закончиться, не сказав по каждой записи,
+# что стало с её назначением: «назначено и не упомянуто» есть ровно тот провал
+# долга, для наказания которого написан критерий 6 фазы. Поэтому у записи есть
+# поле диспозиции, и его значение принадлежит перечню ниже.
+#
+# Две диспозиции, и обе выразимы:
+#   * «снято» — отступление перестало существовать. Такая запись в ЖИВОМ
+#     перечне стоять не может: она закрывается по форме
+#     INCLUDE_TARGET_EXCEPTIONS — прежний текст записи сохраняется дословно в
+#     комментарии, число падает строкой летописи, и абзац говорит «ПРЕДМЕТ СНЯТ,
+#     А НЕ ОТЛОЖЕН», чтобы закрытие было отличимо от тихой отмены. Правило ниже
+#     краснеет на записи «снято», оставшейся в перечне;
+#   * «перезаписано» — отступление живо, назначение снято с Фазы 15 и передано
+#     НАЗВАННОМУ адресату. Поле адресата непусто и НЕ есть Фаза 15: назначение,
+#     оставленное у закрытой фазы, есть долг без адресата.
+PHASE_15_DISPOSITION_REMOVED = "снято"
+PHASE_15_DISPOSITION_REASSIGNED = "перезаписано"
+PHASE_15_DISPOSITIONS = frozenset(
+    {PHASE_15_DISPOSITION_REMOVED, PHASE_15_DISPOSITION_REASSIGNED}
+)
+PHASE_15_DISPOSITIONS_DECLARED = 2
+
+# Печатающие шаблоны двух экранов, чьи холостые пути удаления шлют узлы с
+# отсутствующей целью.
+GROUP_DELETE_RESPONSE = "app/templates/account_groups/partials/delete_response.html"
+SCHEDULE_DELETE_RESPONSE = "app/templates/ads/partials/sched_delete_response.html"
+
+# ⚠️ МЕСТА, ГДЕ ПРОЗА ОБЪЯВЛЯЕТ ОСТАТОК «ПЕРЕЧНЕМ `OOB_TARGET_EXCEPTIONS`», И
+# ШАБЛОН, ПЕЧАТАЮЩИЙ УЗЛЫ, О КОТОРЫХ ОНА ГОВОРИТ. Перечень выписан руками по той
+# же причине, что и OOB_SILENCE_CLAIM_SITES: проза сама не называет своего
+# шаблона в машинно читаемой форме. Слепоты это не заводит: обход ниже НАХОДИТ
+# места по тексту во всём дереве, и место, которого здесь нет, реддит правило и
+# называется.
+#
+# Три нижние записи суть СИРОТА, которого план 15-09 ввёл в перечень: они
+# объявляли остаток экрана редактора «унаследованным перечнем
+# `OOB_TARGET_EXCEPTIONS` с назначенной Фазой 15», а записей узлов этого экрана
+# в перечне не было ни одной.
+OOB_EXCEPTION_PROSE_SITES: dict[str, str] = {
+    "app/pages/account_groups.py": GROUP_DELETE_RESPONSE,
+    GROUP_DELETE_RESPONSE: GROUP_DELETE_RESPONSE,
+    "app/pages/schedules.py": SCHEDULE_DELETE_RESPONSE,
+    SCHEDULE_DELETE_RESPONSE: SCHEDULE_DELETE_RESPONSE,
+    "tests/test_pages/test_editor_schedules.py": SCHEDULE_DELETE_RESPONSE,
+}
+OOB_EXCEPTION_PROSE_SITES_DECLARED = 5
+
+# Признак объявления прозой: сам перечень, названный как перечень. Имя числа
+# (`…_DECLARED`) под образец не попадает: после имени обязана стоять обратная
+# кавычка.
+OOB_EXCEPTION_PROSE_MARK = re.compile(r"перечн\w*\s+`OOB_TARGET_EXCEPTIONS`")
+
+# Узел снятия, чей идентификатор собран из переменной ПУТИ.
+OOB_DELETE_NODE_RE = re.compile(
+    r'<[^<>]*\bid="([A-Za-z][-\w]*-)\{\{\s*(\w+)\s*\}\}"[^<>]*hx-swap-oob="delete"[^<>]*>'
+)
+JINJA_COMMENT_RE = re.compile(r"\{#.*?#\}", re.DOTALL)
+
+# Дом перечня в обход не входит: здесь имя перечня стоит в каждом правиле.
+OOB_EXCEPTION_HOME = "tests/test_pages/test_account_groups.py"
+
+
+def _oob_prose_universe() -> dict[str, str]:
+    """Исходники `app/**/*.py`, `app/templates/**/*.html` и `tests/**/*.py` без дома перечня."""
+    sources: dict[str, str] = {}
+    for pattern, root in (("*.py", "app"), ("*.html", "app/templates"), ("*.py", "tests")):
+        for path in sorted((REPO_ROOT / root).rglob(pattern)):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if rel != OOB_EXCEPTION_HOME:
+                sources[rel] = path.read_text(encoding="utf-8")
+    return sources
+
+
+def _oob_delete_nodes(printer_source: str) -> list[str]:
+    """Ключи узлов снятия шаблона в форме перечня: `group-row-{group_id}`."""
+    text = JINJA_COMMENT_RE.sub("", printer_source)
+    return [f"{prefix}{{{var}}}" for prefix, var in OOB_DELETE_NODE_RE.findall(text)]
+
+
+def _declared_oob_exceptions_in_prose(
+    sources: dict[str, str], prose_sites: dict[str, str]
+) -> tuple[list[str], dict[str, list[str]], list[str]]:
+    """Что объявлено прозой: найденные места, ключ узла → места, несопоставленные места."""
+    found = sorted(site for site, text in sources.items() if OOB_EXCEPTION_PROSE_MARK.search(text))
+    declared: dict[str, list[str]] = {}
+    unmapped: list[str] = []
+    for site in found:
+        printer = prose_sites.get(site)
+        if printer is None or printer not in sources:
+            unmapped.append(site)
+            continue
+        for key in _oob_delete_nodes(sources[printer]):
+            declared.setdefault(key, []).append(site)
+    return found, declared, unmapped
+
+
+def _orphaned_oob_exceptions(
+    sources: dict[str, str],
+    exceptions: dict[str, OobTargetException],
+    prose_sites: dict[str, str],
+) -> list[str]:
+    """Отступления, объявленные прозой и не стоящие в перечне, — каждое названо."""
+    _found, declared, unmapped = _declared_oob_exceptions_in_prose(sources, prose_sites)
+    problems = [
+        f"{site}: проза объявляет остаток перечнем, а печатающий шаблон ей не сопоставлен"
+        for site in unmapped
+    ]
+    for key, sites in sorted(declared.items()):
+        if key not in exceptions:
+            problems.append(f"{key}: объявлено прозой ({', '.join(sites)}), в перечне записи нет")
+    return problems
+
+
+def _oob_exceptions_without_a_disposition(
+    exceptions: dict[str, OobTargetException],
+) -> list[str]:
+    return sorted(
+        key
+        for key, record in exceptions.items()
+        if record.phase_15_disposition not in PHASE_15_DISPOSITIONS
+    )
+
+
+def _oob_exceptions_removed_but_still_listed(
+    exceptions: dict[str, OobTargetException],
+) -> list[str]:
+    return sorted(
+        key
+        for key, record in exceptions.items()
+        if record.phase_15_disposition == PHASE_15_DISPOSITION_REMOVED
+    )
+
+
+def _oob_exceptions_reassigned_without_an_addressee(
+    exceptions: dict[str, OobTargetException],
+) -> list[str]:
+    return sorted(
+        key
+        for key, record in exceptions.items()
+        if record.phase_15_disposition == PHASE_15_DISPOSITION_REASSIGNED
+        and (
+            not record.reassigned_to.strip()
+            or record.reassigned_to.strip().startswith("Фаза 15")
+        )
+    )
+
+
+def test_every_oob_target_exception_declared_in_prose_stands_in_the_list():
+    """Правило полноты: каждое отступление, объявленное прозой, стоит в перечне.
+
+    Сирота не переживёт переезда своего файла: проза, говорящая «остаток
+    унаследован перечнем», при переезде останется правдой только на словах.
+    Правило находит места прозы ОБХОДОМ всего дерева и краснеет в двух случаях:
+    место не сопоставлено печатающему шаблону (новая проза) и узел шаблона не
+    стоит в перечне (сирота). Два действующих правила перечня
+    (test_every_claim_about_a_missing_oob_target_names_the_runtime_event и
+    test_the_idle_delete_path_really_ships_the_recorded_nodes) это правило не
+    заменяет: оно встаёт рядом.
+    """
+    sources = _oob_prose_universe()
+    found, declared, _unmapped = _declared_oob_exceptions_in_prose(
+        sources, OOB_EXCEPTION_PROSE_SITES
+    )
+
+    assert len(OOB_EXCEPTION_PROSE_SITES) == OOB_EXCEPTION_PROSE_SITES_DECLARED
+    assert found, "обход не нашёл ни одного места прозы — сеть ослепла"
+    assert declared, "места прозы найдены, а узлов снятия у их шаблонов нет"
+    assert found == sorted(OOB_EXCEPTION_PROSE_SITES), (
+        "места прозы, объявляющей остаток перечнем, разошлись с перечнем мест: "
+        f"найдено {found}, объявлено {sorted(OOB_EXCEPTION_PROSE_SITES)}"
+    )
+
+    orphaned = _orphaned_oob_exceptions(sources, OOB_TARGET_EXCEPTIONS, OOB_EXCEPTION_PROSE_SITES)
+    assert not orphaned, (
+        "ОТСТУПЛЕНИЕ ОБЪЯВЛЕНО ПРОЗОЙ, А В ПЕРЕЧНЕ ЕГО НЕТ:\n  " + "\n  ".join(orphaned)
+    )
+
+
+def test_every_oob_target_exception_carries_a_phase_15_disposition():
+    """У каждой записи есть диспозиция назначения Фазе 15 из объявленного перечня.
+
+    Запись «снято» в живом перечне стоять не может: закрытое отступление
+    закрывается по форме INCLUDE_TARGET_EXCEPTIONS, а не остаётся строкой.
+    """
+    assert len(PHASE_15_DISPOSITIONS) == PHASE_15_DISPOSITIONS_DECLARED
+
+    missing = _oob_exceptions_without_a_disposition(OOB_TARGET_EXCEPTIONS)
+    assert not missing, (
+        "запись перечня не говорит, что стало с её назначением Фазе 15: "
+        + ", ".join(missing)
+    )
+    removed = _oob_exceptions_removed_but_still_listed(OOB_TARGET_EXCEPTIONS)
+    assert not removed, (
+        "запись со снятым отступлением осталась в живом перечне — закрой её по "
+        "форме INCLUDE_TARGET_EXCEPTIONS: " + ", ".join(removed)
+    )
+
+
+def test_every_reassigned_oob_target_exception_names_an_addressee():
+    """У перезаписанного назначения назван адресат, и это не Фаза 15."""
+    orphaned = _oob_exceptions_reassigned_without_an_addressee(OOB_TARGET_EXCEPTIONS)
+    assert not orphaned, (
+        "назначение снято с Фазы 15, а адресат не назван или назван Фазой 15: "
+        + ", ".join(orphaned)
+    )
+
+
+def test_control_negative_an_oob_target_exception_without_a_disposition_is_named():
+    """Контроль от вакуума: запись без диспозиции краснеет правило и называется.
+
+    Контроль стартует с перечня, где диспозиция стоит у каждой записи ПО
+    ПОСТРОЕНИЮ, и добавляет одну запись без неё. Так он зелен и до правки
+    перечня, и после неё.
+    """
+    planted = {
+        key: OobTargetException(
+            where_printed=record.where_printed,
+            assigned_phase=record.assigned_phase,
+            reason=record.reason,
+            phase_15_disposition=PHASE_15_DISPOSITION_REASSIGNED,
+            reassigned_to="подставлено контролем",
+        )
+        for key, record in OOB_TARGET_EXCEPTIONS.items()
+    }
+    assert not _oob_exceptions_without_a_disposition(planted), (
+        "правило красно на перечне с диспозицией у каждой записи — краснота ниже "
+        "доказывала бы не то"
+    )
+    planted["planted-by-control-{group_id}"] = OobTargetException(
+        where_printed=GROUP_DELETE_RESPONSE,
+        assigned_phase="Фаза 15 — Упрочнение и сводный обход 47 форм",
+        reason="подставлено контролем",
+    )
+
+    assert _oob_exceptions_without_a_disposition(planted) == [
+        "planted-by-control-{group_id}"
+    ]
+
+
+def test_control_negative_a_removed_oob_target_exception_leaves_its_prose_orphaned():
+    """Контроль от вакуума: запись убрана, проза осталась — правило полноты называет сироту.
+
+    Контроль стартует с перечня, ПОЛНОГО ПО ПОСТРОЕНИЮ (запись на каждый узел,
+    объявленный прозой), и снимает по одной записи. Так он зелен и до правки
+    перечня, и после неё: доказывается свойство правила, а не состояние дерева.
+    """
+    sources = _oob_prose_universe()
+    _found, declared, _unmapped = _declared_oob_exceptions_in_prose(
+        sources, OOB_EXCEPTION_PROSE_SITES
+    )
+    assert len(declared) >= 2, f"прозой объявлено узлов {len(declared)} — сеть ослепла"
+    complete = {
+        key: OobTargetException(
+            where_printed="подставлено контролем",
+            assigned_phase="подставлено контролем",
+            reason="подставлено контролем",
+        )
+        for key in declared
+    }
+    assert not _orphaned_oob_exceptions(sources, complete, OOB_EXCEPTION_PROSE_SITES), (
+        "правило полноты красно на полном перечне — краснота ниже доказывала бы не то"
+    )
+
+    for victim in sorted(declared):
+        reduced = {key: value for key, value in complete.items() if key != victim}
+        orphaned = _orphaned_oob_exceptions(sources, reduced, OOB_EXCEPTION_PROSE_SITES)
+        assert len(orphaned) == 1 and orphaned[0].startswith(f"{victim}:"), (
+            f"убрана запись `{victim}`, а правило полноты назвало {orphaned}"
+        )
+
+
+def test_control_negative_an_unmapped_prose_site_is_named():
+    """Контроль от вакуума: новое место прозы, не сопоставленное шаблону, называется."""
+    sources = _oob_prose_universe()
+    baseline = set(_orphaned_oob_exceptions(sources, OOB_TARGET_EXCEPTIONS, OOB_EXCEPTION_PROSE_SITES))
+    scratch = "tests/test_pages/a_module_some_future_phase_will_add.py"
+    assert scratch not in sources, "ПОДМЕНА СОВПАЛА С ЖИВЫМ ФАЙЛОМ"
+    sources[scratch] = "# остаток назван перечнем `OOB_TARGET_EXCEPTIONS` с назначенной фазой\n"
+
+    orphaned = set(_orphaned_oob_exceptions(sources, OOB_TARGET_EXCEPTIONS, OOB_EXCEPTION_PROSE_SITES))
+
+    assert orphaned - baseline == {
+        f"{scratch}: проза объявляет остаток перечнем, а печатающий шаблон ей не сопоставлен"
+    }
 
 
 # =============================================================================

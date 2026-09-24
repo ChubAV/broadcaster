@@ -4516,3 +4516,91 @@ def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save
         f"прямых вызовов вычислителя в модуле {module_direct}, ожидался один — "
         f"в schedules_create"
     )
+
+
+# =============================================================================
+# План 15-09, задача 2: ОСТАТОК ХОЛОСТОГО ПУТИ РЕДАКТОРА ВВЕДЁН В ПЕРЕЧЕНЬ.
+# =============================================================================
+#
+# Докстринг `test_repeated_editor_delete_is_harmless` выше говорит, что остаток
+# «наследуется перечнем `OOB_TARGET_EXCEPTIONS` с назначенной Фазой 15». До
+# плана 15-09 записей узлов этого экрана в перечне не было ни одной: остаток был
+# объявлен только прозой. Записи заведены (`sched-{schedule_id}`,
+# `sched-del-{schedule_id}` в tests/test_pages/test_account_groups.py), и правило
+# ниже есть ТРЕТЬЕ, поведенческое утверждение идиомы SP-1 для них: образец —
+# `test_the_idle_delete_path_really_ships_the_recorded_nodes` экрана групп.
+#
+# Импорт перечня и помощников — внутри правила, а не в шапке модуля: строка в
+# шапке сдвинула бы номера строк, которые цитируют записи о других планах.
+
+
+@pytest.mark.asyncio
+async def test_the_idle_editor_delete_path_really_ships_the_recorded_oob_nodes(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Холостой путь удаления из редактора шлёт РОВНО записанные узлы без цели.
+
+    Правило краснеет в обе стороны: записанный узел перестал приезжать (запись
+    устарела) и приехал незаписанный (отступление завелось без решения).
+
+    ⚠️ ПЕРВЫЕ УТВЕРЖДЕНИЯ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ И О ДОКУМЕНТЕ. Ветка
+    перехода отвечает пустым телом, а разность пустого множества с любым пуста:
+    без этих проверок сверка ниже была бы зелена по построению.
+    """
+    from tests.test_pages.test_account_groups import (
+        OOB_TARGET_EXCEPTIONS,
+        SCHEDULE_DELETE_RESPONSE,
+        _document_ids,
+        _oob_targets,
+    )
+
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    gone = await _seed_schedule(db_session, ad.id, account.id)
+    survivor = await _seed_schedule(db_session, ad.id, account.id)
+    body = _editor_delete_body(ad)
+
+    first = await htmx_client.post(
+        f"/schedules/{gone.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    assert first.status_code == 200, f"первое удаление ответило {first.status_code}"
+
+    # Документ ПОСЛЕ первого удаления: карточки удалённой строки в нём уже нет,
+    # а карточка выжившей есть — значит, редактор печатает идентификаторы
+    # карточек и разность ниже меряет не пустоту.
+    page = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    on_screen = _document_ids(page)
+    assert f"sched-{survivor.id}" in on_screen, (
+        "редактор не напечатал карточку выжившего расписания — документ не тот"
+    )
+    assert f"sched-{gone.id}" not in on_screen
+
+    idle = await htmx_client.post(
+        f"/schedules/{gone.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    assert idle.status_code == 200, (
+        f"фрагментная ветка не достигнута: ответ {idle.status_code} вместо 200"
+    )
+    assert "<!DOCTYPE" not in idle.text, "в теле приехал целый документ"
+
+    targets, seen = _oob_targets(idle.text)
+    assert seen > 0, "холостой ответ не несёт ни одного внеполосного узла"
+    assert len(targets) == seen, "у части внеполосных узлов цель определить не удалось"
+
+    unresolved = targets - on_screen
+    recorded = {
+        key.format(schedule_id=gone.id)
+        for key, record in OOB_TARGET_EXCEPTIONS.items()
+        if record.where_printed == SCHEDULE_DELETE_RESPONSE
+    }
+
+    stale = recorded - unresolved
+    assert not stale, f"ЗАПИСАННЫЙ УЗЕЛ ПЕРЕСТАЛ ПРИЕЗЖАТЬ — ЗАПИСЬ УСТАРЕЛА: {sorted(stale)}"
+    unrecorded = unresolved - recorded
+    assert not unrecorded, (
+        f"ПРИЕХАЛ УЗЕЛ БЕЗ ЦЕЛИ, КОТОРОГО В ПЕРЕЧНЕ НЕТ: {sorted(unrecorded)}. Каждый "
+        f"такой узел есть строка `htmx:oobErrorNoTarget` в консоли на запрос."
+    )
