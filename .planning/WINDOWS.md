@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 76
+open_count: 75
 waived_count: 3
-fixed_count: 22
+fixed_count: 23
 total_count: 101
-last_updated: 2026-09-24T07:45:05.190Z
+last_updated: 2026-09-24T11:06:14.551Z
 ---
 
 # Broken Windows Ledger
@@ -115,7 +115,7 @@ last_updated: 2026-09-24T07:45:05.190Z
 | 98 | 12 | deviation | tests/test_pages/test_htmx_gates.py |  | Три правки сверх двух плановых в задаче 3: HX_HEADER_WRITES 4->5 и два контроля, сравнивавших боевое чтение перечня точечных заголовков с ПУСТЫМ словарём | fixed |  | 2026-09-19T10:21:29.006Z | 2026-09-19T10:21:51.385Z |
 | 99 | 12 | deviation | tests/test_pages/test_htmx_gates.py |  | План 12-10 не называет этот модуль в files_modified: вызов гарды источника завёл собственный выход Response(403) у уже переведённого обработчика, и гейт OWN_RESPONSE_EXITS потребовал записи с новым состоянием решения (D-15) — D-08 этой записи не называет | fixed |  | 2026-09-19T10:47:53.255Z | 2026-09-19T10:48:08.772Z |
 | 100 | 15 | todo | .planning/REQUIREMENTS.md | 73 | GATE-08 name chronicle (plan 15-06) awaits the FETCH-03 prohibition function name from plan 15-04's summary — not invented | fixed |  | 2026-09-24T06:15:54.449Z | 2026-09-24T07:45:05.190Z |
-| 101 | 15 | unrun-verify | .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-03-PLAN.md |  | План 15-03, задача 3: команда проверки uv run pytest tests/ -q -p no:randomly -m 'not planning' (продуктовая половина, ~36 мин) исполнителем НЕ прогонялась — по указанию оркестратора полный прогон выполняет он сам после волны. Вместо неё прогнаны: гейт пар 15/15, три правимых файла 253 (было 248), tests/test_templates/ 275, восемь гейтов, читающих tests/ (138), compileall — чисто. Закрывается зелёным полным прогоном оркестратора после волны | open |  | 2026-09-24T07:28:35.107Z |  |
+| 101 | 15 | unrun-verify | .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-03-PLAN.md |  | План 15-03, задача 3: команда проверки uv run pytest tests/ -q -p no:randomly -m 'not planning' (продуктовая половина, ~36 мин) исполнителем НЕ прогонялась — по указанию оркестратора полный прогон выполняет он сам после волны. Вместо неё прогнаны: гейт пар 15/15, три правимых файла 253 (было 248), tests/test_templates/ 275, восемь гейтов, читающих tests/ (138), compileall — чисто. Закрывается зелёным полным прогоном оркестратора после волны | fixed |  | 2026-09-24T07:28:35.107Z | 2026-09-24T11:06:14.551Z |
 
 ````json
 [
@@ -1343,10 +1343,10 @@ last_updated: 2026-09-24T07:45:05.190Z
     "file": ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-03-PLAN.md",
     "line": null,
     "description": "План 15-03, задача 3: команда проверки uv run pytest tests/ -q -p no:randomly -m 'not planning' (продуктовая половина, ~36 мин) исполнителем НЕ прогонялась — по указанию оркестратора полный прогон выполняет он сам после волны. Вместо неё прогнаны: гейт пар 15/15, три правимых файла 253 (было 248), tests/test_templates/ 275, восемь гейтов, читающих tests/ (138), compileall — чисто. Закрывается зелёным полным прогоном оркестратора после волны",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-09-24T07:28:35.107Z",
-    "resolved_at": null,
+    "resolved_at": "2026-09-24T11:06:14.551Z",
     "milestone": "v2.1"
   }
 ]
