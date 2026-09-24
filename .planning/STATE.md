@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 15
 current_phase_name: Упрочнение и сводный обход 47 форм
 status: executing
-stopped_at: Completed 15-03-PLAN.md
-last_updated: "2026-09-24T07:30:17.697Z"
+stopped_at: Completed 15-04-PLAN.md
+last_updated: "2026-09-24T07:47:13.818Z"
 last_activity: 2026-09-24
 last_activity_desc: Phase 15 execution started
-state_head: c577739967ac9baa0cb9dbfdbc2116f061171c20
+state_head: f27edbd77351ff808ecc7560f5378ddcddd7a3e1
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 156
-  completed_plans: 146
+  completed_plans: 147
   percent: 89
 ---
 
@@ -55,10 +55,11 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 15 (Упрочнение и сводный обход 47 форм) — EXECUTING
-Plan: 5 of 14
+Plan: 6 of 14
 Total Plans in Phase: 14
-Completed Plans in Phase: 4
+Completed Plans in Phase: 5
 Status: Executing Phase 15
+⚠️ После плана 15-04 (2026-09-24) `state.advance-plan` в пятый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 4»; фаза исполняется (исполнено 5 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md` и `15-04-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Прежние значения ошибкой не были — они устарели с исполнением плана 15-04; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-03 (2026-09-24) `state.advance-plan` в четвёртый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 3»; фаза исполняется (исполнено 4 плана из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md` и `15-03-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 5 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения названы здесь, а не вычеркнуты молча.
 ⚠️ После плана 15-02 (2026-09-24) `state.advance-plan` в третий раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 2»; фаза исполняется (исполнено 3 плана из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md` и `15-02-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 4 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения названы здесь, а не вычеркнуты молча.
 ⚠️ После плана 15-01 (2026-09-24) `state.advance-plan` снова записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 1»; фаза исполняется (исполнено 2 плана из 14 — сводки `15-06-SUMMARY.md` и `15-01-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 3 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения названы здесь, а не вычеркнуты молча.
@@ -266,6 +267,7 @@ Progress: [████████████████████] 116/116
 | Phase 15 P01 | 23 min | 3 tasks | 3 files |
 | Phase 15 P02 | 20 min | 3 tasks | 1 files |
 | Phase 15 P03 | 22 min | 3 tasks | 4 files |
+| Phase 15 P04 | 13 min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -584,6 +586,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 15]: 15-02: летопись 27 → 29 НЕ записана (под определением места письма файлов 27); оговорка: 27 = 27 — совпадение чисел, а не множеств (в сети «все места формы» 27 → 29 через 12-01, 13-01) — вопрос об отдельной записи по этой сети вынесен владельцу — План запрещает летопись расхождения, которого нет у объявленного числа; факт реплея записан рядом, а не спрятан
 - [Phase 15]: 15-03: предикат пары GATE-10 — совпадение ЗАПИСАННОГО ключа предмета (экран, действие) при разных механизмах; паритет счёта (2) и совпадение основы (5) отвергнуты замером; пар 0 → 5 — D-14 «не хватает 2» было вычитанием 5 − 3; ключи пяти alpine- и трёх htmx-тестов не пересекались. Контрпример основы уточнён замером: у editor_delete_form и editor_delete экран один, различается действие
 - [Phase 15]: 15-03: гейт пар test_degradation_pairs.py не несёт маркер planning — предмет суита о себе, не запись проекта; три границы разборщика закрыты правилами-запретами — Маркер planning объявлен для правил о .planning/; постановка на гейт суиты сделала бы отбор -m 'not planning' лгущим во вторую сторону
+- [Phase 15]: 15-04: FETCH-03 closed by a prohibition, not a second counter — test_fetch_prohibition_forbids_manual_request_assembly_in_templates asserts absence (assert not found) over the reused MANUAL_FETCH_CALL / _manual_fetch_places, next to G-22; Phase 8 ceiling untouched
+- [Phase 15]: 15-04: the name chronicle of test_no_manual_fetch_remains is measured by ast definitions, not text — text occurrences exist (census D-05 comment, the chronicle itself), definitions are zero
+- [Phase 15]: 15-04: plain event-handler attributes inventoried at 1 place (components/thumb.html#0 onerror) over comment-stripped source with an 8-name list declared by number; markup untouched (Phase 13-05 debt closed by inventory)
 
 ### Pending Todos
 
@@ -768,8 +773,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-24T07:30:17.051Z
-Stopped at: Completed 15-03-PLAN.md
+Last session: 2026-09-24T07:47:13.086Z
+Stopped at: Completed 15-04-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
