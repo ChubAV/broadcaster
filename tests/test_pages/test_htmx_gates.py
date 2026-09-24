@@ -6717,6 +6717,34 @@ DUAL_BRANCH_OWNER_DECISIONS: dict[str, str] = {
     key: DUAL_BRANCH_AWAITS_THE_OWNER for key in DUAL_BRANCH_HANDLERS
 }
 
+# ЛЕТОПИСЬ: ответ владельца, Фаза 15, план 15-11, задача 3. Привязка выше —
+# состояние ДО ответа, она не стёрта и не переписана: переопределение ниже
+# встаёт рядом, как и всякая летопись этого файла.
+# - кто решил: владелец (`chubav`);
+# - когда: 2026-09-24;
+# - канал: AskUserQuestion в `/gsd-execute-phase 15`;
+# - ветвь: ОДНА на все 19 дуальных обработчиков (все 20 спорных мест) —
+#   `case-three-server-header`;
+# - основание: выбран вариант, предъявленный как «Сервер решает — адрес
+#   меняется только когда сервер уводит человека на другой экран. Так это
+#   работает сегодня, и нового кода не нужно»; своих слов обоснования
+#   владелец не дал. Формулировка варианта — оркестратора, не владельца.
+# Шесть экранов кода авторизации (случай второй, у шага нет своего адреса)
+# владельцу НЕ выносились и этим ответом НЕ решены: они не дуальны и в этот
+# перечень не входят.
+DUAL_BRANCH_OWNER_DECIDED_BY = "владелец (`chubav`)"
+DUAL_BRANCH_OWNER_DECIDED_ON = "2026-09-24"
+DUAL_BRANCH_OWNER_CHANNEL = "AskUserQuestion в /gsd-execute-phase 15"
+DUAL_BRANCH_OWNER_DECISIONS = {key: "case-three-server-header" for key in DUAL_BRANCH_HANDLERS}
+
+# Ветвь владельца → случай реестра, который она означает. Правило ниже
+# сверяет их: ответ владельца, расходящийся со случаем в `PUSH_URL_DECISIONS`,
+# означал бы, что реестр записывает не то, что решено.
+DUAL_BRANCH_OWNER_OPTION_CASE: dict[str, str] = {
+    "case-three-server-header": PUSH_URL_CASE_THREE,
+    "case-two-no-attribute": PUSH_URL_CASE_TWO,
+}
+
 _DUAL = "ДУАЛЕН: "
 _ONLY_TRANSITION = "только переходом: "
 _NO_OWN_ADDRESS = (
@@ -7267,6 +7295,56 @@ def test_push_url_dual_branch_handlers_are_case_three():
         if value not in allowed
     }
     assert not unknown, f"решение по спорной форме вне вариантов чекпойнта: {unknown}"
+
+
+def test_push_url_owner_branch_agrees_with_the_registry_case():
+    """Ответ владельца по спорным формам и случай реестра говорят одно.
+
+    Владелец выбрал ветвь по каждой дуальной форме (задача 3 плана 15-11).
+    Ветвь означает случай конвенции (`DUAL_BRANCH_OWNER_OPTION_CASE`), и этот
+    случай обязан совпасть со случаем строки `PUSH_URL_DECISIONS`: иначе реестр
+    записывал бы не то, что решено. Ожидающая форма в сверку не входит — её
+    случай машинный и честно неподтверждён.
+
+    ЧЕГО ЭТО ПРАВИЛО НЕ УТВЕРЖДАЕТ: оно не утверждает, что ответ владельца
+    верен (это его суждение), и не касается шести экранов кода авторизации,
+    которые владельцу не выносились.
+    """
+    assert set(DUAL_BRANCH_OWNER_OPTION_CASE) == set(DUAL_BRANCH_OWNER_OPTIONS), (
+        "перевод ветвей владельца в случаи расходится с вариантами чекпойнта"
+    )
+    disagreeing = _owner_branch_disagreements(DUAL_BRANCH_OWNER_DECISIONS, PUSH_URL_DECISIONS)
+    assert not disagreeing, (
+        f"ветвь владельца расходится со случаем реестра (ветвь, случай): {disagreeing}"
+    )
+
+
+def _owner_branch_disagreements(
+    owner: dict[str, str], registry: dict[str, tuple[str, str]]
+) -> dict[str, tuple[str, str]]:
+    """Спорные формы, где ветвь владельца означает не тот случай, что в реестре."""
+    return {
+        key: (value, registry[key][0])
+        for key, value in owner.items()
+        if value != DUAL_BRANCH_AWAITS_THE_OWNER
+        and DUAL_BRANCH_OWNER_OPTION_CASE[value] != registry[key][0]
+    }
+
+
+def test_control_push_url_owner_branch_contradicting_the_registry_is_named():
+    """Контроль от вакуума: ответ владельца «второй» на строке третьего случая назван.
+
+    Без этого контроля сверка ответа с реестром могла бы молчать на пустоте —
+    например, если бы все формы снова стали ожидающими.
+    """
+    key = "app/pages/schedules.py::schedules_delete"
+    owner = dict(DUAL_BRANCH_OWNER_DECISIONS)
+    owner[key] = "case-two-no-attribute"
+    found = _owner_branch_disagreements(owner, PUSH_URL_DECISIONS)
+    assert found == {key: ("case-two-no-attribute", PUSH_URL_CASE_THREE)}, found
+
+    awaiting = {k: DUAL_BRANCH_AWAITS_THE_OWNER for k in DUAL_BRANCH_OWNER_DECISIONS}
+    assert _owner_branch_disagreements(awaiting, PUSH_URL_DECISIONS) == {}
 
 
 def test_push_url_decisions_agree_with_the_response_form():
