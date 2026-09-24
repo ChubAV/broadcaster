@@ -168,8 +168,53 @@ PLAN_FILES_FLOOR = 100
 # образце `10-PROHIBITIONS-SUBJECT.md:120-137`) вводит план 15-12 вместе со схемой диспозиций, и
 # тогда же поднимается число ниже. Объявить значение в перечне не значит записать его в строку:
 # ни одной строке этот план диспозиции, кроме засеянной, не пишет.
-DISPOSITIONS = frozenset({"enforced", "permitted", "unresolved"})
-DISPOSITIONS_DECLARED = 3
+#
+# ЛЕТОПИСЬ ЧИСЛА: 3 → 4, план 15-12, задача 1. План 15-01 объявил перечень
+# `frozenset({"enforced", "permitted", "unresolved"})` и `DISPOSITIONS_DECLARED = 3` — по схеме,
+# которую разведка (15-RESEARCH.md Ф-03) набросала сама и сама назвала наброском. ЧЕМ СНЯТО
+# ЧЕТВЁРТОЕ ЗНАЧЕНИЕ — ЗАМЕРОМ, а не вкусом: построчная таблица действующего образца
+# `10-PROHIBITIONS-SUBJECT.md:118-160` (39 запретов седьмой партии) применяет итог «принуждается
+# частично», и среди записей, у которых правило вообще есть, он единственный: свод образца по 25
+# записям с дескриптором `test` даёт «принуждается» 0, «принуждается частично» 8, «не
+# принуждается» 17. (Формулировка плана «частичность в таблице ДОМИНИРУЕТ» верна для записей с
+# правилом — 8 из 8, — а не для всех 25: там большинство у «не принуждается», которое здесь есть
+# `unresolved`. Замер записан рядом со словом плана, слово не правится.) Пример образца дословно:
+# у запрета плана 10-35 есть правило `test_the_failure_banner_registers_its_handlers_once_per_body`,
+# но «половина „файл не правится ни на строку“ не покрыта ничем» — правило есть и закрывает ЧАСТЬ
+# предмета. Трёхзначная схема заставила бы писать по такому запрету `enforced` (неправда: покрыта
+# часть), `permitted` (неправда: разрешения не было) либо `unresolved` (неправда: правило есть), —
+# и перепись 61 запрета D-05 стала бы ложным утверждением о дереве. ⚠️ ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН
+# УСТАРЕЛ: на момент своей записи он был верным, и правится не он, а числа, которые он пережил.
+# ⚠️ ЗНАЧЕНИЕ, ПРИШЕДШЕЕ В РЕЕСТР и не внесённое в перечень, краснит правило принадлежности ниже, а
+# значение, внесённое в перечень без подъёма числа, краснит правило объявленных чисел, — иначе
+# следующая эпоха диспозиций вышла бы из-под правила НЕЗАМЕТНО.
+#
+# ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ (оговорка образца дословно; образец держит её полем
+# `prohibitions_fully_enforced: 0` при 39 разрешённых запретах). Строка со значением `permitted` НЕ
+# утверждает, что запрет соблюдён, и ни одно правило этого модуля так её не читает.
+#
+# Что предъявлено при каждом значении:
+DISPOSITIONS = frozenset(
+    {
+        # принуждается полностью — предъявлено машинное правило, покрывающее ВЕСЬ предмет запрета;
+        "enforced",
+        # принуждается частично — правило есть, но покрывает часть предмета; НЕПОКРЫТАЯ часть
+        # названа полем строки реестра `UNCOVERED_PART_FIELD`, а не подразумевается;
+        "partially-enforced",
+        # разрешено — человеческое разрешение владельца с машинно читаемой областью (`permit_scope`
+        # именем класса). ⚠️ Поле разрешения заводит ОТВЕТ ВЛАДЕЛЬЦА; исполнитель его не пишет;
+        "permitted",
+        # неразобрано — решения не принималось: значение области D-02 (строки вне Фазы 10) и
+        # переходное состояние строк Фазы 10 до решений плана 15-13.
+        "unresolved",
+    }
+)
+DISPOSITIONS_DECLARED = 4
+PARTIALLY_ENFORCED = "partially-enforced"
+# Поле строки реестра, называющее НЕПОКРЫТУЮ часть предмета у диспозиции «принуждается частично».
+# ⚠️ В `REGISTRY_ROW_FIELDS` оно НЕ внесено: ни одна строка его сегодня не несёт, и внесёт его план
+# 15-13 вместе с первой такой диспозицией и летописью числа полей — по общему правилу перечня.
+UNCOVERED_PART_FIELD = "uncovered_part"
 
 # ПЕРЕЧЕНЬ ПОЛЕЙ СТРОКИ РЕЕСТРА. ⚠️ Полей `permit_*` и любого поля вердикта здесь НЕТ
 # НАМЕРЕННО: их заводит ответ владельца на чекпойнте плана 15-12, а записывает по классам план
@@ -266,6 +311,21 @@ def disposition_offences(rows) -> list[str]:
         for row in rows
         if row.get("disposition") not in DISPOSITIONS
     ]
+
+
+def partial_disposition_offences(rows) -> list[str]:
+    """Строки «принуждается частично», не назвавшие НЕПОКРЫТУЮ часть предмета строкой."""
+    offences = []
+    for row in rows:
+        if row.get("disposition") != PARTIALLY_ENFORCED:
+            continue
+        uncovered = row.get(UNCOVERED_PART_FIELD)
+        if not isinstance(uncovered, str) or not uncovered.strip():
+            offences.append(
+                f"{row.get('plan')}#{row.get('index')}: диспозиция `{PARTIALLY_ENFORCED}` без "
+                f"поля `{UNCOVERED_PART_FIELD}`"
+            )
+    return offences
 
 
 def _before_phase_15(sources):
@@ -507,6 +567,61 @@ def test_every_disposition_belongs_to_the_declared_vocabulary(registry_document)
         + "\n".join(offences)
         + f"\n\nраспределение диспозиций реестра: {disposition_distribution(rows)}"
     )
+
+
+def test_the_disposition_vocabulary_declares_four_values_with_the_partial_one():
+    """Четыре значения, и среди них «принуждается частично», снятое замером образца.
+
+    Засеянное значение строки реестра обязано принадлежать перечню: иначе засев сам писал бы
+    диспозицию вне словаря, и правило принадлежности краснело бы на каждой новой строке.
+    """
+    assert len(DISPOSITIONS) == DISPOSITIONS_DECLARED, sorted(DISPOSITIONS)
+    assert PARTIALLY_ENFORCED in DISPOSITIONS
+    assert tool.SEED_DISPOSITION in DISPOSITIONS
+
+
+def test_every_partially_enforced_disposition_names_its_uncovered_part(registry_document):
+    """«Частично» без названной непокрытой части есть «полностью» под другим именем."""
+    rows = registry_document["rows"]
+    offences = partial_disposition_offences(rows)
+    assert not offences, (
+        "частичные диспозиции без названной непокрытой части:\n"
+        + "\n".join(offences)
+        + f"\n\nраспределение диспозиций реестра: {disposition_distribution(rows)}"
+    )
+
+
+def test_control_a_disposition_outside_the_vocabulary_is_named():
+    """Синтетическая строка с пятым значением НАЗЫВАЕТСЯ правилом принадлежности."""
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "disposition": "unresolved"},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "disposition": "waived"},
+    ]
+    assert disposition_offences(rows) == [f"{SYNTHETIC_PLAN}#1: диспозиция `waived`"]
+
+
+def test_control_a_partial_disposition_without_the_uncovered_part_is_named():
+    """Три синтетические строки: без поля, с пустым полем и с названной частью — краснеют две."""
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "disposition": PARTIALLY_ENFORCED},
+        {
+            "plan": SYNTHETIC_PLAN,
+            "index": 1,
+            "disposition": PARTIALLY_ENFORCED,
+            UNCOVERED_PART_FIELD: "  ",
+        },
+        {
+            "plan": SYNTHETIC_PLAN,
+            "index": 2,
+            "disposition": PARTIALLY_ENFORCED,
+            UNCOVERED_PART_FIELD: "половина «файл не правится ни на строку»",
+        },
+    ]
+    offences = partial_disposition_offences(rows)
+    assert [offence.split(":")[0] for offence in offences] == [
+        f"{SYNTHETIC_PLAN}#0",
+        f"{SYNTHETIC_PLAN}#1",
+    ], offences
 
 
 def test_the_declared_vocabularies_and_numbers_agree():
