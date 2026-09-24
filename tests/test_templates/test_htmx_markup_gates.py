@@ -9855,7 +9855,7 @@ def test_modal_linkage_four_counts_converge_and_a_divergence_names_the_pair() ->
 
     diverged = _linkage_pair_offence({"I": {"x#0"}, "II": {"x#0"}, "III": set(), "IV": {"x#0"}})
     assert "счёты I и III разошлись" in diverged and "x#0" in diverged, diverged
-    assert "счёты I и II" not in diverged, "сошедшаяся пара названа разошедшейся"
+    assert "счёты I и II разошлись" not in diverged, "сошедшаяся пара названа разошедшейся"
 
 
 def test_modal_linkage_keeps_the_triggers_and_the_component_form_as_separate_places() -> None:
