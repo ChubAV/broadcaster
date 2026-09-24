@@ -664,6 +664,55 @@ async def test_the_only_payment_left_is_a_real_form_and_degrades_without_alpine(
 
 
 @pytest.mark.asyncio
+async def test_the_payment_form_keeps_its_route_and_degrades_without_htmx(
+    authed_client: AsyncClient,
+):
+    """Пара к тесту выше (GATE-10, план 15-03): оплата не зависит и от htmx.
+
+    Ключ предмета тот же — экран `/billing`, действие `POST /billing/subscribe`
+    (записан в `tests/test_templates/test_degradation_pairs.py`). Отключение htmx
+    оставляет ТОТ ЖЕ маршрут: `hx-post` посимвольно равен `action`, метод — POST,
+    а маршрут без признака htmx отвечает прежним 302 на страницу оплаты — полной
+    навигацией браузера, а не фрагментом и не заголовком перехода.
+
+    НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
+    утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
+    улика, а не наблюдение.
+    """
+    from tests.test_pages.test_htmx_post_pairs import (
+        YOOMONEY_CONFIRMATION_URL,
+        _yookassa_network,
+    )
+
+    body = _body((await authed_client.get("/billing")).text)
+
+    forms = _payment_forms(body)
+    assert len(forms) == 1, f"форм оплаты на экране не одна: {len(forms)}"
+
+    open_tag = forms[0][: forms[0].index(">") + 1]
+    action = re.search(r'\saction="([^"]*)"', open_tag)
+    hx_post = re.search(r'\shx-post="([^"]*)"', open_tag)
+    assert re.search(r'\smethod="post"', open_tag, re.I), open_tag
+    assert action and action.group(1), f"у формы оплаты нет адреса: {open_tag}"
+    assert hx_post, f"форма оплаты не несёт hx-post — пара потеряла предмет: {open_tag}"
+    assert hx_post.group(1) == action.group(1), (
+        f"hx-post {hx_post.group(1)!r} и action {action.group(1)!r} разошлись: "
+        "без htmx форма ушла бы на другой маршрут"
+    )
+
+    with _yookassa_network()():
+        response = await authed_client.post(action.group(1), follow_redirects=False)
+
+    assert response.status_code == 302, (
+        f"маршрут без признака htmx ответил {response.status_code} — путь без htmx "
+        "перестал быть навигацией браузера"
+    )
+    assert response.headers["location"] == YOOMONEY_CONFIRMATION_URL
+    assert "HX-Location" not in response.headers
+    assert "HX-Redirect" not in response.headers
+
+
+@pytest.mark.asyncio
 async def test_the_screen_keeps_the_price_but_no_payment_form_when_disabled(
     authed_client: AsyncClient, test_settings
 ):

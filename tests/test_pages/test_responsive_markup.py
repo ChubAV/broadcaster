@@ -1260,6 +1260,50 @@ async def test_accounts_delete_form_degrades_without_alpine(
 
 
 @pytest.mark.asyncio
+async def test_accounts_delete_confirm_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к тесту выше (GATE-10, план 15-03): удаление аккаунта не зависит и от htmx.
+
+    Ключ предмета тот же — экран `/accounts`, действие
+    `POST /accounts/{account_id}/delete` (записан в
+    `tests/test_templates/test_degradation_pairs.py`). Предмет смотрится с другой
+    стороны: не форма-триггер строки, а форма ПАНЕЛИ ПОДТВЕРЖДЕНИЯ — единственная,
+    что несёт `hx-post`. Её `hx-post` посимвольно равен `action`, метод — POST, и
+    маршрут без признака htmx отвечает перенаправлением на ПОЛНЫЙ документ.
+
+    НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
+    утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
+    улика, а не наблюдение.
+    """
+    account = await _seed_account(db_session, type_="max")
+    action = f"/accounts/{account.id}/delete"
+
+    html = (await authed_client.get("/accounts")).text
+
+    enhanced = [f for f in _delete_forms(html, account.id) if "hx-post=" in f]
+    assert enhanced, "у удаления аккаунта нет формы с hx-post — пара потеряла предмет"
+    for form in enhanced:
+        open_tag = form[: form.index(">") + 1]
+        assert re.search(r'\smethod="post"', open_tag, re.I), open_tag
+        assert re.search(r'\saction="([^"]*)"', open_tag).group(1) == action, open_tag
+        assert re.search(r'\shx-post="([^"]*)"', open_tag).group(1) == action, (
+            f"hx-post и action разошлись: без htmx форма ушла бы на другой маршрут: "
+            f"{open_tag}"
+        )
+
+    response = await authed_client.post(action, follow_redirects=False)
+    assert response.status_code in (302, 303), (
+        f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
+    )
+    assert "HX-Location" not in response.headers
+
+    page = await authed_client.get(response.headers["location"])
+    assert page.status_code == 200
+    assert "<!DOCTYPE" in page.text, "путь без htmx привёл не к полному документу"
+
+
+@pytest.mark.asyncio
 async def test_accounts_modal_unique_per_account(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
@@ -3445,6 +3489,48 @@ async def test_ads_delete_form_degrades_without_alpine(
 
 
 @pytest.mark.asyncio
+async def test_ads_delete_confirm_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к тесту выше (GATE-10, план 15-03): удаление объявления не зависит и от htmx.
+
+    Ключ предмета тот же — экран `/ads`, действие `POST /ads/{ad_id}/delete`
+    (записан в `tests/test_templates/test_degradation_pairs.py`). Форма ПАНЕЛИ
+    ПОДТВЕРЖДЕНИЯ, несущая `hx-post`, держит тот же маршрут в `action`, метод —
+    POST, и маршрут без признака htmx отвечает перенаправлением на ПОЛНЫЙ документ.
+
+    НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
+    утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
+    улика, а не наблюдение.
+    """
+    ad = await _seed_ad(db_session)
+    action = f"/ads/{ad.id}/delete"
+
+    html = (await authed_client.get("/ads")).text
+
+    enhanced = [f for f in _delete_forms_for(html, action) if "hx-post=" in f]
+    assert enhanced, "у удаления объявления нет формы с hx-post — пара потеряла предмет"
+    for form in enhanced:
+        open_tag = form[: form.index(">") + 1]
+        assert re.search(r'\smethod="post"', open_tag, re.I), open_tag
+        assert re.search(r'\saction="([^"]*)"', open_tag).group(1) == action, open_tag
+        assert re.search(r'\shx-post="([^"]*)"', open_tag).group(1) == action, (
+            f"hx-post и action разошлись: без htmx форма ушла бы на другой маршрут: "
+            f"{open_tag}"
+        )
+
+    response = await authed_client.post(action, follow_redirects=False)
+    assert response.status_code in (302, 303), (
+        f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
+    )
+    assert "HX-Location" not in response.headers
+
+    page = await authed_client.get(response.headers["location"])
+    assert page.status_code == 200
+    assert "<!DOCTYPE" in page.text, "путь без htmx привёл не к полному документу"
+
+
+@pytest.mark.asyncio
 async def test_admin_user_delete_form_degrades_without_alpine(
     authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
 ):
@@ -3468,6 +3554,49 @@ async def test_admin_user_delete_form_degrades_without_alpine(
         assert 'type="submit"' in form, (
             f"кнопка удаления перестала отправлять форму: {form[:200]}"
         )
+
+
+@pytest.mark.asyncio
+async def test_admin_user_delete_confirm_degrades_without_htmx(
+    authed_client: AsyncClient, admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к тесту выше (GATE-10, план 15-03): удаление пользователя не зависит и от htmx.
+
+    Ключ предмета тот же — экран `/admin/users/{user_id}`, действие
+    `POST /admin/users/{user_id}/delete` (записан в
+    `tests/test_templates/test_degradation_pairs.py`). Форма ПАНЕЛИ
+    ПОДТВЕРЖДЕНИЯ, несущая `hx-post`, держит тот же маршрут в `action`, метод —
+    POST, и маршрут без признака htmx отвечает перенаправлением на ПОЛНЫЙ документ.
+
+    НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
+    утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
+    улика, а не наблюдение.
+    """
+    user = await _user(db_session)
+    action = f"/admin/users/{user.id}/delete"
+
+    html = (await admin_client.get(f"/admin/users/{user.id}")).text
+
+    enhanced = [f for f in _delete_forms_for(html, action) if "hx-post=" in f]
+    assert enhanced, "у удаления пользователя нет формы с hx-post — пара потеряла предмет"
+    for form in enhanced:
+        open_tag = form[: form.index(">") + 1]
+        assert re.search(r'\smethod="post"', open_tag, re.I), open_tag
+        assert re.search(r'\saction="([^"]*)"', open_tag).group(1) == action, open_tag
+        assert re.search(r'\shx-post="([^"]*)"', open_tag).group(1) == action, (
+            f"hx-post и action разошлись: без htmx форма ушла бы на другой маршрут: "
+            f"{open_tag}"
+        )
+
+    response = await admin_client.post(action, follow_redirects=False)
+    assert response.status_code in (302, 303), (
+        f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
+    )
+    assert "HX-Location" not in response.headers
+
+    page = await admin_client.get(response.headers["location"])
+    assert page.status_code == 200
+    assert "<!DOCTYPE" in page.text, "путь без htmx привёл не к полному документу"
 
 
 # --- План 12, Задача 3, часть 2: подписи колонок в оставшихся четырёх шаблонах -

@@ -1922,6 +1922,55 @@ async def test_editor_delete_form_degrades_without_alpine(
 
 
 @pytest.mark.asyncio
+async def test_editor_ad_delete_confirm_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к тесту выше (GATE-10, план 15-03): удаление из редактора не зависит и от htmx.
+
+    Ключ предмета тот же — экран `/ads/{ad_id}/edit`, действие
+    `POST /ads/{ad_id}/delete` (записан в
+    `tests/test_templates/test_degradation_pairs.py`). ⚠️ Это НЕ пара к
+    `test_editor_delete_degrades_without_htmx` из `test_editor_schedules.py`:
+    там удаляется РАСПИСАНИЕ, здесь — объявление; совпадение основы имени парой
+    не является. Форма ПАНЕЛИ ПОДТВЕРЖДЕНИЯ, несущая `hx-post`, держит тот же
+    маршрут в `action`, метод — POST, и маршрут без признака htmx отвечает
+    перенаправлением на ПОЛНЫЙ документ.
+
+    НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
+    утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
+    улика, а не наблюдение.
+    """
+    ad = await _seed_ad(db_session, title="Удаляемое без htmx")
+    action = f"/ads/{ad.id}/delete"
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    forms = re.findall(
+        rf'<form[^>]*action="{re.escape(action)}"[^>]*>.*?</form>', html, re.S
+    )
+    enhanced = [f for f in forms if "hx-post=" in f]
+    assert enhanced, "у удаления объявления нет формы с hx-post — пара потеряла предмет"
+    for form in enhanced:
+        open_tag = form[: form.index(">") + 1]
+        assert re.search(r'\smethod="post"', open_tag, re.I), open_tag
+        assert re.search(r'\saction="([^"]*)"', open_tag).group(1) == action, open_tag
+        assert re.search(r'\shx-post="([^"]*)"', open_tag).group(1) == action, (
+            f"hx-post и action разошлись: без htmx форма ушла бы на другой маршрут: "
+            f"{open_tag}"
+        )
+
+    response = await authed_client.post(action, follow_redirects=False)
+    assert response.status_code in (302, 303), (
+        f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
+    )
+    assert "HX-Location" not in response.headers
+
+    page = await authed_client.get(response.headers["location"])
+    assert page.status_code == 200
+    assert "<!DOCTYPE" in page.text, "путь без htmx привёл не к полному документу"
+
+
+@pytest.mark.asyncio
 async def test_editor_markup_order_is_the_reading_order(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
