@@ -1415,6 +1415,157 @@ def test_fetch_prohibition_name_chronicle_is_measured_by_the_syntax_tree() -> No
     )
 
 
+# Порог непустоты вселенной запрета. Тот же, что у положительного контроля
+# групп выше: на дереве плана 15-04 шаблонов 113 (замер 2026-09-24), и обход,
+# нашедший пятьдесят или меньше, почти наверняка сломан, а не «почищен».
+FETCH_PROHIBITION_UNIVERSE_FLOOR = 50
+
+
+def _fetch_prohibition_universe_offence(templates_: dict[str, str]) -> str:
+    """Пустая строка, если вселенная запрета непуста; иначе — отказ словами.
+
+    Чистая функция от поданного отображения. Это ПЕРВАЯ половина доказательства
+    нуля: `not found` на пустом словаре формально истинно, и без этой половины
+    запрет был бы зелен на сломанном обходе посимвольно так же, как на
+    переведённом дереве.
+    """
+    if len(templates_) > FETCH_PROHIBITION_UNIVERSE_FLOOR:
+        return ""
+    return (
+        f"вселенная запрета — {len(templates_)} шаблонов при пороге "
+        f"> {FETCH_PROHIBITION_UNIVERSE_FLOOR}: ноль мест ручной сборки запроса на "
+        f"ней неотличим от слепоты обхода"
+    )
+
+
+def test_fetch_prohibition_forbids_manual_request_assembly_in_templates() -> None:
+    """ЗАПРЕТ FETCH-03: мест ручной сборки запроса в шаблонах НЕ ОСТАЁТСЯ НИ ОДНОГО.
+
+    Утверждение — ОТСУТСТВИЕ предмета, а не равенство объявленному числу:
+    объявленного числа у запрета нет, и поднять его нечем. Отказ называет КАЖДОЕ
+    найденное место по ключу `путь#индекс` вместе со строкой вокруг вызова.
+
+    Зелень запрета не приходит одна: в этом же правиле утверждается непустота
+    вселенной (первая половина доказательства нуля); вторая половина —
+    `test_control_negative_a_synthetic_manual_fetch_breaks_the_fetch_prohibition`.
+    """
+    sources = _template_sources()
+
+    assert _fetch_prohibition_universe_offence(sources) == "", (
+        _fetch_prohibition_universe_offence(sources)
+    )
+
+    found = _manual_fetch_places(sources)
+
+    assert not found, (
+        f"ЗАПРЕТ FETCH-03 НАРУШЕН: в шаблонах {len(found)} мест(а) ручной сборки "
+        f"запроса — {found}. Ноль мест есть КОНТРАКТ вехи, а не объявленное число: "
+        f"место надлежит перевести на фрагмент разметки, а не разрешить"
+    )
+
+
+def test_control_negative_a_synthetic_manual_fetch_breaks_the_fetch_prohibition() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на дереве, где запрету ЕСТЬ ЧТО НАЙТИ, он находит и НАЗЫВАЕТ.
+
+    Вторая половина доказательства нуля. Ключ синтетический — такого шаблона в
+    дереве нет, и это утверждается, — поэтому контроль не зависит от того, какой
+    настоящий шаблон завтра переименуют, и не трогает ни одного файла проекта.
+    """
+    key = "synthetic/fetch_prohibition_probe.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    changed = dict(sources)
+    changed[key] = "<script>fetch('/synthetic/a-call-the-prohibition-forbids');</script>\n"
+    assert changed != sources, "подмена ничего не изменила"
+
+    found = _manual_fetch_places(changed)
+
+    assert not (not found), (
+        "ЗАПРЕТ ОСТАЛСЯ ИСТИННЫМ НА ДЕРЕВЕ С РУЧНОЙ СБОРКОЙ ЗАПРОСА — ноль запрета "
+        "неотличим от слепоты измерителя"
+    )
+    assert set(found) - set(_manual_fetch_places(sources)) == {f"{key}#0"}, (
+        f"запрет нашёл не то место или не назвал его: найдено {sorted(found)}, "
+        f"ожидалось новое место {key}#0"
+    )
+    assert found[f"{key}#0"].startswith("fetch("), (
+        f"отказ не показывает строку вызова: {found[f'{key}#0']!r}"
+    )
+
+
+# Четыре формы, которые наивная подстрока вызова посчитала бы ручной сборкой
+# запроса, а ею они не являются: вызов-метод чужого объекта, чужая функция с
+# суффиксом имени, дефис внутри текста или атрибута и другое слово, кончающееся
+# тем же именем. Ключ — сама форма, чтобы отказ называл просочившуюся.
+FETCH_NET_LOOKALIKES: dict[str, str] = {
+    ".fetch(": "<script>client.fetch('/synthetic/a-method-of-another-object');</script>",
+    "_fetch(": "<script>cached_fetch('/synthetic/a-helper-with-a-suffix');</script>",
+    "-fetch(": '<p data-note="pre-fetch(later)">текст с дефисом</p>',
+    "prefetch(": "<script>prefetch('/synthetic/another-word-ending-the-same');</script>",
+}
+
+
+def test_control_precision_the_fetch_prohibition_net_ignores_four_lookalike_forms() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: сеть запрета ТОЧНА — четыре двойника дают ноль, голый вызов один.
+
+    Без этого контроля ноль запрета был бы доказан только с одной стороны: сеть,
+    ловящая больше, чем ручную сборку запроса, краснела бы на законных формах, и
+    её первым же делом «починили» бы сужением. Каждая форма подаётся отдельным
+    синтетическим шаблоном ТЕМ ЖЕ прогоном; то, что подстрока вызова в каждой
+    форме действительно есть, утверждается, иначе ноль был бы нулём по построению.
+    """
+    assert len(FETCH_NET_LOOKALIKES) == 4, (
+        f"форм-двойников {len(FETCH_NET_LOOKALIKES)}, объявлено 4 — перечень сужен"
+    )
+    for form, source in FETCH_NET_LOOKALIKES.items():
+        assert source.count(form) == 1, f"синтетика формы {form!r} не несёт саму форму"
+        leaked = _manual_fetch_places({f"synthetic/lookalike{form}.html": source})
+        assert leaked == {}, (
+            f"форма {form!r} ПРОСОЧИЛАСЬ в сеть запрета: {leaked} — сеть посчитала "
+            f"ручной сборкой запроса то, что ею не является"
+        )
+
+    bare = _manual_fetch_places(
+        {"synthetic/bare.html": "<script>fetch('/synthetic/a-bare-call');</script>"}
+    )
+    assert list(bare) == ["synthetic/bare.html#0"], (
+        f"голый вызов сеть не увидела или увидела не один раз: {bare}"
+    )
+
+
+def test_control_positive_the_untouched_tree_keeps_the_fetch_prohibition_silent() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на НЕИЗМЕНЁННОМ дереве запрет молчит — и молчит на НЕПУСТОЙ вселенной.
+
+    Без этого контроля отрицательный выше прошёл бы и у запрета, который
+    краснеет всегда.
+    """
+    sources = _template_sources()
+
+    assert len(sources) > FETCH_PROHIBITION_UNIVERSE_FLOOR, (
+        f"обход нашёл всего {len(sources)} шаблонов — запрет мог сойтись на пустоте"
+    )
+    assert _manual_fetch_places(sources) == {}, "запрет покраснел на неизменённом дереве"
+
+
+def test_control_positive_an_empty_tree_satisfies_the_fetch_prohibition_only_vacuously() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: пустота ЗАСЕКАЕТСЯ — зелень запрета не приходит одна.
+
+    На пустом словаре и на словаре из одного шаблона утверждение отсутствия
+    формально истинно. Это не дефект запрета, а свойство любого «нет ни одного»,
+    и ловится оно отдельным утверждением — непустотой вселенной, которое стои́т в
+    самом правиле-запрете и которое здесь доказанно краснеет.
+    """
+    for universe in ({}, {"includes/nothing_fetches_here.html": "<p>тихо</p>"}):
+        assert not _manual_fetch_places(universe), (
+            f"запрет покраснел на вселенной без единого вызова: {universe}"
+        )
+        assert _fetch_prohibition_universe_offence(universe) != "", (
+            f"ПУСТОТА ПРОШЛА МИМО ЗАПРЕТА: вселенная из {len(universe)} шаблонов "
+            f"не засечена — зелень запрета пришла одна"
+        )
+
+
 # =============================================================================
 # КОНТРОЛИ ОБЕИХ ГРУПП: доказательство того, что гейты КРАСНЕЮТ (`-k control`)
 #
