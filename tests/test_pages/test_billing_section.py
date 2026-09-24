@@ -699,9 +699,14 @@ async def test_the_payment_form_keeps_its_route_and_degrades_without_htmx(
         f"hx-post {hx_post.group(1)!r} и action {action.group(1)!r} разошлись: "
         "без htmx форма ушла бы на другой маршрут"
     )
+    # Адрес POST — литерал, а не `action.group(1)`: правило пар 302
+    # (`test_every_302_assertion_on_a_converted_handler_is_paired`) называет
+    # обработчик по адресу запроса и на собранном выражением адресе отказывает.
+    # Равенство разметки литералу утверждено здесь же, строкой ниже.
+    assert action.group(1) == "/billing/subscribe", action.group(1)
 
     with _yookassa_network()():
-        response = await authed_client.post(action.group(1), follow_redirects=False)
+        response = await authed_client.post("/billing/subscribe", follow_redirects=False)
 
     assert response.status_code == 302, (
         f"маршрут без признака htmx ответил {response.status_code} — путь без htmx "
