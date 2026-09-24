@@ -278,3 +278,8 @@ None - no external service configuration required.
 ---
 *Phase: 15-uprochnenie-i-svodnyy-obhod-47-form*
 *Completed: 2026-09-24*
+
+## Self-Check: PASSED
+
+- Файл `tests/test_templates/test_htmx_markup_gates.py` на месте; коммиты 5104c871, 87091108, c5bdba58, 5c3491ae, 16351ade, 8b8211fa, 8f2d768f найдены.
+- `tests/test_planning/` после коммита сводки — 78 passed.
