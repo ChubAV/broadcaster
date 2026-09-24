@@ -269,3 +269,10 @@ None - no external service configuration required.
 ---
 *Phase: 15-uprochnenie-i-svodnyy-obhod-47-form*
 *Completed: 2026-09-24*
+
+## Self-Check: PASSED
+
+- FOUND: `scripts/prohibitions_census.py`, `tests/test_planning/test_plan_prohibitions_census.py`, `15-prohibitions-registry.yaml`, `15-01-SUMMARY.md`
+- FOUND: `e0f9036e`, `66c42fef`, `a774f1d9`, `7c9fed2f`, `f39f2bd0`, `6cdf31e6` (сводка)
+- `tests/conftest.py` не входит ни в один коммит плана (0 вхождений)
+- Итоговое дерево: `tests/test_planning/` — 78 passed; `tests/test_planning/ tests/test_templates/` — 314 passed за 19.1 s; `--check` — 0; `compileall -q app main.py tests scripts` — молчание

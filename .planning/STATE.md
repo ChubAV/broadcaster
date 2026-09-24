@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 15
 current_phase_name: Упрочнение и сводный обход 47 форм
 status: executing
-stopped_at: Completed 15-06-PLAN.md
-last_updated: "2026-09-24T06:14:41.027Z"
+stopped_at: Completed 15-01-PLAN.md
+last_updated: "2026-09-24T06:42:51.678Z"
 last_activity: 2026-09-24
 last_activity_desc: Phase 15 execution started
-state_head: e099620a351955aa7b01acdfd8059127562e253c
+state_head: 6cdf31e691743354adfeb729ab134a16c0c0a398
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 156
-  completed_plans: 143
+  completed_plans: 144
   percent: 89
 ---
 
@@ -55,10 +55,11 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 15 (Упрочнение и сводный обход 47 форм) — EXECUTING
-Plan: 2 of 14
+Plan: 3 of 14
 Total Plans in Phase: 14
-Completed Plans in Phase: 1
+Completed Plans in Phase: 2
 Status: Executing Phase 15
+⚠️ После плана 15-01 (2026-09-24) `state.advance-plan` снова записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 1»; фаза исполняется (исполнено 2 плана из 14 — сводки `15-06-SUMMARY.md` и `15-01-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 3 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения названы здесь, а не вычеркнуты молча.
 ⚠️ После плана 15-06 (2026-09-24) `state.advance-plan` записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 0»; фаза исполняется (исполнен 1 план из 14 — сводка `15-06-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Прежние значения названы здесь, а не вычеркнуты молча.
 ⚠️ При старте исполнения Фазы 15 (2026-09-24) `state.begin-phase` оставил «Completed Plans in Phase: 7» — счёт Фазы 14 под именем Фазы 15; поставлено 0 рукой замером (сводок `15-*-SUMMARY.md` на диске нет).
 ⚠️ Прежняя формулировка «ждёт верификации» ошибкой не была — она устарела 2026-09-23, когда верификация прошла и вернула `human_needed`; по идиоме D-30/D-32 названа, а не вычеркнута.
@@ -260,6 +261,7 @@ Progress: [████████████████████] 116/116
 | Phase 14 P06 | 79 min | 3 tasks | 7 files |
 | Phase 14 P07 | 50 min | 2 tasks | 5 files |
 | Phase 15 P06 | 4 min | 3 tasks | 2 files |
+| Phase 15 P01 | 23 min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -569,6 +571,10 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 15]: 15-06: 14-UAT.md header returned to non-terminal `human_needed` (owner chubav 2026-09-23); marks left empty, `checks_declared: 9` and 9 tables kept — tests/test_planning/ 1 failed/43 passed -> 44 passed
 - [Phase 15]: 15-06: REQUIREMENTS.md stale claims chronicled by pure addition (group-list-sentinel closed by 09-13; GATE-08 name `test_no_manual_fetch_remains`); GATE-08 mark NOT removed, requirement text unmoved
 - [Phase 15]: 15-06: name of the FETCH-03 prohibition function left unwritten in the GATE-08 chronicle (REQUIREMENTS.md:73) until plan 15-04 summary exists — not invented
+- [Phase 15]: 15-01: перепись запретов вехи снята прибором 2026-09-24 — 697 элементов на 156 планах (с 47 элементами 14 планов Фазы 15); 650 (2026-09-23, 142 плана) не вычеркнуто, а утверждается правилом над подмножеством без каталога Фазы 15; область решений D-02 — Фаза 10, 321 — не меняется — Планы Фазы 15 сами несут блоки must_haves.prohibitions и входят в область прибора по построению; число двигается замером, литерал назван именем фазы (PROHIBITIONS_DECLARED_AT_PHASE_15)
+- [Phase 15]: 15-01: перечень диспозиций реестра запретов — {enforced, permitted, unresolved}, DISPOSITIONS_DECLARED = 3; все 697 строк несут засеянные class: unclassified / disposition: unresolved, полей permit_* нет; решений по запретам план 15-01 не принимал (D-03) — Четвёртое значение («принуждается частично») вводит план 15-12 вместе со схемой классов; решения по классам пишет план 15-13 по ответу владельца
+- [Phase 15]: 15-01: вселенная правил D-05 — имена функций ∪ имена модулей суиты (ast); из 61 запрета Фазы 10 с verification: test имя правила объявляют 2 (10-36#1 — функция, 10-44#3 — модуль), у 59 — признак <undeclared> — Одни функции объявили бы существующий модуль правил отсутствующим — правило краснело бы на работе, а не на дефекте
+- [Phase 15]: 15-01: разница сетей verification: test 76 − 61 = 15 разложена счётом как 10 truths + 0 assumptions + 1 проза шапки + 4 проза тела (10-47-PLAN.md), а не «соседние блоки» целиком; поправка — летописью рядом с прежней формулировкой — Слагаемые снимаются независимо от числа сети, остатка среди них нет — равенство суммы числу есть проверка, а не определение
 
 ### Pending Todos
 
@@ -753,8 +759,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-24T06:14:31.918Z
-Stopped at: Completed 15-06-PLAN.md
+Last session: 2026-09-24T06:42:51.077Z
+Stopped at: Completed 15-01-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
