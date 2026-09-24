@@ -113,7 +113,10 @@ Alpine-триггеры модалки, по D-07 считающиеся пер�
 означает, что хоть одно из 49 мест сработало на рантайме htmx 2.0.10: суита не
 исполняет ни строчки JS и ни одной страницы не рендерит браузером. Он НЕ
 означает, что связка 18 триггеров с формой модалки исправна — это отдельное
-утверждение плана 15-09. ГРАНИЦА РАЗБОРЩИКА: форма, чей ``method`` приходит
+утверждение плана 15-09 в ``tests/test_templates/test_htmx_markup_gates.py``
+(здесь утверждено лишь, что 18 триггеров СУЩЕСТВУЮТ, составляют свой класс
+поимённо и открывают панель; перезамер их координат 2026-09-24 — все 18
+совпали с D-08). ГРАНИЦА РАЗБОРЩИКА: форма, чей ``method`` приходит
 параметром макроса, сети по литеральному ``post`` НЕ ВИДНА НИ В КАКОМ СЛУЧАЕ,
 даже если вызывающий передаст ``method='post'``. Замер 2026-09-24,
 ``grep -rn 'filters(' app/templates/`` — 8 строк: определение макроса
@@ -123,7 +126,9 @@ Alpine-триггеры модалки, по D-07 считающиеся пер�
 ``admin/user_history.html:28``, ``admin/users.html:60``, ``admin/logs.html:60``,
 ``history/list.html:74``. Ни один из шести ``method`` не переопределяет: все
 получают GET по умолчанию макроса. Это замер, а не перенесённое допущение A2
-разведки.
+разведки. Граница не только названа, но и ЗАКРЫТА правилами (приём второго
+уровня, ниже в файле): форма с ``method`` из выражения в дереве ровно одна;
+вызывающий ``filters`` с ``method=`` краснеет; вложенных форм нет.
 
 Файл живёт в ``tests/test_templates/``: это гейт РАЗМЕТКИ, читающий исходники
 шаблонов. Обход и вырезание комментариев ИМПОРТИРОВАНЫ из
@@ -137,6 +142,7 @@ from enum import Enum
 from typing import NamedTuple
 
 from tests.test_templates.test_htmx_markup_gates import (
+    ACTION_VALUE,
     HTML_COMMENT,
     HX_POST_ATTR,
     HX_POST_TAG,
@@ -721,3 +727,468 @@ def test_control_negative_the_declaration_not_the_fact_reddens_in_both_direction
         f"падение названо утверждением роста, а не равенства: {down!r}"
     )
     assert up != down, "два направления расхождения неразличимы по тексту"
+
+
+# --- ПЕРЕЧЕНЬ 18 ALPINE-ТРИГГЕРОВ ПОИМЁННО ----------------------------------
+#
+# Класс «сырой POST без ``hx-post``» выписан ЛИТЕРАЛОМ: ключ места → основание
+# (какое действие письма форма запускает). Действие каждой формы идёт через
+# htmx формой панели подтверждения ``components/modal.html:805`` (D-07); сама
+# форма-триггер отправку перехватывает (``x-on:submit.prevent``) и открывает
+# панель событием ``modal-open-…``.
+#
+# ⚠️ ГРАНИЦА, ПЕРЕДАВАЕМАЯ ПЛАНУ 15-09, НАЗЫВАЕТСЯ ЗДЕСЬ ПРЯМО. Этот файл
+# утверждает, что 18 триггеров СУЩЕСТВУЮТ, составляют свой класс и открывают
+# панель. Он НЕ утверждает, что submit каждого из них действительно доезжает до
+# формы модалки с ``hx-post``: это связка двух узлов, её утверждает план 15-09 в
+# ``tests/test_templates/test_htmx_markup_gates.py`` независимыми счётами по
+# форме ``test_modal_site_inventory`` (``tests/test_templates/test_components.py``).
+#
+# ПЕРЕЗАМЕР КООРДИНАТ 2026-09-24. Строки открытия 18 тегов сняты обходом и
+# сверены с ``15-CONTEXT.md`` D-08: ВСЕ 18 СОВПАЛИ С D-08 (group_row 234;
+# accounts/list 105, 136, 169; partial_cards 60, 90, 119; sync_status_card 89,
+# 112, 128; queue_row 87; user_actions 98, 109; worker_row 108; ads/form 416;
+# ad_card 116; sched_card 309; history_card 162). Летописи сдвига нет — сдвига
+# нет. Координаты строк в гейт НЕ вписаны: ключ места — порядковый номер, и
+# правка текста выше формы гейт не роняет.
+#
+# Основание несёт статический скелет адреса действия (``{…}`` — выражение
+# шаблонизатора), и он СВЕРЯЕТСЯ с атрибутом ``action`` тега: основание, не
+# совпавшее с формой, краснеет, а не живёт отдельно от разметки.
+
+ALPINE_TRIGGER_PLACES: dict[str, str] = {
+    "account_groups/includes/group_row.html#1": (
+        "удаление группы из аккаунта — POST /accounts/{id}/groups/{gid}/delete"
+    ),
+    "accounts/list.html#0": (
+        "удаление аккаунта, карточка «синхронизация» — POST /accounts/{id}/delete"
+    ),
+    "accounts/list.html#2": (
+        "удаление аккаунта, карточка «синхронизация не удалась» — POST /accounts/{id}/delete"
+    ),
+    "accounts/list.html#3": (
+        "удаление аккаунта, карточка прочих состояний — POST /accounts/{id}/delete"
+    ),
+    "accounts/partial_cards.html#0": (
+        "удаление аккаунта из порции подгрузки, «синхронизация» — POST /accounts/{id}/delete"
+    ),
+    "accounts/partial_cards.html#2": (
+        "удаление аккаунта из порции подгрузки, «синхронизация не удалась» — "
+        "POST /accounts/{id}/delete"
+    ),
+    "accounts/partial_cards.html#3": (
+        "удаление аккаунта из порции подгрузки, прочие состояния — POST /accounts/{id}/delete"
+    ),
+    "accounts/partials/sync_status_card.html#0": (
+        "удаление аккаунта из опрашиваемой карточки, «активен» — POST /accounts/{id}/delete"
+    ),
+    "accounts/partials/sync_status_card.html#2": (
+        "удаление аккаунта из опрашиваемой карточки, «синхронизация не удалась» — "
+        "POST /accounts/{id}/delete"
+    ),
+    "accounts/partials/sync_status_card.html#3": (
+        "удаление аккаунта из опрашиваемой карточки, «синхронизация» — POST /accounts/{id}/delete"
+    ),
+    "admin/includes/queue_row.html#0": (
+        "сброс очереди отправки аккаунта — POST /admin/queue/{id}/drop"
+    ),
+    "admin/includes/user_actions.html#2": (
+        "вход под личностью пользователя — POST /admin/users/{id}/impersonate"
+    ),
+    "admin/includes/user_actions.html#3": (
+        "удаление пользователя — POST /admin/users/{id}/delete"
+    ),
+    "admin/includes/worker_row.html#0": (
+        "перезапуск воркера аккаунта — POST /admin/workers/{id}/restart"
+    ),
+    "ads/form.html#2": "удаление объявления из редактора — POST /ads/{id}/delete",
+    "ads/includes/ad_card.html#0": (
+        "удаление объявления из карточки списка — POST /ads/{id}/delete"
+    ),
+    "ads/includes/sched_card.html#2": (
+        "удаление расписания из карточки редактора — POST /schedules/{id}/delete"
+    ),
+    "history/includes/history_card.html#0": (
+        "повтор неудавшейся отправки из истории — POST /history/{id}/retry"
+    ),
+}
+
+# ⚠️ ЧИСЛО ВЫПИСАНО ОТДЕЛЬНОЙ КОНСТАНТОЙ НАМЕРЕННО (идиома SP-1): перечень,
+# опустевший молча, оставил бы правило зелёным ровно тогда, когда триггеров не
+# стало, — и неотличимым от перечня, чьи записи тихо отменили.
+#
+# ЛЕТОПИСЬ: 18, Фаза 15, план 15-02 — снято ОБХОДОМ (класс «сырой POST без
+# ``hx-post``»), совпало с D-08 поимённо.
+ALPINE_TRIGGER_PLACES_DECLARED = 18
+
+MODAL_OPEN_DISPATCH = re.compile(r"x-on:submit(?:\.[\w.]+)?\s*=\s*\"[^\"]*\$dispatch\('modal-open-")
+JINJA_EXPRESSION = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+BASIS_PLACEHOLDER = re.compile(r"\{[^{}]*\}")
+BASIS_PATH = re.compile(r"POST (\S+)")
+
+
+def _action_skeleton(action: str) -> str:
+    """Адрес действия без выражений шаблонизатора: ``/ads/{{ ad.id }}/delete`` → ``/ads//delete``."""
+    return JINJA_EXPRESSION.sub("", action)
+
+
+def test_alpine_trigger_list_is_declared_and_never_empty() -> None:
+    """Первое и второе утверждения SP-1: число — объявленное, и оно не ноль."""
+    assert len(ALPINE_TRIGGER_PLACES) == ALPINE_TRIGGER_PLACES_DECLARED, (
+        f"записей в перечне {len(ALPINE_TRIGGER_PLACES)}, объявлено "
+        f"{ALPINE_TRIGGER_PLACES_DECLARED}: триггер заведён или снят — обнови число "
+        f"вместе с решением о нём и допиши строку летописи"
+    )
+    assert ALPINE_TRIGGER_PLACES_DECLARED > 0, (
+        "перечень Alpine-триггеров объявлен ПУСТЫМ — правило о классе стало бы "
+        "зелёным ровно тогда, когда триггеров не стало"
+    )
+    assert ALPINE_TRIGGER_PLACES_DECLARED == RAW_POST_WITHOUT_HX_POST
+
+
+def test_alpine_trigger_places_equal_the_declared_list() -> None:
+    """Места класса «сырой POST без ``hx-post``» — ровно перечень, поимённо."""
+    found = {
+        p.key
+        for p in _form_places(_template_sources())
+        if p.kind is PlaceKind.RAW_POST_WITHOUT_HX_POST
+    }
+
+    assert found == set(ALPINE_TRIGGER_PLACES), (
+        f"класс разошёлся с перечнем: лишние {sorted(found - set(ALPINE_TRIGGER_PLACES))}, "
+        f"пропавшие {sorted(set(ALPINE_TRIGGER_PLACES) - found)}"
+    )
+
+
+def test_every_alpine_trigger_opens_the_confirmation_panel_and_matches_its_basis() -> None:
+    """Каждый триггер перехватывает submit событием ``modal-open-…``, и основание сверено с ``action``."""
+    places = {p.key: p for p in _form_places(_template_sources())}
+    offenders: list[str] = []
+    for key, basis in ALPINE_TRIGGER_PLACES.items():
+        place = places.get(key)
+        if place is None:
+            offenders.append(f"{key}: места нет")
+            continue
+        if not MODAL_OPEN_DISPATCH.search(place.text):
+            offenders.append(f"{key}: submit не открывает панель подтверждения")
+        action = _attr_value(place.text, ACTION_VALUE) or ""
+        basis_path = BASIS_PATH.search(basis)
+        if basis_path is None:
+            offenders.append(f"{key}: основание не называет действие письма")
+        elif BASIS_PLACEHOLDER.sub("", basis_path.group(1)) != _action_skeleton(action):
+            offenders.append(f"{key}: основание {basis_path.group(1)!r} не совпало с action {action!r}")
+
+    assert offenders == [], f"триггеры, расходящиеся с перечнем: {offenders}"
+
+
+# --- ПРИЁМ ВТОРОГО УРОВНЯ: НЕВИДИМОЕ РАЗБОРЩИКУ ЗАПРЕЩЕНО --------------------
+#
+# Образец — tests/test_pages/test_impersonation_gate.py («гейт, который чего-то
+# не видит, обязан требовать, чтобы этого и не было»). Это же — ответ на первую
+# ветвь критерия 5 ROADMAP Фазы 15: «либо такая форма запрещена гейтом, либо
+# проверена глазами». Границы названы, и каждая закрыта отдельным правилом:
+#
+# 1. Форма, чей ``method`` приходит из выражения шаблонизатора, сети по
+#    литеральному ``post`` невидима. Правило: таких мест в дереве РОВНО ОДНО —
+#    ``components/filters.html#0``, объявленное изъятием поимённо; второе такое
+#    место краснеет. И отдельно: ни один вызывающий ``filters(`` метод не
+#    переопределяет — иначе единственное изъятие стало бы формой письма, которой
+#    прибор не видит.
+# 2. Форма, вложенная в другую форму, разбору границ тега невидима: браузер
+#    вложенную форму молча отбрасывает, а прибор посчитал бы её местом. Правило:
+#    вложенных форм в дереве НЕТ. Вложенность ищется с учётом того, что форму
+#    рождают не только сырые теги: вызов блоком макроса, кладущего ``caller()``
+#    внутрь своей формы (``form_wrapper``, ``modal``, ``filters`` — множество
+#    СНИМАЕТСЯ с дерева), вызов макроса, рендерящего форму (транзитивно), и
+#    ``{% include %}`` файла, рендерящего форму (транзитивно). Единственное
+#    вхождение вложенности по сырому тексту — ``ads/form.html:275``, внутри
+#    Jinja-комментария; наивный проход по тексту без вырезания комментариев
+#    видит его как незакрытую форму и объявляет вложенной сырую форму на 416.
+#    ГРАНИЦА ЭТОГО ПРАВИЛА: включение по ПЕРЕМЕННОЙ (``{% include screen_template %}``)
+#    не разрешается в файл — поэтому оно ЗАПРЕЩЕНО внутри формы тем же правилом;
+#    макросы опознаются по имени, псевдонимов импорта (``import … as``) в
+#    дереве ноль (замер 2026-09-24).
+
+MACRO_BLOCK = re.compile(r"\{%-?\s*macro\s+(\w+)\s*\(.*?\{%-?\s*endmacro\s*-?%\}", re.DOTALL)
+MACRO_OPEN = re.compile(r"\{%-?\s*macro\s+\w+\s*\(")
+MACRO_CLOSE = re.compile(r"\{%-?\s*endmacro\s*-?%\}")
+CALL_OPEN = re.compile(r"\{%-?\s*call(?:\s*\([^()]*\))?\s+(\w+)\s*\(")
+CALL_CLOSE = re.compile(r"\{%-?\s*endcall\s*-?%\}")
+FORM_CLOSE = re.compile(r"</form\s*>", re.IGNORECASE)
+INCLUDE = re.compile(r"\{%-?\s*include\s+(.+?)\s*-?%\}", re.DOTALL)
+LITERAL_TARGET = re.compile(r"^(?:\"([^\"]+)\"|'([^']+)')")
+NAME_CALL = re.compile(r"(?<![\w.])(\w+)\s*\(")
+CALLER_CALL = re.compile(r"(?<![\w.])caller\s*\(")
+FILTERS_CALL = re.compile(r"\{%-?\s*call(?:\s*\([^()]*\))?\s+filters\s*\((.*?)%\}", re.DOTALL)
+METHOD_ARGUMENT = re.compile(r"(?<![\w.])method\s*=")
+
+NESTING_KNOWN_RAW_TEXT_FILES = frozenset({"ads/form.html"})
+
+
+def _include_target(argument: str) -> str | None:
+    """Литеральная цель включения; ``None`` — цель из выражения, файлом не разрешима."""
+    match = LITERAL_TARGET.match(argument.strip())
+    if match is None:
+        return None
+    return match.group(1) or match.group(2)
+
+
+def _form_rendering(bodies: dict[str, str]) -> tuple[set[str], set[str], set[str]]:
+    """Три множества, снятые с дерева: (caller-в-форме, макросы с формой, файлы с формой).
+
+    Макрос «кладёт ``caller()`` в форму», если в его теле ``caller(`` стоит после
+    открытия тега формы и до её закрытия. Макрос и файл «рендерят форму», если
+    несут сырой тег формы, зовут рендерящий макрос или включают рендерящий
+    файл, — до неподвижной точки.
+    """
+    macros: dict[str, list[str]] = {}
+    for body in bodies.values():
+        for match in MACRO_BLOCK.finditer(body):
+            macros.setdefault(match.group(1), []).append(match.group(0))
+
+    caller_in_form: set[str] = set()
+    for name, blocks in macros.items():
+        for block in blocks:
+            for form in FORM_TAG.finditer(block):
+                close = FORM_CLOSE.search(block, form.end())
+                caller = CALLER_CALL.search(block, form.end())
+                if caller and (close is None or caller.start() < close.start()):
+                    caller_in_form.add(name)
+
+    def renders(text: str, macro_names: set[str], files: set[str]) -> bool:
+        if FORM_TAG.search(text):
+            return True
+        if any(name in macro_names for name in NAME_CALL.findall(text)):
+            return True
+        return any(_include_target(arg) in files for arg in INCLUDE.findall(text))
+
+    rendering_macros: set[str] = set()
+    rendering_files: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, blocks in macros.items():
+            if name not in rendering_macros and any(
+                renders(block[block.index("%}") + 2 :], rendering_macros, rendering_files)
+                for block in blocks
+            ):
+                rendering_macros.add(name)
+                changed = True
+        for rel, body in bodies.items():
+            if rel not in rendering_files and renders(body, rendering_macros, rendering_files):
+                rendering_files.add(rel)
+                changed = True
+    return caller_in_form, rendering_macros, rendering_files
+
+
+def _nested_form_offences(sources: dict[str, str]) -> dict[str, str]:
+    """Места, где форма рождается ВНУТРИ другой формы: ``путь#номер`` → что именно.
+
+    Исходник читается без комментариев. Глубина формы растёт на сыром теге и на
+    вызове блоком макроса, кладущего ``caller()`` в форму; падает на
+    ``</form>`` и на закрытии такого вызова. Тело определения макроса
+    читается с нулевой глубиной — его контекст задаёт вызывающий, а не место
+    определения.
+    """
+    bodies = {rel: _strip_comments(source) for rel, source in sources.items()}
+    caller_in_form, rendering_macros, rendering_files = _form_rendering(bodies)
+    offences: dict[str, str] = {}
+    for rel, body in bodies.items():
+        events: list[tuple[int, str, str]] = []
+        events += [(m.start(), "open", m.group(0)) for m in FORM_TAG.finditer(body)]
+        events += [(m.start(), "close", "") for m in FORM_CLOSE.finditer(body)]
+        events += [(m.start(), "call", m.group(1)) for m in CALL_OPEN.finditer(body)]
+        events += [(m.start(), "endcall", "") for m in CALL_CLOSE.finditer(body)]
+        events += [(m.start(), "macro", "") for m in MACRO_OPEN.finditer(body)]
+        events += [(m.start(), "endmacro", "") for m in MACRO_CLOSE.finditer(body)]
+        heads = [m.span() for m in CALL_OPEN.finditer(body)] + [
+            m.span() for m in MACRO_OPEN.finditer(body)
+        ]
+        for match in NAME_CALL.finditer(body):
+            if match.group(1) in rendering_macros and not any(
+                start <= match.start() < end for start, end in heads
+            ):
+                events.append((match.start(), "render", match.group(1)))
+        for match in INCLUDE.finditer(body):
+            target = _include_target(match.group(1))
+            if target is None:
+                events.append((match.start(), "unresolved-include", match.group(1).strip()))
+            elif target in rendering_files:
+                events.append((match.start(), "include", target))
+        events.sort(key=lambda event: event[0])
+
+        depth = 0
+        stack: list[bool] = []
+        saved: list[tuple[int, list[bool]]] = []
+        ordinal = 0
+
+        def offend(what: str) -> None:
+            nonlocal ordinal
+            offences[f"{rel}#{ordinal}"] = what
+            ordinal += 1
+
+        for _, kind, what in events:
+            if kind == "open":
+                if depth:
+                    offend(f"сырая форма внутри формы: {what[:80]}")
+                depth += 1
+            elif kind == "close":
+                depth = max(0, depth - 1)
+            elif kind == "call":
+                opens_form = what in caller_in_form
+                if depth and (opens_form or what in rendering_macros):
+                    offend(f"вызов {what} рендерит форму внутри формы")
+                depth += 1 if opens_form else 0
+                stack.append(opens_form)
+            elif kind == "endcall":
+                if stack and stack.pop():
+                    depth = max(0, depth - 1)
+            elif kind == "macro":
+                saved.append((depth, stack))
+                depth, stack = 0, []
+            elif kind == "endmacro":
+                if saved:
+                    depth, stack = saved.pop()
+            elif kind == "render" and depth:
+                offend(f"вызов {what} рендерит форму внутри формы")
+            elif kind == "include" and depth:
+                offend(f"включение {what} рендерит форму внутри формы")
+            elif kind == "unresolved-include" and depth:
+                offend(f"включение по выражению {what!r} внутри формы — файл не разрешим")
+    return offences
+
+
+def _naive_raw_text_nesting(sources: dict[str, str]) -> set[str]:
+    """Файлы, где проход по СЫРОМУ тексту (без вырезания комментариев) видит вложенность."""
+    found: set[str] = set()
+    for rel, source in sources.items():
+        events = sorted(
+            [(m.start(), 1) for m in FORM_TAG.finditer(source)]
+            + [(m.start(), -1) for m in FORM_CLOSE.finditer(source)]
+        )
+        depth = 0
+        for _, step in events:
+            if step == 1 and depth:
+                found.add(rel)
+            depth = max(0, depth + step)
+    return found
+
+
+def _filters_method_overrides(sources: dict[str, str]) -> tuple[int, list[str]]:
+    """(число вызывающих ``filters`` блоком, вызывающие, передавшие ``method=``)."""
+    calls = 0
+    overriding: list[str] = []
+    for rel, source in sources.items():
+        for match in FILTERS_CALL.finditer(_strip_comments(source)):
+            calls += 1
+            if METHOD_ARGUMENT.search(match.group(1)):
+                overriding.append(f"{rel}: {match.group(0)[:100]!r}")
+    return calls, overriding
+
+
+def test_invisible_variable_method_forms_are_exactly_the_declared_one() -> None:
+    """Форм с ``method`` из выражения ровно одна — ``components/filters.html``."""
+    found = {
+        p.key for p in _form_places(_template_sources()) if p.kind is PlaceKind.VARIABLE_METHOD
+    }
+
+    assert found == {"components/filters.html#0"}, (
+        "форма с method из выражения шаблонизатора невидима сети по литеральному "
+        f"post, и допускается ровно одна, объявленная изъятием: найдено {sorted(found)}"
+    )
+    assert "components/filters.html#0" in WRITE_FORM_EXCLUSIONS
+
+
+def test_boundary_no_filters_caller_overrides_the_method() -> None:
+    """Ни один вызывающий ``filters`` не передаёт ``method=`` — изъятие остаётся GET."""
+    calls, overriding = _filters_method_overrides(_template_sources())
+
+    assert calls > 0, "вызывающих filters не найдено — правило молчало бы на пустоте"
+    assert overriding == [], (
+        "вызывающий filters переопределил method — форма письма, которой прибор "
+        f"не видит: {overriding}"
+    )
+
+
+def test_invisible_nested_forms_do_not_exist() -> None:
+    """Вложенных форм в дереве нет; наивный проход по сырому тексту ошибся бы в одном файле."""
+    sources = _template_sources()
+
+    assert _nested_form_offences(sources) == {}, (
+        f"форма рождается внутри формы: {_nested_form_offences(sources)}"
+    )
+    assert _naive_raw_text_nesting(sources) == NESTING_KNOWN_RAW_TEXT_FILES, (
+        "проход по сырому тексту видит вложенность не там, где её объясняет "
+        f"комментарий ads/form.html:275: {sorted(_naive_raw_text_nesting(sources))}"
+    )
+    caller_in_form, rendering_macros, _ = _form_rendering(
+        {rel: _strip_comments(source) for rel, source in sources.items()}
+    )
+    assert caller_in_form == {"form_wrapper", "modal", "filters"}, (
+        f"макросы, кладущие caller() в форму, сменились: {sorted(caller_in_form)}"
+    )
+    assert caller_in_form <= rendering_macros
+
+
+def test_control_negative_a_second_invisible_variable_method_form_reddens_the_rule() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: вторая форма с ``method`` из выражения правилом ВИДНА."""
+    key = "synthetic/variable_method_form.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    changed = dict(sources)
+    changed[key] = '<form method="{{ verb }}" action="/synthetic"></form>\n'
+    assert changed != sources, "подмена ничего не изменила"
+
+    found = {p.key for p in _form_places(changed) if p.kind is PlaceKind.VARIABLE_METHOD}
+    assert found == {"components/filters.html#0", f"{key}#0"}, (
+        f"вторая невидимая форма прошла мимо правила: {sorted(found)}"
+    )
+
+
+def test_control_negative_a_filters_caller_overriding_the_method_reddens_the_boundary_rule() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: вызывающий ``filters(…, method='post')`` правилом границы ВИДЕН."""
+    key = "synthetic/filters_post.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    changed = dict(sources)
+    changed[key] = "{% call filters('synthetic', action='/synthetic', method='post') %}{% endcall %}\n"
+    assert changed != sources, "подмена ничего не изменила"
+
+    _, overriding = _filters_method_overrides(changed)
+    assert len(overriding) == 1 and overriding[0].startswith(key), (
+        f"переопределённый метод фильтров прошёл мимо правила: {overriding}"
+    )
+
+
+def test_control_negative_an_invisible_nested_form_reddens_the_nesting_rule() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: вложенность рождением формы тремя путями правилом ВИДНА."""
+    sources = _template_sources()
+    cases = {
+        "synthetic/nested_by_call.html": (
+            '<form method="post" action="/a">'
+            "{% call form_wrapper(action='/b') %}{% endcall %}</form>\n"
+        ),
+        "synthetic/nested_by_include.html": (
+            '<form method="post" action="/a">'
+            '{% include "ads/includes/ad_card.html" %}</form>\n'
+        ),
+        "synthetic/nested_by_expression_include.html": (
+            '<form method="post" action="/a">{% include screen_template %}</form>\n'
+        ),
+        "synthetic/nested_in_a_panel.html": (
+            "{% call modal('x', 'Заголовок', action='/c') %}"
+            '<form method="post" action="/d"></form>{% endcall %}\n'
+        ),
+    }
+    for key, text in cases.items():
+        assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+        changed = dict(sources)
+        changed[key] = text
+        assert changed != sources, "подмена ничего не изменила"
+
+        offences = _nested_form_offences(changed)
+        assert list(offences) == [f"{key}#0"], (
+            f"вложенная форма {key} прошла мимо правила: {offences}"
+        )
