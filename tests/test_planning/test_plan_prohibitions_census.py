@@ -788,3 +788,149 @@ def test_control_negative_a_declared_rule_absent_from_the_suite_is_named(suite_s
 def test_control_positive_the_suite_function_universe_is_not_empty(suite_sources):
     """На неизменённом дереве вселенная имён функций суиты непуста — больше 1000 имён."""
     assert len(_suite_function_names(suite_sources)) > SUITE_FUNCTION_NAMES_FLOOR
+
+
+# --- группа согласия с четырьмя историческими сетями ---------------------------------------
+#
+# Критерий 6 ROADMAP называет предметом расхождения четыре числа, снятые четырьмя сетями на 57
+# планах Фазы 10 (15-RESEARCH.md Ф-03, воспроизведены разведкой). Замер прибором 2026-09-24
+# воспроизвёл все четыре. Прибор, не умеющий их воспроизвести, не доказал бы, что заменяет их,
+# а не просто даёт пятое число.
+HISTORIC_NET_STATEMENT_LINES = 374
+HISTORIC_NET_VERIFICATION_TEST_LINES = 76
+HISTORIC_NET_PROHIBITIONS_KEYS = 57
+HISTORIC_NET_PROSE_MARKERS = 38
+
+# Сети сняты с ЭТОГО набора файлов; иначе их воспроизведение ничего не доказывает.
+PHASE_10_PLAN_FILES = 57
+
+# ПОПРАВКА РАЗЛОЖЕНИЯ «76 − 61 = 15 — соседние блоки» → 15 = 10 + 0 + 1 + 4 (план 15-01,
+# задача 3, замер прибором 2026-09-24). 15-RESEARCH.md Ф-03 и задача 3 плана 15-01 записали
+# разницу сети `verification: test` (76) с переписью (61) как «те же соседние блоки
+# `truths`/`assumptions`». Счёт по слагаемым дал: 10 — ключи `verification: test` у элементов
+# `truths`, 0 — у элементов `assumptions`, 1 — упоминание фразы в прозе шапки (строковый
+# элемент блока `must_haves.key_links`, `10-47-PLAN.md:52`), 4 — упоминания фразы в теле
+# `10-47-PLAN.md`. Сумма 15 верна,
+# разбивка — нет: соседние блоки дают 10, а 5 — проза, а не блок вовсе. Принята величина,
+# полученная счётом, а не перенесённая из ожидания; прежняя формулировка не вычёркивается —
+# она названа здесь ПЕРВОЙ записью летописи, и её доминирующее слагаемое (соседние блоки) верно.
+HISTORIC_VERIFICATION_TEST_IN_TRUTHS = 10
+HISTORIC_VERIFICATION_TEST_IN_ASSUMPTIONS = 0
+HISTORIC_VERIFICATION_TEST_IN_FRONTMATTER_PROSE = 1
+HISTORIC_VERIFICATION_TEST_IN_BODY_PROSE = 4
+HISTORIC_VERIFICATION_TEST_SURPLUS = 15
+
+
+def _historic_nets_by_pattern(sources) -> dict:
+    return {net.pattern: net for net in tool.historic_nets(tool.historic_sources(sources))}
+
+
+def test_historic_nets_are_measured_on_the_declared_phase_10_plan_files(live_sources):
+    """Четыре сети сняты с 57 файлов `10-*-PLAN.md` — тот же набор, что у исторического замера."""
+    assert len(tool.historic_sources(live_sources)) == PHASE_10_PLAN_FILES
+
+
+def test_historic_nets_are_reproduced_by_the_instrument(live_sources):
+    """Прибор воспроизводит ВСЕ ЧЕТЫРЕ исторические сети: 374 / 76 / 57 / 38.
+
+    ⚠️ ЭТО ДОКАЗЫВАЕТ СОГЛАСИЕ ПРИБОРА С ИХ МНОЖЕСТВАМИ, А НЕ ИХ ВЕРНОСТЬ. Каждая сеть честно
+    считает СВОЁ множество — строки с формулировкой, строки с дескриптором, блоки, строки с
+    маркером прозы, — и ни одно из них не есть множество запретов. Воспроизведение говорит,
+    что прибор видит то же, что видели они, и умеет назвать, ЧТО именно каждая измеряла; перепись
+    от этого не становится ни одной из четырёх.
+    """
+    nets = _historic_nets_by_pattern(live_sources)
+    assert {pattern: net.count for pattern, net in nets.items()} == {
+        r"^\s*- statement:": HISTORIC_NET_STATEMENT_LINES,
+        "verification: test": HISTORIC_NET_VERIFICATION_TEST_LINES,
+        r"^\s*prohibitions:": HISTORIC_NET_PROHIBITIONS_KEYS,
+        "MUST NOT|НЕ ДОЛЖ|ЗАПРЕЩ": HISTORIC_NET_PROSE_MARKERS,
+    }
+
+
+def test_historic_nets_decompose_into_named_addends(live_sources):
+    """Каждая сеть = сумма НАЗВАННЫХ слагаемых, снятых независимо от её числа; слагаемое
+    переписи в каждой сети равно числу переписи того же множества."""
+    nets = _historic_nets_by_pattern(live_sources)
+    for net in nets.values():
+        assert net.addends_total == net.count, net
+    assert nets[r"^\s*- statement:"].addend(tool.ADDEND_CENSUS) == PROHIBITIONS_IN_DECISION_SCOPE
+    assert (
+        nets["verification: test"].addend(tool.ADDEND_VERIFICATION_TEST_CENSUS)
+        == PHASE_10_VERIFICATION_TEST
+    )
+    assert (
+        nets[r"^\s*prohibitions:"].addend(tool.ADDEND_PLANS_WITH_BLOCK) == PHASE_10_PLAN_FILES
+    )
+
+
+def test_historic_verification_test_net_and_the_census_differ_by_named_addends(live_sources):
+    """76 и 61 утверждаются ОБА, и их разность 15 — слагаемыми, а не одним вычитанием."""
+    net = _historic_nets_by_pattern(live_sources)["verification: test"]
+    assert net.count == HISTORIC_NET_VERIFICATION_TEST_LINES
+    assert net.addend(tool.ADDEND_VERIFICATION_TEST_CENSUS) == PHASE_10_VERIFICATION_TEST
+    assert (
+        net.addend(tool.ADDEND_VERIFICATION_TEST_TRUTHS),
+        net.addend(tool.ADDEND_VERIFICATION_TEST_ASSUMPTIONS),
+        net.addend(tool.ADDEND_VERIFICATION_TEST_FRONTMATTER_PROSE),
+        net.addend(tool.ADDEND_VERIFICATION_TEST_BODY_PROSE),
+    ) == (
+        HISTORIC_VERIFICATION_TEST_IN_TRUTHS,
+        HISTORIC_VERIFICATION_TEST_IN_ASSUMPTIONS,
+        HISTORIC_VERIFICATION_TEST_IN_FRONTMATTER_PROSE,
+        HISTORIC_VERIFICATION_TEST_IN_BODY_PROSE,
+    )
+    assert (
+        HISTORIC_NET_VERIFICATION_TEST_LINES - PHASE_10_VERIFICATION_TEST
+        == HISTORIC_VERIFICATION_TEST_IN_TRUTHS
+        + HISTORIC_VERIFICATION_TEST_IN_ASSUMPTIONS
+        + HISTORIC_VERIFICATION_TEST_IN_FRONTMATTER_PROSE
+        + HISTORIC_VERIFICATION_TEST_IN_BODY_PROSE
+        == HISTORIC_VERIFICATION_TEST_SURPLUS
+    )
+
+
+def test_control_historic_decomposition_reddens_on_an_unattributed_block():
+    """Строка сети из блока, которого разложение не знает, ломает равенство — не растворяется.
+
+    Синтетика: элемент с ключом `statement` в блоке `key_links` — такой строкой наивная сеть
+    пополнится, а ни одно слагаемое её не назовёт. Остатка среди слагаемых нет, поэтому сумма
+    обязана разойтись с числом сети.
+    """
+    source = """---
+must_haves:
+  key_links:
+    - statement: "элемент блока, которого разложение не знает"
+  prohibitions:
+    - statement: "MUST NOT синтетический запрет"
+---
+"""
+    net = _historic_nets_by_pattern({".planning/phases/10-synthetic/10-99-PLAN.md": source})[
+        r"^\s*- statement:"
+    ]
+    assert net.count == 2
+    assert net.addends_total == 1
+
+
+def test_reconcile_table_carries_the_historic_and_the_census_numbers(live_sources):
+    """Таблица сличения предъявляет и четыре исторических числа, и оба своих семейства."""
+    table = "\n".join(tool.reconcile_lines(live_sources))
+    for number in (
+        HISTORIC_NET_STATEMENT_LINES,
+        HISTORIC_NET_VERIFICATION_TEST_LINES,
+        HISTORIC_NET_PROHIBITIONS_KEYS,
+        HISTORIC_NET_PROSE_MARKERS,
+        PROHIBITIONS_BEFORE_PHASE_15_PLANS,
+        NAIVE_LINE_NET_DECLARED,
+        PROHIBITIONS_DECLARED_AT_PHASE_15,
+        NAIVE_LINE_NET_AT_PHASE_15,
+    ):
+        assert f"| {number} |" in table, (number, table)
+
+
+def test_reconcile_seed_of_the_registry_is_idempotent_by_identity(
+    live_census, registry_document
+):
+    """Повторный засев не меняет реестра ни на символ: дата замера и поля строк остаются."""
+    again = tool.dump_registry(tool.seed_registry(live_census, registry_document, "1999-01-01"))
+    assert again == REGISTRY_FILE.read_text(encoding="utf-8")

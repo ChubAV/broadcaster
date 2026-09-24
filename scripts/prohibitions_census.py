@@ -19,6 +19,13 @@
 Режимы:
   --check           число элементов и разбивка по фазам; код 1, если перепись разошлась с
                     реестром (число, `rows_declared`, биекция тождеств)
+  --list [--phase N]
+                    перечень записей глазам человека: тождество, фаза, `verification`,
+                    диспозиция из реестра, первые ~100 символов формулировки
+  --breakdown       разбивка по фазам, по значениям `verification` и по диспозициям реестра
+  --reconcile       таблица сличения: разбор по блоку, наивная сеть по строке над вехой и
+                    четыре исторические сети над планами Фазы 10 — каждая со СЛАГАЕМЫМИ
+                    своего расхождения с переписью, а не только с разностью
   --seed-registry   засев скелета реестра; идемпотентен по тождествам — уже записанные поля
                     строк не двигаются, новые строки получают засеянные значения
 
@@ -30,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import sys
 from collections import Counter
@@ -450,6 +458,231 @@ def dump_registry(document: Mapping) -> str:
     return REGISTRY_HEADER + "\n" + body
 
 
+# --- исторические сети ------------------------------------------------------------
+#
+# Четыре сети, давшие на 57 планах Фазы 10 четыре числа (374 / 76 / 57 / 38; критерий 6 ROADMAP
+# называет их предметом расхождения). Прибор их ВОСПРОИЗВОДИТ и раскладывает каждую на
+# слагаемые: это доказывает СОГЛАСИЕ прибора с тем множеством, которое сеть измеряет, и умение
+# это множество назвать, — а не верность сети. Сеть считает СТРОКИ файла целиком (шапка и
+# тело), как `grep` по склеенным файлам.
+#
+# ⚠️ СЛАГАЕМЫЕ СНИМАЮТСЯ НЕЗАВИСИМО ОТ ЧИСЛА СЕТИ: элементы блоков — разбором шапки, тело плана
+# и проза шапки — счётом строк. Остатка «число сети минус известное» среди слагаемых НЕТ: он
+# сошёлся бы всегда. Равенство суммы слагаемых числу сети есть проверка, а не определение.
+
+HISTORIC_PHASE = "10"
+HISTORIC_PROHIBITIONS_KEY_LINE = re.compile(r"\s*prohibitions:")
+HISTORIC_VERIFICATION_TEST_TEXT = "verification: test"
+HISTORIC_VERIFICATION_TEST_KEY_LINE = re.compile(r"\s*(?:- )?verification:\s*test\s*$")
+HISTORIC_PROSE_MARKERS = re.compile(r"MUST NOT|НЕ ДОЛЖ|ЗАПРЕЩ")
+
+# Имена слагаемых — одно место на прибор; на них ссылаются правила согласия модуля теста.
+ADDEND_CENSUS = "элементы переписи"
+ADDEND_DASH_ELSEWHERE = "элементы переписи с дефисом на чужом ключе"
+ADDEND_TRUTHS_STATEMENT_FIRST = "элементы truths с дефисом на формулировке"
+ADDEND_ASSUMPTIONS_STATEMENT_FIRST = "элементы assumptions с дефисом на формулировке"
+ADDEND_BODY_LINES = "строки тела плана"
+ADDEND_VERIFICATION_TEST_CENSUS = "элементы переписи с `verification: test`"
+ADDEND_VERIFICATION_TEST_TRUTHS = "элементы truths с `verification: test`"
+ADDEND_VERIFICATION_TEST_ASSUMPTIONS = "элементы assumptions с `verification: test`"
+ADDEND_VERIFICATION_TEST_FRONTMATTER_PROSE = "упоминания фразы в прозе шапки"
+ADDEND_VERIFICATION_TEST_BODY_PROSE = "упоминания фразы в теле плана"
+ADDEND_PLANS_WITH_BLOCK = "планы с блоком `must_haves.prohibitions` (блоки, а не элементы)"
+ADDEND_MARKERS_CENSUS = "элементы переписи с маркером"
+ADDEND_MARKERS_TRUTHS = "элементы truths с маркером"
+ADDEND_MARKERS_ASSUMPTIONS = "элементы assumptions с маркером"
+
+ADD, SUBTRACT = 1, -1
+
+
+@dataclass(frozen=True)
+class HistoricNet:
+    """Историческая сеть: образец, число и слагаемые «знак, имя, величина».
+
+    Знак хранится отдельно от величины: вычитаемое слагаемое, равное нулю, остаётся
+    ВЫЧИТАЕМЫМ — его имя говорит, что сеть теряет такие элементы, даже когда их ноль.
+    """
+
+    pattern: str
+    count: int
+    addends: tuple[tuple[int, str, int], ...]
+
+    @property
+    def addends_total(self) -> int:
+        return sum(sign * value for sign, _, value in self.addends)
+
+    def addend(self, name: str) -> int:
+        return next(value for _, label, value in self.addends if label == name)
+
+
+def historic_sources(sources: Mapping[str, str]) -> dict[str, str]:
+    """Подмножество вселенной — планы Фазы 10, на которых сняты четыре исторические сети."""
+    return {path: text for path, text in sources.items() if phase_of(path) == HISTORIC_PHASE}
+
+
+def _split_frontmatter(text: str) -> tuple[list[str], list[str]]:
+    """Строки шапки (с ограждениями) и строки тела. Файл без шапки — всё тело."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != FRONTMATTER_FENCE:
+        return [], lines
+    for position in range(1, len(lines)):
+        if lines[position].strip() == FRONTMATTER_FENCE:
+            return lines[: position + 1], lines[position + 1 :]
+    return lines, []
+
+
+def _element_text(element) -> str:
+    if isinstance(element, dict):
+        return str(element.get(STATEMENT_KEY, ""))
+    return str(element)
+
+
+def _verification_test(elements: Iterable) -> int:
+    return sum(
+        1
+        for element in elements
+        if isinstance(element, dict)
+        and str(element.get(VERIFICATION_KEY)) == DECLARED_RULE_VERIFICATION
+    )
+
+
+def _with_markers(elements: Iterable) -> int:
+    return sum(1 for element in elements if HISTORIC_PROSE_MARKERS.search(_element_text(element)))
+
+
+def historic_nets(sources: Mapping[str, str]) -> list[HistoricNet]:
+    """Четыре исторические сети над поданными исходниками — со слагаемыми расхождения."""
+    records = census(sources)
+    parsed = [_frontmatter(sources[path]) for path in sorted(sources)]
+    split = [_split_frontmatter(sources[path]) for path in sorted(sources)]
+
+    def elements(block: str) -> list:
+        return [item for frontmatter in parsed for item in _block_elements(frontmatter, block)]
+
+    prohibitions = elements(PROHIBITIONS_BLOCK)
+    truths = elements(TRUTHS_BLOCK)
+    assumptions = elements(ASSUMPTIONS_BLOCK)
+
+    def frontmatter_lines(predicate) -> int:
+        return sum(1 for head, _ in split for line in head if predicate(line))
+
+    def body_lines(predicate) -> int:
+        return sum(1 for _, body in split for line in body if predicate(line))
+
+    def all_lines(predicate) -> int:
+        return frontmatter_lines(predicate) + body_lines(predicate)
+
+    def is_statement(line: str) -> bool:
+        return bool(NAIVE_STATEMENT_LINE.match(line))
+
+    def is_prohibitions_key(line: str) -> bool:
+        return bool(HISTORIC_PROHIBITIONS_KEY_LINE.match(line))
+
+    def is_verification_test(line: str) -> bool:
+        return HISTORIC_VERIFICATION_TEST_TEXT in line
+
+    def is_verification_test_prose(line: str) -> bool:
+        return is_verification_test(line) and not HISTORIC_VERIFICATION_TEST_KEY_LINE.match(line)
+
+    def has_marker(line: str) -> bool:
+        return bool(HISTORIC_PROSE_MARKERS.search(line))
+
+    plans_with_block = sum(
+        1 for frontmatter in parsed if PROHIBITIONS_BLOCK in (frontmatter.get(MUST_HAVES) or {})
+    )
+    return [
+        HistoricNet(
+            pattern=r"^\s*- statement:",
+            count=all_lines(is_statement),
+            addends=(
+                (ADD, ADDEND_CENSUS, len(records)),
+                (
+                    SUBTRACT,
+                    ADDEND_DASH_ELSEWHERE,
+                    sum(1 for record in records if record.first_key != STATEMENT_KEY),
+                ),
+                (ADD, ADDEND_TRUTHS_STATEMENT_FIRST, _statement_first(truths)),
+                (ADD, ADDEND_ASSUMPTIONS_STATEMENT_FIRST, _statement_first(assumptions)),
+                (ADD, ADDEND_BODY_LINES, body_lines(is_statement)),
+            ),
+        ),
+        HistoricNet(
+            pattern=HISTORIC_VERIFICATION_TEST_TEXT,
+            count=all_lines(is_verification_test),
+            addends=(
+                (ADD, ADDEND_VERIFICATION_TEST_CENSUS, _verification_test(prohibitions)),
+                (ADD, ADDEND_VERIFICATION_TEST_TRUTHS, _verification_test(truths)),
+                (ADD, ADDEND_VERIFICATION_TEST_ASSUMPTIONS, _verification_test(assumptions)),
+                (
+                    ADD,
+                    ADDEND_VERIFICATION_TEST_FRONTMATTER_PROSE,
+                    frontmatter_lines(is_verification_test_prose),
+                ),
+                (ADD, ADDEND_VERIFICATION_TEST_BODY_PROSE, body_lines(is_verification_test)),
+            ),
+        ),
+        HistoricNet(
+            pattern=r"^\s*prohibitions:",
+            count=all_lines(is_prohibitions_key),
+            addends=(
+                (ADD, ADDEND_PLANS_WITH_BLOCK, plans_with_block),
+                (ADD, ADDEND_BODY_LINES, body_lines(is_prohibitions_key)),
+            ),
+        ),
+        HistoricNet(
+            pattern=HISTORIC_PROSE_MARKERS.pattern,
+            count=all_lines(has_marker),
+            addends=(
+                (ADD, ADDEND_MARKERS_CENSUS, _with_markers(prohibitions)),
+                (ADD, ADDEND_MARKERS_TRUTHS, _with_markers(truths)),
+                (ADD, ADDEND_MARKERS_ASSUMPTIONS, _with_markers(assumptions)),
+                (ADD, ADDEND_BODY_LINES, body_lines(has_marker)),
+            ),
+        ),
+    ]
+
+
+def _terms(addends) -> str:
+    terms = []
+    for position, (sign, name, value) in enumerate(addends):
+        prefix = "" if position == 0 and sign == ADD else ("+ " if sign == ADD else "− ")
+        terms.append(f"{prefix}{value} {name}")
+    return " ".join(terms)
+
+
+def reconcile_lines(sources: Mapping[str, str]) -> list[str]:
+    """Таблица сличения «сеть → число → чем отличается от переписи», по строке на сеть."""
+    before = {path: text for path, text in sources.items() if phase_of(path) != "15"}
+    lines = [
+        "| Сеть | Множество | Число | Слагаемые расхождения с переписью |",
+        "|---|---|---:|---|",
+    ]
+    for label, universe in (("веха без планов Фазы 15", before), ("веха целиком", sources)):
+        parts = decomposition(universe)
+        lines.append(
+            f"| разбор блока `must_haves.prohibitions` | {label}, планов {len(universe)} | "
+            f"{parts.prohibitions} | целевое множество — перепись |"
+        )
+        addends = (
+            (ADD, ADDEND_CENSUS, parts.prohibitions),
+            (SUBTRACT, ADDEND_DASH_ELSEWHERE, parts.first_key_elsewhere),
+            (ADD, ADDEND_TRUTHS_STATEMENT_FIRST, parts.truths),
+            (ADD, ADDEND_ASSUMPTIONS_STATEMENT_FIRST, parts.assumptions),
+        )
+        lines.append(
+            f"| `^\\s*- statement:` | {label}, планов {len(universe)} | {parts.line_net} | "
+            f"{_terms(addends)} = {parts.reconstructed} |"
+        )
+    phase_10 = historic_sources(sources)
+    for net in historic_nets(phase_10):
+        pattern = net.pattern.replace("|", "\\|")
+        lines.append(
+            f"| `{pattern}` | Фаза 10, планов {len(phase_10)} | {net.count} | "
+            f"{_terms(net.addends)} = {net.addends_total} |"
+        )
+    return lines
+
+
 # --- режимы ------------------------------------------------------------------------
 
 
@@ -485,6 +718,47 @@ def _check(root: Path) -> int:
     return 0
 
 
+def _list(root: Path, phase: str | None) -> int:
+    registry = _registry_rows(load_registry(root / REGISTRY_RELATIVE_PATH))
+    for record in census(_plan_sources(root)):
+        if phase is not None and record.phase != phase:
+            continue
+        row = registry.get(record.identity, {})
+        verification = record.verification if record.verification is not None else "—"
+        statement = " ".join(record.statement.split())[:100]
+        print(
+            f"{record.identity}  фаза {record.phase}  verification={verification}  "
+            f"disposition={row.get('disposition', '?')}  {statement}"
+        )
+    return 0
+
+
+def _breakdown(root: Path) -> int:
+    records = census(_plan_sources(root))
+    registry = _registry_rows(load_registry(root / REGISTRY_RELATIVE_PATH))
+    print("по фазам:")
+    for phase, count in phase_breakdown(records).items():
+        print(f"  фаза {phase}: {count}")
+    print("по значениям `verification` (— ключа нет):")
+    values = Counter(record.verification or "—" for record in records)
+    for value, count in sorted(values.items()):
+        print(f"  {value}: {count}")
+    print("по диспозициям реестра (? — строки нет):")
+    dispositions = Counter(
+        str(registry.get(record.identity, {}).get("disposition", "?")) for record in records
+    )
+    for value, count in sorted(dispositions.items()):
+        print(f"  {value}: {count}")
+    print(f"итого элементов блока must_haves.prohibitions: {len(records)}")
+    return 0
+
+
+def _reconcile(root: Path) -> int:
+    for line in reconcile_lines(_plan_sources(root)):
+        print(line)
+    return 0
+
+
 def _seed(root: Path) -> int:
     path = root / REGISTRY_RELATIVE_PATH
     existing = load_registry(path) if path.exists() else None
@@ -502,15 +776,33 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Перепись запретов планов вехи.")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="число, разбивка, согласие с реестром")
+    mode.add_argument("--list", action="store_true", help="перечень записей")
+    mode.add_argument("--breakdown", action="store_true", help="разбивка по фазам и полям")
+    mode.add_argument("--reconcile", action="store_true", help="сличение с сетями по строке")
     mode.add_argument("--seed-registry", action="store_true", help="засев скелета реестра")
+    parser.add_argument("--phase", help="только эта фаза (с --list), например 10")
     arguments = parser.parse_args(argv)
+    if arguments.phase is not None and not arguments.list:
+        parser.error("--phase применим только с --list")
     try:
         if arguments.check:
             return _check(TREE_ROOT)
+        if arguments.list:
+            return _list(TREE_ROOT, arguments.phase)
+        if arguments.breakdown:
+            return _breakdown(TREE_ROOT)
+        if arguments.reconcile:
+            return _reconcile(TREE_ROOT)
         return _seed(TREE_ROOT)
     except CensusError as error:
         print(f"ОТКАЗ: {error}", file=sys.stderr)
         return 1
+    except BrokenPipeError:
+        # Читатель закрыл канал (`--list | head`): перечень ему больше не нужен, и это не
+        # отказ прибора. Поток вывода переводится в пустоту, чтобы интерпретатор не упал при
+        # его закрытии на выходе.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
 
 
 if __name__ == "__main__":
