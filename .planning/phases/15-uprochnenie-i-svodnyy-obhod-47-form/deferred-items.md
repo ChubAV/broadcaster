@@ -3,7 +3,8 @@
 ## Deferred Items
 
 - Правило пар 302 жалуется на `tests/test_pages/test_billing_section.py:706` (найдено исполнителем плана 15-08, 2026-09-24)
-  status: open
+  status: resolved
+  **Resolved:** оркестратор фазы, 2026-09-24, коммит `4cd2d45c` — после полного прогона волны 1 (`1 failed, 3775 passed`): адрес POST стал литералом `/billing/subscribe` с утверждением равенства разметки, `PAIRED_302_ASSERTIONS_DECLARED` 189 → 190 прогоном правила; полный прогон волны 2 — `3856 passed, 0 failed`. Прежнее состояние `open` ошибкой не было — оно устарело с этим коммитом.
   **What:** `test_every_302_assertion_on_a_converted_handler_is_paired` (`tests/test_pages/test_htmx_post_pairs.py`) красен дословно так: «утверждения 302 без пары: tests/test_pages/test_billing_section.py:706 (test_the_payment_form_keeps_its_route_and_degrades_without_htmx): обработчик не назван — адрес POST собран выражением».
   **Measured origin:** красно и на дереве `83c34ab5` — ДО первого коммита плана 15-08 (прогон правила над снимком `git archive 83c34ab5`); файл правки — коммит `0203202f` плана 15-03. План 15-08 этого файла не трогал.
   **Why deferred:** вне области плана 15-08 (правило границы области исполнителя: чинится только то, что сломала собственная правка). Второе красное правило того же модуля — число утверждений 302 (189 против 188) — ВЫЗВАНО планом 15-08 и им же починено (`5e9b4d49`).
