@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 15
 current_phase_name: Упрочнение и сводный обход 47 форм
 status: executing
-stopped_at: Completed 15-12-PLAN.md
-last_updated: "2026-09-24T16:57:41.143Z"
+stopped_at: Completed 15-13-PLAN.md
+last_updated: "2026-09-24T18:00:09.606Z"
 last_activity: 2026-09-24
 last_activity_desc: Phase 15 execution started
-state_head: 5a6e6b65ea59dfb98e684a732c176ae16182f5f8
+state_head: e17d9ec5b9d8053d96f181d0ad16db820e4fb2be
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 156
-  completed_plans: 154
+  completed_plans: 155
   percent: 89
 ---
 
@@ -55,10 +55,11 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 15 (Упрочнение и сводный обход 47 форм) — EXECUTING
-Plan: 13 of 14
+Plan: 14 of 14
 Total Plans in Phase: 14
-Completed Plans in Phase: 12
+Completed Plans in Phase: 13
 Status: Executing Phase 15
+⚠️ После плана 15-13 (2026-09-24) `state.advance-plan` в тринадцатый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 12»; фаза исполняется (исполнено 13 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md`, `15-09-SUMMARY.md`, `15-10-SUMMARY.md`, `15-11-SUMMARY.md`, `15-12-SUMMARY.md` и `15-13-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 14 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-13; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-12 (2026-09-24) `state.advance-plan` в двенадцатый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 11»; фаза исполняется (исполнено 12 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md`, `15-09-SUMMARY.md`, `15-10-SUMMARY.md`, `15-11-SUMMARY.md` и `15-12-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 13 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-12; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-11 (2026-09-24) `state.advance-plan` в одиннадцатый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 10»; фаза исполняется (исполнено 11 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md`, `15-09-SUMMARY.md`, `15-10-SUMMARY.md` и `15-11-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 12 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-11; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-10 (2026-09-24) `state.advance-plan` в десятый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 9»; фаза исполняется (исполнено 10 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md`, `15-09-SUMMARY.md` и `15-10-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 11 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-10; по идиоме D-30/D-32 названы, а не вычеркнуты.
@@ -282,6 +283,7 @@ Progress: [████████████████████] 116/116
 | Phase 15 P10 | 25 min | 2 tasks | 1 files |
 | Phase 15 P11 | 2h 52m | 3 tasks | 2 files |
 | Phase 15 P12 | 37 min | 3 tasks | 3 files |
+| Phase 15 P13 | 17 min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -620,6 +622,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 15]: 15-11: владелец (chubav, 2026-09-24, AskUserQuestion в /gsd-execute-phase 15) выбрал одну ветвь на все 19 дуальных обработчиков — case-three-server-header; своих слов обоснования не дал; шесть экранов кода авторизации (случай второй) ему не выносились — выбран вариант, предъявленный как «Сервер решает — адрес меняется только когда сервер уводит человека на другой экран. Так это работает сегодня, и нового кода не нужно»
 - [Phase 15]: 15-12: владелец (chubav, 2026-09-24, AskUserQuestion в /gsd-execute-phase 15) ответил по 11 классам запретов Фазы 10: product-invariant (70) — require-enforcement, остальные десять классов (251) — permit-class, row-by-row ни по одному; своих слов обоснования не дал — формулировка выбранного варианта принадлежит оркестратору и записана дословно в 15-12-SUMMARY.md — D-04: решение по классу, permit_scope — имя класса; разрешение не есть соблюдение
 - [Phase 15]: 15-12: ответ записан блоком документа реестра class_decisions (засев переносит, не пишет; ключей документа 3 -> 4 с летописью), а не в строки; диспозиции не тронуты (697 unresolved); адресат работы по product-invariant не назначен — план называет только «будущие фазы»; перечень диспозиций 3 -> 4 (partially-enforced по замеру образца), классов 11 — биекция и идемпотентность засева 15-01 остаются зелёными; построчные решения — план 15-13
+- [Phase 15]: 15-13: диспозиции 321 запрета Фазы 10 — 2 enforced, 32 partially-enforced (непокрытая часть названа coverage_note), 202 permitted (permit_scope = имя класса по ответу владельца), 85 unresolved с причиной: 27 declared-rule-absent (объявлен verification: test, правила нет — находка D-05, не разрешение), 58 enforcement-required (product-invariant) — мера покрытия 61 запрета D-05 снята чтением предмета запрета и правила; существование правила — по ast в файле координаты; разрешение только по записанному ответу владельца
+- [Phase 15]: 15-13: закрывающее утверждение критерия 6 — безусловная форма (нет unresolved без причины из UNRESOLVED_REASONS, согласной со строкой); сильная форма не заведена, хотя все 11 классов ответили: product-invariant оставлен открытым ответом require-enforcement, находки D-05 разрешением не закрываются; адресат по product-invariant и по 376 запретам вне Фазы 10 не назначен — вопрос владельцу — сильная форма была бы красной на законном дереве; остаток 85 назван причиной и числом в 15-PROHIBITIONS-SUBJECT.md, но не утверждается
 
 ### Pending Todos
 
@@ -804,8 +808,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-24T16:57:40.514Z
-Stopped at: Completed 15-12-PLAN.md
+Last session: 2026-09-24T18:00:08.940Z
+Stopped at: Completed 15-13-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
