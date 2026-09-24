@@ -534,3 +534,174 @@ def test_place_keys_are_path_and_ordinal_and_never_collapse() -> None:
         "довод о ключе по тексту здесь больше не показан"
     )
     assert len({p.key for p in same_file}) == 3
+
+
+# --- ГРУППА КОНТРОЛЯ: ЧИСЛА, ДОКАЗАННЫЕ ОТ ВАКУУМА ----------------------------
+#
+# Контроли ПОДМЕНЯЮТ СЛОВАРЬ ИСХОДНИКОВ, А НЕ ФАЙЛОВУЮ СИСТЕМУ: ни один файл
+# проекта не трогается и временный каталог не заводится. Это несущее решение
+# формы (образец — tests/test_templates/test_htmx_inventory.py, группа
+# контроля над ``_template_sources()``): файловые операции там, где их нет,
+# увели бы форму контроля от той, которую дерево уже проверило.
+#
+# ⚠️ ДОКАЗАТЕЛЬСТВО СОСТОИТ ИЗ ДВУХ ПОЛОВИН, И ОБЕ СНИМАЮТСЯ ТЕМ ЖЕ ПРОГОНОМ,
+# ЧТО И САМИ ЧИСЛА. Половина А: вселенная обхода НЕПУСТА — шаблоны находятся, и
+# на неизменённом дереве все утверждения молчат. Половина Б: на дереве, где
+# искомому ЕСТЬ ЧТО НАЙТИ (пятидесятое место, снятый вызов, форма в
+# комментарии), то же выражение его находит и НАЗЫВАЕТ. Число, у которого зелены
+# обе половины, есть исполненная работа; число, у которого красна любая из них,
+# есть поломка измерителя.
+#
+# ⚠️ КОНТРОЛИ РАВЕНСТВА КРАСНЕЮТ В РАЗНЫЕ СТОРОНЫ, И РАЗЛИЧИЕ УТВЕРЖДАЕТСЯ:
+# рост реддит утверждение роста, падение — утверждение равенства. Правило,
+# краснеющее только вверх, молча переживёт исчезновение места — ровно тот
+# отказ, ради которого инвентарные гейты в проекте и заведены.
+
+SYNTHETIC_WRITE_FORM = (
+    '<form method="post" action="/synthetic/one-more-write" '
+    'hx-post="/synthetic/one-more-write" hx-swap="none"></form>\n'
+)
+
+
+def test_control_negative_a_fiftieth_write_place_reddens_the_growth_gate() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: пятидесятое место письма обход ВИДИТ, и «не выросло» краснеет."""
+    key = "synthetic/one_more_write_form.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    changed = dict(sources)
+    changed[key] = SYNTHETIC_WRITE_FORM
+    assert changed != sources, "подмена ничего не изменила"
+
+    found = _write_form_places(changed)
+
+    assert len(found) == WRITE_FORM_PLACES + 1, (
+        f"ПЯТИДЕСЯТОЕ МЕСТО ПИСЬМА ПРОШЛО МИМО ОБХОДА: найдено {len(found)}, "
+        f"ожидалось {WRITE_FORM_PLACES + 1}"
+    )
+    assert not (len(found) <= WRITE_FORM_PLACES), (
+        "утверждение «не выросло» осталось истинным при выросшем числе — "
+        "счётчик зелен по построению"
+    )
+    assert "ВЫРОСЛО" in _inventory_offence(WRITE_FORM_PLACES, len(found)), (
+        "рост назван не утверждением роста"
+    )
+
+
+def test_control_negative_a_removed_form_wrapper_call_reddens_the_equality_gate() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: СНЯТЫЙ вызов ``form_wrapper`` замечает равенство, а не рост.
+
+    ⚠️ ЭТО И ЕСТЬ ПРИЧИНА, ПО КОТОРОЙ УТВЕРЖДЕНИЙ ДВА. Упавшее число «не
+    выросло» пропускает совершенно правильно; молчали бы оба — счётчик описывал
+    бы прошлое состояние сколько угодно долго.
+    """
+    sources = _template_sources()
+    first_call = next(
+        p for p in _write_form_places(sources) if p.kind is PlaceKind.FORM_WRAPPER_CALL
+    )
+    key = first_call.template
+
+    changed = dict(sources)
+    changed[key] = sources[key].replace(
+        first_call.text, first_call.text.replace("form_wrapper", "not_a_form_wrapper", 1), 1
+    )
+    assert changed[key] != sources[key], "подмена ничего не изменила"
+
+    found = _write_form_places(changed)
+
+    assert len(found) == WRITE_FORM_PLACES - 1, (
+        f"снятый вызов не изменил счёта: найдено {len(found)}, ожидалось "
+        f"{WRITE_FORM_PLACES - 1}"
+    )
+    assert len(found) <= WRITE_FORM_PLACES, (
+        "утверждение «не выросло» покраснело на УПАВШЕМ числе"
+    )
+    assert len(found) != WRITE_FORM_PLACES, (
+        "УТВЕРЖДЕНИЕ О РАВЕНСТВЕ ОСТАЛОСЬ ИСТИННЫМ ПРИ УПАВШЕМ ЧИСЛЕ — место "
+        "исчезло молча"
+    )
+    offence = _inventory_offence(WRITE_FORM_PLACES, len(found))
+    assert "РАВЕНСТВ" in offence and "ВЫРОСЛО" not in offence, (
+        f"падение названо не утверждением равенства: {offence!r}"
+    )
+
+
+def test_control_negative_a_form_inside_a_comment_adds_no_place() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: форма в Jinja-комментарии мест НЕ добавляет, а наивная сеть — добавляет."""
+    key = "synthetic/commented_write_form.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    commented = "{#- " + SYNTHETIC_WRITE_FORM.strip() + " -#}\n"
+    changed = dict(sources)
+    changed[key] = commented
+    assert changed != sources, "подмена ничего не изменила"
+
+    stripped_places = len(_form_places({key: commented}))
+    naive = len(NAIVE_FORM.findall(commented))
+
+    assert stripped_places == 0, (
+        f"форма в комментарии посчитана местом: {stripped_places}"
+    )
+    assert naive == 1, f"наивная сеть не увидела формы в комментарии: {naive}"
+    assert naive - stripped_places == 1
+    assert len(_write_form_places(changed)) == WRITE_FORM_PLACES, (
+        "форма в комментарии сдвинула число мест письма дерева"
+    )
+
+
+def test_control_negative_an_empty_source_map_reddens_the_nonzero_declaration() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на пустом словаре ненулевое объявление КРАСНЕЕТ, а прибор не падает."""
+    found = _write_form_places({})
+
+    assert found == [], "обход нашёл место письма там, где нет ни одного шаблона"
+    assert not (len(found) > 0), "пустое дерево дало непустой обход"
+    assert _inventory_offence(WRITE_FORM_PLACES, len(found)) != "", (
+        "ОБЪЯВЛЕННЫЕ 49 СОШЛИСЬ С ПУСТОТОЙ — утверждение о числе зеленеет вакуумом"
+    )
+    assert _form_places({}) == [] and _provider_tags({}) == []
+
+
+def test_control_positive_the_untouched_tree_keeps_every_inventory_gate_green() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на НЕИЗМЕНЁННОМ дереве все утверждения молчат, и обход НЕ ПУСТ.
+
+    ⚠️ БЕЗ ЭТОГО КОНТРОЛЯ ОТРИЦАТЕЛЬНЫЕ ВЫШЕ ПРОШЛИ БЫ И У ГЕЙТА, КОТОРЫЙ
+    КРАСНЕЕТ ВСЕГДА. Это половина А доказательства: классификация, сошедшаяся
+    потому, что обход не нашёл ни одного файла, неотличима от сошедшейся по
+    существу.
+    """
+    sources = _template_sources()
+
+    assert len(sources) > 50, (
+        f"обход нашёл всего {len(sources)} шаблонов — группы могли сойтись на пустоте"
+    )
+    places = _form_places(sources)
+    write = _write_form_places(sources)
+    assert _inventory_offence(WRITE_FORM_PLACES, len(write)) == ""
+    assert _inventory_offence(ALL_FORM_PLACES, len(places)) == ""
+    assert [p for p in places if p.kind is None] == []
+    assert {p.key for p in places if p.kind not in WRITE_KINDS} == set(WRITE_FORM_EXCLUSIONS)
+
+
+def test_control_negative_the_declaration_not_the_fact_reddens_in_both_directions() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: чистая функция сравнения краснеет в ОБЕ стороны и РАЗНЫМИ текстами.
+
+    Контроли выше доказывают, что гейт видит изменение ФАКТА на дереве. Этот
+    доказывает то же на самой функции сравнения, без дерева: замер на единицу
+    больше объявления краснеет утверждением роста, равный молчит, на единицу
+    меньше — краснеет утверждением РАВЕНСТВА, а не роста.
+    """
+    declared = WRITE_FORM_PLACES
+
+    up = _inventory_offence(declared, declared + 1)
+    same = _inventory_offence(declared, declared)
+    down = _inventory_offence(declared, declared - 1)
+
+    assert up != "", "ВЫРОСШИЙ ЗАМЕР ПРОШЁЛ МИМО ФУНКЦИИ СРАВНЕНИЯ"
+    assert same == "", "функция сравнения покраснела на равенстве"
+    assert down != "", "УПАВШИЙ ЗАМЕР ПРОШЁЛ МИМО ФУНКЦИИ СРАВНЕНИЯ — место исчезло бы молча"
+    assert "ВЫРОСЛО" in up, f"рост назван не утверждением роста: {up!r}"
+    assert "РАВЕНСТВ" in down and "ВЫРОСЛО" not in down, (
+        f"падение названо утверждением роста, а не равенства: {down!r}"
+    )
+    assert up != down, "два направления расхождения неразличимы по тексту"
