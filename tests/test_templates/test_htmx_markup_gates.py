@@ -8098,3 +8098,359 @@ def test_the_autosave_response_never_reprints_the_whole_media_tray() -> None:
         "внеполосная подмена заявит власть над всем его содержимым, включая "
         "ключи, которых этот запрос не видел (зонд WR-07, ПОРЯДОК II)"
     )
+
+
+# =============================================================================
+# Фаза 15, план 15-05: УСЛОВНАЯ СБОРКА `hx-post` — ЗАПРЕТ С ЯВНО ПУСТЫМ ПЕРЕЧНЕМ
+# =============================================================================
+#
+# ⚠️ ПРЕДИКАТ ОБЪЯВЛЯЕТСЯ ЗДЕСЬ, ВЫШЕ ПЕРВОГО ЧИСЛА ГРУППЫ, И ВСЕ ЧИСЛА НИЖЕ
+# (этой группы и группы инвентаря слепой зоны) СНЯТЫ ИМЕННО ПО НЕМУ.
+#
+#   МЕСТО УСЛОВНОЙ СБОРКИ — атрибут `hx-*`, чьё ПРИСУТСТВИЕ в теге зависит от
+#   Jinja-ветвления (`{% if %}` / `{%- if %}` внутри открывающего тега), либо
+#   чья строка запроса собрана `{% for %}`-циклом. Атрибут, присутствующий
+#   БЕЗУСЛОВНО, но получающий условное ЗНАЧЕНИЕ (тернарник Jinja внутри строки),
+#   местом условной сборки НЕ ЯВЛЯЕТСЯ: гейт разметки его видит, и слепой зоны
+#   он не создаёт.
+#
+# ИЗЪЯТИЕ НАЗВАНО ПОИМЁННО: `app/templates/ads/form.html:152` несёт `hx-post`,
+# чьё значение — тернарник Jinja (`{{ '/ads/' ~ ad.id ~ '/edit' if ad else
+# '/ads/new' }}`), а сам атрибут безусловен. Без объявленного предиката этот
+# файл попал бы в слепую зону ошибочно, и число 12 группы ниже выросло бы до 13
+# без всякого изменения дерева. Изъятие утверждается ИМЕННО на этом файле —
+# `test_conditional_hx_post_predicate_excludes_the_ternary_value_of_the_editor_form`.
+#
+# Два следствия предиката, названные затем, чтобы их не открывать заново:
+#   • тег, ЦЕЛИКОМ стоящий под `{% if %}` (ветвление СНАРУЖИ тега, например
+#     `{% if has_next %}<div hx-get=…>{% endif %}`), местом условной сборки не
+#     является: тег печатается либо целиком, либо не печатается вовсе, и гейт
+#     разметки видит его целиком;
+#   • разборщик считает атрибут условным, если тот напечатан ВНУТРИ блока
+#     `{% if %}…{% endif %}` открывающего тега, — в том числе когда тот же
+#     атрибут печатают обе ветви `if`/`else`. Это СТРОЖЕ предиката (сеть видит
+#     больше, а не меньше); вне макроса `form_wrapper` таких мест ноль, внутри —
+#     одно (`hx-swap` ветви `target`, см. группу инвентаря слепой зоны).
+#
+# ЗАМЕР БУКВАЛЬНОГО ПРЕДМЕТА ПУНКТА 9 РУЧНОГО UAT. Вхождений `hx-post` внутри
+# `{% if %}` в дереве НОЛЬ (замер 2026-09-23, воспроизведён планированием и
+# исполнением плана 15-05 2026-09-24). `hx-post` встречается в `app/templates/`
+# на ТРЁХ местах разметки — `ads/form.html:152`,
+# `components/form_wrapper.html:188`, `components/modal.html:807`, — и ни одно
+# не собрано условием; ещё 4 вхождения лежат в комментариях и докстрингах
+# (`base.html:77`, `ads/includes/autosave_response.html:142`,
+# `components/form_wrapper.html:38`, `components/modal.html:465`). Значит первая
+# ветвь критерия 5 ROADMAP («либо такая форма запрещена гейтом») доступна и
+# истинна сегодня: правило ниже есть гейт УДЕРЖАНИЯ нуля, того же рода, что
+# запрет FETCH-03 (`test_fetch_prohibition_forbids_manual_request_assembly_in_templates`).
+#
+# ⚠️ ГРАНИЦА (D-16): ЗЕЛЕНЬ ЭТОГО ПРАВИЛА ПУНКТ 9 НЕ ЗАКРЫВАЕТ. Его предмет
+# пуст, и зелень пустого правила есть ровно «зелено вакуумом» — прецедент
+# записан в дереве словами «G-2 ПРОХОДИЛ ВАКУУМНО ДО ФАЗЫ 9»
+# (`tests/test_pages/test_htmx_gates.py:64`). Человеку подаются 12 измеренных
+# мест группы инвентаря слепой зоны ниже, и отметку о закрытии пункта 9 ставит
+# ОН (D-17). Раздел улики пункта 9 в `15-UAT.md` пишет план 15-14.
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ. Зелёный цвет означает, что `hx-post` нигде не
+# собран условием и что мест разметки с ним ровно три. Он НЕ означает, что эти
+# три места СРАБОТАЛИ на рантайме htmx 2.0.10 — суита не исполняет ни строчки
+# JS. Он НЕ означает, что условной сборки нет у ПРОЧИХ `hx-*` — их 12 мест
+# объявлены отдельной группой ниже, и именно они суть настоящая слепая зона.
+#
+# ГРАНИЦА РАЗБОРЩИКА. Атрибут, собранный не Jinja-ветвлением, а Python-кодом
+# обработчика (строка атрибута приходит в контекст готовой), сети по тексту
+# шаблона НЕ ВИДЕН НИ В КАКОМ СЛУЧАЕ. ПЕРЕЗАМЕРЕНО планом 15-05 2026-09-24:
+# `grep -rn 'hx-' app/pages/` даёт 6 строк, и все 6 — проза: 3 в докстрингах
+# (`ads.py:733`, `:830`, `:833`) и 3 в комментариях (`ads.py:1073`,
+# `account_groups.py:543`, `schedules.py:1635`); сеть плана
+# `grep -rn 'hx-' app/pages/ | grep -v '^.*#'` оставляет из них 3 докстринговые.
+# Атрибутов `hx-*`, приходящих в контекст шаблона готовой строкой из
+# `app/pages/`, — НОЛЬ; в прочем Python-коде `app/` строк `hx-` нет ни одной.
+# Изъятия с числом нет, потому что мест нет; но появление первого такого места
+# эта сеть НЕ заметит, и это граница, а не покрытие.
+
+# Порог непустоты вселенной обеих групп плана 15-05. Тот же, что у запрета
+# FETCH-03 (`FETCH_PROHIBITION_UNIVERSE_FLOOR`, `test_htmx_inventory.py`): на
+# дереве плана 15-05 шаблонов 113 (замер 2026-09-24), и обход, нашедший
+# пятьдесят или меньше, почти наверняка сломан, а не «почищен».
+CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR = 50
+
+# Места условной сборки `hx-post` — ИМЕНОВАННЫЙ НОЛЬ.
+#
+# ⚠️ ПЕРЕЧЕНЬ ПУСТ — ИМЕНОВАННЫЙ НОЛЬ, А НЕ ЗАБЫТОЕ ОБЪЯВЛЕНИЕ. Пустой словарь
+# стережёт появление первого места: оно покраснеет расхождением перечня с
+# найденным обходом, а не пройдёт молча. Утверждается РАВЕНСТВО множества
+# найденных ключей множеству ключей этого перечня, а не `== 0`: равенство
+# перечню краснеет и когда место появилось, и когда объявление перечня тихо
+# стёрли (форма — `MANUAL_FETCH_SITES`, `test_htmx_inventory.py`).
+CONDITIONAL_HX_POST_SITES: dict[str, str] = {}
+
+# Места РАЗМЕТКИ с `hx-post`: ключ `путь#порядковый_номер`, обход тот же, что у
+# `HX_POST_PLACES` (`_post_sites`). ⚠️ ДВА НОСИТЕЛЯ ОДНОГО ЧИСЛА — ОСОЗНАННО:
+# `HX_POST_PLACES` есть инвентарное число Фазы 8, а это — слагаемое разбиения
+# «сырые вхождения = разметка + проза» этой группы. Разойтись молча им не дано:
+# их равенство утверждает тот же тест, что утверждает перечень.
+HX_POST_MARKUP_PLACES = 3
+HX_POST_MARKUP_SITES: dict[str, str] = {
+    "ads/form.html#0": (
+        ":152 — форма редактора; атрибут БЕЗУСЛОВЕН, условно только его ЗНАЧЕНИЕ "
+        "(тернарник Jinja) — изъятие предиката"
+    ),
+    "components/form_wrapper.html#0": ':188 — макрос-обёртка, `hx-post="{{ action }}"` безусловен',
+    "components/modal.html#0": ':807 — панель подтверждения, `hx-post="{{ action }}"` безусловен',
+}
+
+# Упоминания `hx-post` в ПРОЗЕ — комментариях Jinja и HTML. ⚠️ Это число и есть
+# машинное доказательство того, что вырезалка комментариев работает: сеть по
+# сырому тексту даёт 7, сеть по исходнику без комментариев — 3, и разность 4
+# утверждается ОТДЕЛЬНО. Правило того же рода уже стои́т в дереве под именем
+# `test_inventory_gate_ignores_prose` (`test_htmx_inventory.py`) — прецедент.
+# Номера строк в значениях — на момент замера 2026-09-24; сравниваются ключи.
+HX_POST_PROSE_MENTIONS = 4
+HX_POST_PROSE_SITES: dict[str, str] = {
+    "ads/includes/autosave_response.html#0": (
+        ":142 — шапка ответа автосохранения объясняет неизменяемость адреса запроса"
+    ),
+    "base.html#0": ":77 — комментарий шелла о форме, печатаемой макросом",
+    "components/form_wrapper.html#0": ":38 — шапка макроса о правиле G-4",
+    "components/modal.html#0": ":465 — шапка компонента панели подтверждения",
+}
+
+HX_POST_NAME = "hx-post"
+HX_ANY_ATTR = re.compile(r"(?<![-\w])(hx-[-\w:]+)\s*=")
+HX_ANY_TAG = re.compile(r"<[^<>]*?(?<![-\w])hx-[-\w:]+\s*=[^<>]*>")
+
+SYNTHETIC_CONDITIONAL_POST_TEMPLATE = "synthetic/conditional_post.html"
+SYNTHETIC_CONDITIONAL_POST = '<form method="post" action="/y" {% if x %}hx-post="/y"{% endif %}></form>'
+
+
+def _ordinal_keys(sites: list[Site]) -> list[str]:
+    """Ключи `путь#порядковый_номер` для мест в порядке обхода.
+
+    Номер — порядковый В ПРЕДЕЛАХ ШАБЛОНА: два места одного файла остаются
+    двумя записями, и сравнение идёт МНОЖЕСТВАМИ ключей, поэтому текстовый
+    порядок объявления перечня не несущий.
+    """
+    seen: dict[str, int] = {}
+    keys: list[str] = []
+    for site in sites:
+        ordinal = seen.get(site.template, 0)
+        keys.append(f"{site.template}#{ordinal}")
+        seen[site.template] = ordinal + 1
+    return keys
+
+
+def _conditional_universe_offence(sources: dict[str, str]) -> str:
+    """Пустая строка, если вселенная непуста; иначе — отказ словами.
+
+    Чистая функция от поданного отображения. Первая половина доказательства
+    нуля: «мест нет» на пустом словаре формально истинно, и без этой половины
+    запрет был бы зелен на сломанном обходе посимвольно так же, как на дереве.
+    """
+    if len(sources) > CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR:
+        return ""
+    return (
+        f"вселенная правил условной сборки — {len(sources)} шаблонов при пороге "
+        f"> {CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR}: ноль мест на ней неотличим от "
+        f"слепоты обхода"
+    )
+
+
+def _conditional_hx_post_sites(sources: dict[str, str]) -> dict[str, str]:
+    """Места условной сборки `hx-post`: ключ `путь#индекс` → текст тега.
+
+    Чистая функция от поданного отображения «путь → исходник»: вселенная
+    приходит ПАРАМЕТРОМ, иначе контроль на синтетическом шаблоне невыразим.
+    Обход и вырезание комментариев — общие с файлом (`_sites`,
+    `_strip_comments`); своего обхода каталога и своего вырезания здесь нет.
+    Индекс — порядковый среди мест условного `hx-post` своего шаблона.
+    """
+    found: dict[str, str] = {}
+    return found
+
+
+def _conditional_hx_post_offence(found: dict[str, str], declared: dict[str, str]) -> str:
+    """Пустая строка, если множества ключей совпали; иначе — отказ с именами мест."""
+    if set(found) == set(declared):
+        return ""
+    return (
+        f"мест условной сборки `hx-post` найдено {sorted(found)}, объявлено "
+        f"{sorted(declared)} — лишние: {sorted(set(found) - set(declared))}, "
+        f"пропавшие: {sorted(set(declared) - set(found))}. Условная сборка "
+        f"`hx-post` ЗАПРЕЩЕНА (первая ветвь критерия 5 ROADMAP Фазы 15): "
+        f"атрибут, которого может не быть в отрисованной странице, гейт разметки "
+        f"видит всегда"
+    )
+
+
+def _hx_post_prose_sites(sources: dict[str, str]) -> dict[str, str]:
+    """Упоминания `hx-post` внутри комментариев: ключ `путь#индекс` → номер строки.
+
+    Позиция считается прозой, если лежит внутри комментария Jinja или HTML
+    СЫРОГО исходника (те же выражения `JINJA_COMMENT` / `HTML_COMMENT`, что у
+    `_strip_comments`). Это второй, независимый путь к числу прозы: первый —
+    разность «сырые вхождения минус места разметки».
+    """
+    found: dict[str, str] = {}
+    for rel, source in sorted(sources.items()):
+        spans = [match.span() for match in JINJA_COMMENT.finditer(source)]
+        spans += [match.span() for match in HTML_COMMENT.finditer(source)]
+        ordinal = 0
+        for match in re.finditer(re.escape(HX_POST_NAME), source):
+            if any(start <= match.start() < end for start, end in spans):
+                line = source.count("\n", 0, match.start()) + 1
+                found[f"{rel}#{ordinal}"] = f"строка {line}"
+                ordinal += 1
+    return found
+
+
+def test_control_negative_a_synthetic_conditional_hx_post_is_found_and_named() -> None:
+    """Контроль от вакуума: синтетический `{% if x %}hx-post="/y"{% endif %}` НАЙДЕН И НАЗВАН.
+
+    ⚠️ ЭТО RED-ФАЗА ГРУППЫ, А НЕ ЗАПРЕТ. Запрет зелен с рождения — его предмет в
+    дереве пуст, и правило, зелёное с первой секунды, не может доказать себя
+    своим же зелёным цветом. Доказательство — здесь: в поданный словарь
+    исходников добавляется шаблон, несущий ровно буквальный предмет пункта 9, и
+    то же выражение, которым стережётся дерево, обязано найти место, назвать его
+    ключом `путь#индекс` и сделать утверждение пустоты перечня ЛОЖНЫМ.
+    """
+    sources = dict(_all_templates())
+    key = SYNTHETIC_CONDITIONAL_POST_TEMPLATE
+    assert key not in sources, (
+        f"синтетический шаблон {key} совпал с настоящим: контроль подменил бы "
+        f"настоящий исходник, а не добавил предмет"
+    )
+    changed = {**sources, key: SYNTHETIC_CONDITIONAL_POST}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    found = _conditional_hx_post_sites(changed)
+
+    assert f"{key}#0" in found, (
+        f"синтетическое место условной сборки `hx-post` не найдено: найдено "
+        f"{sorted(found)} — разборщик слеп к буквальному предмету пункта 9, и "
+        f"пустой перечень CONDITIONAL_HX_POST_SITES неотличим от этой слепоты"
+    )
+    assert not (set(found) == set(CONDITIONAL_HX_POST_SITES)), (
+        "утверждение пустоты перечня осталось истинным при добавленном месте"
+    )
+    assert f"{key}#0" in _conditional_hx_post_offence(found, CONDITIONAL_HX_POST_SITES), (
+        "отказ запрета не называет найденное место по ключу `путь#индекс`"
+    )
+
+
+def test_conditional_hx_post_assembly_is_forbidden_with_the_site_list_declared_empty() -> None:
+    """ЗАПРЕТ: мест условной сборки `hx-post` в `app/templates/` не остаётся ни одного.
+
+    Утверждается РАВЕНСТВО множества найденных ключей объявленному перечню
+    `CONDITIONAL_HX_POST_SITES`, а не `== 0`. Вселенная утверждается непустой в
+    этом же прогоне. ⚠️ Зелень этого правила пункт 9 ручного UAT НЕ закрывает:
+    его предмет пуст; человеку подаются 12 мест группы инвентаря слепой зоны,
+    отметку ставит он (D-17), раздел улики пишет план 15-14.
+    """
+    sources = dict(_all_templates())
+    assert _conditional_universe_offence(sources) == "", _conditional_universe_offence(sources)
+
+    found = _conditional_hx_post_sites(sources)
+
+    assert set(found) == set(CONDITIONAL_HX_POST_SITES), _conditional_hx_post_offence(
+        found, CONDITIONAL_HX_POST_SITES
+    )
+
+
+def test_conditional_hx_post_predicate_excludes_the_ternary_value_of_the_editor_form() -> None:
+    """Изъятие предиката утверждается ИМЕННО на `ads/form.html`.
+
+    Файл несёт `hx-post`, чьё ЗНАЧЕНИЕ — тернарник Jinja, а сам атрибут
+    безусловен. Сперва утверждается, что изъятие НЕ ПОТЕРЯЛО ПРЕДМЕТА (тернарник
+    на месте), и лишь затем — что мест условной сборки файл даёт НОЛЬ.
+    """
+    source = dict(_all_templates())[FORM]
+    sites = _post_sites([(FORM, source)])
+    assert len(sites) == 1, f"мест `hx-post` в {FORM} {len(sites)}, ожидалось одно"
+    value = _attr_value(sites[0].tag, HX_POST_VALUE)
+    assert value is not None and value.startswith("{{") and " if " in value and " else " in value, (
+        f"значение `hx-post` в {FORM} больше не тернарник Jinja ({value!r}) — изъятие "
+        f"потеряло предмет, и абзац о нём в шапке группы устарел"
+    )
+    assert "ads/form.html#0" in HX_POST_MARKUP_SITES
+
+    assert _conditional_hx_post_sites({FORM: source}) == {}, (
+        f"{FORM} посчитан местом условной сборки `hx-post`: предикат спутал "
+        f"условное ЗНАЧЕНИЕ безусловного атрибута с условным ПРИСУТСТВИЕМ"
+    )
+
+
+def test_conditional_hx_post_gate_sees_exactly_the_declared_three_markup_places() -> None:
+    """Мест разметки с `hx-post` ровно `HX_POST_MARKUP_PLACES`, и это объявленные три ключа."""
+    sites = _post_sites(_all_templates())
+    keys = _ordinal_keys(sites)
+
+    assert len(sites) == HX_POST_MARKUP_PLACES, (
+        f"мест разметки с `hx-post` {len(sites)}, объявлено {HX_POST_MARKUP_PLACES}: {keys}"
+    )
+    assert set(keys) == set(HX_POST_MARKUP_SITES), (
+        f"перечень мест разметки разошёлся с объявленным: найдено {sorted(keys)}, "
+        f"объявлено {sorted(HX_POST_MARKUP_SITES)}"
+    )
+    assert len(HX_POST_MARKUP_SITES) == HX_POST_MARKUP_PLACES
+    assert HX_POST_MARKUP_PLACES == HX_POST_PLACES, (
+        f"два носителя числа мест `hx-post` разошлись: HX_POST_MARKUP_PLACES "
+        f"{HX_POST_MARKUP_PLACES}, HX_POST_PLACES {HX_POST_PLACES} — двигать их "
+        f"обязана одна правка"
+    )
+
+
+def test_conditional_hx_post_gate_ignores_the_declared_four_prose_mentions() -> None:
+    """Проза не считается: сырых вхождений 7, мест разметки 3, разность 4 — отдельно."""
+    sources = dict(_all_templates())
+    raw = sum(source.count(HX_POST_NAME) for source in sources.values())
+    stripped = sum(_strip_comments(source).count(HX_POST_NAME) for source in sources.values())
+    markup = len(_post_sites(list(sources.items())))
+
+    assert markup == HX_POST_MARKUP_PLACES, f"мест разметки {markup}"
+    assert stripped == markup, (
+        f"вне комментариев подстрока `hx-post` встречается {stripped} раз, а мест "
+        f"разметки {markup}: разность сырых и разметки перестала быть прозой"
+    )
+    assert raw == HX_POST_MARKUP_PLACES + HX_POST_PROSE_MENTIONS, (
+        f"сырых вхождений {raw}, объявлено {HX_POST_MARKUP_PLACES} + "
+        f"{HX_POST_PROSE_MENTIONS}"
+    )
+    assert raw > markup, "вырезание комментариев ничего не вырезает — утверждение потеряло предмет"
+    assert raw - markup == HX_POST_PROSE_MENTIONS, (
+        f"разность сырых вхождений и мест разметки {raw - markup}, объявлено "
+        f"{HX_POST_PROSE_MENTIONS}"
+    )
+
+    prose = _hx_post_prose_sites(sources)
+    assert set(prose) == set(HX_POST_PROSE_SITES), (
+        f"упоминания в прозе разошлись с перечнем: найдено {prose}, объявлено "
+        f"{sorted(HX_POST_PROSE_SITES)}"
+    )
+    assert len(HX_POST_PROSE_SITES) == HX_POST_PROSE_MENTIONS
+
+
+def test_control_positive_conditional_hx_post_prohibition_is_silent_on_a_nonempty_universe() -> None:
+    """Положительный контроль: на необойдённом дереве `len(sources) > 50`, и ЗАПРЕТ молчит."""
+    sources = dict(_all_templates())
+    assert len(sources) > CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR, (
+        f"вселенная {len(sources)} шаблонов — обход сломан"
+    )
+    assert _sites(list(sources.items()), HX_ANY_TAG), "ни одного тега с `hx-*` — сеть слепа"
+    assert (
+        _conditional_hx_post_offence(_conditional_hx_post_sites(sources), CONDITIONAL_HX_POST_SITES)
+        == ""
+    )
+
+
+def test_control_negative_conditional_hx_post_prohibition_on_an_empty_universe_is_caught() -> None:
+    """Контроль пустоты: на пустом словаре ЗАПРЕТ формально истинен — и это ЗАСЕКАЕТСЯ."""
+    empty: dict[str, str] = {}
+    found = _conditional_hx_post_sites(empty)
+
+    assert _conditional_hx_post_offence(found, CONDITIONAL_HX_POST_SITES) == "", (
+        "на пустой вселенной запрет не истинен — контроль пустоты потерял предмет"
+    )
+    offence = _conditional_universe_offence(empty)
+    assert offence != "", "пустая вселенная не засечена: зелень запрета на ней неотличима от слепоты"
+    assert "0 шаблонов" in offence
