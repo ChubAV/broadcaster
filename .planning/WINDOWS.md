@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 76
+open_count: 75
 waived_count: 3
-fixed_count: 23
+fixed_count: 24
 total_count: 102
-last_updated: 2026-09-24T18:12:54.898Z
+last_updated: 2026-09-24T18:57:18.081Z
 ---
 
 # Broken Windows Ledger
@@ -116,7 +116,7 @@ last_updated: 2026-09-24T18:12:54.898Z
 | 99 | 12 | deviation | tests/test_pages/test_htmx_gates.py |  | План 12-10 не называет этот модуль в files_modified: вызов гарды источника завёл собственный выход Response(403) у уже переведённого обработчика, и гейт OWN_RESPONSE_EXITS потребовал записи с новым состоянием решения (D-15) — D-08 этой записи не называет | fixed |  | 2026-09-19T10:47:53.255Z | 2026-09-19T10:48:08.772Z |
 | 100 | 15 | todo | .planning/REQUIREMENTS.md | 73 | GATE-08 name chronicle (plan 15-06) awaits the FETCH-03 prohibition function name from plan 15-04's summary — not invented | fixed |  | 2026-09-24T06:15:54.449Z | 2026-09-24T07:45:05.190Z |
 | 101 | 15 | unrun-verify | .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-03-PLAN.md |  | План 15-03, задача 3: команда проверки uv run pytest tests/ -q -p no:randomly -m 'not planning' (продуктовая половина, ~36 мин) исполнителем НЕ прогонялась — по указанию оркестратора полный прогон выполняет он сам после волны. Вместо неё прогнаны: гейт пар 15/15, три правимых файла 253 (было 248), tests/test_templates/ 275, восемь гейтов, читающих tests/ (138), compileall — чисто. Закрывается зелёным полным прогоном оркестратора после волны | fixed |  | 2026-09-24T07:28:35.107Z | 2026-09-24T11:06:14.551Z |
-| 102 | 15 | unrun-verify | .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md |  | План 15-14, задача 3: полный прогон just test (uv run pytest tests/ -v) исполнителем НЕ прогонялся — по указанию оркестратора /gsd-execute-phase 15 полную суиту он гонит сам сразу после плана 15-14. В 15-UAT.md (У-9) процитирован прогон волны 2 (2026-09-24, дерево aff6bd06: 3856 passed, 0 failed); на дереве 15-14 прогнаны tests/test_planning (108 passed), compileall (молчит), -m characterisation (1 passed / 3866 deselected). Закрывается полным прогоном оркестратора после 15-14. | open |  | 2026-09-24T18:12:54.898Z |  |
+| 102 | 15 | unrun-verify | .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md |  | План 15-14, задача 3: полный прогон just test (uv run pytest tests/ -v) исполнителем НЕ прогонялся — по указанию оркестратора /gsd-execute-phase 15 полную суиту он гонит сам сразу после плана 15-14. В 15-UAT.md (У-9) процитирован прогон волны 2 (2026-09-24, дерево aff6bd06: 3856 passed, 0 failed); на дереве 15-14 прогнаны tests/test_planning (108 passed), compileall (молчит), -m characterisation (1 passed / 3866 deselected). Закрывается полным прогоном оркестратора после 15-14. | fixed |  | 2026-09-24T18:12:54.898Z | 2026-09-24T18:57:18.081Z |
 
 ````json
 [
@@ -1357,10 +1357,10 @@ last_updated: 2026-09-24T18:12:54.898Z
     "file": ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md",
     "line": null,
     "description": "План 15-14, задача 3: полный прогон just test (uv run pytest tests/ -v) исполнителем НЕ прогонялся — по указанию оркестратора /gsd-execute-phase 15 полную суиту он гонит сам сразу после плана 15-14. В 15-UAT.md (У-9) процитирован прогон волны 2 (2026-09-24, дерево aff6bd06: 3856 passed, 0 failed); на дереве 15-14 прогнаны tests/test_planning (108 passed), compileall (молчит), -m characterisation (1 passed / 3866 deselected). Закрывается полным прогоном оркестратора после 15-14.",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-09-24T18:12:54.898Z",
-    "resolved_at": null,
+    "resolved_at": "2026-09-24T18:57:18.081Z",
     "milestone": "v2.1"
   }
 ]
