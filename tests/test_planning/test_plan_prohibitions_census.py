@@ -91,7 +91,9 @@ PyYAML 6.0.3 закреплён в `uv.lock` и приходит транзит�
 и уронит прибор отказом импорта — громко, а не молча.
 """
 
+import ast
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -173,10 +175,42 @@ DISPOSITIONS_DECLARED = 3
 # НАМЕРЕННО: их заводит ответ владельца на чекпойнте плана 15-12, а записывает по классам план
 # 15-13; исполнитель, поставивший такое поле сам, вынес бы вердикт вместо владельца. Поле,
 # пришедшее в реестр, вносится сюда ВМЕСТЕ С ЛЕТОПИСЬЮ — иначе оно войдёт в реестр незаметно.
+#
+# ЛЕТОПИСЬ ЧИСЛА: 7 → 8, план 15-01, задача 2 — пришло поле `declared_rule` (группа D-05 ниже).
+# Оно есть ОБЪЯВЛЕНИЕ, снятое засевом с формулировки запрета, а не вердикт: имя правила, которое
+# назвал автор запрета, либо признак «имя не объявлено».
 REGISTRY_ROW_FIELDS = frozenset(
-    {"plan", "index", "phase", "verification", "statement_digest", "class", "disposition"}
+    {
+        "plan",
+        "index",
+        "phase",
+        "verification",
+        "statement_digest",
+        "class",
+        "disposition",
+        "declared_rule",
+    }
 )
-REGISTRY_ROW_FIELDS_DECLARED = 7
+REGISTRY_ROW_FIELDS_DECLARED = 8
+
+# --- группа D-05: объявленные числа поля `verification` Фазы 10 ----------------------------
+# Замер 2026-09-23 (15-CONTEXT.md D-05, воспроизведён разведкой Ф-02), воспроизведён прибором
+# 2026-09-24: у всех 321 запрета Фазы 10 `status: flagged-unverified`; `verification: test` —
+# 61, `verification: none` — 199, ключа нет — 61. Три значения поля суммируются к области
+# решений: это ВТОРОЙ НЕЗАВИСИМЫЙ счёт того же множества, и расхождение читается как ошибка
+# разбора, а не как пропажа запрета.
+PHASE_10_VERIFICATION_TEST = 61
+PHASE_10_VERIFICATION_NONE = 199
+PHASE_10_VERIFICATION_ABSENT = 61
+PHASE_10_STATUS_FLAGGED_UNVERIFIED = 321
+VERIFICATION_TEST = "test"
+VERIFICATION_NONE = "none"
+STATUS_FLAGGED_UNVERIFIED = "flagged-unverified"
+
+# Контроль от вакуума, положительный: вселенная имён функций суиты непуста. Замер 2026-09-24:
+# 190 модулей `tests/**/*.py`, 4225 имён функций.
+SUITE_FUNCTION_NAMES_FLOOR = 1000
+SUITE_ROOT = TREE_ROOT / "tests"
 
 # Синтетика контролей. Путь лежит в фазе, которой в дереве нет, чтобы подмена словаря
 # исходников не могла совпасть с живым файлом.
@@ -525,3 +559,230 @@ def test_control_empty_universe_reddens_the_declared_number(registry_document):
     orphans, extras = bijection_offences([], tool._registry_rows(registry_document))
     assert not orphans
     assert len(extras) == PROHIBITIONS_DECLARED_AT_PHASE_15
+
+
+# --- группа D-05: у запрета с `verification: test` предъявляется СУЩЕСТВОВАНИЕ правила -----
+#
+# ПРЕДМЕТ ГРУППЫ — СУЩЕСТВОВАНИЕ ОБЪЯВЛЕННОГО ПРАВИЛА, а не человеческое разрешение
+# (15-CONTEXT.md D-05): объявление о тесте, которого нет, есть ровно тот класс «зелено
+# вакуумом», от которого фаза защищается. Измеренный экземпляр класса — `test_no_manual_fetch_remains`,
+# объявленный в GATE-08 и в дереве отсутствующий (15-RESEARCH.md Ф-06).
+
+
+def _suite_sources(root: Path) -> dict[str, str]:
+    """Отображение «путь модуля суиты → исходник» по `sorted(rglob)`."""
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(root.rglob("*.py"))
+    }
+
+
+def _suite_function_names(sources) -> frozenset[str]:
+    """Имена `ast.FunctionDef` и `ast.AsyncFunctionDef` поданных исходников — по ДЕРЕВУ.
+
+    Довод «по дереву, а не по строке» — `tests/test_pages/test_impersonation_gate.py:462`,
+    `:628-632`: поиск по тексту нашёл бы имя и в комментарии, и в докстринге, и в
+    закомментированном коде, то есть абзац мог бы «назвать свидетеля», процитировав себя.
+    """
+    names: set[str] = set()
+    for source in sources.values():
+        names |= _functions_defined_in(source)
+    return frozenset(names)
+
+
+@lru_cache(maxsize=None)
+def _functions_defined_in(source: str) -> frozenset[str]:
+    """Имена функций ОДНОГО исходника. Кэш ключуется ТЕКСТОМ исходника, а не путём.
+
+    Поэтому он прозрачен: подменённая копия исходника есть другой ключ и разбирается заново,
+    а неизменённый исходник не разбирается второй раз ни контролем, ни правилом. Без кэша три
+    прохода по 190 модулям суиты стоили бы ~4.5 s и вывели бы каталог из бюджета T-15-06.
+    """
+    return frozenset(
+        node.name
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+
+
+def _suite_module_names(sources) -> frozenset[str]:
+    """Имена модулей суиты, чей исходник РАЗБИРАЕТСЯ деревом: основа имени файла.
+
+    Правило в дереве суиты бывает функцией и бывает МОДУЛЕМ правил, и запреты называют оба:
+    замер 2026-09-24 — из двух имён, объявленных запретами Фазы 10, одно есть функция
+    (`10-36-PLAN.md#1`), другое — модуль (`10-44-PLAN.md#3`, «правило
+    `test_requirement_completion_follows_verification`»). Вселенная из одних функций объявила
+    бы существующий модуль отсутствующим — то есть краснела бы на работе, а не на дефекте.
+    """
+    names: set[str] = set()
+    for path, source in sources.items():
+        _functions_defined_in(source)  # исходник, не разбирающийся деревом, — отказ, а не модуль
+        names.add(Path(path).stem)
+    return frozenset(names)
+
+
+def _declared_rule_missing(declared, sources) -> list[str]:
+    """Объявленные имена правил, которых в поданной вселенной суиты НЕТ — все, а не первое.
+
+    `declared` — отображение «тождество запрета → объявленное имя»; признак «имя не
+    объявлено» сюда не подаётся. Вселенная суиты приходит ПАРАМЕТРОМ, чтобы контроль мог
+    подать изменённую копию.
+    """
+    universe = _suite_function_names(sources) | _suite_module_names(sources)
+    return sorted(
+        f"{identity.plan_path}#{identity.index}: объявлено правило `{name}`"
+        for identity, name in declared.items()
+        if name not in universe
+    )
+
+
+def _phase_10_verification_test(records):
+    return [
+        record
+        for record in records
+        if record.phase == DECISION_SCOPE_PHASE and record.verification == VERIFICATION_TEST
+    ]
+
+
+def _declared_rules(records, registry) -> dict:
+    """Объявленные имена по тождеству — без признака «имя не объявлено»."""
+    declared = {}
+    for record in _phase_10_verification_test(records):
+        name = registry[record.identity].get("declared_rule")
+        if name != tool.RULE_UNDECLARED:
+            declared[record.identity] = name
+    return declared
+
+
+@pytest.fixture(scope="module")
+def suite_sources():
+    return _suite_sources(SUITE_ROOT)
+
+
+def test_phase_10_verification_test_count_is_declared(live_census):
+    """Запретов Фазы 10 с `verification: test` — 61, по разбору блока, а не по строке."""
+    assert len(_phase_10_verification_test(live_census)) == PHASE_10_VERIFICATION_TEST
+
+
+def test_phase_10_verification_values_sum_to_the_decision_scope(live_census):
+    """Три значения поля — `test`, `none` и ОТСУТСТВИЕ ключа — сходятся к 321 вторым путём."""
+    in_scope = [record for record in live_census if record.phase == DECISION_SCOPE_PHASE]
+    counts = Counter(record.verification for record in in_scope)
+    assert (counts[VERIFICATION_TEST], counts[VERIFICATION_NONE], counts[None]) == (
+        PHASE_10_VERIFICATION_TEST,
+        PHASE_10_VERIFICATION_NONE,
+        PHASE_10_VERIFICATION_ABSENT,
+    ), counts
+    assert sum(counts.values()) == len(in_scope)
+    assert (
+        PHASE_10_VERIFICATION_TEST + PHASE_10_VERIFICATION_NONE + PHASE_10_VERIFICATION_ABSENT
+        == PROHIBITIONS_IN_DECISION_SCOPE
+    )
+
+
+def test_phase_10_verification_status_is_counted_a_second_way(live_census):
+    """Поле `status` — третий счёт того же множества: все 321 — `flagged-unverified`."""
+    in_scope = [record for record in live_census if record.phase == DECISION_SCOPE_PHASE]
+    flagged = [record for record in in_scope if record.status == STATUS_FLAGGED_UNVERIFIED]
+    assert len(flagged) == PHASE_10_STATUS_FLAGGED_UNVERIFIED == PROHIBITIONS_IN_DECISION_SCOPE
+
+
+def test_verification_none_and_an_absent_key_are_not_mixed():
+    """`verification: none` и отсутствие ключа — РАЗНЫЕ значения, и в реестре тоже."""
+    source = """---
+must_haves:
+  prohibitions:
+    - statement: "MUST NOT синтетика, объявившая none"
+      verification: none
+    - statement: "MUST NOT синтетика без ключа"
+---
+"""
+    declared_none, absent = tool.census({SYNTHETIC_PLAN: source})
+    assert declared_none.verification == VERIFICATION_NONE
+    assert absent.verification is None
+    assert tool.registry_row(declared_none)["verification"] == VERIFICATION_NONE
+    assert "verification" not in tool.registry_row(absent)
+
+
+def test_every_phase_10_verification_test_row_carries_a_declared_rule(
+    live_census, registry_document
+):
+    """По каждому из 61 запрета — поле `declared_rule`: имя правила ЛИБО признак «не объявлено».
+
+    Признак — отдельное значение, а не пустая строка и не ноль: ноль означал бы «объявлено
+    ноль правил», и смешение изъяло бы элемент из правила молча (идиома
+    `WalkthroughCounts.declared_checks`). Строки вне этого множества поля не несут вовсе.
+    """
+    registry = tool._registry_rows(registry_document)
+    subject = {record.identity for record in _phase_10_verification_test(live_census)}
+    without = sorted(identity for identity in subject if "declared_rule" not in registry[identity])
+    assert not without, (
+        f"строки реестра без поля `declared_rule` ({len(without)}):\n{_names(without)}"
+    )
+    malformed = sorted(
+        identity
+        for identity in subject
+        if not isinstance(registry[identity]["declared_rule"], str)
+        or not registry[identity]["declared_rule"].strip()
+    )
+    assert not malformed, _names(malformed)
+    strays = sorted(
+        identity
+        for identity, row in registry.items()
+        if "declared_rule" in row and identity not in subject
+    )
+    assert not strays, f"поле `declared_rule` вне множества D-05:\n{_names(strays)}"
+
+
+def test_every_declared_rule_exists_in_the_suite_tree(
+    live_census, registry_document, suite_sources
+):
+    """У каждого ОБЪЯВЛЕННОГО имени правила предъявлено существование в дереве суиты.
+
+    ЧЕГО ГРУППА НЕ УТВЕРЖДАЕТ. Совпадение имени не есть совпадение предмета: группа НЕ
+    утверждает, что найденное правило действительно СТЕРЕЖЁТ предмет своего запрета, — это
+    предмет человеческого суждения по D-33. И о `verification: none` группа не судит: она не
+    утверждает, что у таких запретов правила быть не должно, — это предмет решения владельца в
+    плане 15-13. Число запретов БЕЗ объявленного имени не знает ни одно утверждение: это
+    литерал сегодняшнего незакрытого состояния, и оно ДОКЛАДЫВАЕТСЯ в сообщении об отказе.
+    """
+    registry = tool._registry_rows(registry_document)
+    declared = _declared_rules(live_census, registry)
+    missing = _declared_rule_missing(declared, suite_sources)
+    undeclared = len(_phase_10_verification_test(live_census)) - len(declared)
+    assert not missing, (
+        "объявленные правила, которых в дереве суиты нет:\n"
+        + "\n".join(missing)
+        + f"\n\nобъявлено имён {len(declared)}, запретов с признаком «имя не объявлено» "
+        f"{undeclared}"
+    )
+
+
+def test_control_negative_a_declared_rule_absent_from_the_suite_is_named(suite_sources):
+    """Имя, которого в суите нет, объявляется отсутствующим и НАЗЫВАЕТСЯ — двумя путями.
+
+    (а) в перечень объявленного добавлено синтетическое имя; (б) из ПОДАННОЙ КОПИИ вселенной
+    суиты вынут модуль, объявляющий существующее правило. Дерево не правится ни одним путём.
+    """
+    live_name = "test_control_a_missing_anchor_is_named_by_the_rule"
+    synthetic = tool.ProhibitionIdentity(SYNTHETIC_PLAN, 0)
+    real = tool.ProhibitionIdentity(SYNTHETIC_PLAN, 1)
+    declared = {synthetic: "test_no_such_rule_was_ever_written", real: live_name}
+
+    missing = _declared_rule_missing(declared, suite_sources)
+    assert missing == [
+        f"{SYNTHETIC_PLAN}#0: объявлено правило `test_no_such_rule_was_ever_written`"
+    ], missing
+
+    holder = [path for path, text in suite_sources.items() if f"def {live_name}(" in text]
+    assert len(holder) == 1, holder
+    doctored = {path: text for path, text in suite_sources.items() if path not in holder}
+    assert sorted(_declared_rule_missing(declared, doctored)) == [
+        f"{SYNTHETIC_PLAN}#0: объявлено правило `test_no_such_rule_was_ever_written`",
+        f"{SYNTHETIC_PLAN}#1: объявлено правило `{live_name}`",
+    ]
+
+
+def test_control_positive_the_suite_function_universe_is_not_empty(suite_sources):
+    """На неизменённом дереве вселенная имён функций суиты непуста — больше 1000 имён."""
+    assert len(_suite_function_names(suite_sources)) > SUITE_FUNCTION_NAMES_FLOOR
