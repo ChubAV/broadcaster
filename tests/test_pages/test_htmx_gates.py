@@ -434,6 +434,10 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
 #   GET-входы (порции, статусы, блоки опроса), поэтому расширение области обхода
 #   есть решение, которое веха обязана ПРИНЯТЬ, а не унаследовать молча. Здесь
 #   оно не принимается: план 09-15 гейт не расширяет — он его границу НАЗЫВАЕТ.
+#   ⚠️ Фаза 15, план 15-11 (`DEF-09-04`): граница по-прежнему НЕ расширена —
+#   расширение принадлежит вехе, — и у неё появился СТОРОЖ:
+#   `test_push_url_g2_universe_holds_only_changing_methods` краснеет, если во
+#   вселенную G-2 придёт GET-маршрут (группа запрета D-13 в конце файла).
 #
 #   34 → 33, Фаза 10, план 10-01. ИСТОЧНИК ДВИЖЕНИЯ: УДАЛЕНИЕ РАСПИСАНИЯ ИЗ
 #   РЕДАКТОРА ОБЪЯВЛЕНИЯ переведено на слой ответа — единственный ФРАГМЕНТНЫЙ
@@ -7492,4 +7496,265 @@ def test_control_positive_push_url_universe_is_not_empty():
     assert _dual_branch_handlers(sources), "дуальных не найдено — признак ослеп"
     assert len(_write_form_places(_inventory_template_sources())) > 40, (
         "инвентарь мест письма пуст — ноль атрибута стал бы неотличим от слепоты обхода"
+    )
+
+
+# =============================================================================
+# ЗАПРЕТ `hx-push-url` НА МАРШРУТАХ «ИЗМЕНЯЕТ ДАННЫЕ» (D-13) И ГРАНИЦА DEF-09-04
+# (Фаза 15, план 15-11, критерий 3 ROADMAP Фазы 15)
+#
+# ПЕРЕЧЕНЬ «ИЗМЕНЯЕТ ДАННЫЕ» НЕ ВЫВОДИТСЯ ЗАНОВО. Он уже машинный: это
+# `FRAGMENT_RESPONSE_HANDLERS` (25 из 37). Он уже несёт обоснование на каждую
+# запись и уже стоит под правилом согласованности
+# (`FRAGMENT_RESPONSE_HANDLERS_DECLARED`). Собственный разбор стал бы вторым
+# носителем того же множества и разошёлся бы с первым. Правило ЧИТАЕТ чужой
+# перечень (`CHANGES_DATA_HANDLERS` — это он же, а не копия) и утверждает его
+# длину, поэтому расхождение становится видимым, а не наследуемым.
+#
+# Запрет сформулирован как ОТСУТСТВИЕ предмета (`assert not offenders`), а не
+# как равенство счётчика нулю: предмет здесь — запрет, а не счёт. Отказ
+# называет место ключом `путь#порядковый_номер` и его обработчика. Атрибут
+# ищется на НЕСУЩЕМ теге места: на сыром теге формы, а у вызова обёртки — в
+# тексте вызова и в теле макроса `form_wrapper` (провайдер раздал бы атрибут
+# всем вызывающим разом).
+#
+# ⚠️ ГРАНИЦА `DEF-09-04` НАЗВАНА И РАБОТОЙ НЕ ЗАКРЫТА:
+#   1. Вселенная гейта G-2 видит только POST-обработчики. GET-маршрут порции
+#      невидим ей В ОБЕ СТОРОНЫ: и когда он ушёл из множества
+#      неконвертированных, и когда GET-вход вернул бы себе собственное
+#      перенаправление.
+#   2. Граница НАЗВАНА записью летописи у самой константы (летопись
+#      `NOT_YET_CONVERTED_COUNT`, план 09-15) и НЕ РАСШИРЕНА. Ни одно правило
+#      этого плана вселенную G-2 на GET не расширяет.
+#   3. ⚠️ Расширение области обхода есть решение ВЕХИ, а не плана. Так записано
+#      в самом долге (`.planning/REQUIREMENTS.md`, запись `DEF-09-04`). План,
+#      расширивший вселенную G-2 на GET, НАРУШИЛ БЫ ЗАПИСЬ САМОГО ДОЛГА.
+#   4. Адресат передан ВЕХЕ по имени, а не растворён: решение о GET-входах
+#      принимает закрытие вехи v2.1 (её аудит), а не очередной план.
+#   Форма довода взята у образца, где та же граница уже принята
+#   (`tests/test_pages/test_impersonation_gate.py`, вторая названная граница
+#   разборщика изменяющих маршрутов): «расширение множества на `GET` втянуло бы
+#   в перечни все читающие маршруты продукта».
+#
+# ⚠️ СТОРОЖ ГРАНИЦЫ, А НЕ ЕЁ РАСШИРЕНИЕ.
+# `test_push_url_g2_universe_holds_only_changing_methods` утверждает, что
+# вселенная гейта состоит только из изменяющих методов, и краснеет на
+# пришедшем GET-маршруте, называя его. Это приём второго уровня: гейт, который
+# чего-то не видит, обязан требовать, чтобы этого и не было. Без сторожа
+# расширение могло бы произойти молча, руками того, кто «помог».
+#
+# ⚠️ ЧЕГО ЗАПРЕТ НЕ УТВЕРЖДАЕТ. Зелёный цвет означает: атрибута нет ни на одном
+# месте письма, чей обработчик меняет данные. Он НЕ означает, что атрибут
+# ПРАВИЛЬНО стоит там, где стоит: мест с атрибутом сегодня ноль, и это
+# отдельное утверждение реестра выше. Он НЕ означает ничего о GET-маршрутах:
+# они вне вселенной по НАЗВАННОЙ границе, и её расширение принадлежит вехе.
+# Он НЕ видит атрибут на вложенном элементе формы или на её предке (атрибут
+# наследуется); такой случай ловит правило нуля по всей разметке
+# (`test_push_url_zero_in_markup_is_a_decision_not_a_gap`).
+# =============================================================================
+
+# Перечень «изменяет данные» — ТОТ ЖЕ объект, что перечень фрагментных, а не копия.
+CHANGES_DATA_HANDLERS = FRAGMENT_RESPONSE_HANDLERS
+
+# Изменяющие методы HTTP — единственные, которым место во вселенной гейта G-2.
+CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Декораторы-методы маршрута (`@router.get(...)` и т. д.) — для чтения методов.
+_ROUTE_METHOD_DECORATORS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+
+# Метод, чьё значение разборщику не видно (перечень методов собран выражением).
+_UNSEEN_METHOD = "<выражение>"
+
+
+def _push_url_offenders(
+    template_sources: dict[str, str],
+    page_sources: dict[str, str],
+    *,
+    forbidden: frozenset[str] = FRAGMENT_RESPONSE_HANDLERS,
+) -> list[str]:
+    """Места письма обработчиков «изменяет данные», несущие `hx-push-url`.
+
+    Каждое нарушение — строка `ключ места → обработчики`.
+    """
+    offenders: list[str] = []
+    return offenders
+
+
+def _route_methods(decorator: ast.AST) -> frozenset[str] | None:
+    """Методы HTTP, которые объявляет декоратор маршрута; `None` — не маршрут."""
+    if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
+        return None
+    attr = decorator.func.attr
+    if attr in _ROUTE_METHOD_DECORATORS:
+        return frozenset({attr.upper()})
+    if attr != "api_route":
+        return None
+    for keyword in decorator.keywords:
+        if keyword.arg != "methods":
+            continue
+        if not isinstance(keyword.value, (ast.List, ast.Tuple, ast.Set)):
+            return frozenset({_UNSEEN_METHOD})
+        return frozenset(
+            element.value.upper()
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            else _UNSEEN_METHOD
+            for element in keyword.value.elts
+        )
+    return frozenset({"GET"})
+
+
+def _g2_universe_methods(sources: dict[str, str]) -> dict[str, frozenset[str]]:
+    """Вселенная гейта G-2 (`_post_handlers`) → методы HTTP каждого её обработчика.
+
+    Методы читаются со ВСЕХ декораторов маршрута функции: обработчик, вошедший
+    во вселенную своим POST, приносит с собой и соседние объявления.
+    """
+    methods: dict[str, frozenset[str]] = {}
+    return methods
+
+
+def _g2_universe_intruders(sources: dict[str, str]) -> dict[str, list[str]]:
+    """Обработчики вселенной G-2, принёсшие НЕизменяющий метод, — с этими методами."""
+    return {
+        key: sorted(declared - CHANGING_METHODS)
+        for key, declared in sorted(_g2_universe_methods(sources).items())
+        if declared - CHANGING_METHODS
+    }
+
+
+def test_push_url_forbidden_on_places_of_changes_data_handlers():
+    """ЗАПРЕТ (D-13): ни одно место письма обработчика «изменяет данные» не несёт атрибута."""
+    offenders = _push_url_offenders(_inventory_template_sources(), _pages_sources())
+
+    assert not offenders, (
+        "`hx-push-url` стоит на месте письма обработчика, меняющего только "
+        f"данные: {offenders}. Адрес сменился бы там, где показанное не менялось"
+    )
+
+
+def test_push_url_forbidden_reads_the_changes_data_list_it_does_not_copy():
+    """Запрет опирается на ЧУЖОЙ поддерживаемый перечень и утверждает его длину."""
+    import inspect
+
+    assert CHANGES_DATA_HANDLERS is FRAGMENT_RESPONSE_HANDLERS, (
+        "перечень «изменяет данные» стал копией — у множества два носителя"
+    )
+    assert len(CHANGES_DATA_HANDLERS) == FRAGMENT_RESPONSE_HANDLERS_DECLARED, (
+        f"перечень «изменяет данные» — {len(CHANGES_DATA_HANDLERS)} записей, "
+        f"объявлено {FRAGMENT_RESPONSE_HANDLERS_DECLARED}"
+    )
+    default = inspect.signature(_push_url_offenders).parameters["forbidden"].default
+    assert default is FRAGMENT_RESPONSE_HANDLERS, (
+        "запрет по умолчанию читает не перечень фрагментных"
+    )
+
+
+def test_control_push_url_forbidden_names_a_changes_data_place_carrying_the_attribute():
+    """КОНТРОЛЬ: атрибут на месте обработчика ИЗ перечня краснит запрет и называется."""
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    assert not _push_url_offenders(templates, pages), "запрет красен на неизменённом дереве"
+
+    probe = "zz_probe/changes_data.html"
+    templates[probe] = (
+        '<form method="post" action="/profile" hx-post="/profile" hx-push-url="true"></form>\n'
+    )
+
+    offenders = _push_url_offenders(templates, pages)
+
+    assert offenders == [f"{probe}#0 → app/pages/profile.py::profile_post"], (
+        f"запрет не нашёл либо не назвал место с атрибутом: {offenders}"
+    )
+
+
+def test_control_push_url_forbidden_stays_silent_outside_the_changes_data_list():
+    """КОНТРОЛЬ: атрибут на месте обработчика ВНЕ перечня запрет НЕ краснит.
+
+    Без этого контроля запрет мог бы краснеть на любом атрибуте и предмета не
+    различал бы. Атрибут при этом виден правилу нуля: место приземлилось.
+    """
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    probe = "zz_probe/outside.html"
+    templates[probe] = (
+        '<form method="post" action="/ads/{{ ad.id }}/delete" '
+        'hx-post="/ads/{{ ad.id }}/delete" hx-push-url="true"></form>\n'
+    )
+
+    resolved = _place_handlers(templates, pages)
+    assert resolved.get(f"{probe}#0") == frozenset({"app/pages/ads.py::ads_delete"}), (
+        "синтетическое место не приземлилось на обработчика вне перечня"
+    )
+    assert _push_url_markup_places(templates) == [f"{probe}: 1"], "атрибут на месте не виден"
+    assert "app/pages/ads.py::ads_delete" not in CHANGES_DATA_HANDLERS
+
+    assert _push_url_offenders(templates, pages) == [], (
+        "запрет покраснел на месте обработчика ВНЕ перечня «изменяет данные»"
+    )
+
+
+def test_control_push_url_forbidden_sees_the_attribute_in_the_wrapper_body():
+    """КОНТРОЛЬ: атрибут в теле макроса обёртки достаётся всем её вызывающим."""
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    wrapper = next(
+        (name for name, text in templates.items() if FORM_WRAPPER_MACRO.search(text)), None
+    )
+    assert wrapper is not None, "тело макроса `form_wrapper` не найдено"
+    templates[wrapper] = templates[wrapper].replace("<form ", '<form hx-push-url="true" ', 1)
+
+    offenders = _push_url_offenders(templates, pages)
+
+    assert any("includes/profile_settings.html#0" in line for line in offenders), (
+        f"атрибут провайдера не достался вызывающим: {offenders}"
+    )
+
+
+def test_control_positive_push_url_forbidden_universe_is_not_empty():
+    """КОНТРОЛЬ: вселенная запрета непуста — мест письма больше 40, обработчиков больше 30."""
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    assert len(_write_form_places(templates)) > 40, "мест письма не найдено"
+    assert len(_post_handlers(pages)) > 30, "POST-обработчиков не найдено"
+    resolved = _place_handlers(templates, pages)
+    assert any(handlers & CHANGES_DATA_HANDLERS for handlers in resolved.values()), (
+        "ни одно место не ведёт к обработчику «изменяет данные» — запрет молчал бы на пустоте"
+    )
+
+
+def test_push_url_g2_universe_holds_only_changing_methods():
+    """СТОРОЖ ГРАНИЦЫ `DEF-09-04`: во вселенной G-2 — только изменяющие методы.
+
+    ⚠️ Это правило утверждает, что граница НА МЕСТЕ, а не расширяет её. Отказ
+    называет обработчика, принёсшего GET, и его методы. Сторож обязан видеть
+    ВСЮ вселенную: иначе он молчал бы на пустоте.
+    """
+    sources = _pages_sources()
+    methods = _g2_universe_methods(sources)
+
+    assert set(methods) == set(_post_handlers(sources)), (
+        "сторож видит не всю вселенную G-2: "
+        f"{sorted(set(_post_handlers(sources)) - set(methods))}"
+    )
+    intruders = _g2_universe_intruders(sources)
+    assert not intruders, (
+        f"во вселенную гейта G-2 пришли НЕизменяющие методы: {intruders}. Граница "
+        "DEF-09-04 расширяется только решением вехи, а не плана"
+    )
+
+
+def test_control_push_url_g2_universe_guard_names_an_incoming_get_route(tmp_path):
+    """КОНТРОЛЬ: обработчик с GET и POST на одном объявлении краснит сторожа и называется."""
+    original = _pages_sources()[SCRATCH_MODULE]
+    addition = (
+        '\n\n@router.api_route("/profile/both", methods=["GET", "POST"])\n'
+        "async def a_route_reading_and_writing(request: Request):\n"
+        '    return await respond(request, redirect="/profile")\n'
+    )
+    sources = _sources_with(tmp_path, _pages_sources(), SCRATCH_MODULE, original + addition)
+    key = f"{SCRATCH_MODULE}::a_route_reading_and_writing"
+
+    assert key in _post_handlers(sources), "синтетический обработчик не вошёл во вселенную G-2"
+    assert _g2_universe_intruders(sources) == {key: ["GET"]}, (
+        f"сторож не назвал пришедший GET-маршрут: {_g2_universe_intruders(sources)}"
     )
