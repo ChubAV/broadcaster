@@ -5,16 +5,16 @@ milestone_name: HTMX-first
 current_phase: 15
 current_phase_name: Упрочнение и сводный обход 47 форм
 status: executing
-stopped_at: Completed 15-08-PLAN.md
-last_updated: "2026-09-24T10:20:10.601Z"
+stopped_at: Completed 15-09-PLAN.md
+last_updated: "2026-09-24T12:54:10.378Z"
 last_activity: 2026-09-24
 last_activity_desc: Phase 15 execution started
-state_head: b397a99aadddc29e4d57bbb5c3b87212bf08609f
+state_head: f0d8984d63c1b37d5b65cfe1012ae309f07859ff
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 156
-  completed_plans: 150
+  completed_plans: 151
   percent: 89
 ---
 
@@ -55,10 +55,11 @@ v2.1: Фазы 7, 8, 9, 10, 11, 12 (129 планов, 6 из 9 фаз, 67%). Ф�
 ## Current Position
 
 Phase: 15 (Упрочнение и сводный обход 47 форм) — EXECUTING
-Plan: 9 of 14
+Plan: 10 of 14
 Total Plans in Phase: 14
-Completed Plans in Phase: 8
+Completed Plans in Phase: 9
 Status: Executing Phase 15
+⚠️ После плана 15-09 (2026-09-24) `state.advance-plan` в девятый раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 8»; фаза исполняется (исполнено 9 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md`, `15-08-SUMMARY.md` и `15-09-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 10 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-09; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-08 (2026-09-24) `state.advance-plan` в восьмой раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 7»; фаза исполняется (исполнено 8 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md`, `15-07-SUMMARY.md` и `15-08-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 9 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-08; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-07 (2026-09-24) `state.advance-plan` в седьмой раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 6»; фаза исполняется (исполнено 7 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md`, `15-05-SUMMARY.md` и `15-07-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 8 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-07; по идиоме D-30/D-32 названы, а не вычеркнуты.
 ⚠️ После плана 15-05 (2026-09-24) `state.advance-plan` в шестой раз записал «Status: Ready to execute» и не сдвинул «Completed Plans in Phase: 5»; фаза исполняется (исполнено 6 планов из 14 — сводки `15-06-SUMMARY.md`, `15-01-SUMMARY.md`, `15-02-SUMMARY.md`, `15-03-SUMMARY.md`, `15-04-SUMMARY.md` и `15-05-SUMMARY.md`), поэтому обе строки поставлены рукой замером по сводкам на диске. Строку «Plan: 7 of 14» верб поставил в форме, принятой планом 15-06, и она не тронута. Прежние значения ошибкой не были — они устарели с исполнением плана 15-05; по идиоме D-30/D-32 названы, а не вычеркнуты.
@@ -274,6 +275,7 @@ Progress: [████████████████████] 116/116
 | Phase 15 P05 | 20 min | 3 tasks | 1 files |
 | Phase 15 P07 | 44 min | 3 tasks | 4 files |
 | Phase 15 P08 | 76 min | 3 tasks | 5 files |
+| Phase 15 P09 | 1h 43m | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -603,6 +605,9 @@ Decisions are logged in PROJECT.md Key Decisions table.
 - [Phase 15]: 15-08: schedules_update откатывает невалидную зону на ПРОВЕРЕННОЕ значение (сохранённая зона, только если валидна, иначе зона профиля ∈ VALID_TIMEZONES, UTC последним рубежом) и спрашивает next_run_or_none; неисполнимое полное включённое расписание на правке сохраняется выключенным (D-08) — Откат на сохранённое подтверждал невалидную зону и перезаписывал её; одна починка помощником оставила бы строку испорченной молча. Выключение вместо отказа — иначе фиксация падала бы на ck_schedules_active_requires_next_run
 - [Phase 15]: 15-08: посылка задачи 2 опровергнута замером — путём карточки редактора все 6 форм MALFORMED_STORED_FORMS зелены уже после задачи 1 (санитайзеры отбрасывают негодные дни/времена до расчёта); next_run_or_none на этом входе — ВТОРАЯ линия, измеренная правилами с открытой первой линией — Неожиданная зелень RED по посылке плана (fail-fast правило 1); решение владельца «четвёртый вход спрашивает next_run_or_none» исполнено, а его необходимость доказана прогоном второй линии (5 из 6 форм давали 500 без помощника)
 - [Phase 15]: 15-08: запрет огульного перехвата в app/services/schedule_rules.py принуждён ast-разбором ТЕЛА (tests/test_services/test_schedule_rules_gate.py), а не грепом; докстринг next_run_or_none называет конструкцию прямо, вынужденная оговорка снята летописью D-30/D-32 — Обещанного докстрингом греп-гейта в дереве не было (зелено вакуумом); гейт по узлам дерева не видит докстринг по построению, что доказано правилом разности обходов
+- [Phase 15]: 15-09: page size reaches the six templates from the context as PAGE_SIZE itself, not the client's limit, so the rendered portion URL is unchanged; the gate asserts the ABSENCE of the literal in template sources — a rule on the rendered URL stays green with the literal back (DEF-09-03)
+- [Phase 15]: 15-09: the editor-screen orphan (sched-{schedule_id}, sched-del-{schedule_id}) entered the same OOB_TARGET_EXCEPTIONS list, 2 -> 4, by a chronicle entry — prose in three places declared it inherited by the list with Phase 15, yet no entry existed
+- [Phase 15]: 15-09: all four OOB target exceptions carry Phase 15 disposition 'reassigned' with the product owner as addressee; removal is the owner's decision on the task 3 measurement (mutant: 13 rules redden, 9 of them indistinguishability D-04-A) — the executor may not undo D-04-A, and leaving the assignment with the closing phase leaves a debt without an addressee
 
 ### Pending Todos
 
@@ -787,8 +792,8 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-09-24T10:20:09.895Z
-Stopped at: Completed 15-08-PLAN.md
+Last session: 2026-09-24T12:54:09.677Z
+Stopped at: Completed 15-09-PLAN.md
 Resume file: None
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
