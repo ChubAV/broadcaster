@@ -2454,7 +2454,17 @@ FAILURE_BANNER_SUCCESS_FLAG = "successful"
 FAILURE_BANNER_DISMISS_CLASS = "banner-dismiss"
 
 # Доступное имя органа снятия — по-русски, как и обе плашки.
-FAILURE_BANNER_DISMISS_LABEL = "Скрыть сообщение"
+#
+# ⚠️ ЛЕТОПИСЬ (идиома D-30/D-32: прежнее значение названо, а не вычеркнуто).
+# До плана 15-07 здесь стояла ОДНА строка `FAILURE_BANNER_DISMISS_LABEL =
+# "Скрыть сообщение"` — одно имя на обе заготовки, и при двойной аварии в
+# порядке обхода стоя́ли два неразличимых доступных имени (WCAG 4.1.2, находка 3
+# долга D-18.3). Правкой плана 15-07 имена разведены ПО ПРЕДМЕТУ заготовки, и
+# ожидание теперь ПО УЗЛУ. Носитель имён ОДИН —
+# `BANNER_DISMISS_ACCESSIBLE_NAMES` в tests/test_templates/test_banner_dismiss.py
+# (там же различимость и соответствие предмету); здесь он импортируется внутри
+# `_dismiss_control_findings`, а не в шапке модуля, чтобы не сдвигать номера
+# строк выше, которые цитируют записи фазы.
 
 # Идентификаторы органов снятия, ПОЗИЦИОННО парные `FAILURE_BANNER_IDS`.
 #
@@ -8269,7 +8279,13 @@ def _dismiss_control_findings(path: Path) -> tuple[str, ...]:
           обход всей страницы, и цена эта берётся не здесь.
     Плюс пятое: идентификатор органа равен объявленному — им сценарий находит
     орган, и разойдясь, он находил бы НИЧЕГО молча.
+
+    Ожидаемое доступное имя — ПО УЗЛУ, из единственного носителя
+    `BANNER_DISMISS_ACCESSIBLE_NAMES` (план 15-07; летопись — в комментарии
+    «Доступное имя органа снятия» выше).
     """
+    from tests.test_templates.test_banner_dismiss import BANNER_DISMISS_ACCESSIBLE_NAMES
+
     findings: list[str] = []
     for banner_id in FAILURE_BANNER_IDS:
         line = _failure_banner_node_line(path, banner_id)
@@ -8305,10 +8321,11 @@ def _dismiss_control_findings(path: Path) -> tuple[str, ...]:
                 "      следствие: узел без роли в порядок обхода с клавиатуры "
                 "не попадает, и человек с клавиатурой выхода не получает"
             )
-        if f'aria-label="{FAILURE_BANNER_DISMISS_LABEL}"' not in tag:
+        expected_label = BANNER_DISMISS_ACCESSIBLE_NAMES.get(banner_id, "")
+        if not expected_label or f'aria-label="{expected_label}"' not in tag:
             findings.append(
                 f"#{banner_id}: у органа снятия НЕТ доступного имени "
-                f"`{FAILURE_BANNER_DISMISS_LABEL}`\n"
+                f"`{expected_label}`\n"
                 f"      получено:  {tag}\n"
                 "      следствие: вспомогательные технологии назовут его "
                 "«флажок» и ничем больше"

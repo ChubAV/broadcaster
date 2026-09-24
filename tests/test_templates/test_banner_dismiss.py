@@ -133,7 +133,7 @@ class DismissControl(NamedTuple):
 def _banner_source(directory: Path | None = None) -> str:
     """Исходник шаблона заготовок из обхода дерева (UTF-8, как читает обход).
 
-    Обход — ОБЩИЙ `_all_templates` гейтов разметки; своего `rglob` здесь не
+    Обход — ОБЩИЙ `_all_templates` гейтов разметки; своего обхода каталога не
     заводится.
     """
     for rel, source in _all_templates(directory):

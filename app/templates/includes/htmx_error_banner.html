@@ -297,8 +297,8 @@
 
    Подключение: {% include "includes/htmx_error_banner.html" %} #}
 {% from "components/alert.html" import alert %}
-<div id="htmx-failure-server" class="failure-stack" hidden><input type="checkbox" id="htmx-failure-server-close" class="banner-dismiss" aria-label="Скрыть сообщение">{{ alert('Действие не выполнено. Попробуйте ещё раз через минуту.', 'error') }}</div>
-<div id="htmx-failure-network" class="failure-stack" hidden><input type="checkbox" id="htmx-failure-network-close" class="banner-dismiss" aria-label="Скрыть сообщение">{{ alert('Запрос не дошёл до сервера. Проверьте соединение и попробуйте ещё раз. Показанное на экране могло разойтись с тем, что записано на сервере: обновите страницу, чтобы увидеть настоящее состояние.', 'error') }}</div>
+<div id="htmx-failure-server" class="failure-stack" hidden><input type="checkbox" id="htmx-failure-server-close" class="banner-dismiss" aria-label="Скрыть сообщение об отказе сервера">{{ alert('Действие не выполнено. Попробуйте ещё раз через минуту.', 'error') }}</div>
+<div id="htmx-failure-network" class="failure-stack" hidden><input type="checkbox" id="htmx-failure-network-close" class="banner-dismiss" aria-label="Скрыть сообщение об обрыве связи">{{ alert('Запрос не дошёл до сервера. Проверьте соединение и попробуйте ещё раз. Показанное на экране могло разойтись с тем, что записано на сервере: обновите страницу, чтобы увидеть настоящее состояние.', 'error') }}</div>
 <script>
   if (!document.body.dataset.htmxFailureWired) {
   document.body.dataset.htmxFailureWired = '1';
