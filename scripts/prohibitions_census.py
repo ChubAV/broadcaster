@@ -19,10 +19,17 @@
 Режимы:
   --check           число элементов и разбивка по фазам; код 1, если перепись разошлась с
                     реестром (число, `rows_declared`, биекция тождеств)
-  --list [--phase N]
-                    перечень записей глазам человека: тождество, фаза, `verification`,
-                    диспозиция из реестра, первые ~100 символов формулировки
-  --breakdown       разбивка по фазам, по значениям `verification` и по диспозициям реестра
+  --list [--phase N] [--class NAME]
+                    перечень записей глазам человека: тождество, фаза, `verification`, класс и
+                    диспозиция из реестра, первые ~100 символов формулировки; `--class` —
+                    перечень одного класса предмета
+  --breakdown       разбивка по фазам, по значениям `verification`, по диспозициям и по КЛАССАМ
+                    реестра; для области решений (Фаза 10) — число запретов класса и число
+                    среди них с `verification: test`
+  --draft-classes   ЧЕРНОВАЯ разбивка области решений по классам ключевыми словами: по каждому
+                    запрету печатаются ВСЕ классы-кандидаты, а не первый, рядом — класс,
+                    записанный в реестр. ⚠️ Режим — для человека и для улики в сводке; гейт
+                    его НЕ ЗОВЁТ: класс есть записанное поле, а не вывод в момент прогона
   --reconcile       таблица сличения: разбор по блоку, наивная сеть по строке над вехой и
                     четыре исторические сети над планами Фазы 10 — каждая со СЛАГАЕМЫМИ
                     своего расхождения с переписью, а не только с разностью
@@ -72,6 +79,8 @@ DIGEST_LENGTH = 12
 # 15-12, диспозицию — план 15-13 по ответу владельца. Полей `permit_*` засев не пишет вовсе.
 SEED_CLASS = "unclassified"
 SEED_DISPOSITION = "unresolved"
+# Признак ключа разрешения. Такие ключи заводит ОТВЕТ ВЛАДЕЛЬЦА; `--check` их только считает.
+PERMIT_PREFIX = "permit"
 
 # Порядок полей строки реестра — ради воспроизводимого вывода засева.
 REGISTRY_FIELD_ORDER = (
@@ -120,6 +129,12 @@ REGISTRY_HEADER = """\
 #
 # `rows_declared` — второй носитель числа переписи (первый — литерал модуля теста);
 # перегенерация реестра в другой размер краснит модуль.
+#
+# `class` у строк Фазы 10 (область решений D-02) записан планом 15-12 ОДИН раз — чтением
+# формулировки, а не порядком правил регулярных выражений; перечень классов объявлен в модуле
+# теста (`PROHIBITION_CLASSES`). Строки вне области решений сохраняют `unclassified`. Черновая
+# разбивка ключевыми словами (`--draft-classes`) есть улика для человека: гейт её не зовёт.
+# Верность отнесения — человеческое суждение; гейт утверждает ПОЛНОТУ, а не правильность.
 """
 
 
@@ -683,6 +698,84 @@ def reconcile_lines(sources: Mapping[str, str]) -> list[str]:
     return lines
 
 
+# --- черновая разбивка по классам ---------------------------------------------------
+#
+# ⚠️ ЧЕРНОВИК, А НЕ КЛАССИФИКАТОР. Замер разведки (15-RESEARCH.md Ф-04) на восьми классах: 139
+# запретов из 321 попадают в два и более класса, 64 — ни в один, и «первое совпадение
+# выигрывает» делает класс функцией ПОРЯДКА правил в этом перечне: переставьте два правила — и
+# `permit_scope` сотни запретов сменит имя. Поэтому функция ниже возвращает ВСЕ классы-кандидаты
+# (в порядке имён, чтобы и порядок вывода не зависел от порядка правил), класс записывается в
+# реестр ЧТЕНИЕМ формулировки один раз, а принуждающая половина прибора этот раздел не
+# импортирует и не зовёт. Имена классов — те же, что в `PROHIBITION_CLASSES` модуля теста;
+# расхождение имён видно в выводе `--draft-classes` как класс реестра вне всех кандидатов.
+
+DECISION_SCOPE_PHASE = "10"
+
+DRAFT_CLASS_PATTERNS: dict[str, re.Pattern] = {
+    "gate-integrity": re.compile(
+        r"правил|контрол|вакуум|литерал|объявленн\w* числ|подгон|pytest\.skip|синтетик|"
+        r"констант|подмен\w* \w*\s?рантайм|D-33|зелен|зелён|изъяти|вселенн",
+        re.IGNORECASE,
+    ),
+    "live-environment-safety": re.compile(
+        r"посев|DATABASE_URL|боев\w* баз|live_dom_uat|\bпрод\b|стенд", re.IGNORECASE
+    ),
+    "owner-decision-reserved": re.compile(
+        r"решени\w* владельц|владел\w* вехи|не принимается внутри|имя принявшего|не сочиняется|"
+        r"запер|решени\w* вехи|решение уровня вехи|ветв\w* не предлагается|D-01|D-11|D-13",
+        re.IGNORECASE,
+    ),
+    "plan-file-scope": re.compile(
+        r"этим планом|настоящим планом|files_modified|`app/|app\.css|не правится ни на|"
+        r"не правятся ни на|не трогается|не трогаются",
+        re.IGNORECASE,
+    ),
+    "product-invariant": re.compile(
+        r"оптимистичн|панел|плашк|заготовк|уведомлен|notice|гард|фокус|селектор|"
+        r"идентификатор|скоуп|x-data|hx-on|hx-confirm|T-\d\d-\d\d|WR-04|отказ",
+        re.IGNORECASE,
+    ),
+    "record-immutability": re.compile(
+        r"исполненн\w* план|сводк|\.planning/research|ROADMAP|роадмап|CONTEXT\.md|реестр\w* окон|"
+        r"PROHIBITIONS-SUBJECT|задним числом|переписанн\w* истори",
+        re.IGNORECASE,
+    ),
+    "requirement-flag": re.compile(
+        r"FORM-06|REQUIREMENTS\.md|требовани\w* не помечается|отмечается выполненным",
+        re.IGNORECASE,
+    ),
+    "self-certification": re.compile(
+        r"UAT|отметк|терминальн|самозаверен|вердикт|VERIFICATION|гэп|G-10-7|обход",
+        re.IGNORECASE,
+    ),
+    "superseded-text-kept": re.compile(
+        r"вычёркива|вычеркива|стира|опровергнут|D-30/D-32|летопис", re.IGNORECASE
+    ),
+    "vendored-runtime-and-dependencies": re.compile(
+        r"вендорен|htmx\.min|alpine\.min|строки JS|зависимост|build-шаг|playwright|selenium",
+        re.IGNORECASE,
+    ),
+    "work-owned-elsewhere": re.compile(
+        r"Фаз[еыаи] 1[15]|отложен|предсуществующ|IN-0\d|UI-\d|не чинится|не чинятся|"
+        r"не втягивается|перемаршрутиз|владел\w* котор",
+        re.IGNORECASE,
+    ),
+}
+
+
+def _draft_class_candidates(record: ProhibitionRecord) -> tuple[str, ...]:
+    """ВСЕ классы-кандидаты формулировки по ключевым словам — в порядке имён, а не правил."""
+    return tuple(
+        name
+        for name in sorted(DRAFT_CLASS_PATTERNS)
+        if DRAFT_CLASS_PATTERNS[name].search(record.statement)
+    )
+
+
+def _decision_scope(records: Iterable[ProhibitionRecord]) -> list[ProhibitionRecord]:
+    return [record for record in records if record.phase == DECISION_SCOPE_PHASE]
+
+
 # --- режимы ------------------------------------------------------------------------
 
 
@@ -709,6 +802,12 @@ def _check(root: Path) -> int:
         problems.append(f"запрет без строки реестра: {identity}")
     for identity in sorted(set(registry) - census_ids):
         problems.append(f"строка реестра без запрета: {identity}")
+    # Ключи разрешения в строках реестра — ПЕЧАТАЮТСЯ, а не судятся: их заводит ответ владельца
+    # (план 15-12, задача 3; строки — план 15-13), и число здесь есть улика для человека.
+    permit_keys = sum(
+        1 for row in registry.values() for field in row if str(field).startswith(PERMIT_PREFIX)
+    )
+    print(f"ключей разрешения (`{PERMIT_PREFIX}*`) в строках реестра: {permit_keys}")
     if problems:
         print("РАСХОЖДЕНИЕ переписи с реестром:")
         for problem in problems:
@@ -718,17 +817,20 @@ def _check(root: Path) -> int:
     return 0
 
 
-def _list(root: Path, phase: str | None) -> int:
+def _list(root: Path, phase: str | None, klass: str | None = None) -> int:
     registry = _registry_rows(load_registry(root / REGISTRY_RELATIVE_PATH))
     for record in census(_plan_sources(root)):
         if phase is not None and record.phase != phase:
             continue
         row = registry.get(record.identity, {})
+        if klass is not None and row.get("class") != klass:
+            continue
         verification = record.verification if record.verification is not None else "—"
         statement = " ".join(record.statement.split())[:100]
         print(
             f"{record.identity}  фаза {record.phase}  verification={verification}  "
-            f"disposition={row.get('disposition', '?')}  {statement}"
+            f"class={row.get('class', '?')}  disposition={row.get('disposition', '?')}  "
+            f"{statement}"
         )
     return 0
 
@@ -749,7 +851,51 @@ def _breakdown(root: Path) -> int:
     )
     for value, count in sorted(dispositions.items()):
         print(f"  {value}: {count}")
+
+    def class_of(record: ProhibitionRecord) -> str:
+        return str(registry.get(record.identity, {}).get("class", "?"))
+
+    print("по классам реестра, вся веха (? — строки нет):")
+    for value, count in sorted(Counter(class_of(record) for record in records).items()):
+        print(f"  {value}: {count}")
+    scope = _decision_scope(records)
+    print(
+        f"по классам области решений (фаза {DECISION_SCOPE_PHASE}): запретов / из них с "
+        f"`verification: {DECLARED_RULE_VERIFICATION}`"
+    )
+    by_class = Counter(class_of(record) for record in scope)
+    tested = Counter(
+        class_of(record) for record in scope if record.verification == DECLARED_RULE_VERIFICATION
+    )
+    for value in sorted(by_class):
+        print(f"  {value}: {by_class[value]} / {tested[value]}")
+    print(
+        f"  сумма по классам области решений: {sum(by_class.values())} "
+        f"(классов {len(by_class)})"
+    )
     print(f"итого элементов блока must_haves.prohibitions: {len(records)}")
+    return 0
+
+
+def _draft(root: Path) -> int:
+    records = _decision_scope(census(_plan_sources(root)))
+    registry = _registry_rows(load_registry(root / REGISTRY_RELATIVE_PATH))
+    widths: Counter = Counter()
+    recorded_among = 0
+    for record in records:
+        candidates = _draft_class_candidates(record)
+        widths[len(candidates)] += 1
+        recorded = str(registry.get(record.identity, {}).get("class", "?"))
+        mark = "∈" if recorded in candidates else "∉"
+        recorded_among += recorded in candidates
+        listed = ", ".join(candidates) if candidates else "—"
+        print(f"{record.identity}  записан={recorded} {mark} кандидаты[{len(candidates)}]: {listed}")
+    print(f"ЧЕРНОВАЯ РАЗБИВКА: область решений (фаза {DECISION_SCOPE_PHASE}) — {len(records)}")
+    for width in sorted(widths):
+        print(f"  кандидатов {width}: {widths[width]}")
+    print(f"  многозначных (кандидатов ≥ 2): {sum(c for w, c in widths.items() if w >= 2)}")
+    print(f"  беспризорных (кандидатов 0): {widths[0]}")
+    print(f"  записанный класс среди кандидатов черновика: {recorded_among} из {len(records)}")
     return 0
 
 
@@ -780,19 +926,27 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--breakdown", action="store_true", help="разбивка по фазам и полям")
     mode.add_argument("--reconcile", action="store_true", help="сличение с сетями по строке")
     mode.add_argument("--seed-registry", action="store_true", help="засев скелета реестра")
+    mode.add_argument(
+        "--draft-classes", action="store_true", help="черновая разбивка: ВСЕ кандидаты"
+    )
     parser.add_argument("--phase", help="только эта фаза (с --list), например 10")
+    parser.add_argument("--class", dest="klass", help="только этот класс (с --list)")
     arguments = parser.parse_args(argv)
     if arguments.phase is not None and not arguments.list:
         parser.error("--phase применим только с --list")
+    if arguments.klass is not None and not arguments.list:
+        parser.error("--class применим только с --list")
     try:
         if arguments.check:
             return _check(TREE_ROOT)
         if arguments.list:
-            return _list(TREE_ROOT, arguments.phase)
+            return _list(TREE_ROOT, arguments.phase, arguments.klass)
         if arguments.breakdown:
             return _breakdown(TREE_ROOT)
         if arguments.reconcile:
             return _reconcile(TREE_ROOT)
+        if arguments.draft_classes:
+            return _draft(TREE_ROOT)
         return _seed(TREE_ROOT)
     except CensusError as error:
         print(f"ОТКАЗ: {error}", file=sys.stderr)

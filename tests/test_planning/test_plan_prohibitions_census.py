@@ -78,6 +78,9 @@ D-06, ОБЕ ПОЛОВИНЫ: этот модуль — ПЕРВЫЙ в про�
 читаемые ПОЛЯ — элементы блока шапки и строки реестра — и объявленное между ними соответствие.
 Суждения этот предмет не требует, поэтому D-33 настоящим модулем НЕ ПЕРЕОТКРЫВАЕТСЯ и НЕ
 ОТМЕНЯЕТСЯ; документная половина прохибиций по-прежнему судится человеком.
+Класс предмета (план 15-12) — тот же довод: предмет — ДВА машинно читаемых поля (`class` строки
+реестра и перечень `PROHIBITION_CLASSES` модуля) и ОДНО объявленное между ними соответствие
+(принадлежность); класс из прозы формулировки гейт не выводит, и суждения этот предмет не требует.
 
 ГРАНИЦА: ПЕРЕЕЗД В АРХИВ. Вселенная прибора — `.planning/phases/`. Закрытие вехи переносит
 каталоги фаз в архив, и тогда правила ниже покраснеют пустой вселенной, а не позеленеют молча:
@@ -216,6 +219,57 @@ PARTIALLY_ENFORCED = "partially-enforced"
 # 15-13 вместе с первой такой диспозицией и летописью числа полей — по общему правилу перечня.
 UNCOVERED_PART_FIELD = "uncovered_part"
 
+# ПЕРЕЧЕНЬ КЛАССОВ ПРЕДМЕТА ЗАПРЕТА (D-04: владелец решает ПО КЛАССУ, `permit_scope` пишется
+# ИМЕНЕМ класса, каждый запрет несёт СВОЮ строку со своим классом). ⚠️ КЛАСС — ЗАПИСАННОЕ ПОЛЕ
+# РЕЕСТРА, А НЕ ВЫВОД В МОМЕНТ ПРОГОНА: замер 15-RESEARCH.md Ф-04 — 139 запретов из 321 попадают в
+# два и более класса ключевых слов, 64 ни в один, и «первое совпадение выигрывает» сделало бы
+# класс функцией ПОРЯДКА правил, то есть переименовало бы молча область решений владельца.
+#
+# ЛЕТОПИСЬ ЧИСЛА: 11. Выведено планом 15-12 (задача 2, 2026-09-24) ЧТЕНИЕМ всех 321 формулировки
+# Фазы 10, ОДИН раз; восемь имён замера Ф-04 были отправной точкой, четыре примера D-04 вошли
+# (`vendored-runtime-and-dependencies`, `record-immutability`, `requirement-flag`,
+# `owner-decision-reserved`). Граница обозримости — от 5 до 12: один класс есть оптовое
+# разрешение, тридцать — поштучное, и обе крайности владелец отверг. ⚠️ Класс, пришедший в реестр
+# и не внесённый сюда, краснит правило принадлежности; внесённый без подъёма числа — правило
+# объявленных чисел.
+#
+# ЧЕГО ПЕРЕЧЕНЬ НЕ УТВЕРЖДАЕТ: верность отнесения запрета к классу есть человеческое суждение, и
+# правила ниже его не судят — они утверждают ПОЛНОТУ разнесения (D-33 не переоткрывается).
+PROHIBITION_CLASSES = frozenset(
+    {
+        # продукт: записанное свойство поведения или устройства (панель, плашка, гард, границы
+        # величин, коды уведомлений, тексты) не меняется;
+        "product-invariant",
+        # вендоренные рантаймы, строки JS, шаг сборки и новые зависимости, в том числе браузерная;
+        "vendored-runtime-and-dependencies",
+        # файлы, которых исполнение ОДНОГО плана не касается: «этим планом не правится» — чужая
+        # область, не тот предмет, отказ стал бы неатрибутируемым;
+        "plan-file-scope",
+        # работа с названным владельцем вне плана: другая фаза, отложенная находка, предсуществующий
+        # красный прогон, UI-находки;
+        "work-owned-elsewhere",
+        # записи проекта не правятся задним числом: исполненные планы и сводки, `.planning/research/`,
+        # формулировки ROADMAP и CONTEXT, реестр окон, реестр запретов;
+        "record-immutability",
+        # опровергнутое не стирается, а помечается с названным преемником (идиома D-30/D-32);
+        "superseded-text-kept",
+        # вердикт и приёмка не выносятся исполнителем: поля отчёта верификации, состояние и отметки
+        # артефакта обхода, состояния гэпов и окон;
+        "self-certification",
+        # требование не отмечается выполненным раньше вердикта своей фазы;
+        "requirement-flag",
+        # решение принадлежит владельцу или вехе: не принимается внутри задачи, не сочиняется, запертые
+        # решения не переоткрываются;
+        "owner-decision-reserved",
+        # честность правил суиты: без подгонки под дерево, без литерала сегодняшнего состояния, без
+        # второй копии числа, без зелени вакуумом и без утверждения, что рантайм что-то исполнил;
+        "gate-integrity",
+        # живая база и стенд: посев не запускается исполнителем, рабочее дерево смотрит в прод.
+        "live-environment-safety",
+    }
+)
+PROHIBITION_CLASSES_DECLARED = 11
+
 # ПЕРЕЧЕНЬ ПОЛЕЙ СТРОКИ РЕЕСТРА. ⚠️ Полей `permit_*` и любого поля вердикта здесь НЕТ
 # НАМЕРЕННО: их заводит ответ владельца на чекпойнте плана 15-12, а записывает по классам план
 # 15-13; исполнитель, поставивший такое поле сам, вынес бы вердикт вместо владельца. Поле,
@@ -326,6 +380,75 @@ def partial_disposition_offences(rows) -> list[str]:
                 f"поля `{UNCOVERED_PART_FIELD}`"
             )
     return offences
+
+
+def _row_name(row) -> str:
+    return f"{row.get('plan')}#{row.get('index')}"
+
+
+def _decision_scope_rows(rows) -> list:
+    """Строки области решений D-02 — Фаза 10. Число их этот помощник не знает."""
+    return [row for row in rows if str(row.get("phase")) == DECISION_SCOPE_PHASE]
+
+
+def _class_offences(rows) -> list[str]:
+    """Нарушения полноты разнесения по классам — ВСЕ, с тождествами, а не первое.
+
+    Три предмета: (1) класс строки принадлежит словарю поля — объявленным классам и засеянному
+    `unclassified`; (2) строка области решений не несёт `unclassified`; (3) строка ВНЕ области
+    решений сохраняет `unclassified` и засеянную диспозицию (D-02 — ПРИНАДЛЕЖНОСТЬЮ, не числом).
+    """
+    vocabulary = PROHIBITION_CLASSES | {tool.SEED_CLASS}
+    offences = []
+    for row in rows:
+        klass = row.get("class")
+        in_scope = str(row.get("phase")) == DECISION_SCOPE_PHASE
+        if klass not in vocabulary:
+            offences.append(f"{_row_name(row)}: класс `{klass}` вне объявленного перечня")
+        elif in_scope and klass == tool.SEED_CLASS:
+            offences.append(f"{_row_name(row)}: строка области решений не классифицирована")
+        elif not in_scope and (
+            klass != tool.SEED_CLASS or row.get("disposition") != tool.SEED_DISPOSITION
+        ):
+            offences.append(
+                f"{_row_name(row)}: строка вне области решений несёт класс `{klass}` и "
+                f"диспозицию `{row.get('disposition')}` — D-02 оставляет её неразобранной"
+            )
+    return offences
+
+
+def _decided_before_class(rows) -> list[str]:
+    """Строки, чья диспозиция ушла от засеянной раньше, чем записан класс (D-03, D-04)."""
+    return [
+        f"{_row_name(row)}: диспозиция `{row.get('disposition')}` при классе `{row.get('class')}`"
+        for row in rows
+        if row.get("disposition") != tool.SEED_DISPOSITION
+        and row.get("class") not in PROHIBITION_CLASSES
+    ]
+
+
+def _statement_digest_mismatches(records, registry) -> list[str]:
+    """Тождества, у которых отпечаток строки реестра разошёлся с формулировкой по тождеству.
+
+    Класс записан ДЛЯ ФОРМУЛИРОВКИ: правка её текста при неизменном тождестве унаследовала бы
+    чужой класс молча. Отказ называет тождество и оба отпечатка.
+    """
+    mismatches = []
+    for record in records:
+        row = registry.get(record.identity)
+        if row is not None and row.get("statement_digest") != record.digest:
+            mismatches.append(
+                f"{record.identity}: отпечаток реестра `{row.get('statement_digest')}`, "
+                f"формулировки `{record.digest}` — класс `{row.get('class')}` записан для "
+                f"другого текста"
+            )
+    return mismatches
+
+
+def class_distribution(rows) -> str:
+    """Распределение классов — ДОКЛАДЫВАЕТСЯ в отказе, в утверждения не входит."""
+    counts = Counter(str(row.get("class")) for row in rows)
+    return ", ".join(f"{name}: {count}" for name, count in sorted(counts.items()))
 
 
 def _before_phase_15(sources):
@@ -622,6 +745,123 @@ def test_control_a_partial_disposition_without_the_uncovered_part_is_named():
         f"{SYNTHETIC_PLAN}#0",
         f"{SYNTHETIC_PLAN}#1",
     ], offences
+
+
+# --- классы предмета: полнота разнесения, а не его правильность ---------------------------
+
+
+def test_the_prohibition_class_vocabulary_is_declared_and_not_empty():
+    """Число классов объявлено литералом и равно длине перечня; перечень непуст (антивакуум).
+
+    Перечень, опустевший молча, оставил бы правило принадлежности зелёным ровно тогда, когда
+    классов не стало. Засеянное `unclassified` классом НЕ является.
+    """
+    assert PROHIBITION_CLASSES_DECLARED > 0
+    assert len(PROHIBITION_CLASSES) == PROHIBITION_CLASSES_DECLARED, sorted(PROHIBITION_CLASSES)
+    assert tool.SEED_CLASS not in PROHIBITION_CLASSES
+
+
+def test_every_row_class_is_complete_for_the_decision_scope(registry_document):
+    """Каждый класс — из перечня; ни одна строка Фазы 10 не `unclassified`; вне области — да.
+
+    Отказ НАЗЫВАЕТ тождества; распределение классов ДОКЛАДЫВАЕТСЯ и в утверждение не входит.
+    """
+    rows = registry_document["rows"]
+    offences = _class_offences(rows)
+    assert not offences, (
+        f"нарушения полноты разнесения по классам ({len(offences)}):\n"
+        + "\n".join(offences)
+        + f"\n\nраспределение классов реестра: {class_distribution(rows)}"
+    )
+
+
+def test_the_decision_scope_is_not_empty_and_carries_no_unclassified_row(registry_document):
+    """Антивакуум полноты: область решений в реестре НЕПУСТА, и `unclassified` в ней нет."""
+    scope = _decision_scope_rows(registry_document["rows"])
+    assert len(scope) == PROHIBITIONS_IN_DECISION_SCOPE
+    unclassified = [_row_name(row) for row in scope if row.get("class") == tool.SEED_CLASS]
+    assert not unclassified, "\n".join(unclassified)
+
+
+def test_no_disposition_is_decided_before_its_class(registry_document):
+    """Решение идёт ПОСЛЕ класса (D-03, D-04): диспозиция вне засеянной требует класса."""
+    offences = _decided_before_class(registry_document["rows"])
+    assert not offences, "\n".join(offences)
+
+
+def test_every_statement_digest_matches_the_statement_found_by_identity(
+    live_census, registry_document
+):
+    """Класс не наследуется чужой формулировкой: отпечаток строки равен отпечатку по тождеству."""
+    mismatches = _statement_digest_mismatches(
+        live_census, tool._registry_rows(registry_document)
+    )
+    assert not mismatches, "\n".join(mismatches)
+
+
+def test_control_a_doctored_statement_is_named_by_the_digest_rule(
+    live_sources, registry_document
+):
+    """Подменённая КОПИЯ исходников: формулировка одного запрета Фазы 10 правится на символ."""
+    registry = tool._registry_rows(registry_document)
+    victim = next(
+        record for record in tool.census(live_sources) if record.phase == DECISION_SCOPE_PHASE
+    )
+    doctored = dict(live_sources)
+    text = doctored[victim.identity.plan_path]
+    first_line = victim.statement.splitlines()[0]
+    assert first_line in text, victim.identity
+    doctored[victim.identity.plan_path] = text.replace(first_line, first_line + " ПРАВКА", 1)
+    mismatches = _statement_digest_mismatches(tool.census(doctored), registry)
+    assert len(mismatches) == 1 and mismatches[0].startswith(f"{victim.identity}:"), mismatches
+
+
+def test_control_class_offences_are_named_for_every_kind():
+    """Синтетические строки: класс вне перечня, неразобранная строка области, чужая строка."""
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "phase": DECISION_SCOPE_PHASE,
+         "class": "no-such-class", "disposition": tool.SEED_DISPOSITION},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "phase": DECISION_SCOPE_PHASE,
+         "class": tool.SEED_CLASS, "disposition": tool.SEED_DISPOSITION},
+        {"plan": SYNTHETIC_PLAN, "index": 2, "phase": "99",
+         "class": sorted(PROHIBITION_CLASSES)[0], "disposition": tool.SEED_DISPOSITION},
+        {"plan": SYNTHETIC_PLAN, "index": 3, "phase": "99",
+         "class": tool.SEED_CLASS, "disposition": PARTIALLY_ENFORCED},
+        {"plan": SYNTHETIC_PLAN, "index": 4, "phase": DECISION_SCOPE_PHASE,
+         "class": sorted(PROHIBITION_CLASSES)[0], "disposition": tool.SEED_DISPOSITION},
+    ]
+    named = [offence.split(":")[0] for offence in _class_offences(rows)]
+    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (0, 1, 2, 3)], named
+    assert _decided_before_class(rows) == [
+        f"{SYNTHETIC_PLAN}#3: диспозиция `{PARTIALLY_ENFORCED}` при классе `{tool.SEED_CLASS}`"
+    ]
+
+
+def test_the_gate_never_calls_the_draft_classifier():
+    """Черновая разбивка ключевыми словами — для человека; ни одно правило её не зовёт.
+
+    Читается ДЕРЕВО этого модуля, а не текст: имя в докстринге или строке не в счёт. Ни одно
+    обращение к прибору не называет черновой раздел — ни функцию, ни перечень образцов.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    touched = sorted(
+        {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "tool"
+            and "draft" in node.attr.lower()
+        }
+    )
+    imported = sorted(
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+        if "draft" in alias.name.lower()
+    )
+    assert not touched and not imported, (touched, imported)
 
 
 def test_the_declared_vocabularies_and_numbers_agree():
