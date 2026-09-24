@@ -8739,6 +8739,49 @@ SYNC_RESULT_POLLING_UNCONDITIONAL = (
 )
 
 
+def _cascade_attributes(tag: str) -> tuple[str, ...]:
+    """Атрибуты `hx-*`, чьё значение (строка запроса) собрано оператором `{% for %}`."""
+    names: list[str] = []
+    for match in HX_ANY_VALUE.finditer(tag):
+        value = match.group(3) if match.group(3) is not None else match.group(4)
+        if FOR_STATEMENT.search(value) and match.group(1) not in names:
+            names.append(match.group(1))
+    return tuple(names)
+
+
+def _blind_zone_attributes(tag: str) -> tuple[str, ...]:
+    """Раздаваемые ветвлением ПРОЧИЕ `hx-*` места: условные без `hx-post`, затем каскадные.
+
+    `hx-post` отсюда исключён: его стережёт группа выше, и два утверждения над
+    одним исходником остаются РАЗДЕЛЬНЫМИ — место с условными `hx-post` и
+    `hx-swap` попадает в обе группы.
+    """
+    names = [name for name in _conditional_attributes(tag) if name != HX_POST_NAME]
+    for name in _cascade_attributes(tag):
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _blind_zone_sites(rel: str, source: str) -> tuple[list[Site], list[Site]]:
+    """Места слепой зоны одного шаблона: (вне тел макросов, внутри тел макросов).
+
+    Тег относится к телу макроса, если его текст лежит внутри текста
+    `{% macro %}…{% endmacro %}` того же исходника без комментариев.
+    """
+    macro_bodies = [match.group(0) for match in MACRO_BODY.finditer(_strip_comments(source))]
+    outside: list[Site] = []
+    inside: list[Site] = []
+    for site in _sites([(rel, source)], HX_ANY_TAG):
+        if not _blind_zone_attributes(site.tag):
+            continue
+        if any(site.tag in body for body in macro_bodies):
+            inside.append(site)
+        else:
+            outside.append(site)
+    return outside, inside
+
+
 def _conditional_hx_sites(sources: dict[str, str]) -> dict[str, Site]:
     """Места условной сборки ПРОЧИХ `hx-*` ВНЕ тела макроса: ключ `путь#индекс` → место.
 
@@ -8748,30 +8791,73 @@ def _conditional_hx_sites(sources: dict[str, str]) -> dict[str, Site]:
     (`_form_wrapper_branches`), а не тегами.
     """
     found: dict[str, Site] = {}
+    for rel, source in sorted(sources.items()):
+        outside, _ = _blind_zone_sites(rel, source)
+        found.update(zip(_ordinal_keys(outside), outside))
     return found
 
 
 def _macro_conditional_hx_sites(sources: dict[str, str]) -> dict[str, Site]:
     """Места условной сборки прочих `hx-*` ВНУТРИ тела макроса — та же сеть, другая сторона."""
     found: dict[str, Site] = {}
+    for rel, source in sorted(sources.items()):
+        _, inside = _blind_zone_sites(rel, source)
+        found.update(zip(_ordinal_keys(inside), inside))
     return found
 
 
 def _blind_zone_classes(tag: str) -> set[str]:
     """Классы, к которым относится место; полнота требует РОВНО одного."""
     classes: set[str] = set()
+    conditional = _conditional_attributes(tag)
+    trigger = _attr_value(tag, HX_TRIGGER_VALUE)
+    if (
+        "hx-trigger" in conditional
+        and trigger is not None
+        and trigger.startswith(POLLING_TRIGGER_PREFIX)
+    ):
+        classes.add(BLIND_ZONE_POLLING)
+    if "hx-swap-oob" in conditional:
+        classes.add(BLIND_ZONE_OOB)
+    if _cascade_attributes(tag):
+        classes.add(BLIND_ZONE_CASCADE)
     return classes
 
 
 def _form_wrapper_branches(source: str) -> dict[str, tuple[str, ...]]:
     """Ветви `{% if %}` исходника (без комментариев), раздающие `hx-*`: условие → атрибуты."""
     branches: dict[str, tuple[str, ...]] = {}
+    for _, condition, block in _if_blocks(_strip_comments(source)):
+        names = tuple(dict.fromkeys(HX_ANY_ATTR.findall(block)))
+        if names:
+            branches[condition] = names
     return branches
 
 
 def _form_wrapper_excluded_branches(source: str) -> list[tuple[str, str, int]]:
     """Ветви наивной сети, `hx-*` не раздающие: (причина, условие, строка сырого исходника)."""
     excluded: list[tuple[str, str, int]] = []
+    comment_spans = [match.span() for match in JINJA_COMMENT.finditer(source)]
+    for comment in JINJA_COMMENT.finditer(source):
+        for statement in IF_STATEMENT.finditer(comment.group(0)):
+            if statement.group(1) == "if" and statement.group(0).startswith(
+                FORM_WRAPPER_NAIVE_BRANCH_NET
+            ):
+                line = source.count("\n", 0, comment.start() + statement.start()) + 1
+                excluded.append(("внутри докстринга макроса", statement.group(2).strip(), line))
+    body = _strip_comments(source)
+    for start, condition, block in _if_blocks(body):
+        opener = IF_STATEMENT.match(body, start)
+        if HX_ANY_ATTR.search(block) or opener is None:
+            continue
+        if not opener.group(0).startswith(FORM_WRAPPER_NAIVE_BRANCH_NET):
+            continue
+        raw_at = next(
+            match.start()
+            for match in re.finditer(re.escape(opener.group(0)), source)
+            if not any(begin <= match.start() < end for begin, end in comment_spans)
+        )
+        excluded.append(("ветвь без единого `hx-*`", condition, source.count("\n", 0, raw_at) + 1))
     return excluded
 
 
