@@ -9243,3 +9243,736 @@ def test_control_negative_focus_ring_rule_with_a_literal_colour_is_named() -> No
     assert FOCUS_RING_VARIABLE in offence and FOCUS_RING_LITERAL_COLOUR in offence, (
         f"отказ не называет, что именно не сошлось: {offence}"
     )
+
+
+# =============================================================================
+# Фаза 15, план 15-10: СВЯЗКА «ФОРМА-ТРИГГЕР → МОДАЛКА С `hx-post`» (D-07)
+# =============================================================================
+#
+# ⚠️ КОНТРАКТ СВЯЗКИ ОБЪЯВЛЯЕТСЯ ЗДЕСЬ, ВЫШЕ ПЕРВОГО ЧИСЛА ГРУППЫ, И ВСЕ ЧИСЛА
+# НИЖЕ (этой группы и группы её границ) СНЯТЫ СЧЁТОМ ИМЕННО ПО НЕМУ. Конкретный
+# контракт — дискреция планировщика по D-07 (`15-CONTEXT.md`); объявлен он так:
+#
+#   СВЯЗКА — пара «форма-триггер, отдающая свой `action` событию открытия
+#   модалки» и «единственная форма компонента модалки, несущая `hx-post`,
+#   посимвольно равный полученному параметру `action`».
+#
+#   ⚠️ Атрибут `hx-post` на САМОМ ТРИГГЕРЕ признаком связки НЕ ЯВЛЯЕТСЯ. D-07
+#   объявляет 18 триггеров переведёнными ИМЕННО потому, что действие письма
+#   идёт формой модалки, и требование атрибута на триггере рисковало бы
+#   работающим подтверждением удаления ради буквы атрибута. Основание — FORM-06
+#   закрыт: 18 мест подтверждения одной правкой `components/modal.html`, число
+#   `MODAL_PLACES` (`tests/test_templates/test_components.py`).
+#
+# МАШИННЫЕ ПРИЗНАКИ УЗЛОВ. Исходник каждого шаблона читается без комментариев
+# обоих видов (`_strip_comments`).
+#   • ФОРМА-ТРИГГЕР — тег `<form …>`, несущий атрибут `x-on:submit.prevent`,
+#     чьё значение вызывает `$dispatch('modal-open-…')`. Её АДРЕС — атрибут
+#     `action`; её СОБЫТИЕ — имя после `modal-open-`, и ОСНОВА имени (всё до
+#     первого `{{`) есть ключ сопоставления с модалкой.
+#   • ФОРМА КОМПОНЕНТА — тег `<form …>` в `components/modal.html`, несущий
+#     `hx-post`. Модалку собирает вызов `modal(id=…, action=…, …)`; компонент
+#     слушает `x-on:modal-open-{{ id }}.window` и раздаёт `hx-post="{{ action }}"`.
+#   • «`action` триггера совпадает с тем, что модалка получит параметром» —
+#     статический СКЕЛЕТ адреса триггера (каждое `{{ … }}` → `{}`) равен
+#     скелету аргумента `action=` вызова модалки с той же основой события
+#     (конкатенация `~`: строковые литералы как есть, прочее — `{}`).
+#
+# ⚠️ ДВЕ ПОПРАВКИ, НАЗВАННЫЕ, А НЕ СГЛАЖЕННЫЕ (идиома D-30/D-32).
+#
+# 1. «СХОДЯТСЯ ТРЕМЯ СЧЁТАМИ» → «ЧЕТЫРЬМЯ». `15-CONTEXT.md` §Reusable Assets
+#    говорит, что 18 мест FORM-06 «сходятся тремя счётами». Это УСТАРЕЛО:
+#    `test_modal_site_inventory` сводит инвентарь ЧЕТЫРЬМЯ счётами, и четвёртый
+#    (имена именованных аргументов вызывающих ⊆ имён сигнатуры макроса)
+#    прибавлен планом 10-01 (D-14 Фазы 10) ради свойства, которого до него не
+#    существовало. Запись контекста ошибкой не была — она устарела. Эта группа
+#    берёт форму из дерева, а не из записи, и доказывает связку тоже ЧЕТЫРЬМЯ.
+# 2. КООРДИНАТА ВТОРОГО УЗЛА: 805 → 807. `15-CONTEXT.md` называет второй узел
+#    связки `components/modal.html:805`. Перезамер 2026-09-24: тег
+#    `<form class="modal__form" method="post" action="{{ action }}"` ОТКРЫВАЕТСЯ
+#    на 805, а атрибут `hx-post="{{ action }}"` стои́т на 807. По тегу координата
+#    верна, по атрибуту — на две строки ниже, и ищущий атрибут на 805 его не
+#    найдёт. Номера строк в гейт не вписаны: ключ места — порядковый номер.
+#
+# ⚠️ СВЯЗКА ДОКАЗЫВАЕТСЯ ЧЕТЫРЬМЯ НЕЗАВИСИМЫМИ СЧЁТАМИ, А НЕ ОДНИМ ОБХОДОМ.
+# Одиночный обход сам может ослепнуть, и тогда его ноль неотличим от
+# исполненной работы. Форма взята из `test_modal_site_inventory`, где третий
+# счёт обязан быть ПРЯМЫМ (счёт по импортёрам до числа мест не доходит в
+# принципе: файл подмены статуса панель сознательно не импортирует).
+#   I   — ТРИГГЕРЫ: теги форм-триггеров по РАЗБОРУ ГРАНИЦ ТЕГА; ключ
+#         `путь#порядковый_номер`, число `MODAL_TRIGGER_FORMS`.
+#   II  — ВТОРОЙ УЗЕЛ: формы компонента с `hx-post`; ровно
+#         `MODAL_COMPONENT_POST_FORMS`, и `hx-post` посимвольно равен `action`.
+#   III — СОБЫТИЕ: ПРЯМОЙ счёт вызовов события по ТЕКСТУ значения атрибута, без
+#         разбора границ тега; основы, зовомые триггерами, ⊆ основ, которые
+#         слушает компонент (основ аргумента `id=` вызовов модалки).
+#   IV  — АДРЕС: имена именованных аргументов, несущих адрес у вызывающих, ⊆
+#         имён сигнатуры макроса — ровно форма четвёртого счёта образца; и
+#         скелет адреса каждого триггера равен скелету адреса его модалки.
+# Каждый счёт даёт МНОЖЕСТВО ключей триггеров, которые он признаёт связанными,
+# и `_linkage_offence` сводит их, называя РАЗОШЕДШУЮСЯ ПАРУ счётов и ключи, на
+# которых они разошлись. Расхождение I и III есть ошибка разбора границ тега, а
+# не пропажа разметки, и сообщение это различает.
+#
+# ПЯТЫЙ СВИДЕТЕЛЬ, А НЕ ЗАМЕНА. `MODAL_IMPORTERS`, `MODAL_EVENT_NAMES`,
+# `MODAL_PLACES` и `test_modal_site_inventory` живут в
+# `tests/test_templates/test_components.py`, и этот план тот файл НЕ ПРАВИТ
+# вовсе. Группа ссылается на них по имени и их счётов не дублирует: число
+# триггеров равно `MODAL_PLACES`, число основ события — `MODAL_EVENT_NAMES`.
+# Импорт делается ВНУТРИ теста: `test_components.py` сам импортирует этот
+# модуль, и импорт в шапке замкнул бы круг (так же и с `test_form_inventory.py`).
+#
+# МЕСТА НЕ СЛИВАЮТСЯ (FORM-01 adjacency edge). 18 триггеров и форма модалки —
+# РАЗДЕЛЬНЫЕ учтённые места инвентаря плана 15-02 (`test_form_inventory.py`:
+# класс «сырой POST без hx-post» и класс «сырой POST с hx-post»). Группа
+# утверждает ОТНОШЕНИЕ между ними и в одно место их не сливает: слияние
+# уронило бы объявленное число мест письма с 49 до 31 без всякого изменения
+# дерева, то есть переопределило бы вселенную FORM-01 задним числом.
+#
+# КЛЮЧИ (FORM-01 ordering edge). Порядковый номер — среди ФОРМ-ТРИГГЕРОВ файла
+# (`_ordinal_keys`), а не среди всех мест формы, как у плана 15-02: там тег
+# триггера группы — `account_groups/includes/group_row.html#1`, здесь — `#0`.
+# Гейт сравнивает МНОЖЕСТВА ключей, поэтому текстовый порядок объявления не
+# несущий, и два триггера одного файла не схлопываются в один ключ. Сверка с
+# классами 15-02 идёт по ТЕКСТУ тега, а не по ключу.
+#
+# ⚠️ КОСВЕННОЕ ИМЯ СОБЫТИЯ, ОБЪЯВЛЕННОЕ ПОИМЁННО. Триггер
+# `admin/includes/queue_row.html` зовёт `modal-open-{{ modal_id }}`: основы у
+# имени нет, оно приходит параметром макроса строки. Модалку собирает вызов
+# `modal(id=queue_drop_modal_id(…))`, и тот же макрос отдаёт строке её
+# `modal_id` (`admin/queue.html`). Отображение `MODAL_OPEN_EVENT_INDIRECTIONS`
+# называет это поимённо, а основа выводится из ТЕЛА макроса (`queue-drop-`), а
+# не вписывается: правка макроса рвёт связку вслух. Имя без основы, не
+# названное в отображении, счёт III считает нерасрешённым и не связывает.
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ (D-16). Зелёный цвет означает: триггеров 18, у
+# каждого есть парный узел по всем четырём счётам, и адреса согласованы. Он НЕ
+# означает, что Alpine ДЕЙСТВИТЕЛЬНО перехватывает submit на рантайме — суита
+# не исполняет ни строчки JS, и переинициализация Alpine после свапа есть
+# пункт 5 ручного обхода, закрытый Фазой 11. Он НЕ означает, что модалка
+# ОТКРЫВАЕТСЯ по событию: это предмет правил `test_components.py`, и они здесь
+# пятый свидетель, а не часть утверждения.
+#
+# ГРАНИЦА РАЗБОРЩИКА. Триггер, чей `action` собран Python-кодом обработчика и
+# приезжает в контекст готовой строкой, сети по тексту шаблона не виден НИ В
+# КАКОМ случае. ПЕРЕЗАМЕРЕНО планом 15-10 2026-09-24: у всех 18 триггеров
+# `action` начинается литеральным сегментом маршрута (`/accounts`, `/admin`,
+# `/ads`, `/history`, `/schedules`), и выражения внутри него — только
+# идентификаторы сущностей. Триггеров, чей `action` приезжает готовой строкой
+# из `app/pages/`, — 0 (НОЛЬ); `grep -rn 'modal-open\|modal_id' app/pages/` —
+# 0 строк. Запрет этой границы — в группе границ связки ниже.
+
+# Порог непустоты вселенной связки: тот же, что у групп плана 15-05
+# (`CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR`); на дереве плана 15-10 шаблонов 113.
+MODAL_LINKAGE_UNIVERSE_FLOOR = 50
+
+MODAL_LINKAGE_COMPONENT = "components/modal.html"
+MODAL_OPEN_EVENT_PREFIX = "modal-open-"
+MODAL_LISTENER = "x-on:modal-open-{{ id }}.window"
+MODAL_ADDRESS_EXPRESSION = "{{ action }}"
+
+
+class ModalTrigger(NamedTuple):
+    """Объявленная форма-триггер: основа события открытия и скелет адреса."""
+
+    event_stem: str
+    address: str
+
+
+# СЧЁТ I. ЛЕТОПИСЬ: 18, Фаза 15, план 15-10 — снято счётом I по объявленному
+# контракту; совпало с D-08 поимённо и с `ALPINE_TRIGGER_PLACES` плана 15-02 по
+# тексту тега (ключи разные — см. абзац «КЛЮЧИ» выше). Выписано ЗДЕСЬ, а не
+# выведено из шаблонов: тест, считающий ожидание по коду, согласится с любой
+# правкой и молча переживёт исчезновение триггера.
+MODAL_TRIGGER_FORMS = 18
+MODAL_TRIGGER_SITES: dict[str, ModalTrigger] = {
+    "account_groups/includes/group_row.html#0": ModalTrigger(
+        "group-del-", "/accounts/{}/groups/{}/delete"
+    ),
+    "accounts/list.html#0": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/list.html#1": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/list.html#2": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partial_cards.html#0": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partial_cards.html#1": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partial_cards.html#2": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partials/sync_status_card.html#0": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partials/sync_status_card.html#1": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partials/sync_status_card.html#2": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "admin/includes/queue_row.html#0": ModalTrigger("queue-drop-", "/admin/queue/{}/drop"),
+    "admin/includes/user_actions.html#0": ModalTrigger(
+        "user-imp-", "/admin/users/{}/impersonate"
+    ),
+    "admin/includes/user_actions.html#1": ModalTrigger("user-del-", "/admin/users/{}/delete"),
+    "admin/includes/worker_row.html#0": ModalTrigger(
+        "worker-restart-", "/admin/workers/{}/restart"
+    ),
+    "ads/form.html#0": ModalTrigger("ad-del-", "/ads/{}/delete"),
+    "ads/includes/ad_card.html#0": ModalTrigger("ad-del-", "/ads/{}/delete"),
+    "ads/includes/sched_card.html#0": ModalTrigger("sched-del-", "/schedules/{}/delete"),
+    "history/includes/history_card.html#0": ModalTrigger("history-retry-", "/history/{}/retry"),
+}
+
+# СЧЁТ II. Форм компонента модалки, несущих `hx-post`, — ровно одна.
+MODAL_COMPONENT_POST_FORMS = 1
+
+# СЧЁТ III. Основы имён события открытия, зовомых триггерами. Девять — столько
+# же, сколько различных имён у `MODAL_EVENT_NAMES` (пятый свидетель): там основа
+# строки очереди читается пустой, здесь она выведена через косвенное имя.
+MODAL_OPEN_EVENT_NAMES_CALLED: frozenset[str] = frozenset(
+    {
+        "acc-del-",
+        "ad-del-",
+        "group-del-",
+        "history-retry-",
+        "queue-drop-",
+        "sched-del-",
+        "user-del-",
+        "user-imp-",
+        "worker-restart-",
+    }
+)
+
+# Косвенные имена события: переменная в `modal-open-{{ … }}` → макрос, чьё тело
+# собирает и `id` модалки, и имя события. Основа выводится из тела макроса.
+MODAL_OPEN_EVENT_INDIRECTIONS: dict[str, str] = {"modal_id": "queue_drop_modal_id"}
+
+# СЧЁТ IV. Имена именованных аргументов, несущих АДРЕС у вызывающих модалку.
+MODAL_ADDRESS_PARAMETER_NAMES: frozenset[str] = frozenset({"action"})
+
+LINKAGE_COUNT_NAMES = ("I", "II", "III", "IV")
+
+SUBMIT_PREVENT_NAME = "x-on:submit.prevent"
+SUBMIT_PREVENT_TAG = _tag_pattern(SUBMIT_PREVENT_NAME)
+SUBMIT_PREVENT_VALUE = _value_pattern(SUBMIT_PREVENT_NAME)
+MODAL_OPEN_DISPATCH_CALL = re.compile(r"\$dispatch\(\s*(['\"])modal-open-(.*?)\1\s*\)")
+MODAL_MACRO_SIGNATURE = re.compile(r"\{%-?\s*macro\s+modal\s*\((.*?)\)\s*-?%\}", re.DOTALL)
+MODAL_MACRO_CALL = re.compile(r"(?<![\w.])modal\s*\(")
+JINJA_OUTPUT = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+BARE_VARIABLE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+MACRO_NAME_CALL = re.compile(r"(\w+)\s*\(")
+KEYWORD_NAME = re.compile(r"\s*([A-Za-z_]\w*)\s*")
+
+SYNTHETIC_ORPHAN_TRIGGER_TEMPLATE = "synthetic/orphan_trigger.html"
+SYNTHETIC_ORPHAN_TRIGGER = (
+    '<form method="post" action="/synthetic/{{ x.id }}/delete" '
+    "x-data x-on:submit.prevent=\"$dispatch('modal-open-synthetic-orphan-{{ x.id }}')\"></form>"
+)
+MODAL_COMPONENT_HX_POST_ATTRIBUTE = ' hx-post="{{ action }}"'
+
+
+def _linkage_universe_offence(sources: dict[str, str]) -> str:
+    """Пустая строка, если вселенная связки непуста; иначе — отказ словами."""
+    if len(sources) > MODAL_LINKAGE_UNIVERSE_FLOOR:
+        return ""
+    return (
+        f"вселенная связки — {len(sources)} шаблонов при пороге "
+        f"> {MODAL_LINKAGE_UNIVERSE_FLOOR}: ноль мест на ней неотличим от слепоты обхода"
+    )
+
+
+def _scan_to_close(text: str, start: int) -> int:
+    """Индекс скобки, закрывающей вызов, открытый прямо перед ``start``; ``-1`` — не закрыт.
+
+    Вложенность считается вне строковых литералов: скобка внутри текста панели
+    (``body='… (…) …'``) границы вызова не сдвигает.
+    """
+    depth, quote = 1, ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _split_top_level(text: str, separator: str) -> list[str]:
+    """Разбить по ``separator`` ВЕРХНЕГО уровня вне строковых литералов.
+
+    Запятые и тильды внутри текста панели (``body='…, …'``) аргументов не рвут —
+    ради этого разборщик и не наивный ``split``.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    depth, quote = 0, ""
+    for char in text:
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == separator and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    parts.append("".join(current))
+    return parts
+
+
+def _string_literal(text: str) -> str | None:
+    """Содержимое строкового литерала Jinja, если ``text`` — ровно один литерал."""
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"" and text[0] not in text[1:-1]:
+        return text[1:-1]
+    return None
+
+
+def _concatenation_skeleton(expression: str) -> str:
+    """Скелет конкатенации ``~``: литералы как есть, прочие слагаемые — ``{}``."""
+    return "".join(
+        literal if (literal := _string_literal(part)) is not None else "{}"
+        for part in _split_top_level(expression, "~")
+    )
+
+
+def _attribute_skeleton(value: str) -> str:
+    """Скелет значения атрибута: каждое ``{{ … }}`` — ``{}``."""
+    return JINJA_OUTPUT.sub("{}", value)
+
+
+def _macro_literal_prefix(name: str, sources: dict[str, str]) -> str | None:
+    """Литеральное начало тела макроса ``name`` (до первого ``{{``/``{%``); ``None`` — не единственный."""
+    pattern = re.compile(
+        rf"\{{%-?\s*macro\s+{re.escape(name)}\s*\(.*?\)\s*-?%\}}(.*?)\{{%-?\s*endmacro",
+        re.DOTALL,
+    )
+    bodies = [
+        match.group(1)
+        for source in sources.values()
+        for match in pattern.finditer(_strip_comments(source))
+    ]
+    if len(bodies) != 1:
+        return None
+    return re.split(r"\{\{|\{%", bodies[0], maxsplit=1)[0] or None
+
+
+def _event_stem(event: str, sources: dict[str, str]) -> str | None:
+    """Основа имени события (после ``modal-open-``); косвенное имя — через тело макроса."""
+    stem = event.split("{{", 1)[0]
+    if stem:
+        return stem
+    bare = BARE_VARIABLE.fullmatch(event.strip())
+    if bare and bare.group(1) in MODAL_OPEN_EVENT_INDIRECTIONS:
+        return _macro_literal_prefix(MODAL_OPEN_EVENT_INDIRECTIONS[bare.group(1)], sources)
+    return None
+
+
+def _id_stem(expression: str, sources: dict[str, str]) -> str | None:
+    """Основа аргумента ``id=`` вызова модалки: первый литерал либо тело макроса-имени."""
+    head = _split_top_level(expression, "~")[0]
+    literal = _string_literal(head)
+    if literal is not None:
+        return literal
+    call = MACRO_NAME_CALL.match(head.strip())
+    if call:
+        return _macro_literal_prefix(call.group(1), sources)
+    return None
+
+
+def _modal_trigger_forms(sources: dict[str, str]) -> dict[str, Site]:
+    """СЧЁТ I: формы-триггеры по разбору границ тега; ключ ``путь#номер_среди_триггеров``.
+
+    Чистая функция от поданного отображения, модульного изменяемого состояния
+    нет: число одинаково под ``-p no:randomly`` и при любом порядке сбора.
+    """
+    found: dict[str, Site] = {}
+    return found
+
+
+def _modal_component_post_forms(sources: dict[str, str]) -> dict[str, Site]:
+    """СЧЁТ II: формы компонента модалки, несущие ``hx-post``; ключ ``путь#номер``."""
+    found: dict[str, Site] = {}
+    return found
+
+
+def _modal_open_event_calls(sources: dict[str, str]) -> dict[str, str]:
+    """СЧЁТ III, ПРЯМОЙ: вызовы события в значениях ``x-on:submit.prevent`` по тексту.
+
+    Границы тега здесь не разбираются вовсе: ищется значение атрибута в
+    исходнике без комментариев, а в нём — ``$dispatch('modal-open-…')``. Ключ —
+    ``путь#номер`` среди таких вызовов файла, значение — имя после префикса.
+    """
+    found: dict[str, str] = {}
+    return found
+
+
+def _modal_calls(sources: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
+    """Вызовы макроса модалки: пары «шаблон → именованные аргументы (сырой текст значения)».
+
+    Объявление макроса вызовом не считается — по той же форме, что
+    ``_modal_call_kwargs`` в ``test_components.py``: иначе компонент объявил бы
+    сам себя своим вызывающим.
+    """
+    calls: list[tuple[str, dict[str, str]]] = []
+    return calls
+
+
+def _modal_macro_signature(sources: dict[str, str]) -> set[str]:
+    """Имена параметров сигнатуры макроса модалки."""
+    match = MODAL_MACRO_SIGNATURE.search(
+        _strip_comments(sources.get(MODAL_LINKAGE_COMPONENT, ""))
+    )
+    if not match:
+        return set()
+    return {
+        part.split("=", 1)[0].strip()
+        for part in _split_top_level(match.group(1), ",")
+        if part.strip()
+    }
+
+
+def _modal_address_parameters(calls: list[tuple[str, dict[str, str]]]) -> dict[str, set[str]]:
+    """СЧЁТ IV: имена аргументов, несущих АДРЕС (скелет начинается с ``/``) → файлы вызовов."""
+    found: dict[str, set[str]] = {}
+    for rel, arguments in calls:
+        for name, value in arguments.items():
+            if _concatenation_skeleton(value).startswith("/"):
+                found.setdefault(name, set()).add(rel)
+    return found
+
+
+def _listened_stems(
+    calls: list[tuple[str, dict[str, str]]], sources: dict[str, str]
+) -> dict[str, set[str]]:
+    """Основы имён, которые слушает компонент: основа ``id=`` каждого вызова → файлы."""
+    stems: dict[str, set[str]] = {}
+    for rel, arguments in calls:
+        stem = _id_stem(arguments["id"], sources) if "id" in arguments else None
+        if stem:
+            stems.setdefault(stem, set()).add(rel)
+    return stems
+
+
+def _trigger_event_stem(site: Site, sources: dict[str, str]) -> str | None:
+    dispatch = MODAL_OPEN_DISPATCH_CALL.search(_attr_value(site.tag, SUBMIT_PREVENT_VALUE) or "")
+    return _event_stem(dispatch.group(2), sources) if dispatch else None
+
+
+def _component_post_form_offence(forms: dict[str, Site]) -> str:
+    """Отказ счёта II словами; пустая строка — счёт молчит."""
+    if len(forms) != MODAL_COMPONENT_POST_FORMS:
+        extra = sorted(forms)[MODAL_COMPONENT_POST_FORMS:]
+        tail = (
+            f" — лишние {extra}: «ровно одна» перестала быть истинной, и связка "
+            f"утверждала бы не про ту форму"
+            if extra
+            else " — форма модалки потеряла `hx-post`, и действие письма больше не идёт через htmx"
+        )
+        return (
+            f"СЧЁТ II: форм компонента `{MODAL_LINKAGE_COMPONENT}` с `hx-post` {len(forms)}, "
+            f"объявлено {MODAL_COMPONENT_POST_FORMS}: {sorted(forms)}{tail}"
+        )
+    (site,) = forms.values()
+    post = _attr_value(site.tag, HX_POST_VALUE)
+    action = _attr_value(site.tag, ACTION_VALUE)
+    if post != action or post != MODAL_ADDRESS_EXPRESSION:
+        return (
+            f"СЧЁТ II: у формы компонента `hx-post`={post!r}, `action`={action!r}; ожидались "
+            f"оба {MODAL_ADDRESS_EXPRESSION!r} — две маршрутизации одной формы"
+        )
+    return ""
+
+
+def _linkage_counts(sources: dict[str, str]) -> dict[str, set[str]]:
+    """Четыре счёта: имя счёта → множество ключей триггеров, признанных им СВЯЗАННЫМИ."""
+    triggers = _modal_trigger_forms(sources)
+    calls = _modal_calls(sources)
+    signature = _modal_macro_signature(sources)
+    listened = _listened_stems(calls, sources)
+    component = _strip_comments(sources.get(MODAL_LINKAGE_COMPONENT, ""))
+    hears = MODAL_LISTENER in component and "id" in signature
+    component_ok = _component_post_form_offence(_modal_component_post_forms(sources)) == ""
+    address_names = {name for name in _modal_address_parameters(calls) if name in signature}
+    addresses = {
+        (_id_stem(arguments["id"], sources), _concatenation_skeleton(arguments[name]))
+        for _, arguments in calls
+        if "id" in arguments
+        for name in address_names
+        if name in arguments
+    }
+
+    count_iv: set[str] = set()
+    for key, site in triggers.items():
+        action = _attr_value(site.tag, ACTION_VALUE) or ""
+        pair = (_trigger_event_stem(site, sources), _attribute_skeleton(action))
+        if action.strip() and pair in addresses:
+            count_iv.add(key)
+
+    return {
+        "I": set(triggers),
+        "II": set(triggers) if component_ok else set(),
+        "III": {
+            key
+            for key, event in _modal_open_event_calls(sources).items()
+            if hears and _event_stem(event, sources) in listened
+        },
+        "IV": count_iv,
+    }
+
+
+def _linkage_pair_offence(counts: dict[str, set[str]]) -> str:
+    """Каждая РАЗОШЕДШАЯСЯ ПАРА счётов и ключи расхождения; пустая строка — счёты сошлись."""
+    problems: list[str] = []
+    names = list(counts)
+    for index, first in enumerate(names):
+        for second in names[index + 1 :]:
+            if counts[first] != counts[second]:
+                problems.append(
+                    f"счёты {first} и {second} разошлись: только в {first} — "
+                    f"{sorted(counts[first] - counts[second])}, только в {second} — "
+                    f"{sorted(counts[second] - counts[first])}"
+                )
+    return "; ".join(problems)
+
+
+def _linkage_offence(sources: dict[str, str]) -> str:
+    """Отказ гейта связки словами; пустая строка — все четыре счёта молчат и сходятся.
+
+    Чистая функция от поданного отображения: ни модульного изменяемого
+    состояния, ни чтения диска. Несвязанный триггер называется ключом.
+    """
+    counts = _linkage_counts(sources)
+    linked = set.intersection(*counts.values())
+    problems = [
+        offence
+        for offence in (
+            _linkage_universe_offence(sources),
+            _component_post_form_offence(_modal_component_post_forms(sources)),
+            _linkage_pair_offence(counts),
+        )
+        if offence
+    ]
+    unlinked = sorted(set.union(*counts.values()) - linked)
+    if unlinked:
+        problems.append(f"несвязанные триггеры: {unlinked}")
+    if not counts["I"]:
+        problems.append("счёт I не нашёл ни одного триггера — связка утверждала бы пустоту")
+    return "; ".join(problems)
+
+
+def test_modal_linkage_count_i_trigger_forms_are_the_declared_eighteen() -> None:
+    """СЧЁТ I: форм-триггеров ровно ``MODAL_TRIGGER_FORMS``, и ключи — объявленный перечень."""
+    sources = dict(_all_templates())
+    found = _modal_trigger_forms(sources)
+
+    assert len(MODAL_TRIGGER_SITES) == MODAL_TRIGGER_FORMS, (
+        f"записей в перечне {len(MODAL_TRIGGER_SITES)}, объявлено {MODAL_TRIGGER_FORMS}"
+    )
+    assert set(found) == set(MODAL_TRIGGER_SITES), (
+        f"счёт I разошёлся с перечнем: лишние {sorted(set(found) - set(MODAL_TRIGGER_SITES))}, "
+        f"пропавшие {sorted(set(MODAL_TRIGGER_SITES) - set(found))}"
+    )
+    assert len(found) == MODAL_TRIGGER_FORMS
+
+
+def test_modal_linkage_count_ii_the_component_has_exactly_one_post_form_equal_to_its_action() -> (
+    None
+):
+    """СЧЁТ II: у компонента ровно одна форма с ``hx-post``, и он посимвольно равен ``action``."""
+    forms = _modal_component_post_forms(dict(_all_templates()))
+
+    assert _component_post_form_offence(forms) == "", _component_post_form_offence(forms)
+    (site,) = forms.values()
+    assert _attr_value(site.tag, HX_POST_VALUE) == MODAL_ADDRESS_EXPRESSION
+    assert _attr_value(site.tag, ACTION_VALUE) == MODAL_ADDRESS_EXPRESSION
+
+
+def test_modal_linkage_count_iii_called_event_names_are_heard_by_the_component() -> None:
+    """СЧЁТ III: основы, зовомые триггерами, ⊆ основ, которые слушает компонент; чужая — названа."""
+    sources = dict(_all_templates())
+    events = _modal_open_event_calls(sources)
+    stems = {key: _event_stem(event, sources) for key, event in events.items()}
+    listened = _listened_stems(_modal_calls(sources), sources)
+
+    assert MODAL_LISTENER in _strip_comments(sources[MODAL_LINKAGE_COMPONENT]), (
+        f"компонент больше не слушает `{MODAL_LISTENER}` — ни одно имя не будет услышано"
+    )
+    assert stems == {key: trigger.event_stem for key, trigger in MODAL_TRIGGER_SITES.items()}, (
+        f"основы событий по прямому счёту разошлись с перечнем: {stems}"
+    )
+    assert set(stems.values()) == MODAL_OPEN_EVENT_NAMES_CALLED
+    unheard = {key: stem for key, stem in stems.items() if stem not in listened}
+    assert not unheard, (
+        f"триггер зовёт имя, которого компонент не слушает (ни один вызов модалки не "
+        f"несёт такой основы `id`): {unheard}"
+    )
+
+
+def test_modal_linkage_count_iv_address_parameter_belongs_to_the_macro_signature() -> None:
+    """СЧЁТ IV: имя аргумента адреса ⊆ сигнатуры макроса, и адрес каждого триггера доезжает им."""
+    sources = dict(_all_templates())
+    calls = _modal_calls(sources)
+    parameters = _modal_address_parameters(calls)
+    signature = _modal_macro_signature(sources)
+
+    assert signature, "сигнатура макроса модалки не разобралась — счёт вакуумен"
+    assert set(parameters) == MODAL_ADDRESS_PARAMETER_NAMES, (
+        f"адрес модалке передаётся именами {sorted(parameters)}, объявлено "
+        f"{sorted(MODAL_ADDRESS_PARAMETER_NAMES)}"
+    )
+    unknown = {name: sorted(files) for name, files in parameters.items() if name not in signature}
+    assert not unknown, f"вызывающий передаёт адрес именем вне сигнатуры: {unknown}"
+    assert {f"{{{{ {name} }}}}" for name in parameters} == {MODAL_ADDRESS_EXPRESSION}, (
+        "имя аргумента адреса разошлось с тем, которым компонент раздаёт `hx-post`"
+    )
+
+    triggers = _modal_trigger_forms(sources)
+    addresses = {
+        key: _attribute_skeleton(_attr_value(site.tag, ACTION_VALUE) or "")
+        for key, site in triggers.items()
+    }
+    assert addresses == {key: trigger.address for key, trigger in MODAL_TRIGGER_SITES.items()}, (
+        f"скелеты адресов триггеров разошлись с перечнем: {addresses}"
+    )
+    assert _linkage_counts(sources)["IV"] == set(MODAL_TRIGGER_SITES), (
+        "адрес триггера не доезжает до модалки тем же параметром: "
+        f"{sorted(set(MODAL_TRIGGER_SITES) - _linkage_counts(sources)['IV'])}"
+    )
+
+
+def test_modal_linkage_four_counts_converge_and_a_divergence_names_the_pair() -> None:
+    """Четыре счёта сходятся на объявленном перечне; расхождение называет ПАРУ и ключ."""
+    sources = dict(_all_templates())
+    counts = _linkage_counts(sources)
+
+    assert _linkage_offence(sources) == "", _linkage_offence(sources)
+    for name in LINKAGE_COUNT_NAMES:
+        assert counts[name] == set(MODAL_TRIGGER_SITES), (
+            f"счёт {name} разошёлся с перечнем: {sorted(counts[name] ^ set(MODAL_TRIGGER_SITES))}"
+        )
+
+    diverged = _linkage_pair_offence({"I": {"x#0"}, "II": {"x#0"}, "III": set(), "IV": {"x#0"}})
+    assert "счёты I и III разошлись" in diverged and "x#0" in diverged, diverged
+    assert "счёты I и II" not in diverged, "сошедшаяся пара названа разошедшейся"
+
+
+def test_modal_linkage_keeps_the_triggers_and_the_component_form_as_separate_places() -> None:
+    """18 триггеров и форма модалки — РАЗНЫЕ места разных классов инвентаря плана 15-02."""
+    from collections import Counter
+
+    from tests.test_templates.test_form_inventory import (
+        WRITE_FORM_PLACES,
+        PlaceKind,
+        _form_places,
+        _write_form_places,
+    )
+
+    sources = dict(_all_templates())
+    places = _form_places(sources)
+    triggers = list(_modal_trigger_forms(sources).values())
+    component = list(_modal_component_post_forms(sources).values())
+    assert triggers and component, "узлы связки не найдены — сверка с инвентарём вакуумна"
+
+    def matched(sites: list[Site]) -> list:
+        wanted = Counter((site.template, site.tag) for site in sites)
+        return [place for place in places if wanted[(place.template, place.text)]]
+
+    trigger_places = matched(triggers)
+    component_places = matched(component)
+    assert len(trigger_places) == MODAL_TRIGGER_FORMS, (
+        f"инвентарь 15-02 видит {len(trigger_places)} из {MODAL_TRIGGER_FORMS} триггеров"
+    )
+    assert len(component_places) == MODAL_COMPONENT_POST_FORMS
+    assert {place.kind for place in trigger_places} == {PlaceKind.RAW_POST_WITHOUT_HX_POST}
+    assert {place.kind for place in component_places} == {PlaceKind.RAW_POST_WITH_HX_POST}
+    keys = {place.key for place in trigger_places + component_places}
+    assert len(keys) == MODAL_TRIGGER_FORMS + MODAL_COMPONENT_POST_FORMS, (
+        "узлы связки слиты в меньшее число мест инвентаря — вселенная FORM-01 переопределена"
+    )
+    assert len(_write_form_places(sources)) == WRITE_FORM_PLACES
+
+
+def test_modal_linkage_fifth_witness_modal_places_and_event_names_agree_by_name() -> None:
+    """Пятый свидетель: числа ``test_components.py`` сходятся с числами связки — по имени."""
+    from tests.test_templates.test_components import MODAL_EVENT_NAMES, MODAL_PLACES
+
+    assert MODAL_TRIGGER_FORMS == MODAL_PLACES
+    assert len(MODAL_OPEN_EVENT_NAMES_CALLED) == MODAL_EVENT_NAMES
+
+
+def test_modal_linkage_event_indirection_is_derived_from_the_macro_body() -> None:
+    """Косвенное имя события строки очереди выводится из тела макроса, а не вписано."""
+    sources = dict(_all_templates())
+    calls = _modal_calls(sources)
+
+    for variable, macro in MODAL_OPEN_EVENT_INDIRECTIONS.items():
+        assert _macro_literal_prefix(macro, sources) == "queue-drop-", (
+            f"тело макроса `{macro}` больше не начинается основой `queue-drop-`"
+        )
+        assert any(
+            arguments.get("id", "").startswith(f"{macro}(") for _, arguments in calls
+        ), f"ни один вызов модалки не берёт `id` из `{macro}` — косвенность выдумана"
+        assert any(
+            f"modal-open-{{{{ {variable} }}}}" in _strip_comments(source)
+            for source in sources.values()
+        ), f"ни один триггер не зовёт `modal-open-{{{{ {variable} }}}}` — запись мертва"
+
+
+def test_modal_linkage_counts_are_a_pure_function_of_the_passed_mapping() -> None:
+    """Порядок ключей поданного отображения на счёты не влияет, и повторный вызов равен первому."""
+    sources = dict(_all_templates())
+    reversed_sources = dict(reversed(list(sources.items())))
+
+    assert _linkage_counts(sources) == _linkage_counts(reversed_sources)
+    assert _linkage_counts(sources) == _linkage_counts(sources)
+    assert _linkage_counts(sources)["I"], "счёт I пуст — сравнение вакуумно"
+
+
+def test_control_negative_modal_linkage_an_unpaired_synthetic_trigger_form_is_named() -> None:
+    """Контроль от вакуума: триггер БЕЗ парной модалки — гейт краснеет и НАЗЫВАЕТ его."""
+    sources = dict(_all_templates())
+    key = SYNTHETIC_ORPHAN_TRIGGER_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_ORPHAN_TRIGGER}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    offence = _linkage_offence(changed)
+
+    assert f"{key}#0" in _linkage_counts(changed)["I"], "счёт I не видит синтетический триггер"
+    assert offence != "", "несвязанный триггер не покраснил гейт — связка зелена вакуумом"
+    assert f"{key}#0" in offence, f"отказ не называет несвязанный триггер: {offence}"
+    assert "счёты I и III разошлись" in offence, f"отказ не называет разошедшуюся пару: {offence}"
+
+
+def test_control_negative_modal_linkage_a_component_without_hx_post_reddens_count_ii() -> None:
+    """Контроль от вакуума: у формы компонента снят ``hx-post`` — краснеет счёт II."""
+    sources = dict(_all_templates())
+    component = sources[MODAL_LINKAGE_COMPONENT]
+    assert component.count(MODAL_COMPONENT_HX_POST_ATTRIBUTE) == 1, (
+        "атрибут отправки формы компонента встречается не один раз — подмена меняет не то место"
+    )
+    changed = {
+        **sources,
+        MODAL_LINKAGE_COMPONENT: component.replace(MODAL_COMPONENT_HX_POST_ATTRIBUTE, "", 1),
+    }
+    assert changed != sources, "подмена ничего не изменила"
+
+    offence = _component_post_form_offence(_modal_component_post_forms(changed))
+
+    assert offence.startswith("СЧЁТ II"), f"счёт II молчит без `hx-post` у компонента: {offence!r}"
+    assert "потеряла `hx-post`" in offence
+    assert _linkage_counts(changed)["II"] == set(), "счёт II связывает триггеры без второго узла"
+    assert "счёты I и II разошлись" in _linkage_offence(changed)
+
+
+def test_control_positive_modal_linkage_untouched_tree_keeps_all_four_counts_silent() -> None:
+    """Положительный контроль: вселенная непуста (> 50), и все четыре счёта молчат."""
+    sources = dict(_all_templates())
+
+    assert len(sources) > MODAL_LINKAGE_UNIVERSE_FLOOR, f"вселенная {len(sources)} — обход сломан"
+    assert _linkage_offence(sources) == "", _linkage_offence(sources)
+    assert all(_linkage_counts(sources)[name] for name in LINKAGE_COUNT_NAMES), (
+        "один из счетов пуст на дереве — молчание гейта вакуумно"
+    )
