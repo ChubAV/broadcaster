@@ -46,7 +46,7 @@
     {
       "number": "15",
       "name": "Упрочнение и сводный обход",
-      "status": "pending"
+      "status": "in_progress"
     }
   ],
   "next": {
@@ -54,5 +54,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 15 of 9 · 89% · executing"
   },
-  "updated_at": "2026-09-24T06:14:16.304Z"
+  "updated_at": "2026-09-24T06:42:34.872Z"
 }
