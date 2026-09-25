@@ -40,9 +40,12 @@
                     строк не двигаются, новые строки получают засеянные значения; блок ответа
                     владельца по классам (`class_decisions`) переносится как есть, не пишется
   --record ТОЖДЕСТВО --disposition D --rule tests/…::имя [--rule …] [--coverage-note ТЕКСТ]
+           [--permit-uncovered]
                     запись МЕРЫ ПОКРЫТИЯ одной строки области решений (план 15-22): диспозиция
                     `enforced` / `partially-enforced`, имена правил и их координаты через
-                    `RULE_SEPARATOR`, непокрытая часть у частичной. Каждое правило ищется
+                    `RULE_SEPARATOR`, непокрытая часть у частичной; `--permit-uncovered` — её
+                    разрешение классом строки (`permit_scope_uncovered`), только у частичной
+                    строки класса с ветвью `permit-class`. Каждое правило ищется
                     разбором `ast` в файле своей ссылки; всё, чего записывать нельзя, — отказ
                     `CensusError` по имени, и реестр тогда не пишется вовсе. ⚠️ Режим пишет
                     ТОЛЬКО меру покрытия: класса, разрешения владельца и вердикта он не пишет
@@ -131,6 +134,9 @@ REGISTRY_FIELD_ORDER = (
     # оставшейся «неразобрано», и область разрешения — имя класса — у строки «разрешено».
     "unresolved_reason",
     "permit_scope",
+    # Разрешение НЕПОКРЫТОЙ части частичной строки разрешённого класса (план 15-22, задача 2):
+    # имя класса строки. Пишет его только режим `--record --permit-uncovered`.
+    "permit_scope_uncovered",
 )
 
 # Группа D-05: у запрета Фазы 10 с `verification: test` реестр несёт `declared_rule` — имя
@@ -163,6 +169,10 @@ RULE_NAME_FIELD = "rule_name"
 RULE_SITE_FIELD = "rule_site"
 COVERAGE_NOTE_FIELD = "coverage_note"
 UNRESOLVED_REASON_FIELD = "unresolved_reason"
+# Разрешение непокрытой части (план 15-22, задача 2) стоит только у частичной строки класса, чей
+# ответ владельца — ветвь `permit-class`; значение — имя класса строки (D-04).
+PERMIT_SCOPE_UNCOVERED_FIELD = "permit_scope_uncovered"
+PERMIT_CLASS_BRANCH = "permit-class"
 
 REGISTRY_HEADER = """\
 # Реестр тождеств запретов планов вехи v2.1 — строка на каждый элемент переписи.
@@ -812,8 +822,10 @@ def record_coverage(
     найденным разбором `ast` в файле ссылки, непустую непокрытую часть у частичной и её
     отсутствие у полной. Пишет `disposition`, `rule_name` и `rule_site` (через
     `RULE_SEPARATOR`), `coverage_note` у частичной; снимает `unresolved_reason` и
-    `permit_scope` — поля, которые запись меры делает ложными. Класса, блока `class_decisions`
-    и вердикта не пишет.
+    `permit_scope` — поля, которые запись меры делает ложными. По `permit_uncovered` ставит
+    `permit_scope_uncovered` = класс строки — только частичной строке класса с ветвью
+    `permit-class` (план 15-22, задача 2; правила — `_permit_uncovered_fields`). Класса, блока
+    `class_decisions` и вердикта не пишет.
 
     Любой отказ — `CensusError` ДО первой записи: документ либо изменён целиком, либо не изменён
     вовсе. `suite_root` — каталог суиты (`tests/`), от которого разрешаются ссылки.
@@ -869,11 +881,34 @@ def _permit_uncovered_fields(
 ) -> dict:
     """Поля разрешения непокрытой части, которые запись ставит (значение) или снимает (`None`).
 
-    До плана 15-22 (задача 2) поля нет: флаг — отказ, снимать нечего.
+    Флаг ставит `permit_scope_uncovered` = класс строки и отказывает, если диспозиция не
+    частичная или ветвь ответа владельца по классу не `permit-class`. Без флага поле снимается;
+    но частичная строка разрешённого класса без флага — отказ: запись оставила бы остаток её
+    предмета не закрытым ничем, и гейт назвал бы строку. Отказ поднимается ДО первой записи.
     """
+    klass = str(row.get("class"))
+    branch = _branch_by_class(document).get(klass)
+    permitted_class = branch == PERMIT_CLASS_BRANCH
+    identity = f"{row.get('plan')}#{row.get('index')}"
     if permit_uncovered:
-        raise CensusError("разрешение непокрытой части ещё не объявлено")
-    return {}
+        if disposition != PARTIALLY_ENFORCED:
+            raise CensusError(
+                f"`{identity}`: `{PERMIT_SCOPE_UNCOVERED_FIELD}` только у `{PARTIALLY_ENFORCED}`, "
+                f"а записывается `{disposition}` — у полной непокрытой части нет"
+            )
+        if not permitted_class:
+            raise CensusError(
+                f"`{identity}`: класс `{klass}` получил ветвь `{branch}`, а не "
+                f"`{PERMIT_CLASS_BRANCH}` — разрешения остатка владелец не давал"
+            )
+        return {PERMIT_SCOPE_UNCOVERED_FIELD: klass}
+    if disposition == PARTIALLY_ENFORCED and permitted_class:
+        raise CensusError(
+            f"`{identity}`: частичная строка разрешённого класса `{klass}` без "
+            f"`{PERMIT_SCOPE_UNCOVERED_FIELD}` — передайте `--permit-uncovered`, иначе остаток "
+            f"её предмета не закрыт ничем"
+        )
+    return {PERMIT_SCOPE_UNCOVERED_FIELD: None}
 
 
 # --- исторические сети ------------------------------------------------------------
@@ -1266,7 +1301,11 @@ def _list(root: Path, phase: str | None, klass: str | None = None) -> int:
 
 
 def _branch_by_class(document: Mapping) -> dict[str, str]:
-    """Ветвь ответа владельца по имени класса — для глаз человека, не для гейта."""
+    """Ветвь ответа владельца по имени класса — для глаз человека и режима записи, не для гейта.
+
+    Режим `--record` берёт отсюда ветвь класса строки, чтобы поставить либо отказать в
+    `permit_scope_uncovered`; гейт судит то же своим помощником `_branch_of_class`.
+    """
     branches: dict[str, str] = {}
     for decision in _class_decisions(document):
         if PERMIT_SCOPE_FIELD in decision:
@@ -1364,6 +1403,29 @@ def _breakdown(root: Path) -> int:
     )
     for value, count in sorted(
         Counter(str(row_of(record).get("disposition", "?")) for record in tested_scope).items()
+    ):
+        print(f"  {value}: {count}")
+    # Разрешение непокрытой части (план 15-22, задача 2) — ПЕЧАТАЕТСЯ, а не судится: форму поля
+    # судит модуль теста принадлежностью.
+    partial_scope = [
+        record
+        for record in scope
+        if row_of(record).get("disposition") == PARTIALLY_ENFORCED
+    ]
+    carrying = [
+        record for record in partial_scope if PERMIT_SCOPE_UNCOVERED_FIELD in row_of(record)
+    ]
+    print(
+        f"частичных строк области решений с `{PERMIT_SCOPE_UNCOVERED_FIELD}`: {len(carrying)}; "
+        f"без поля: {len(partial_scope) - len(carrying)}"
+    )
+    for value, count in sorted(
+        Counter(
+            f"{class_of(record)} — "
+            f"{'с полем' if PERMIT_SCOPE_UNCOVERED_FIELD in row_of(record) else 'без поля'} "
+            f"(ветвь {branches.get(class_of(record), '—')})"
+            for record in partial_scope
+        ).items()
     ):
         print(f"  {value}: {count}")
     print(f"итого элементов блока must_haves.prohibitions: {len(records)}")

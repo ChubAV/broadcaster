@@ -1885,9 +1885,12 @@ def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_clas
     )
     assert written[PERMIT_SCOPE_UNCOVERED_FIELD] == permitted["class"], written
     assert _permit_scope_uncovered_offences([written], decisions) == []
-    assert {key: value for key, value in written.items() if key != PERMIT_SCOPE_UNCOVERED_FIELD} == (
-        permitted
-    ), "запись поля сдвинула прежние поля строки"
+    def without_field(row) -> dict:
+        return {key: value for key, value in row.items() if key != PERMIT_SCOPE_UNCOVERED_FIELD}
+
+    assert without_field(written) == without_field(permitted), (
+        "запись поля сдвинула прежние поля строки"
+    )
     lifted = tool.record_coverage(
         document, live_census, identity_of(permitted), "enforced", rules_of(permitted), None,
         False, SUITE_ROOT,
