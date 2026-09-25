@@ -1275,8 +1275,15 @@ async def test_accounts_delete_confirm_degrades_without_htmx(
     НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
     утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
     улика, а не наблюдение.
+
+    WR-03 (план 15-17): тем же видом перенаправления обработчик отвечает и на отказе
+    (`/login`), и на холостой ветке «удалять нечего» — у неё адрес тот же, что у
+    успеха (`/accounts`). Поэтому пара утверждает ТОЧНЫЙ адрес ветки успеха
+    (литерал, снятый чтением `accounts_delete`) и — несущим утверждением — то, что
+    аккаунта в базе больше НЕТ: холостая ветка и отказ пару не зеленят.
     """
     account = await _seed_account(db_session, type_="max")
+    account_id = account.id
     action = f"/accounts/{account.id}/delete"
 
     html = (await authed_client.get("/accounts")).text
@@ -1297,6 +1304,14 @@ async def test_accounts_delete_confirm_degrades_without_htmx(
         f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
     )
     assert "HX-Location" not in response.headers
+    assert response.headers["location"] == "/accounts", (
+        f"перенаправление ушло на {response.headers['location']!r}, а не на адрес "
+        "ветки успеха удаления — это отказ или иная ветка обработчика"
+    )
+    db_session.expire_all()
+    assert await db_session.get(MessengerAccount, account_id) is None, (
+        "аккаунт остался в базе: путь без htmx прошёл холостой веткой, а не удалением"
+    )
 
     page = await authed_client.get(response.headers["location"])
     assert page.status_code == 200
@@ -3502,8 +3517,15 @@ async def test_ads_delete_confirm_degrades_without_htmx(
     НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
     утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
     улика, а не наблюдение.
+
+    WR-03 (план 15-17): тем же видом перенаправления обработчик отвечает и на отказе
+    (`/login`), и на холостых ветках «нет строки» / «величина вне колонки» — у них
+    адрес тот же, что у успеха (`/ads`). Поэтому пара утверждает ТОЧНЫЙ адрес ветки
+    успеха (литерал, снятый чтением `ads_delete`) и — несущим утверждением, раз
+    адрес холостой ветки совпадает, — то, что объявления в базе больше НЕТ.
     """
     ad = await _seed_ad(db_session)
+    ad_id = ad.id
     action = f"/ads/{ad.id}/delete"
 
     html = (await authed_client.get("/ads")).text
@@ -3524,6 +3546,14 @@ async def test_ads_delete_confirm_degrades_without_htmx(
         f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
     )
     assert "HX-Location" not in response.headers
+    assert response.headers["location"] == "/ads", (
+        f"перенаправление ушло на {response.headers['location']!r}, а не на адрес "
+        "ветки успеха удаления — это отказ или иная ветка обработчика"
+    )
+    db_session.expire_all()
+    assert await db_session.get(Ad, ad_id) is None, (
+        "объявление осталось в базе: путь без htmx прошёл холостой веткой, а не удалением"
+    )
 
     page = await authed_client.get(response.headers["location"])
     assert page.status_code == 200
@@ -3571,8 +3601,16 @@ async def test_admin_user_delete_confirm_degrades_without_htmx(
     НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
     утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
     улика, а не наблюдение.
+
+    WR-03 (план 15-17): тем же видом перенаправления обработчик отвечает и на отказе
+    (удаление самого себя — `/admin/users/{user_id}`), и на холостой ветке «нет
+    строки» — у неё адрес тот же, что у успеха (`/admin/users`). Поэтому пара
+    утверждает ТОЧНЫЙ адрес ветки успеха (литерал, снятый чтением
+    `admin_delete_user`) и — несущим утверждением — то, что пользователя в базе
+    больше НЕТ.
     """
     user = await _user(db_session)
+    user_id = user.id
     action = f"/admin/users/{user.id}/delete"
 
     html = (await admin_client.get(f"/admin/users/{user.id}")).text
@@ -3593,6 +3631,15 @@ async def test_admin_user_delete_confirm_degrades_without_htmx(
         f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
     )
     assert "HX-Location" not in response.headers
+    assert response.headers["location"] == "/admin/users", (
+        f"перенаправление ушло на {response.headers['location']!r}, а не на адрес "
+        "ветки успеха удаления — это отказ или иная ветка обработчика"
+    )
+    db_session.expire_all()
+    assert await db_session.get(User, user_id) is None, (
+        "пользователь остался в базе: путь без htmx прошёл отказом или холостой "
+        "веткой, а не удалением"
+    )
 
     page = await admin_client.get(response.headers["location"])
     assert page.status_code == 200

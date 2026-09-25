@@ -1939,8 +1939,16 @@ async def test_editor_ad_delete_confirm_degrades_without_htmx(
     НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
     утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
     улика, а не наблюдение.
+
+    WR-03 (план 15-17): тем же видом перенаправления `ads_delete` отвечает и на
+    отказе (`/login`), и на холостых ветках «нет строки» / «величина вне колонки».
+    Адрес успеха у запроса с экрана редактора ТОТ ЖЕ, что со списка, — `/ads`
+    (литерал, снятый чтением обработчика: экрана редактора после удаления нет), и
+    он совпадает с адресом холостой ветки. Поэтому несущее утверждение пары — то,
+    что объявления в базе больше НЕТ.
     """
     ad = await _seed_ad(db_session, title="Удаляемое без htmx")
+    ad_id = ad.id
     action = f"/ads/{ad.id}/delete"
 
     html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
@@ -1964,6 +1972,14 @@ async def test_editor_ad_delete_confirm_degrades_without_htmx(
         f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
     )
     assert "HX-Location" not in response.headers
+    assert response.headers["location"] == "/ads", (
+        f"перенаправление ушло на {response.headers['location']!r}, а не на адрес "
+        "ветки успеха удаления — это отказ или иная ветка обработчика"
+    )
+    db_session.expire_all()
+    assert await db_session.get(Ad, ad_id) is None, (
+        "объявление осталось в базе: путь без htmx прошёл холостой веткой, а не удалением"
+    )
 
     page = await authed_client.get(response.headers["location"])
     assert page.status_code == 200
