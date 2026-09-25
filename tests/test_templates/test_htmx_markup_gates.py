@@ -9521,6 +9521,47 @@ def _split_top_level(text: str, separator: str) -> list[str]:
     return parts
 
 
+# --- ПОВЕДЕНИЕ ЕДИНОГО РАЗБОРЩИКА (план 15-18, ревью IN-03) -------------------
+#
+# Разборщику верят три гейта: связка модалок и условная сборка здесь, реестр
+# `hx-push-url` в `tests/test_pages/test_htmx_gates.py`, разбор аргументов
+# панели в `tests/test_templates/test_components.py`. Его поведение закреплено
+# на СИНТЕТИЧЕСКИХ строках: исход на дереве шаблонов сегодня мог бы совпасть и у
+# разборщика, который одну из форм разбора молча не умеет.
+
+
+def test_split_top_level_divides_by_a_multi_character_separator() -> None:
+    """Многосимвольный разделитель делит — у ` else ` и ` if ` нет однобуквенной формы."""
+    assert _split_top_level("a if b else c", " else ") == ["a if b", "c"], (
+        "разборщик НЕ ДЕЛИТ по многосимвольному разделителю ` else `: условное "
+        "выражение шаблонизатора дало бы один скелет вместо двух — "
+        f"{_split_top_level('a if b else c', ' else ')!r}"
+    )
+    assert _split_top_level("a if b", " if ") == ["a", "b"]
+    assert _split_top_level("a~b~c", "~") == ["a", "b", "c"]
+
+
+def test_split_top_level_ignores_separators_inside_three_kinds_of_brackets() -> None:
+    """Запятые внутри `()`, `[]` и `{}` части не рвут."""
+    parts = _split_top_level("f(a, b), {'k': 1, 'm': 2}, [x, y]", ",")
+    assert [part.strip() for part in parts] == ["f(a, b)", "{'k': 1, 'm': 2}", "[x, y]"], (
+        f"разделитель внутри скобок разорвал часть: {parts!r}"
+    )
+    assert _split_top_level("g({'a': x else y}) else z", " else ") == [
+        "g({'a': x else y})",
+        "z",
+    ]
+
+
+def test_split_top_level_ignores_separators_inside_quotes() -> None:
+    """Разделитель внутри строкового литерала — текст, а не граница части."""
+    assert _split_top_level("'a,b', c", ",") == ["'a,b'", " c"]
+    assert _split_top_level('"x else y" else z', " else ") == ['"x else y"', "z"]
+    assert _split_top_level("'a~b' ~ \"(\" ~ c", "~") == ["'a~b' ", ' "(" ', " c"], (
+        "скобка внутри кавычек сдвинула глубину, и следующий разделитель не разделил"
+    )
+
+
 def _string_literal(text: str) -> str | None:
     """Содержимое строкового литерала Jinja, если ``text`` — ровно один литерал."""
     text = text.strip()
