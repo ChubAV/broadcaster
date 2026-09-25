@@ -1925,6 +1925,79 @@ must_haves:
     assert "verification" not in tool.registry_row(absent)
 
 
+# Синтетика IN-01 (план 15-20): ключ `verification`, ПРИСУТСТВУЮЩИЙ без значения. Третьего
+# состояния в записи переписи нет — `None` значит «ключа нет», — и такой ключ есть отказ по имени.
+EMPTY_VERIFICATION_PLAN_SOURCE = """---
+must_haves:
+  prohibitions:
+    - statement: "MUST NOT синтетика с ключом verification без значения"
+      verification:
+---
+"""
+EMPTY_STRING_VERIFICATION_PLAN_SOURCE = """---
+must_haves:
+  prohibitions:
+    - statement: "MUST NOT синтетика с ключом verification, равным пустой строке"
+      verification: ""
+---
+"""
+SYNTHETIC_FIRST_IDENTITY = "99-01-PLAN.md#0"
+ABSENT_VERIFICATION_LABEL = "—"
+
+
+def test_a_present_but_empty_verification_key_is_refused_by_name():
+    """`verification:` без значения — `CensusError` с тождеством, а не молчаливое «ключа нет».
+
+    До плана 15-20 разбор давал `None` и при отсутствии ключа, и при ключе без значения, вопреки
+    докстрингу записи: элемент, объявивший ключ и не объявивший значения, выпадал из правила
+    двух значений молча (находка ревью IN-01).
+    """
+    with pytest.raises(tool.CensusError) as refusal:
+        tool.census({SYNTHETIC_PLAN: EMPTY_VERIFICATION_PLAN_SOURCE})
+    assert SYNTHETIC_FIRST_IDENTITY in str(refusal.value)
+    assert tool.VERIFICATION_KEY in str(refusal.value)
+
+
+def test_an_empty_string_verification_key_is_refused_by_name():
+    """`verification: ""` — тот же отказ: пустая строка не есть объявленное значение."""
+    with pytest.raises(tool.CensusError) as refusal:
+        tool.census({SYNTHETIC_PLAN: EMPTY_STRING_VERIFICATION_PLAN_SOURCE})
+    assert SYNTHETIC_FIRST_IDENTITY in str(refusal.value)
+    assert tool.VERIFICATION_KEY in str(refusal.value)
+
+
+def test_the_verification_label_is_a_dash_only_for_an_absent_key():
+    """«—» разбивки (`--breakdown`, `--list`) — только у записи БЕЗ ключа, а не у пустой строки.
+
+    Подпись — одна функция прибора: `record.verification or "—"` смешивал пустую строку с
+    отсутствием (IN-01), и отказ разбора от этой подписи не освобождает — подпись есть чистая
+    функция записи, какой бы путь её ни построил.
+    """
+    declared_none, absent = tool.census(
+        {
+            SYNTHETIC_PLAN: """---
+must_haves:
+  prohibitions:
+    - statement: "MUST NOT синтетика, объявившая none"
+      verification: none
+    - statement: "MUST NOT синтетика без ключа"
+---
+"""
+        }
+    )
+    assert tool.verification_label(absent) == ABSENT_VERIFICATION_LABEL
+    assert tool.verification_label(declared_none) == VERIFICATION_NONE
+    hand_built_empty = tool.ProhibitionRecord(
+        identity=declared_none.identity,
+        phase=declared_none.phase,
+        statement=declared_none.statement,
+        verification="",
+        status=None,
+        first_key=declared_none.first_key,
+    )
+    assert tool.verification_label(hand_built_empty) == ""
+
+
 def test_every_phase_10_verification_test_row_carries_a_declared_rule(
     live_census, registry_document
 ):
