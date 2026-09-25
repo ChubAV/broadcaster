@@ -348,6 +348,7 @@ REGISTRY_ROW_FIELDS = frozenset(
         "coverage_note",
         "unresolved_reason",
         "permit_scope",
+        "permit_scope_uncovered",
     }
 )
 # ЛЕТОПИСЬ ЧИСЛА: 11 → 13, план 15-13, задача 2 — пришли `unresolved_reason` (названная причина
@@ -358,7 +359,19 @@ REGISTRY_ROW_FIELDS = frozenset(
 # абзац и предсказал: ответ владельца записан блоком `class_decisions` (план 15-12, задача 3), и
 # строка несёт `permit_scope` ТОЛЬКО если её класс получил ветвь `permit-class`; поля вердикта нет
 # по-прежнему.
-REGISTRY_ROW_FIELDS_DECLARED = 13
+#
+# ЛЕТОПИСЬ ЧИСЛА: 13 → 14, план 15-22, задача 2 — пришло `permit_scope_uncovered`: РАЗРЕШЕНИЕ
+# НЕПОКРЫТОЙ ЧАСТИ у строки «принуждается частично», чей класс получил ветвь `permit-class`;
+# значение — имя класса строки (D-04). До плана 15-22 верификатор принимал остаток таких строк
+# покрытым разрешением класса, но ни одно поле этого не говорило, и сильная форма закрывающего
+# правила судить их не могла. Поле ставит ТОЛЬКО режим записи прибора (`--record
+# --permit-uncovered`) и только там, где владелец разрешил КЛАСС; у класса с ветвью
+# `require-enforcement` его нет. Форму судит
+# `test_every_permit_scope_uncovered_names_the_permitted_class_of_its_partial_row`. Поля вердикта
+# нет по-прежнему. (Фраза абзаца выше «строка несёт `permit_scope` ТОЛЬКО если её класс получил
+# ветвь `permit-class`» верна и о новом поле: разрешение в строке стоит только по ответу
+# владельца по классу.)
+REGISTRY_ROW_FIELDS_DECLARED = 14
 RULE_NAME_FIELD = "rule_name"
 RULE_SITE_FIELD = "rule_site"
 # Разделитель нескольких правил одной строки (план 15-22) — ввезён из прибора: второго носителя у
@@ -377,6 +390,8 @@ SUITE_PREFIX = "tests/"
 DECIDED_DISPOSITIONS = frozenset({"enforced", "partially-enforced", "permitted"})
 UNRESOLVED_REASON_FIELD = "unresolved_reason"
 PERMIT_SCOPE_FIELD = "permit_scope"
+# Разрешение непокрытой части частичной строки разрешённого класса (план 15-22, задача 2).
+PERMIT_SCOPE_UNCOVERED_FIELD = "permit_scope_uncovered"
 
 # ПЕРЕЧЕНЬ ПРИЧИН «НЕРАЗОБРАНО» В ОБЛАСТИ РЕШЕНИЙ (план 15-13, задача 2). Каждая строка Фазы 10,
 # не получившая решения, несёт ОДНУ причину из перечня, и причина СОГЛАСНА со строкой:
@@ -407,6 +422,7 @@ ROW_DECISION_FIELDS = (
     "coverage_note",
     "unresolved_reason",
     "permit_scope",
+    "permit_scope_uncovered",
 )
 
 # ПЕРЕЧЕНЬ КЛЮЧЕЙ ДОКУМЕНТА РЕЕСТРА. ЛЕТОПИСЬ ЧИСЛА: 3 → 4, план 15-12, задача 3 — пришёл блок
@@ -1693,6 +1709,216 @@ def test_control_a_permit_scope_other_than_the_row_class_is_named():
     ]
     named = [offence.split(":")[0] for offence in _permit_scope_offences(rows)]
     assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (1, 2, 3)], named
+
+
+# --- разрешение непокрытой части частичной строки (план 15-22, задача 2) --------------------------
+
+
+def _permit_scope_uncovered_offences(rows, decisions) -> list[str]:
+    """Нарушения формы поля `permit_scope_uncovered` — все, с тождествами, а не первое.
+
+    Поле стоит ТОЛЬКО у строки области решений с диспозицией `partially-enforced`, значение —
+    класс строки, и класс получил ветвь `permit-class`. И обратно: КАЖДАЯ частичная строка
+    области решений, чей класс разрешён, поле несёт — иначе остаток её предмета не закрыт ничем.
+    Частичная строка класса с ветвью `require-enforcement` поля не несёт: она ждёт принуждения.
+    """
+    branches = _branch_of_class(decisions)
+    offences = []
+    for row in rows:
+        name = _row_name(row)
+        klass = row.get("class")
+        disposition = row.get("disposition")
+        in_scope = str(row.get("phase")) == DECISION_SCOPE_PHASE
+        permitted_class = branches.get(klass) == PERMIT_CLASS_BRANCH
+        if PERMIT_SCOPE_UNCOVERED_FIELD in row:
+            value = row[PERMIT_SCOPE_UNCOVERED_FIELD]
+            if not in_scope:
+                offences.append(f"{name}: `{PERMIT_SCOPE_UNCOVERED_FIELD}` вне области решений (D-02)")
+            elif disposition != PARTIALLY_ENFORCED:
+                offences.append(
+                    f"{name}: `{PERMIT_SCOPE_UNCOVERED_FIELD}` при диспозиции `{disposition}` — "
+                    f"непокрытая часть есть только у частичной"
+                )
+            elif value != klass:
+                offences.append(
+                    f"{name}: `{PERMIT_SCOPE_UNCOVERED_FIELD}` = `{value}` при классе `{klass}` — "
+                    f"область разрешения не есть имя класса строки"
+                )
+            elif not permitted_class:
+                offences.append(
+                    f"{name}: `{PERMIT_SCOPE_UNCOVERED_FIELD}` у класса `{klass}` с ветвью "
+                    f"`{branches.get(klass)}` — владелец этот класс не разрешал"
+                )
+        elif in_scope and disposition == PARTIALLY_ENFORCED and permitted_class:
+            offences.append(
+                f"{name}: частичная строка разрешённого класса `{klass}` без "
+                f"`{PERMIT_SCOPE_UNCOVERED_FIELD}` — остаток её предмета не закрыт ничем"
+            )
+    return offences
+
+
+def permit_scope_uncovered_distribution(rows) -> str:
+    """Частичные строки области решений по классам — с полем и без; ДОКЛАДЫВАЕТСЯ, не утверждается."""
+    partial = [
+        row for row in _decision_scope_rows(rows) if row.get("disposition") == PARTIALLY_ENFORCED
+    ]
+    cells = Counter(
+        (str(row.get("class")), PERMIT_SCOPE_UNCOVERED_FIELD in row) for row in partial
+    )
+    return f"частичных строк области решений {len(partial)}; " + ", ".join(
+        f"{klass} {'с полем' if carried else 'без поля'} {count}"
+        for (klass, carried), count in sorted(cells.items())
+    )
+
+
+def test_every_permit_scope_uncovered_names_the_permitted_class_of_its_partial_row(
+    registry_document,
+):
+    """РЕШЕНИЕ ПЛАНИРОВАНИЯ О 23 ЧАСТИЧНЫХ СТРОКАХ РАЗРЕШЁННЫХ КЛАССОВ.
+
+    Дословно (план 15-22, истина 3): «РЕШЕНИЕ ПЛАНИРОВАНИЯ О 23 ЧАСТИЧНЫХ СТРОКАХ РАЗРЕШЁННЫХ
+    КЛАССОВ (записано здесь и в докстринге правила, по поручению Г-1): непокрытая часть частично
+    принуждённого запрета класса с ветвью `permit-class` покрыта разрешением ЭТОГО класса, и это
+    стоит машинно читаемым полем СТРОКИ `permit_scope_uncovered` = имя класса — каждая строка
+    несёт свою запись (D-04), а не выводится из блока `class_decisions` молча. D-05 соблюдён:
+    существование правила предъявлено (оно покрывает часть), разрешение закрывает лишь названный
+    остаток».
+
+    ОСНОВАНИЕ. D-04 требует ПОСТРОЧНОЙ записи: область разрешения стоит в строке именем класса, и
+    вывод её из блока `class_decisions` в момент прогона был бы молчаливым решением. D-05 требует
+    у запрета с `verification: test` предъявленного СУЩЕСТВОВАНИЯ правила — оно есть: строка
+    `partially-enforced`, и правило покрывает часть предмета; разрешение класса закрывает только
+    НАЗВАННЫЙ остаток, как оно закрывает строки этого класса, у которых правила нет вовсе. У
+    класса `product-invariant` владелец выбрал `require-enforcement`, и остаток его частичных строк
+    не разрешён ничем — поля у них нет, они ждут принуждения. Решение принято ПЛАНИРОВАНИЕМ
+    2026-09-25 (прогон `/gsd-plan-phase 15 --gaps`) по поручению владельца `chubav` Г-1 «решить
+    явно и записать, как сильная форма судит 23 частичные строки разрешённых классов», а не
+    выведено исполнителем. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ: остаток разрешён, а не принуждён.
+
+    Число строк правило НЕ ЗНАЕТ — принадлежностью, а не литералом: план принуждения, поднявший
+    частичную строку до `enforced`, снимет её поле записью прибора, и правило останется зелёным.
+    Распределение ДОКЛАДЫВАЕТСЯ в отказе. Антивакуум: область решений в реестре равна объявленной,
+    блок ответа владельца непуст.
+    """
+    rows = registry_document["rows"]
+    decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    assert len(_decision_scope_rows(rows)) == PROHIBITIONS_IN_DECISION_SCOPE
+    assert decisions, "блок ответа владельца по классам пуст или отсутствует"
+    offences = _permit_scope_uncovered_offences(rows, decisions)
+    assert not offences, (
+        f"нарушения формы `{PERMIT_SCOPE_UNCOVERED_FIELD}` ({len(offences)}):\n"
+        + "\n".join(offences)
+        + f"\n\n{permit_scope_uncovered_distribution(rows)}"
+        + f"\nветви ответа: {decision_distribution(decisions)}"
+    )
+
+
+def test_control_permit_scope_uncovered_offences_are_named_for_every_kind():
+    """Синтетика: по строке на каждый вид нарушения; законные строки молчат.
+
+    Названы: частичная строка разрешённого класса без поля; поле у `require-enforcement`; поле с
+    чужим классом; поле у `enforced`; поле вне области решений. Молчат: частичная строка
+    разрешённого класса с полем и частичная строка `require-enforcement` без поля.
+    """
+    required, permitted, other = sorted(PROHIBITION_CLASSES)[:3]
+    decisions = [
+        {"decision_branch": REQUIRE_ENFORCEMENT_BRANCH, "decision_scope": required},
+        {"permit_branch": PERMIT_CLASS_BRANCH, "permit_scope": permitted},
+        {"permit_branch": PERMIT_CLASS_BRANCH, "permit_scope": other},
+    ]
+
+    def row(index, klass, disposition, uncovered=None, phase=DECISION_SCOPE_PHASE):
+        built = {"plan": SYNTHETIC_PLAN, "index": index, "phase": phase, "class": klass,
+                 "disposition": disposition}
+        if uncovered is not None:
+            built[PERMIT_SCOPE_UNCOVERED_FIELD] = uncovered
+        return built
+
+    rows = [
+        row(0, permitted, PARTIALLY_ENFORCED, permitted),
+        row(1, required, PARTIALLY_ENFORCED),
+        row(2, permitted, PARTIALLY_ENFORCED),
+        row(3, required, PARTIALLY_ENFORCED, required),
+        row(4, permitted, PARTIALLY_ENFORCED, other),
+        row(5, permitted, "enforced", permitted),
+        row(6, tool.SEED_CLASS, tool.SEED_DISPOSITION, permitted, phase="99"),
+    ]
+    named = [
+        offence.split(":")[0] for offence in _permit_scope_uncovered_offences(rows, decisions)
+    ]
+    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (2, 3, 4, 5, 6)], named
+
+
+def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_class(
+    registry_document, live_census
+):
+    """`--permit-uncovered` ставит поле равным классу строки — и только частичной строке класса
+    с ветвью `permit-class`; частичная строка такого класса без флага — отказ: запись оставила бы
+    остаток не закрытым ничем. На копиях живого реестра; копия после отказа не изменена.
+    """
+    decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    branches = _branch_of_class(decisions)
+    partial = [
+        row
+        for row in _decision_scope_rows(registry_document["rows"])
+        if row.get("disposition") == PARTIALLY_ENFORCED
+    ]
+    permitted = next(row for row in partial if branches[row["class"]] == PERMIT_CLASS_BRANCH)
+    required = next(row for row in partial if branches[row["class"]] == REQUIRE_ENFORCEMENT_BRANCH)
+
+    def rules_of(row) -> list[str]:
+        return [
+            f"{site.rpartition(':')[0]}{tool.RULE_REFERENCE_SEPARATOR}{name}"
+            for name, site in zip(
+                row[RULE_NAME_FIELD].split(RULE_SEPARATOR),
+                row[RULE_SITE_FIELD].split(RULE_SEPARATOR),
+            )
+        ]
+
+    def identity_of(row) -> str:
+        return f"{row['plan']}#{row['index']}"
+
+    document = copy.deepcopy(registry_document)
+    written = tool.record_coverage(
+        document, live_census, identity_of(permitted), PARTIALLY_ENFORCED, rules_of(permitted),
+        permitted[UNCOVERED_PART_FIELD], True, SUITE_ROOT,
+    )
+    assert written[PERMIT_SCOPE_UNCOVERED_FIELD] == permitted["class"], written
+    assert _permit_scope_uncovered_offences([written], decisions) == []
+    assert {key: value for key, value in written.items() if key != PERMIT_SCOPE_UNCOVERED_FIELD} == (
+        permitted
+    ), "запись поля сдвинула прежние поля строки"
+    lifted = tool.record_coverage(
+        document, live_census, identity_of(permitted), "enforced", rules_of(permitted), None,
+        False, SUITE_ROOT,
+    )
+    assert PERMIT_SCOPE_UNCOVERED_FIELD not in lifted, lifted
+
+    left = tool.record_coverage(
+        copy.deepcopy(registry_document), live_census, identity_of(required), PARTIALLY_ENFORCED,
+        rules_of(required), required[UNCOVERED_PART_FIELD], False, SUITE_ROOT,
+    )
+    assert PERMIT_SCOPE_UNCOVERED_FIELD not in left, left
+
+    refusals = {
+        "флаг у класса `require-enforcement`": (
+            required, PARTIALLY_ENFORCED, required[UNCOVERED_PART_FIELD], True, PERMIT_CLASS_BRANCH,
+        ),
+        "флаг при полной диспозиции": (permitted, "enforced", None, True, PARTIALLY_ENFORCED),
+        "частичная строка разрешённого класса без флага": (
+            permitted, PARTIALLY_ENFORCED, permitted[UNCOVERED_PART_FIELD], False,
+            PERMIT_SCOPE_UNCOVERED_FIELD,
+        ),
+    }
+    for kind, (row, disposition, note, flag, word) in refusals.items():
+        fresh = copy.deepcopy(registry_document)
+        with pytest.raises(tool.CensusError) as refusal:
+            tool.record_coverage(
+                fresh, live_census, identity_of(row), disposition, rules_of(row), note, flag,
+                SUITE_ROOT,
+            )
+        assert word in str(refusal.value), (kind, str(refusal.value))
+        assert fresh == registry_document, f"{kind}: копия изменена отказавшей записью"
 
 
 # --- зубы: подмена словаря исходников, а не правка дерева -------------------------------
