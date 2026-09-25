@@ -44,8 +44,12 @@
 # `enforcement-required` у класса `require-enforcement`. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ.
 # Строки вне Фазы 10 не несут ни одного поля решения (D-02).
 #
-# `rows_declared` — второй носитель числа переписи (первый — литерал модуля теста);
-# перегенерация реестра в другой размер краснит модуль.
+# `rows_declared` — длина реестра, равная переписи ВСЕЙ вселенной; строк, чьё тождество лежит в
+# ФИКСИРОВАННОМ НАБОРЕ (планы по 15-14 включительно), ровно столько, сколько объявляет литерал
+# модуля теста, а строки планов после набора засеяны и стоят вне области решений (D-02).
+# Перегенерация реестра в другой размер краснит модуль. (Летопись: до плана 15-15 абзац гласил
+# «`rows_declared` — второй носитель числа переписи (первый — литерал модуля теста)» — верно,
+# пока набор и вселенная совпадали, то есть до 2026-09-25, когда легли планы закрытия гэпов.)
 #
 # `class` у строк Фазы 10 (область решений D-02) записан планом 15-12 ОДИН раз — чтением
 # формулировки, а не порядком правил регулярных выражений; перечень классов объявлен в модуле
@@ -53,8 +57,8 @@
 # разбивка ключевыми словами (`--draft-classes`) есть улика для человека: гейт её не зовёт.
 # Верность отнесения — человеческое суждение; гейт утверждает ПОЛНОТУ, а не правильность.
 
-measured: '2026-09-24'
-rows_declared: 697
+measured: '2026-09-25'
+rows_declared: 741
 class_decisions:
 - {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он'}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: gate-integrity, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 61}
@@ -765,3 +769,47 @@ rows:
 - {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 2, phase: '15', statement_digest: 84739be90019, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 3, phase: '15', statement_digest: 18e93b4dfd01, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-14-PLAN.md, index: 4, phase: '15', statement_digest: acac2cc17793, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-15-PLAN.md, index: 0, phase: '15', statement_digest: c9a5c2cdefde, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-15-PLAN.md, index: 1, phase: '15', statement_digest: cb6a78e8d93c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-15-PLAN.md, index: 2, phase: '15', statement_digest: 7e056fce6aab, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-16-PLAN.md, index: 0, phase: '15', statement_digest: 5abbaaea058e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-16-PLAN.md, index: 1, phase: '15', statement_digest: b5e9c61ca830, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-16-PLAN.md, index: 2, phase: '15', statement_digest: c7d748755909, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-17-PLAN.md, index: 0, phase: '15', statement_digest: 30d66ee92974, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-17-PLAN.md, index: 1, phase: '15', statement_digest: cfac963b1487, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-18-PLAN.md, index: 0, phase: '15', statement_digest: 22deb34d319f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-18-PLAN.md, index: 1, phase: '15', statement_digest: 03796defb1ec, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-19-PLAN.md, index: 0, phase: '15', statement_digest: f55b2fb33523, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-19-PLAN.md, index: 1, phase: '15', statement_digest: 0e11b4db9f5b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-19-PLAN.md, index: 2, phase: '15', statement_digest: aa3dceadc2cd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-20-PLAN.md, index: 0, phase: '15', statement_digest: 9ca4b0cef9ae, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-20-PLAN.md, index: 1, phase: '15', statement_digest: 911e5fc47754, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-21-PLAN.md, index: 0, phase: '15', statement_digest: d554edfbfe6d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-21-PLAN.md, index: 1, phase: '15', statement_digest: fd442019ea98, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-22-PLAN.md, index: 0, phase: '15', statement_digest: ae92fcf7d2b6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-22-PLAN.md, index: 1, phase: '15', statement_digest: 153bfd53b1c9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-23-PLAN.md, index: 0, phase: '15', statement_digest: 389c5aa592db, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-23-PLAN.md, index: 1, phase: '15', statement_digest: f145cad5e8c9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-24-PLAN.md, index: 0, phase: '15', statement_digest: 38af81e647e0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-24-PLAN.md, index: 1, phase: '15', statement_digest: d1298936b3bc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-25-PLAN.md, index: 0, phase: '15', statement_digest: 5cd69c3f4815, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-25-PLAN.md, index: 1, phase: '15', statement_digest: 6faa14e46115, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-26-PLAN.md, index: 0, phase: '15', statement_digest: f4ed2a5e0436, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-26-PLAN.md, index: 1, phase: '15', statement_digest: cb971ed723ad, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-27-PLAN.md, index: 0, phase: '15', statement_digest: 5127e6088533, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-27-PLAN.md, index: 1, phase: '15', statement_digest: d4e12bc5e4e3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-28-PLAN.md, index: 0, phase: '15', statement_digest: ae6982d11291, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-28-PLAN.md, index: 1, phase: '15', statement_digest: c8fc7af735db, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-29-PLAN.md, index: 0, phase: '15', statement_digest: 38e154662a67, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-29-PLAN.md, index: 1, phase: '15', statement_digest: 01d8a1d9e24f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-30-PLAN.md, index: 0, phase: '15', statement_digest: 4eb218798f3e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-30-PLAN.md, index: 1, phase: '15', statement_digest: bef8af13c7d8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-30-PLAN.md, index: 2, phase: '15', statement_digest: 08129aac1342, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-31-PLAN.md, index: 0, phase: '15', statement_digest: 0436c7726e14, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-31-PLAN.md, index: 1, phase: '15', statement_digest: d64cf6737a7f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-32-PLAN.md, index: 0, phase: '15', statement_digest: c73cdc06301a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-32-PLAN.md, index: 1, phase: '15', statement_digest: 71c992cd32c1, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-32-PLAN.md, index: 2, phase: '15', statement_digest: 627c93baaa30, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-33-PLAN.md, index: 0, phase: '15', statement_digest: 7e6f460479bf, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-33-PLAN.md, index: 1, phase: '15', statement_digest: e885586b4cce, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-33-PLAN.md, index: 2, phase: '15', statement_digest: 8ca9a0063630, class: unclassified, disposition: unresolved}
