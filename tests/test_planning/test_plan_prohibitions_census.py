@@ -121,6 +121,7 @@ PyYAML 6.0.3 закреплён в `uv.lock` и приходит транзит�
 """
 
 import ast
+import copy
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -2367,6 +2368,56 @@ def test_control_a_coverage_rule_absent_from_its_site_is_named(suite_sources):
     ] == [f"{SYNTHETIC_PLAN}#0"]
 
 
+def test_control_a_multi_rule_row_of_unequal_length_is_named():
+    """Пары сличаются по позиции: число правил и число координат разошлись — строка названа.
+
+    Названы и пустая часть после разделителя, и расхождение в обе стороны; строка двух правил с
+    двумя координатами молчит. Значения полей выписаны литералом, как строки реестра на диске.
+    """
+    site = "tests/test_planning/test_plan_prohibitions_census.py:1"
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "disposition": "enforced",
+         RULE_NAME_FIELD: "test_x; test_y", RULE_SITE_FIELD: f"{site}; {site}"},
+        {"plan": SYNTHETIC_PLAN, "index": 1, "disposition": "enforced",
+         RULE_NAME_FIELD: "test_x; test_y", RULE_SITE_FIELD: site},
+        {"plan": SYNTHETIC_PLAN, "index": 2, "disposition": "enforced",
+         RULE_NAME_FIELD: "test_x; ", RULE_SITE_FIELD: f"{site}; {site}"},
+        {"plan": SYNTHETIC_PLAN, "index": 3, "disposition": PARTIALLY_ENFORCED,
+         RULE_NAME_FIELD: "test_x", RULE_SITE_FIELD: f"{site}; {site}",
+         UNCOVERED_PART_FIELD: "половина"},
+    ]
+    named = sorted({offence.split(":")[0] for offence in _coverage_offences(rows)})
+    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (1, 2, 3)], named
+
+
+def test_control_one_absent_rule_of_two_is_named_alone(suite_sources):
+    """Из двух правил строки одно отсутствует в своём файле — названо ровно оно, живое молчит."""
+    live = "test_the_failure_banner_guard_lives_on_the_node_it_wires"
+    absent = "test_no_such_rule_was_ever_written"
+    holder = [path for path, text in suite_sources.items() if live in _functions_defined_in(text)]
+    assert len(holder) == 1, holder
+    site = f"{SUITE_PREFIX}{holder[0]}:1"
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "disposition": "enforced",
+         RULE_NAME_FIELD: f"{live}; {absent}", RULE_SITE_FIELD: f"{site}; {site}"},
+    ]
+    offences = _rule_site_offences(rows, suite_sources)
+    assert len(offences) == 1, offences
+    assert f"`{absent}`" in offences[0] and live not in offences[0], offences
+
+
+def test_control_a_single_rule_row_reads_as_before(suite_sources):
+    """Одиночная форма — строка без разделителя — читается, как до плана 15-22: молчит."""
+    live = "test_the_failure_banner_guard_lives_on_the_node_it_wires"
+    holder = [path for path, text in suite_sources.items() if live in _functions_defined_in(text)]
+    rows = [
+        {"plan": SYNTHETIC_PLAN, "index": 0, "disposition": "enforced",
+         RULE_NAME_FIELD: live, RULE_SITE_FIELD: f"{SUITE_PREFIX}{holder[0]}:1"},
+    ]
+    assert _coverage_offences(rows) == []
+    assert _rule_site_offences(rows, suite_sources) == []
+
+
 def test_control_a_permitted_verification_test_row_is_named():
     """Строка D-05 с «разрешено» называется; та же диспозиция у `none` — законна."""
     rows = [
@@ -2379,6 +2430,242 @@ def test_control_a_permitted_verification_test_row_is_named():
     ]
     named = [offence.split(":")[0] for offence in _permitted_verification_test_rows(rows)]
     assert named == [f"{SYNTHETIC_PLAN}#0"], named
+
+
+# --- режим записи меры покрытия `--record` (план 15-22, задача 1) ---------------------------------
+#
+# ПРЕДМЕТ ГРУППЫ. Планы принуждения (15-24…15-31) закрывают строки области решений записью меры
+# покрытия; до плана 15-22 её писали руками в YAML, и ничто не мешало записать `enforced` с именем
+# правила, которого в дереве нет. Режим записи прибора — ЕДИНСТВЕННОЕ место записи меры: он ищет
+# каждое правило разбором `ast` в файле его координаты, а гейт выше проверяет то же НЕЗАВИСИМО
+# (`_rule_site_offences`) — запись, прошедшая прибор, обязана пройти гейт, и группа это утверждает
+# на копии живого реестра. Дерево и реестр на диске правила группы не правят.
+
+
+def _definition_line(source: str, name: str) -> int:
+    """Номер строки первого определения функции `name` в исходнике — по дереву, а не по тексту."""
+    return min(
+        node.lineno
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+    )
+
+
+def _rule_references(registry_document) -> list[tuple[str, str]]:
+    """Два правила, уже названных реестром: пары «путь от корня, имя» — живые по построению."""
+    covered = [
+        row for row in registry_document["rows"] if row.get("disposition") in COVERED_DISPOSITIONS
+    ]
+    pairs: list[tuple[str, str]] = []
+    for row in covered:
+        pair = (row[RULE_SITE_FIELD].split(RULE_SEPARATOR)[0].rpartition(":")[0],
+                row[RULE_NAME_FIELD].split(RULE_SEPARATOR)[0])
+        if pair not in pairs:
+            pairs.append(pair)
+    assert len(pairs) >= 2, pairs
+    return pairs[:2]
+
+
+def _tail(identity: str) -> str:
+    """Уникальный хвост тождества `…/10-01-PLAN.md#2` → `10-01-PLAN.md#2`."""
+    return identity.rsplit("/", 1)[-1]
+
+
+def test_the_record_mode_writes_only_what_the_tree_proves(
+    registry_document, live_census, suite_sources
+):
+    """Запись реального правила проходит гейт; всё, чего записывать нельзя, — `CensusError`.
+
+    На КОПИИ документа живого реестра: строка области решений, ждущая принуждения, получает
+    `enforced` двумя правилами (тождество подано хвостом); координаты сняты разбором `ast` и
+    строка проходит `_coverage_offences`, `_rule_site_offences` и закрывающее правило. Затем
+    каждый вид отказа — на свежей копии, и копия после отказа НЕ ИЗМЕНЕНА ни на поле: запись либо
+    проходит целиком, либо не пишет ничего.
+    """
+    decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    victim = next(
+        row
+        for row in _decision_scope_rows(registry_document["rows"])
+        if row.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
+    )
+    identity = f"{victim['plan']}#{victim['index']}"
+    references = _rule_references(registry_document)
+    rules = [f"{path}{tool.RULE_REFERENCE_SEPARATOR}{name}" for path, name in references]
+
+    document = copy.deepcopy(registry_document)
+    row = tool.record_coverage(
+        document, live_census, _tail(identity), "enforced", rules, None, False, SUITE_ROOT
+    )
+    assert row["disposition"] == "enforced"
+    assert row[RULE_NAME_FIELD] == RULE_SEPARATOR.join(name for _, name in references)
+    expected_sites = [
+        f"{path}:{_definition_line(suite_sources[path[len(SUITE_PREFIX):]], name)}"
+        for path, name in references
+    ]
+    assert row[RULE_SITE_FIELD] == RULE_SEPARATOR.join(expected_sites), row
+    assert UNRESOLVED_REASON_FIELD not in row and UNCOVERED_PART_FIELD not in row, row
+    written = tool._registry_rows(document)[tool.ProhibitionIdentity(victim["plan"], victim["index"])]
+    assert written is row
+    assert _coverage_offences([row]) == []
+    assert _rule_site_offences([row], suite_sources) == []
+    assert _closing_offences(document["rows"], decisions) == []
+    assert len(document["rows"]) == len(registry_document["rows"])
+
+    partial = copy.deepcopy(registry_document)
+    row = tool.record_coverage(
+        partial, live_census, identity, PARTIALLY_ENFORCED, rules[:1], "половина", False,
+        SUITE_ROOT,
+    )
+    assert row[UNCOVERED_PART_FIELD] == "половина"
+    assert partial_disposition_offences([row]) == [] and _coverage_offences([row]) == []
+
+    outside = next(
+        row for row in registry_document["rows"] if str(row.get("phase")) != DECISION_SCOPE_PHASE
+    )
+    path, name = references[0]
+    refusals = {
+        "правило, которого нет в файле": (
+            identity, "enforced", [f"{path}::test_no_such_rule_was_ever_written"], None,
+            "test_no_such_rule_was_ever_written",
+        ),
+        "файла правила нет": (
+            identity, "enforced", ["tests/no_such_module.py::test_x"], None, "no_such_module",
+        ),
+        "ссылка без `::`": (identity, "enforced", [name], None, "::"),
+        "ссылка вне каталога суиты": (
+            identity, "enforced", [f"app/main.py::{name}"], None, "tests/",
+        ),
+        "правило названо дважды": (identity, "enforced", rules[:1] * 2, None, "дважды"),
+        "ни одного правила": (identity, "enforced", [], None, "правил"),
+        "тождество вне переписи": (
+            "99-01-PLAN.md#0", "enforced", rules[:1], None, "вне переписи",
+        ),
+        "строка вне области решений": (
+            f"{outside['plan']}#{outside['index']}", "enforced", rules[:1], None, "D-02",
+        ),
+        "диспозиция не меры покрытия": (identity, PERMITTED, rules[:1], None, PERMITTED),
+        "частичная без непокрытой части": (
+            identity, PARTIALLY_ENFORCED, rules[:1], "  ", UNCOVERED_PART_FIELD,
+        ),
+        "полная с непокрытой частью": (
+            identity, "enforced", rules[:1], "половина", UNCOVERED_PART_FIELD,
+        ),
+    }
+    for kind, (target, disposition, refs, note, word) in refusals.items():
+        fresh = copy.deepcopy(registry_document)
+        with pytest.raises(tool.CensusError) as refusal:
+            tool.record_coverage(
+                fresh, live_census, target, disposition, refs, note, False, SUITE_ROOT
+            )
+        assert word in str(refusal.value), (kind, str(refusal.value))
+        assert fresh == registry_document, f"{kind}: копия изменена отказавшей записью"
+
+
+def test_the_record_mode_keeps_the_coordinate_of_a_rule_it_already_names(
+    registry_document, live_census
+):
+    """Координата — ДЕНЬ ЗАМЕРА: перезапись того же правила в том же файле её не перемеряет.
+
+    Иначе запись меры по одной строке двигала бы номер строки у каждой перезаписанной строки, чей
+    файл с тех пор вырос, и дифф записи нёс бы чужие поля. Новое правило получает координату,
+    снятую разбором.
+    """
+    victim = next(
+        row
+        for row in _decision_scope_rows(registry_document["rows"])
+        if row.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
+    )
+    (path, name), (other_path, other_name) = _rule_references(registry_document)
+    document = copy.deepcopy(registry_document)
+    row = tool._registry_rows(document)[tool.ProhibitionIdentity(victim["plan"], victim["index"])]
+    row.update(
+        {"disposition": "enforced", RULE_NAME_FIELD: name, RULE_SITE_FIELD: f"{path}:1"}
+    )
+    row.pop(UNRESOLVED_REASON_FIELD)
+    identity = f"{victim['plan']}#{victim['index']}"
+    kept = tool.record_coverage(
+        document, live_census, identity, "enforced", [f"{path}::{name}"], None, False, SUITE_ROOT
+    )
+    assert kept[RULE_SITE_FIELD] == f"{path}:1", kept
+    both = tool.record_coverage(
+        document, live_census, identity, "enforced",
+        [f"{path}::{name}", f"{other_path}::{other_name}"], None, False, SUITE_ROOT,
+    )
+    first, second = both[RULE_SITE_FIELD].split(RULE_SEPARATOR)
+    assert first == f"{path}:1"
+    assert second.rpartition(":")[0] == other_path and second.rpartition(":")[2] != "1", both
+
+
+def test_the_record_mode_refuses_an_ambiguous_identity_tail():
+    """Хвост, совпавший с двумя тождествами, — отказ по имени, а не первая попавшаяся строка."""
+    source = """---
+must_haves:
+  prohibitions:
+    - statement: "MUST NOT синтетика"
+      verification: test
+---
+"""
+    first = ".planning/phases/10-synthetic-a/10-01-PLAN.md"
+    second = ".planning/phases/10-synthetic-b/10-01-PLAN.md"
+    records = tool.census({first: source, second: source})
+    document = {"rows": [tool.registry_row(record) for record in records]}
+    with pytest.raises(tool.CensusError, match="неоднозначн"):
+        tool.record_coverage(
+            document, records, "10-01-PLAN.md#0", "enforced", ["tests/x.py::test_x"], None,
+            False, SUITE_ROOT,
+        )
+
+
+SYNTHETIC_DECISION_PLAN = ".planning/phases/10-synthetic/10-01-PLAN.md"
+SYNTHETIC_RULE_MODULE = "tests/test_synthetic_rule.py"
+SYNTHETIC_RULE_SOURCE = "def helper():\n    pass\n\n\ndef test_synthetic_rule():\n    pass\n"
+
+
+def test_control_main_records_the_row_or_refuses_by_name(tmp_path, monkeypatch, capsys):
+    """Сквозной контроль CLI: `main(["--record", …])` пишет строку реестра либо печатает `ОТКАЗ:`.
+
+    Корень дерева подменён каталогом `tmp_path`: синтетический план Фазы 10, его строка реестра и
+    модуль суиты с одним правилом. Отказ не меняет файла реестра ни на символ; флаг режима записи
+    без `--record` — ошибка разбора аргументов.
+    """
+    plan = tmp_path / SYNTHETIC_DECISION_PLAN
+    plan.parent.mkdir(parents=True)
+    plan.write_text(
+        '---\nmust_haves:\n  prohibitions:\n    - statement: "MUST NOT синтетика"\n'
+        "      verification: test\n---\n",
+        encoding="utf-8",
+    )
+    (record,) = tool.census({SYNTHETIC_DECISION_PLAN: plan.read_text(encoding="utf-8")})
+    seeded = tool.registry_row(record)
+    seeded["class"] = "product-invariant"
+    registry = tmp_path / tool.REGISTRY_RELATIVE_PATH
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        tool.dump_registry({"measured": "1999-01-01", "rows_declared": 1, "rows": [seeded]}),
+        encoding="utf-8",
+    )
+    module = tmp_path / SYNTHETIC_RULE_MODULE
+    module.parent.mkdir(parents=True)
+    module.write_text(SYNTHETIC_RULE_SOURCE, encoding="utf-8")
+    monkeypatch.setattr(tool, "TREE_ROOT", tmp_path)
+
+    rule = f"{SYNTHETIC_RULE_MODULE}::test_synthetic_rule"
+    assert tool.main(["--record", "10-01-PLAN.md#0", "--disposition", "enforced", "--rule", rule]) == 0
+    row = tool._registry_rows(tool.load_registry(registry))[record.identity]
+    assert row["disposition"] == "enforced"
+    assert row[RULE_NAME_FIELD] == "test_synthetic_rule"
+    assert row[RULE_SITE_FIELD] == f"{SYNTHETIC_RULE_MODULE}:5"
+    capsys.readouterr()
+
+    before = registry.read_text(encoding="utf-8")
+    absent = f"{SYNTHETIC_RULE_MODULE}::test_absent"
+    assert tool.main(
+        ["--record", "10-01-PLAN.md#0", "--disposition", "enforced", "--rule", absent]
+    ) == REFUSAL_EXIT_CODE
+    assert capsys.readouterr().err.startswith(REFUSAL_PREFIX)
+    assert registry.read_text(encoding="utf-8") == before
+    with pytest.raises(SystemExit):
+        tool.main(["--check", "--disposition", "enforced"])
 
 
 # --- группа согласия с четырьмя историческими сетями ---------------------------------------
