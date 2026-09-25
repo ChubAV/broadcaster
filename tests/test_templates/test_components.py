@@ -51,6 +51,7 @@ from tests.test_templates.test_htmx_markup_gates import (
     CLIENT_STATE_NODES,
     _all_templates as _all_templates_under,
     _client_state_sites,
+    _split_top_level,
 )
 from tests.test_templates.test_htmx_markup_security import INLINE_HANDLER_ATTR
 
@@ -1427,30 +1428,18 @@ def _modal_signature_names(source: str) -> set[str]:
         return set()
     return {
         part.split("=", 1)[0].strip()
-        for part in _split_top_level(match.group(1))
+        for part in _split_top_level(match.group(1), ",")
         if part.strip()
     }
 
 
-def _split_top_level(argument_text: str) -> list[str]:
-    """Разбить список аргументов по запятым ВЕРХНЕГО УРОВНЯ.
-
-    Наивный `split(',')` разорвал бы вложенный вызов и литерал со списком, и
-    разборщик выдал бы имена, которых в исходнике нет.
-    """
-    parts, depth, current = [], 0, []
-    for char in argument_text:
-        if char in "([{":
-            depth += 1
-        elif char in ")]}":
-            depth -= 1
-        if char == "," and depth == 0:
-            parts.append("".join(current))
-            current = []
-            continue
-        current.append(char)
-    parts.append("".join(current))
-    return parts
+# ⚠️ ЛЕТОПИСЬ: до плана 15-18 здесь жил третий разборщик `_split_top_level`
+# (один аргумент, только запятая) — он знал три вида скобок, но НЕ знал кавычек и
+# рвал текст панели `body='…, …'` на обрывки фраз. Имён он не выдумывал лишь
+# потому, что обрывки начинались кириллицей и `KWARG_NAME_RE` их не брал. Сведён
+# к единому разборщику гейта разметки (ревью IN-03, ввоз в шапке); наивный
+# `split(',')` по-прежнему недопустим — он разорвал бы вложенный вызов и литерал
+# со списком, и разборщик выдал бы имена, которых в исходнике нет.
 
 
 def _modal_call_kwargs(source: str) -> set[str]:
@@ -1470,7 +1459,7 @@ def _modal_call_kwargs(source: str) -> set[str]:
             elif source[end] in ")]}":
                 depth -= 1
             end += 1
-        for part in _split_top_level(source[match.end() : end - 1]):
+        for part in _split_top_level(source[match.end() : end - 1], ","):
             found = KWARG_NAME_RE.match(part.strip())
             if found:
                 names.add(found.group(1))
