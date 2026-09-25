@@ -122,6 +122,7 @@ from tests.test_templates.test_htmx_markup_gates import (
     ACTION_VALUE,
     HX_POST_VALUE,
     _attr_value,
+    _split_top_level,
     _strip_comments,
 )
 
@@ -7006,32 +7007,12 @@ def _misfiled_dual_handlers(
     }
 
 
-def _split_top_level(text: str, separator: str) -> list[str]:
-    """Части выражения шаблонизатора по разделителю ВНЕ кавычек и скобок."""
-    parts: list[str] = []
-    depth = 0
-    quote: str | None = None
-    start = 0
-    index = 0
-    while index < len(text):
-        char = text[index]
-        if quote:
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-        elif char in "([":
-            depth += 1
-        elif char in ")]":
-            depth -= 1
-        elif depth == 0 and text.startswith(separator, index):
-            parts.append(text[start:index])
-            index += len(separator)
-            start = index
-            continue
-        index += 1
-    parts.append(text[start:])
-    return parts
+# ⚠️ ЛЕТОПИСЬ: до плана 15-18 здесь жил второй разборщик `_split_top_level` с
+# тем же именем и иным поведением — он делил по многосимвольному разделителю, но
+# не знал вложенности `{}`; одноимённый разборщик гейта разметки знал `{}`, но
+# на многосимвольном разделителе не делил ничего (ревью IN-03). Сведён к одному
+# в `tests/test_templates/test_htmx_markup_gates.py` и ввозится оттуда (блок
+# ввоза в шапке): два разборщика одного предмета расходятся молча.
 
 
 def _jinja_expression_skeletons(expression: str) -> tuple[str, ...]:
