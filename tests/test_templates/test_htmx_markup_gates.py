@@ -9494,15 +9494,35 @@ def _scan_to_close(text: str, start: int) -> int:
 
 
 def _split_top_level(text: str, separator: str) -> list[str]:
-    """Разбить по ``separator`` ВЕРХНЕГО уровня вне строковых литералов.
+    """Части выражения шаблонизатора по ``separator`` ВНЕ кавычек и скобок.
 
-    Запятые и тильды внутри текста панели (``body='…, …'``) аргументов не рвут —
-    ради этого разборщик и не наивный ``split``.
+    ⚠️ ЕДИНСТВЕННОЕ ОПРЕДЕЛЕНИЕ В СУИТЕ (план 15-18, ревью IN-03). Гейт страниц
+    (`tests/test_pages/test_htmx_gates.py`) и гейт компонентов
+    (`tests/test_templates/test_components.py`) его ВВОЗЯТ: до плана 15-18 там
+    жили одноимённые разборщики с иным поведением (один не знал вложенности
+    ``{}``, другой — кавычек), а здешний сравнивал ``char == separator`` и на
+    многосимвольном разделителе молча не делил ничего. Два разборщика одного
+    предмета расходятся молча.
+
+    Предмет: разделитель любой длины (``~``, ``,``, `` else ``, `` if ``)
+    сравнивается через ``startswith`` и пропускается целиком; части не рвутся
+    внутри ``()``, ``[]``, ``{}`` и внутри строкового литерала в одинарных или
+    двойных кавычках — запятые и тильды в тексте панели (``body='…, …'``)
+    аргументов не рвут, ради этого разборщик и не наивный ``split``.
+
+    Граница (названа): экранированная кавычка внутри строкового литерала
+    шаблонизатора (``'it\\'s'``) не разбирается — она закрыла бы литерал раньше.
+    Пустой разделитель — ошибка вызова, а не «ничего не делить».
     """
+    if not separator:
+        raise ValueError("пустой разделитель: разбор не продвинулся бы ни на символ")
     parts: list[str] = []
-    current: list[str] = []
-    depth, quote = 0, ""
-    for char in text:
+    depth = 0
+    quote = ""
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
         if quote:
             if char == quote:
                 quote = ""
@@ -9512,12 +9532,13 @@ def _split_top_level(text: str, separator: str) -> list[str]:
             depth += 1
         elif char in ")]}":
             depth -= 1
-        elif char == separator and depth == 0:
-            parts.append("".join(current))
-            current = []
+        elif depth == 0 and text.startswith(separator, index):
+            parts.append(text[start:index])
+            index += len(separator)
+            start = index
             continue
-        current.append(char)
-    parts.append("".join(current))
+        index += 1
+    parts.append(text[start:])
     return parts
 
 
