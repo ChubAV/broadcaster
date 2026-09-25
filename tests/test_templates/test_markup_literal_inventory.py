@@ -42,6 +42,35 @@
   ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи он был верным, и правится не он,
   а числа, которые он пережил.
 
+ЛЕТОПИСЬ НОСИТЕЛЯ РАЗМЕРА: литерал → выражение → ОТСУТСТВИЕ.
+
+1. До плана 15-09 — литерал ``limit=30`` в шести строках (второй носитель числа).
+2. План 15-09 — выражение ``limit={{ page_size }}``, ключ контекста кладут оба
+   обработчика каждого раздела.
+3. План 15-21 (2026-09-25, решение владельца Г-2; UI-ревью Фазы 15, приоритет 3
+   и пункт 8) — размер из шести сентинелов снят ЦЕЛИКОМ. Выражение оставляло
+   молчаливый путь отказа: окружение Jinja с мягким ``Undefined`` печатало
+   ``limit=`` при пропавшем ключе, сервер отвечал 422, слушатель плашки на 422
+   выходил рано, и сентинел висел «Загрузка» вечно. Прежний литерал так упасть
+   не мог. Теперь размер знает только сервер: умолчание ``Query(PAGE_SIZE)``
+   обработчика порции — единственный носитель числа, и цель DEF-09-03 достигнута
+   полнее. Ключ ``page_size`` из контекстов шести мест снят (ни один шаблон
+   цепочки его больше не читает). Правило 6 держит отсутствие размера; прежнее
+   правило 6 названо летописью на своём месте. На тех же строках подпись
+   ``Загрузка...`` сменилась на ``Загрузка…`` и добавлен ``role="status"``;
+   обе половины каждой пары сменились одним коммитом (правило 5).
+
+⚠️ ОСТАТОК НАЗВАН, А НЕ ЗАБЫТ. Выражение ``limit={{ page_size }}`` по-прежнему
+несут сентинелы ВНЕ области решения Г-2: четыре сентинела истории —
+``app/templates/history/list.html``, ``app/templates/history/partial_cards.html``,
+``app/templates/admin/user_history.html``,
+``app/templates/admin/history_partial_cards.html`` — и, замером исполнителя плана
+15-21, пятое место той же формы: макрос ``sentinel`` экрана групп аккаунта
+(``app/templates/account_groups/includes/sentinel.html``), с которого образец
+15-09 и был взят. Адресат всех пяти — следующая веха; эта партия их не трогает.
+Правило 1 их не ловит (выражение — не литерал), и это верно: предмет правила 1 —
+второй носитель числа, а не путь отказа при пропавшем ключе.
+
 ЧЕГО ЭТОТ ФАЙЛ НЕ УТВЕРЖДАЕТ. Зелёный цвет означает ровно две вещи: литерала
 размера страницы в исходниках шаблонов нет, и сеть, которая его ищет, не слепа.
 Он НЕ означает, что бесконечная прокрутка РАБОТАЕТ. Суита не исполняет JS и не
@@ -82,6 +111,9 @@ PAGE_SIZE_LITERAL_PLACES = 0
 # `путь#индекс` с причиной, и число выше поднимется записью летописи.
 PAGE_SIZE_LITERAL_SITES: dict[str, str] = {}
 
+# Имя ключа контекста, которым размер ехал в разметку с плана 15-09 по план
+# 15-21. После 15-21 правило 6 утверждает его ОТСУТСТВИЕ в контекстах шести
+# мест: мёртвый ключ приглашал бы вернуть `limit={{ page_size }}` в адрес.
 PAGE_SIZE_CONTEXT_KEY = "page_size"
 
 # Литерал размера страницы: параметр `limit`, значение которого набрано ЦИФРАМИ.
@@ -109,8 +141,8 @@ PORTION_PAIRS: dict[str, tuple[str, str, str]] = {
 }
 PORTION_PAIRS_DECLARED = 3
 
-# Какой модуль `app/pages/` кормит какой шаблон. Значение в контексте сверяется
-# с константой, прочитанной ИЗ МОДУЛЯ, а не с числом, переписанным в тест.
+# Какой модуль `app/pages/` кормит какой шаблон. Ожидаемый размер читается
+# константой ИЗ МОДУЛЯ, а не числом, переписанным в тест.
 CONTEXT_CARRIERS: dict[str, str] = {
     "ads/list.html": "app.pages.ads",
     "ads/partial_cards.html": "app.pages.ads",
@@ -271,11 +303,18 @@ def test_both_halves_of_every_pair_build_the_portion_url_with_the_same_line():
 
 
 def test_control_negative_a_diverged_pair_is_named():
-    """Контроль к правилу 5: правка одной половины пары краснеет и НАЗЫВАЕТ пару."""
+    """Контроль к правилу 5: правка одной половины пары краснеет и НАЗЫВАЕТ пару.
+
+    ЛЕТОПИСЬ ПОДМЕНЫ. План 15-09: подмена меняла первый `&` строки на `&amp;`.
+    План 15-21 снял `&limit=…` из адреса аккаунтов, и `&` в строке не осталось —
+    подмена перестала бы приземляться. Теперь она возвращает размер в ОДНУ
+    половину пары: ровно ту правку, от которой правило 5 и держит.
+    """
     sources = _template_sources()
     page, _portion, mark = PORTION_PAIRS["accounts"]
     original = _portion_url_line(sources[page], mark)
-    sources[page] = sources[page].replace(original, original.replace("&", "&amp;", 1))
+    mutated = original.replace("{{ next_offset }}", "{{ next_offset }}&limit={{ page_size }}", 1)
+    sources[page] = sources[page].replace(original, mutated)
 
     assert _portion_url_line(sources[page], mark) != original, "ПОДМЕНА НЕ ПРИЗЕМЛИЛАСЬ"
     assert _diverged_pairs(sources) == ["accounts"]
@@ -414,13 +453,18 @@ async def _schedule_ids(db: AsyncSession) -> list[int]:
 async def test_the_rendered_portion_url_is_unchanged(
     authed_client: AsyncClient, db_session: AsyncSession, section: str
 ):
-    """Правило 7 (страховочное): отрендеренный адрес порции прежний, до символа.
+    """Правило 7 (страховочное): отрендеренный адрес порции — ровно ожидаемый, до символа.
 
-    Замена литерала значением контекста не должна менять адреса. Правило зелено
-    и до правки, и после неё. Оно стоит рядом с прежними правилами адреса
-    (`test_infinite_scroll_chain` и `test_infinite_scroll_keeps_filters` в
-    tests/test_pages/test_htmx_preserved.py) и их не заменяет. Предмет
-    ``DEF-09-03`` оно не держит: его держит правило 1.
+    Правило стоит рядом с прежними правилами адреса (`test_infinite_scroll_chain`
+    и `test_infinite_scroll_keeps_filters` в tests/test_pages/test_htmx_preserved.py)
+    и их не заменяет. Предмет ``DEF-09-03`` оно не держит: его держит правило 1.
+
+    ЛЕТОПИСЬ ОЖИДАНИЯ. План 15-09: адрес нёс `&limit=<PAGE_SIZE>` при любом
+    присланном `limit` порции, и правило утверждало, что замена литерала
+    значением контекста его не сдвинула. План 15-21 (2026-09-25, Г-2): размер из
+    адреса снят целиком, ожидание — адрес без `limit`. Имя правила прежнее:
+    «unchanged» теперь значит «клиентский `limit` порции (семь) в адрес
+    следующей порции не попадает никакой формой» — сдвигается только курсор.
     """
     base = await _seed_section(db_session, section)
     size = import_module(CONTEXT_CARRIERS[f"{section}/list.html"]).PAGE_SIZE
@@ -430,13 +474,11 @@ async def test_the_rendered_portion_url_is_unchanged(
 
     if section == "schedules":
         ids = await _schedule_ids(db_session)
-        expected_page = f"/schedules/partial?after_id={ids[size - 1]}&limit={size}"
-        expected_portion = (
-            f"/schedules/partial?after_id={ids[PORTION_PROBE_LIMIT - 1]}&limit={size}"
-        )
+        expected_page = f"/schedules/partial?after_id={ids[size - 1]}"
+        expected_portion = f"/schedules/partial?after_id={ids[PORTION_PROBE_LIMIT - 1]}"
     else:
-        expected_page = f"/{section}/partial?offset={size}&limit={size}"
-        expected_portion = f"/{section}/partial?offset={PORTION_PROBE_LIMIT}&limit={size}"
+        expected_page = f"/{section}/partial?offset={size}"
+        expected_portion = f"/{section}/partial?offset={PORTION_PROBE_LIMIT}"
 
     assert _sentinel_urls(page.text)[-1] == expected_page
     assert _sentinel_urls(portion.text)[-1] == expected_portion

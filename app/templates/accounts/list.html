@@ -197,10 +197,10 @@
      неявная цель подмены, разметка идентична сентинелу в partial_cards.html.
      Снаружи контейнера он не подтянет следующую порцию в сетку, а без растяжки
      на всю строку (правило [data-accounts-grid] > .empty__hint в app.css)
-     встанет очередной колонкой рядом с последней карточкой, и «Загрузка...»
+     встанет очередной колонкой рядом с последней карточкой, и подпись загрузки
      прочтётся как ещё один аккаунт. #}
   {% if has_next %}
-  <div hx-get="/accounts/partial?offset={{ next_offset }}&limit={{ page_size }}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint">Загрузка...</div>
+  <div hx-get="/accounts/partial?offset={{ next_offset }}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint" role="status">Загрузка…</div>
   {% endif %}
 </div>
 {% else %}
