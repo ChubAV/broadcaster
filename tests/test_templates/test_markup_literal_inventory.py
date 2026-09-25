@@ -56,6 +56,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from importlib import import_module
 
@@ -300,39 +301,108 @@ def _capture_contexts(monkeypatch) -> dict[str, dict]:
 
 
 # Порция запрашивается с РАЗМЕРОМ, ОТЛИЧНЫМ от страничного: так правило
-# различает носителя. Контекст, подставивший присланный клиентом `limit` вместо
-# `PAGE_SIZE`, дал бы здесь семь, и правило назвало бы это.
+# различает носителя. Адрес следующей порции, подставивший присланный клиентом
+# `limit`, понёс бы здесь семь, и правило 7 назвало бы это.
 PORTION_PROBE_LIMIT = 7
+
+# Обработчик порции каждого раздела: модуль и имя функции. Умолчание её
+# параметра `limit` — ЕДИНСТВЕННЫЙ носитель размера после плана 15-21.
+PORTION_HANDLERS: dict[str, tuple[str, str]] = {
+    "ads": ("app.pages.ads", "ads_partial"),
+    "accounts": ("app.pages.accounts", "accounts_partial"),
+    "schedules": ("app.pages.schedules", "schedules_partial"),
+}
+
+# Признак карточки порции: по одному `id` на карточку. Счёт карточек отвечает
+# на вопрос «сколько строк отдала порция без `limit`», а не «сколько разметки».
+PORTION_CARD_IDS: dict[str, re.Pattern[str]] = {
+    "ads": re.compile(r'id="ad-row-\d+"'),
+    "accounts": re.compile(r'id="account-row-\d+"'),
+    "schedules": re.compile(r'id="schedule-row-\d+"'),
+}
+
+HX_GET_VALUE = re.compile(r'hx-get="([^"]*)"')
+
+# ЛЕТОПИСЬ ПРАВИЛА 6 (план 15-21, 2026-09-25, решение владельца Г-2, UI-ревью
+# Фазы 15, приоритет 3). Здесь стояло правило
+# `test_the_page_size_in_the_context_is_the_module_constant` (план 15-09): оно
+# утверждало, что оба обработчика раздела кладут в контекст ключ `page_size`,
+# равный `PAGE_SIZE` своего модуля, — носителем размера в разметке было
+# выражение `limit={{ page_size }}`. Прежнее правило ошибкой не было: оно
+# держало цель DEF-09-03 (один носитель числа) на шести сегодняшних рендерах.
+# Заменено потому, что сама форма оставляла молчаливый путь отказа: при мягком
+# `Undefined` пропавший ключ печатал `limit=`, сервер отвечал 422, слушатель
+# плашки на 422 выходил рано, и сентинел висел «Загрузка» вечно. Размер больше
+# не едет в разметку вовсе; правило ниже утверждает ОТСУТСТВИЕ размера в адресе
+# и то, что единственный носитель — умолчание `Query(PAGE_SIZE)` обработчика.
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("section", ["ads", "accounts", "schedules"])
-async def test_the_page_size_in_the_context_is_the_module_constant(
-    authed_client: AsyncClient, db_session: AsyncSession, monkeypatch, section: str
+async def test_the_six_sentinels_carry_no_page_size_and_the_server_default_is_the_module_constant(
+    authed_client: AsyncClient, db_session: AsyncSession, monkeypatch
 ):
-    """Правило 6: значение, приезжающее в шаблон, — `PAGE_SIZE` своего модуля.
+    """Правило 6: размер страницы не едет в разметку; его знает только сервер.
 
-    Константа читается ИЗ МОДУЛЯ, а не переписывается в тест. Утверждается для
-    обоих обработчиков раздела: страницы и порции.
+    Три половины одного утверждения, по всем трём разделам, с отказом, который
+    называет КАЖДОЕ нарушение, а не первое:
+
+    (а) в ИСХОДНИКАХ шести шаблонов адрес `hx-get` сентинела не содержит `limit`;
+    (б) умолчание параметра `limit` обработчика порции (по `inspect.signature`)
+        равно `PAGE_SIZE` своего модуля — константа читается ИЗ МОДУЛЯ;
+    (в) рендер страницы и порции даёт адрес сентинела без `limit`, в контексте
+        обоих обработчиков нет мёртвого ключа `page_size`, а запрос порции БЕЗ
+        `limit` отдаёт ровно `PAGE_SIZE` карточек (посев больше `PAGE_SIZE`).
     """
-    base = await _seed_section(db_session, section)
+    sources = _template_sources()
     seen = _capture_contexts(monkeypatch)
+    offences: list[str] = []
 
-    page = await authed_client.get(base)
-    portion = await authed_client.get(f"{base}/partial?limit={PORTION_PROBE_LIMIT}")
-    assert page.status_code == 200 and portion.status_code == 200, section
+    for section, (page_template, portion_template, mark) in sorted(PORTION_PAIRS.items()):
+        module_name, handler_name = PORTION_HANDLERS[section]
+        module = import_module(module_name)
 
-    for template in (f"{section}/list.html", f"{section}/partial_cards.html"):
-        module = import_module(CONTEXT_CARRIERS[template])
-        assert template in seen, f"{template}: обработчик не отрисовал шаблон"
-        assert PAGE_SIZE_CONTEXT_KEY in seen[template], (
-            f"{template}: в контексте нет `{PAGE_SIZE_CONTEXT_KEY}` — число "
-            f"набирается в разметке, а не приходит из `PAGE_SIZE`"
-        )
-        assert seen[template][PAGE_SIZE_CONTEXT_KEY] == module.PAGE_SIZE, (
-            f"{template}: в контексте {seen[template][PAGE_SIZE_CONTEXT_KEY]!r}, "
-            f"а `{module.__name__}.PAGE_SIZE` = {module.PAGE_SIZE}"
-        )
+        # (а) исходник
+        for template in (page_template, portion_template):
+            value = HX_GET_VALUE.search(_portion_url_line(sources[template], mark))
+            assert value, f"{template}: у строки сентинела нет `hx-get`"
+            if "limit" in value.group(1):
+                offences.append(f"{template}: исходник адреса сентинела несёт `limit`")
+
+        # (б) умолчание сервера
+        parameter = inspect.signature(getattr(module, handler_name)).parameters["limit"]
+        default = getattr(parameter.default, "default", parameter.default)
+        if default != module.PAGE_SIZE:
+            offences.append(
+                f"{module_name}.{handler_name}: умолчание `limit` {default!r}, "
+                f"а `PAGE_SIZE` = {module.PAGE_SIZE}"
+            )
+
+        # (в) рендер
+        base = await _seed_section(db_session, section)
+        page = await authed_client.get(base)
+        portion = await authed_client.get(f"{base}/partial")
+        assert page.status_code == 200 and portion.status_code == 200, section
+        for template, response in ((page_template, page), (portion_template, portion)):
+            urls = _sentinel_urls(response.text)
+            assert urls, f"{template}: сентинела нет в ответе — посев мал"
+            if "limit" in urls[-1]:
+                offences.append(f"{template}: отрендеренный адрес `{urls[-1]}` несёт `limit`")
+            assert template in seen, f"{template}: обработчик не отрисовал шаблон"
+            if PAGE_SIZE_CONTEXT_KEY in seen[template]:
+                offences.append(
+                    f"{template}: в контексте мёртвый ключ `{PAGE_SIZE_CONTEXT_KEY}`"
+                )
+        cards = len(PORTION_CARD_IDS[section].findall(portion.text))
+        if cards != module.PAGE_SIZE:
+            offences.append(
+                f"{base}/partial без `limit`: {cards} карточек, а `PAGE_SIZE` = "
+                f"{module.PAGE_SIZE}"
+            )
+
+    assert offences == [], (
+        "РАЗМЕР СТРАНИЦЫ ЕДЕТ В РАЗМЕТКУ или сервер его не знает — пропавший ключ "
+        "контекста дал бы `limit=`, 422 и вечную «Загрузку»:\n" + "\n".join(offences)
+    )
 
 
 async def _schedule_ids(db: AsyncSession) -> list[int]:
