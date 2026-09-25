@@ -48,6 +48,21 @@ Questions #5: «исполнить по смыслу + летопись»). Бу
 `PROHIBITIONS_BEFORE_PHASE_15_PLANS`. Область решений D-02 — Фаза 10, 321 — от роста не
 меняется и объявлена отдельной величиной `PROHIBITIONS_IN_DECISION_SCOPE`.
 
+ВСЕЛЕННАЯ ОБЪЯВЛЕННЫХ ЧИСЕЛ — ФИКСИРОВАННЫЙ НАБОР (план 15-15, находка ревью WR-04). Числа с
+именем Фазы 15 (`PROHIBITIONS_DECLARED_AT_PHASE_15`, `PROHIBITIONS_BY_PHASE_DECLARED`,
+`TRUTHS_AT_PHASE_15`, `NAIVE_LINE_NET_AT_PHASE_15`) меряются над ФИКСИРОВАННЫМ НАБОРОМ файлов —
+все планы фаз 07…14 и планы Фазы 15 с номером не больше 14, 156 файлов на 2026-09-24
+(`PLAN_FILES_THROUGH_PLAN_15_14`); отбор один — `tool.through_fixed_set`, по номерам фазы и
+плана, а не по дате и не по порядку обхода. Летопись по идиоме D-30/D-32: до плана 15-15 эти
+числа мерились над ВСЕЙ вселенной обхода, и это не было ошибкой — набор и вселенная совпадали
+до 2026-09-25, когда на диск легли планы закрытия гэпов 15-15…15-33 и вселенная выросла до 175
+файлов (741 запрет по замеру того дня). Значения НЕ подняты: изменилась объявленная вселенная, и
+имя «AT_PHASE_15» теперь говорит правду о наборе, а не о вселенной. Всё, что пришло после
+набора, держит РАСТУЩАЯ ПОЛОВИНА без литерала числа: биекция переписи всей вселенной с реестром,
+принадлежность строк новых планов засеянным значениям вне области решений (D-02) и равенство
+разложения наивной сети по строке на всей вселенной. Числа растущей половины не знает ни одно
+утверждение этого модуля: иначе каждый следующий план снова краснил бы прогон.
+
 ЧЕГО ЭТОТ ФАЙЛ НЕ УТВЕРЖДАЕТ (D-16). Зелёный цвет означает ровно одно: перепись воспроизводима,
 её число равно объявленному, и она БИЕКТИВНА реестру
 `.planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-prohibitions-registry.yaml`. Он НЕ
@@ -55,6 +70,9 @@ Questions #5: «исполнить по смыслу + летопись»). Бу
 `10-PROHIBITIONS-SUBJECT.md` говорит это прямо полем `prohibitions_fully_enforced: 0`. Он НЕ
 означает правильности классификации: гейт утверждает ПОЛНОТУ реестра и принадлежность
 диспозиции объявленному перечню, а не верность класса. И он не судит вердикт отчёта своей фазы.
+(Дополнение плана 15-15.) Объявленное число утверждается над ФИКСИРОВАННЫМ НАБОРОМ, а растущая
+половина НЕ утверждает, СКОЛЬКО запретов несут планы после набора: она держит только биекцию с
+реестром и принадлежность их строк засеянным значениям вне области решений.
 D-06, ОБЕ ПОЛОВИНЫ: этот модуль — ПЕРВЫЙ в проекте читатель блока `must_haves.prohibitions`
 (до него, по замеру 2026-09-23, принуждения в дереве ноль); а два вхождения слова
 `prohibition` в `tests/test_pages/test_impersonation_gate.py` за принуждение запретов планов НЕ
@@ -122,6 +140,12 @@ REGISTRY_FILE = TREE_ROOT / tool.REGISTRY_RELATIVE_PATH
 # только переписав величину, чьё имя утверждает, чему она была равна в Фазе 15, — то есть
 # солгать в опознаваемом месте. Второй носитель того же числа — `rows_declared` в шапке
 # реестра; перегенерация реестра в другой размер краснит модуль.
+# ЛЕТОПИСЬ ВСЕЛЕННОЙ ЧИСЛА (план 15-15, WR-04). Значение не поднято — сдвинута объявленная
+# вселенная: число меряется над ФИКСИРОВАННЫМ НАБОРОМ `tool.through_fixed_set` (планы по 15-14
+# включительно, `PLAN_FILES_THROUGH_PLAN_15_14`), а не над всей вселенной обхода. Фраза о втором
+# носителе была верна до 2026-09-25, пока набор и вселенная совпадали; с тех пор `rows_declared`
+# равно длине переписи всей вселенной, а 697 — числу строк реестра, чьё тождество лежит в наборе
+# (правило `test_the_registry_declares_its_own_length`).
 PROHIBITIONS_DECLARED_AT_PHASE_15 = 697
 
 # Разбивка по фазам — тем же замером. Фазы 07…14 — числа 2026-09-23 (разведка Ф-02),
@@ -160,6 +184,13 @@ PHASE_08_KEY_ORDER_ELEMENTS = 24
 # Фазы 15; `assumptions` и дефис на чужом ключе планами Фазы 15 не пополнились.
 NAIVE_LINE_NET_AT_PHASE_15 = 809
 TRUTHS_AT_PHASE_15 = 119
+
+# ФИКСИРОВАННЫЙ НАБОР — предмет чисел с именем Фазы 15 (план 15-15, WR-04): все планы фаз
+# 07…14 и планы Фазы 15 с номером не больше 14. Замер 2026-09-24 — 156 файлов (142 до Фазы 15
+# плюс 14 планов 15-01…15-14); на 2026-09-25 вселенная обхода — 175 файлов, и разность суть
+# планы закрытия гэпов 15-15…15-33. ⚠️ Число файлов набора — отдельное утверждение: набор,
+# молча выросший или похудевший, краснит его раньше, чем числа запретов (T-15-69).
+PLAN_FILES_THROUGH_PLAN_15_14 = 156
 
 # Контроль от вакуума, положительный: вселенная обхода на неизменённом дереве непуста.
 PLAN_FILES_FLOOR = 100
@@ -467,9 +498,11 @@ def count_offence(records, declared: int) -> str:
     return (
         f"перепись дала {len(records)} элементов блока `must_haves.prohibitions`, "
         f"объявлено {declared}; разбивка по фазам: {tool.phase_breakdown(records)}. "
-        f"Число двигается ЗАМЕРОМ, а не переопределением прибора: перезасейте реестр "
-        f"(`scripts/prohibitions_census.py --seed-registry`) и поднимите литерал ВМЕСТЕ С "
-        f"ЛЕТОПИСЬЮ, назвав, чем и когда заменено прежнее число"
+        f"Объявленные числа меряются над ФИКСИРОВАННЫМИ наборами файлов (план 15-15, WR-04): "
+        f"новый план их не двигает — его держит растущая половина, биекция с реестром "
+        f"(`scripts/prohibitions_census.py --seed-registry`). Расхождение значит, что изменился "
+        f"план ВНУТРИ набора или сам набор: назовите правку; литерал с именем фазы не "
+        f"поднимается"
     )
 
 
@@ -712,14 +745,55 @@ def registry_document():
     return tool.load_registry(REGISTRY_FILE)
 
 
+@pytest.fixture(scope="module")
+def fixed_sources(live_sources):
+    """ФИКСИРОВАННЫЙ НАБОР — предмет чисел с именем Фазы 15; отбор один, он в приборе."""
+    return tool.through_fixed_set(live_sources)
+
+
+@pytest.fixture(scope="module")
+def fixed_census(fixed_sources):
+    return tool.census(fixed_sources)
+
+
 # --- перепись ----------------------------------------------------------------------
 
 
-def test_the_census_of_the_milestone_matches_the_declared_number(live_census):
-    """СКВОЗНОЕ ПРАВИЛО: шапки планов вехи → одно объявленное число и одна разбивка."""
-    offence = count_offence(live_census, PROHIBITIONS_DECLARED_AT_PHASE_15)
+def test_the_census_of_the_milestone_matches_the_declared_number(fixed_sources, fixed_census):
+    """СКВОЗНОЕ ПРАВИЛО: шапки планов фиксированного набора → одно число и одна разбивка.
+
+    Сверх прежнего — число файлов набора (156): набор, молча выросший или похудевший, краснит
+    здесь, а не прячется за совпавшим числом запретов (T-15-69).
+    """
+    assert len(fixed_sources) == PLAN_FILES_THROUGH_PLAN_15_14, sorted(fixed_sources)
+    offence = count_offence(fixed_census, PROHIBITIONS_DECLARED_AT_PHASE_15)
     assert not offence, offence
-    assert tool.phase_breakdown(live_census) == PROHIBITIONS_BY_PHASE_DECLARED
+    assert tool.phase_breakdown(fixed_census) == PROHIBITIONS_BY_PHASE_DECLARED
+
+
+def test_the_fixed_set_is_chosen_by_phase_and_plan_number_not_by_order(live_sources):
+    """Набор отбирается по номеру фазы и плана из пути, а не по порядку обхода.
+
+    Граница — включительно: 15-14 в наборе, 15-15 — нет; фаза раньше 15 в наборе при любом
+    номере плана. Имя файла другой формы — отказ, а не пропуск.
+    """
+    stub = "---\nphase: synthetic\n---\n"
+    phase_15 = ".planning/phases/15-synthetic"
+    probe = {
+        ".planning/phases/14-synthetic/14-99-PLAN.md": stub,
+        f"{phase_15}/15-14-PLAN.md": stub,
+        f"{phase_15}/15-15-PLAN.md": stub,
+        ".planning/phases/16-synthetic/16-01-PLAN.md": stub,
+    }
+    assert sorted(tool.through_fixed_set(probe)) == [
+        ".planning/phases/14-synthetic/14-99-PLAN.md",
+        f"{phase_15}/15-14-PLAN.md",
+    ]
+    assert tool.through_fixed_set(dict(reversed(list(live_sources.items())))) == (
+        tool.through_fixed_set(live_sources)
+    )
+    with pytest.raises(tool.CensusError, match="NN-MM-PLAN.md"):
+        tool.through_fixed_set({f"{phase_15}/15-draft-PLAN.md": stub})
 
 
 def test_the_census_reproduces_the_measurement_taken_before_phase_15_plans(live_sources):
@@ -737,11 +811,18 @@ def test_the_census_reproduces_the_measurement_taken_before_phase_15_plans(live_
     assert tool.phase_breakdown(records) == expected
 
 
-def test_the_decision_scope_of_phase_10_is_declared_apart_from_the_milestone(live_census):
-    """Область решений D-02 — отдельная величина, а не число вехи."""
-    in_scope = [record for record in live_census if record.phase == DECISION_SCOPE_PHASE]
-    assert len(in_scope) == PROHIBITIONS_IN_DECISION_SCOPE, tool.phase_breakdown(live_census)
-    assert PROHIBITIONS_IN_DECISION_SCOPE < PROHIBITIONS_DECLARED_AT_PHASE_15
+def test_the_decision_scope_of_phase_10_is_declared_apart_from_the_milestone(
+    live_census, fixed_census
+):
+    """Область решений D-02 — отдельная величина, а не число вехи.
+
+    Сравнение с 697 — над фиксированным набором; сама область от роста вселенной не меняется,
+    и это утверждается над ОБОИМИ множествами.
+    """
+    for universe in (fixed_census, live_census):
+        in_scope = [record for record in universe if record.phase == DECISION_SCOPE_PHASE]
+        assert len(in_scope) == PROHIBITIONS_IN_DECISION_SCOPE, tool.phase_breakdown(universe)
+    assert PROHIBITIONS_IN_DECISION_SCOPE < len(fixed_census) == PROHIBITIONS_DECLARED_AT_PHASE_15
 
 
 def test_the_census_parses_every_plan_without_refusal(live_sources):
@@ -830,9 +911,13 @@ def test_the_naive_line_net_decomposes_to_the_unit_before_phase_15_plans(live_so
     )
 
 
-def test_the_naive_line_net_decomposes_to_the_unit_with_phase_15_plans(live_sources):
-    """697 − 24 + 119 + 17 = 809: то же разложение на вселенной прибора целиком."""
-    parts = tool.decomposition(live_sources)
+def test_the_naive_line_net_decomposes_to_the_unit_with_phase_15_plans(fixed_sources):
+    """697 − 24 + 119 + 17 = 809: то же разложение на фиксированном наборе (план 15-15).
+
+    Летопись: до плана 15-15 докстринг гласил «на вселенной прибора целиком» — верно, пока набор
+    и вселенная совпадали; всю вселенную держит растущее правило ниже, без литерала.
+    """
+    parts = tool.decomposition(fixed_sources)
     assert parts.reconstructed == parts.line_net, parts
     assert (
         parts.prohibitions,
@@ -847,6 +932,17 @@ def test_the_naive_line_net_decomposes_to_the_unit_with_phase_15_plans(live_sour
         ASSUMPTIONS_DECLARED,
         NAIVE_LINE_NET_AT_PHASE_15,
     )
+
+
+def test_the_naive_line_net_decomposes_to_the_unit_on_the_whole_universe(live_sources):
+    """РАСТУЩЕЕ ПРАВИЛО без литерала числа: разложение сходится до единицы на всей вселенной.
+
+    Новый план со строкой `- statement:` вне трёх блоков шапки, которые разложение знает
+    (`prohibitions`, `truths`, `assumptions`), ломает равенство и называется здесь, а не
+    растворяется в числе, которого правило не знает.
+    """
+    parts = tool.decomposition(live_sources)
+    assert parts.reconstructed == parts.line_net, parts
 
 
 def test_the_order_of_sources_does_not_move_the_identities(live_sources, live_census):
@@ -878,14 +974,77 @@ def test_the_census_and_the_registry_are_a_bijection(live_census, registry_docum
     )
 
 
-def test_the_registry_declares_its_own_length(registry_document):
-    """Два носителя одного числа: шапка реестра и литерал этого модуля."""
+def test_the_registry_declares_its_own_length(registry_document, live_census, fixed_sources):
+    """Шапка реестра объявляет его длину; длина — перепись ВСЕЙ вселенной; набор — 697 строк.
+
+    Летопись (план 15-15, WR-04): до плана 15-15 правило читалось «два носителя одного числа:
+    шапка реестра и литерал этого модуля» и сравнивало длину реестра с 697 — верно, пока набор и
+    вселенная совпадали. Теперь литерал судит строки, чьё тождество лежит в фиксированном наборе,
+    а длину реестра — перепись всей вселенной, числа которой ни одно утверждение не знает.
+    """
     rows = registry_document["rows"]
     assert registry_document["rows_declared"] == len(rows)
-    assert len(rows) == PROHIBITIONS_DECLARED_AT_PHASE_15, (
-        f"строк реестра {len(rows)}, объявлено {PROHIBITIONS_DECLARED_AT_PHASE_15} — "
-        f"реестр перегенерирован в другой размер"
+    assert len(rows) == len(live_census), (
+        f"строк реестра {len(rows)}, перепись всей вселенной {len(live_census)} — "
+        f"перезасейте реестр (`scripts/prohibitions_census.py --seed-registry`)"
     )
+    in_fixed_set = [row for row in rows if str(row["plan"]) in fixed_sources]
+    assert len(in_fixed_set) == PROHIBITIONS_DECLARED_AT_PHASE_15, (
+        f"строк реестра в фиксированном наборе {len(in_fixed_set)}, объявлено "
+        f"{PROHIBITIONS_DECLARED_AT_PHASE_15} — реестр перегенерирован в другой размер"
+    )
+
+
+def after_fixed_set_offences(sources, registry) -> list[str]:
+    """Нарушения РАСТУЩЕЙ ПОЛОВИНЫ над поданной вселенной и строками реестра по тождеству.
+
+    Перепись набора есть подмножество переписи вселенной, и разность состоит РОВНО из записей
+    планов вне набора; такая запись — не Фазы 10 (область решений D-02 не расширяется), у неё
+    есть строка реестра, и строка засеяна (`unclassified` / `unresolved`) без полей решения.
+    Числа записей правило не знает: чистая функция поданных величин.
+    """
+    fixed = tool.through_fixed_set(sources)
+    universe = tool.census(sources)
+    universe_ids = {record.identity for record in universe}
+    fixed_ids = {record.identity for record in tool.census(fixed)}
+    after = [record for record in universe if record.identity.plan_path not in fixed]
+    offences = []
+    if not fixed_ids <= universe_ids:
+        strays = sorted(fixed_ids - universe_ids)
+        offences.append(f"перепись набора вне переписи вселенной:\n{_names(strays)}")
+    if universe_ids - fixed_ids != {record.identity for record in after}:
+        offences.append("разность переписей не совпала с записями планов вне набора")
+    for record in after:
+        name = f"{record.identity.plan_path}#{record.identity.index}"
+        if record.phase == DECISION_SCOPE_PHASE:
+            offences.append(f"{name}: план вне набора в фазе области решений (D-02)")
+        row = registry.get(record.identity)
+        if row is None:
+            offences.append(
+                f"{name}: строки реестра нет — `scripts/prohibitions_census.py --seed-registry`"
+            )
+            continue
+        seeded = (row.get("class"), row.get("disposition"))
+        if seeded != (tool.SEED_CLASS, tool.SEED_DISPOSITION):
+            offences.append(f"{name}: строка не засеяна, а несёт {seeded}")
+        strays = [field for field in ROW_DECISION_FIELDS if field in row]
+        if strays:
+            offences.append(f"{name}: поля решения {strays} вне области решений (D-02)")
+    return offences
+
+
+def test_plans_after_the_fixed_set_only_add_rows_outside_the_decision_scope(
+    live_sources, registry_document
+):
+    """РАСТУЩЕЕ ПРАВИЛО: планы после фиксированного набора добавляют строки вне области решений.
+
+    Держится биекцией и ПРИНАДЛЕЖНОСТЬЮ, а не числом: сколько запретов несут новые планы, не
+    утверждает ни одна строка (запрет плана 15-15). Контроль — синтетический план `15-99`.
+    """
+    offences = after_fixed_set_offences(
+        live_sources, tool._registry_rows(registry_document)
+    )
+    assert not offences, "\n".join(offences)
 
 
 def test_every_registry_row_agrees_with_its_census_element(live_census, registry_document):
@@ -1540,15 +1699,60 @@ def test_control_negative_a_synthetic_prohibition_is_found_and_named(
     doctored[SYNTHETIC_PLAN] = SYNTHETIC_PLAN_SOURCE
     records = tool.census(doctored)
 
-    offence = count_offence(records, PROHIBITIONS_DECLARED_AT_PHASE_15)
+    # Число — над фиксированным набором плюс синтетикой (план 15-15): отказ называет 698.
+    fixed_plus_synthetic = tool.through_fixed_set(live_sources)
+    fixed_plus_synthetic[SYNTHETIC_PLAN] = SYNTHETIC_PLAN_SOURCE
+    offence = count_offence(tool.census(fixed_plus_synthetic), PROHIBITIONS_DECLARED_AT_PHASE_15)
     assert offence, "равенство объявленному числу не покраснело на лишнем запрете"
     assert f"{PROHIBITIONS_DECLARED_AT_PHASE_15 + 1} элементов" in offence, offence
 
+    # Биекция — над всей вселенной плюс синтетикой: сирота ровно одна, синтетическая.
     orphans, extras = bijection_offences(
         [record.identity for record in records], tool._registry_rows(registry_document)
     )
     assert orphans == [tool.ProhibitionIdentity(SYNTHETIC_PLAN, 0)], _names(orphans)
     assert not extras, _names(extras)
+
+
+def test_control_a_plan_after_the_fixed_set_is_named_by_the_bijection(
+    live_sources, registry_document
+):
+    """Синтетический план `15-99` в каталоге Фазы 15: набор его не берёт, биекция называет.
+
+    И растущее правило называет его дважды: без строки реестра — сиротой; со строкой, несущей
+    решение, — строкой не засеянной и с полями решения вне области решений.
+    """
+    synthetic = ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-99-PLAN.md"
+    assert synthetic not in live_sources
+    doctored = dict(live_sources)
+    doctored[synthetic] = SYNTHETIC_PLAN_SOURCE
+    assert synthetic not in tool.through_fixed_set(doctored)
+    assert tool.through_fixed_set(doctored) == tool.through_fixed_set(live_sources)
+
+    registry = tool._registry_rows(registry_document)
+    identity = tool.ProhibitionIdentity(synthetic, 0)
+    orphans, extras = bijection_offences(
+        [record.identity for record in tool.census(doctored)], registry
+    )
+    assert orphans == [identity], _names(orphans)
+    assert not extras, _names(extras)
+
+    offences = after_fixed_set_offences(doctored, registry)
+    assert len(offences) == 1 and "15-99-PLAN.md#0: строки реестра нет" in offences[0], offences
+
+    decided = dict(registry)
+    decided[identity] = {
+        "plan": synthetic,
+        "index": 0,
+        "phase": "15",
+        "class": "gate-integrity",
+        "disposition": "permitted",
+        "permit_scope": "gate-integrity",
+    }
+    offences = after_fixed_set_offences(doctored, decided)
+    assert len(offences) == 2, offences
+    assert "строка не засеяна" in offences[0] and "15-99-PLAN.md#0" in offences[0], offences
+    assert "['permit_scope']" in offences[1], offences
 
 
 def test_control_empty_universe_reddens_the_declared_number(registry_document):
@@ -1560,9 +1764,12 @@ def test_control_empty_universe_reddens_the_declared_number(registry_document):
     parts = tool.decomposition({})
     assert (parts.prohibitions, parts.line_net, parts.reconstructed) == (0, 0, 0)
 
+    # Лишних строк — столько, сколько объявляет шапка реестра (план 15-15: длина реестра есть
+    # перепись всей вселенной, а не литерал 697; до плана 15-15 здесь стоял литерал).
     orphans, extras = bijection_offences([], tool._registry_rows(registry_document))
     assert not orphans
-    assert len(extras) == PROHIBITIONS_DECLARED_AT_PHASE_15
+    assert len(extras) == registry_document["rows_declared"]
+    assert tool.through_fixed_set({}) == {}
 
 
 # --- группа D-05: у запрета с `verification: test` предъявляется СУЩЕСТВОВАНИЕ правила -----
