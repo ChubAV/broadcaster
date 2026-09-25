@@ -20,7 +20,6 @@ from app.services.schedule_rules import (
     is_valid_time_of_day,
     next_run_or_none,
 )
-from app.services.schedule_service import compute_next_run_at
 from app.pages import notices
 # Контекст редактора ввозится у модуля объявлений, а не собирается здесь второй
 # выборкой: карточка после подмены и после перезагрузки обязаны приходить из
@@ -1091,14 +1090,12 @@ async def schedules_create(
         tz = profile_tz
 
     complete = _is_complete(account_id, group_ids, days_of_week, times_of_day)
-    next_run = (
-        compute_next_run_at(
-            days_of_week=days_of_week, times_of_day=times_of_day, tz_name=tz
-        )
-        if complete
-        else None
-    )
 
+    # ⚠️ СТРОКА СОБИРАЕТСЯ ДО РЕШЕНИЯ О МОМЕНТЕ И В СЕССИЮ ЕЩЁ НЕ ДОБАВЛЕНА
+    # (план 15-16, ревью WR-02). Помощник `next_run_or_none` принимает модель и
+    # читает её поля — поэтому временная модель, а не второй вход помощника по
+    # значениям. Неполное расписание сохраняется выключенным без момента (D-08),
+    # как и было.
     schedule = Schedule(
         ad_id=ad_id,
         account_id=account_id,
@@ -1106,9 +1103,32 @@ async def schedules_create(
         days_of_week=days_of_week,
         times_of_day=times_of_day,
         timezone=tz,
-        is_active=complete,
-        next_run_at=next_run,
+        is_active=False,
+        next_run_at=None,
     )
+    if complete:
+        # ⚠️ ВТОРАЯ ЛИНИЯ СОЗДАНИЯ — ТЕМ ЖЕ ОСНОВАНИЕМ, ЧТО У ПРАВКИ В ПЛАНЕ
+        # 15-08: `_clean_ints` / `_clean_times` отбрасывают негодное ДО расчёта,
+        # зону закрывает откат на проверенное значение выше, а помощник держит
+        # исход, если первая линия пропустит значение — регрессией санитайзера
+        # или новым полем. До плана 15-16 здесь стоял прямой вызов вычислителя:
+        # `None` на полной строке давал пару «включено + нет момента», и
+        # фиксация падала ограничением `ck_schedules_active_requires_next_run`,
+        # а исключение вычислителя уходило в общую пятисотку.
+        #
+        # Исход отказа — ТОТ ЖЕ, что у правки, тумблера и JSON-API: ничего не
+        # создано (`db.add` не вызывался), переход в редактор ПОДТВЕРЖДЁННОГО
+        # объявления с кодом закрытого реестра; путь восстановления называет
+        # плашка.
+        next_run = next_run_or_none(schedule)
+        if next_run is None:
+            return await respond(
+                request,
+                redirect=f"/ads/{ad_id}/edit",
+                notice=notices.SCHEDULE_VALUES_OUT_OF_DOMAIN,
+            )
+        schedule.is_active = True
+        schedule.next_run_at = next_run
     db.add(schedule)
     await db.commit()
     await db.refresh(schedule)
