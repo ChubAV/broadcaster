@@ -1998,6 +1998,104 @@ must_haves:
     assert tool.verification_label(hand_built_empty) == ""
 
 
+# Синтетика IN-02 (план 15-20): испорченный реестр. Каждый вид порчи — `CensusError`, называющая
+# позицию строки или решения, и в `main()` — строка `ОТКАЗ:` с кодом 1, а не трасса мимо
+# `except CensusError`. Реестр пишется текстом, а не через `yaml`: модуль `import yaml` не несёт
+# (перечень `YAML_DIRECT_IMPORTERS`).
+VALID_REGISTRY_ROW = {"plan": SYNTHETIC_PLAN, "index": 0}
+MALFORMED_REGISTRY_ROWS = {
+    "row-without-plan": {"index": 1},
+    "row-without-index": {"plan": SYNTHETIC_PLAN},
+    "index-is-a-string": {"plan": SYNTHETIC_PLAN, "index": "3"},
+    "index-is-a-boolean": {"plan": SYNTHETIC_PLAN, "index": True},
+    "plan-is-not-a-string": {"plan": 7, "index": 1},
+    "row-is-not-a-mapping": "строка вместо отображения",
+}
+REGISTRY_POSITION_WORD = "позиции"
+REFUSAL_PREFIX = "ОТКАЗ:"
+REFUSAL_EXIT_CODE = 1
+MALFORMED_REGISTRY_TEXTS = {
+    "document-is-a-list": "- первый\n- второй\n",
+    "row-without-index": f"rows_declared: 1\nrows:\n  - plan: {SYNTHETIC_PLAN}\n",
+    "class-decision-is-a-string": (
+        f"rows_declared: 1\nclass_decisions:\n  - строка вместо отображения\n"
+        f"rows:\n  - plan: {SYNTHETIC_PLAN}\n    index: 0\n"
+    ),
+}
+
+
+def test_a_registry_that_is_not_a_mapping_is_refused_by_name(tmp_path):
+    """Документ реестра — список: `CensusError` с типом, а не `AttributeError` у `.setdefault`."""
+    path = tmp_path / "registry.yaml"
+    path.write_text(MALFORMED_REGISTRY_TEXTS["document-is-a-list"], encoding="utf-8")
+    with pytest.raises(tool.CensusError, match="list"):
+        tool.load_registry(path)
+
+
+def test_an_empty_registry_document_is_still_an_empty_registry(tmp_path):
+    """Пустой документ — пустой реестр, как прежде: проверка формы не делает его отказом."""
+    path = tmp_path / "registry.yaml"
+    path.write_text("", encoding="utf-8")
+    assert tool._registry_rows(tool.load_registry(path)) == {}
+
+
+def test_a_registry_whose_rows_are_not_a_list_is_refused_by_name():
+    """Блок `rows` — отображение вместо списка: отказ, а не обход ключей словаря."""
+    with pytest.raises(tool.CensusError, match="rows"):
+        tool._registry_rows({"rows": {"plan": SYNTHETIC_PLAN, "index": 0}})
+
+
+@pytest.mark.parametrize("kind", sorted(MALFORMED_REGISTRY_ROWS))
+def test_every_malformed_registry_row_is_refused_by_its_position(kind):
+    """Строка без `plan` / `index`, `index` не целое (и не булево), строка — не отображение.
+
+    Порядок строк на вердикт не влияет: порча отказывает и первой, и второй строкой, и отказ
+    называет ИМЕННО её позицию, а не молча подставляет умолчание.
+    """
+    malformed = MALFORMED_REGISTRY_ROWS[kind]
+    for rows, position in (([VALID_REGISTRY_ROW, malformed], 1), ([malformed, VALID_REGISTRY_ROW], 0)):
+        with pytest.raises(tool.CensusError) as refusal:
+            tool._registry_rows({"rows": rows})
+        assert f"{REGISTRY_POSITION_WORD} {position}" in str(refusal.value), (kind, position)
+
+
+def test_a_malformed_class_decision_is_refused_by_name():
+    """Решение по классу — строка вместо отображения: отказ, а не подстрочный тест `in`.
+
+    `_check` и `_branch_by_class` берут блок только через `_class_decisions` — одна проверка.
+    """
+    document = {"rows": [], tool.CLASS_DECISIONS_KEY: ["строка вместо отображения"]}
+    with pytest.raises(tool.CensusError, match=f"{REGISTRY_POSITION_WORD} 0"):
+        tool._class_decisions(document)
+    with pytest.raises(tool.CensusError, match=tool.CLASS_DECISIONS_KEY):
+        tool._branch_by_class(document)
+    with pytest.raises(tool.CensusError, match=tool.CLASS_DECISIONS_KEY):
+        tool._class_decisions({tool.CLASS_DECISIONS_KEY: "строка вместо списка"})
+    decision = {tool.DECISION_SCOPE_FIELD: "product-invariant"}
+    assert tool._class_decisions({tool.CLASS_DECISIONS_KEY: [decision]}) == [decision]
+    assert tool._class_decisions({"rows": []}) == []
+
+
+@pytest.mark.parametrize("kind", sorted(MALFORMED_REGISTRY_TEXTS))
+def test_control_main_prints_the_refusal_line_on_a_malformed_registry(
+    kind, tmp_path, monkeypatch, capsys
+):
+    """Сквозной контроль: `main(["--check"])` на испорченном реестре — `ОТКАЗ:` и код 1.
+
+    Корень дерева подменён каталогом `tmp_path` с одним синтетическим планом, и реестр лежит по
+    пути `REGISTRY_RELATIVE_PATH`: каждый вид порчи проходит путём `except CensusError`.
+    """
+    plan = tmp_path / SYNTHETIC_PLAN
+    plan.parent.mkdir(parents=True)
+    plan.write_text(SYNTHETIC_PLAN_SOURCE, encoding="utf-8")
+    registry = tmp_path / tool.REGISTRY_RELATIVE_PATH
+    registry.parent.mkdir(parents=True)
+    registry.write_text(MALFORMED_REGISTRY_TEXTS[kind], encoding="utf-8")
+    monkeypatch.setattr(tool, "TREE_ROOT", tmp_path)
+    assert tool.main(["--check"]) == REFUSAL_EXIT_CODE, kind
+    assert capsys.readouterr().err.startswith(REFUSAL_PREFIX), kind
+
+
 def test_every_phase_10_verification_test_row_carries_a_declared_rule(
     live_census, registry_document
 ):
