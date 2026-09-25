@@ -78,6 +78,17 @@
 ПОЛНОТУ (ключ есть у каждого имени) и НЕПРОТИВОРЕЧИВОСТЬ (механизм поля совпадает с
 суффиксом имени, файл поля — с файлом объявления).
 
+⚠️ «РОВНО ДВЕ ВЕЩИ» ВЫШЕ ВЕРНЫ ДЛЯ ДЕРЕВА ПЛАНА 15-03 И НЕ ВЫЧЁРКИВАЮТСЯ (идиома
+D-30/D-32): план 15-17 (WR-03, решение владельца Г-2) добавил ТРЕТЬЮ — каждая функция
+``*_degrades_without_htmx``, утверждающая код перенаправления, утверждает и ТОЧНЫЙ
+адрес ``Location`` (правило
+``test_every_redirecting_degradation_pair_asserts_the_exact_location``). Причина —
+замер ревью: четыре пары удаления утверждали только 302/303, отсутствие
+``HX-Location`` и полный документ по адресу, и зеленели на ветке «ничего не удалено»
+и на отказе, отвечающих тем же видом перенаправления, — то есть засчитывались уликой
+пути без htmx, не различая удаление и отказ. ВЕРНОСТЬ адреса это правило не
+утверждает: её утверждает сама пара (граница названа у помощника правила).
+
 ⚠️ НАЗВАННЫЕ ГРАНИЦЫ РАЗБОРЩИКА — их ТРИ, и каждая не только названа, но и закрыта
 отдельным правилом-ЗАПРЕТОМ: гейт, который чего-то не видит, обязан требовать, чтобы
 этого и не было (приём второго уровня, образец
@@ -972,4 +983,312 @@ def test_the_pair_universe_exemptions_are_complete():
     assert not unexempted, (
         f"имена формы _degrades_without_<не alpine и не htmx> вне перечня изъятий: "
         f"{sorted(unexempted)} — изъятие требует записанной причины"
+    )
+
+
+# --- Слабая пара: перенаправление без точного адреса (план 15-17, WR-03) --------
+
+REDIRECT_CODES = frozenset({302, 303})
+LOCATION_HEADER = "location"
+
+
+def _is_int_code(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and type(node.value) is int
+        and node.value in REDIRECT_CODES
+    )
+
+
+def _is_status_code(node: ast.AST) -> bool:
+    """``<x>.status_code`` либо голое имя ``status_code``."""
+    if isinstance(node, ast.Attribute):
+        return node.attr == "status_code"
+    return isinstance(node, ast.Name) and node.id == "status_code"
+
+
+def _asserts_redirect_status(test: ast.AST) -> bool:
+    """В условии ``assert`` есть сравнение кода ответа с кодом перенаправления.
+
+    Три формы: ``… .status_code == 302`` (и ``== 303``, и с переставленными
+    сторонами) и ``… .status_code in (302, 303)`` — кортежем, списком или
+    множеством, в котором есть хоть один код перенаправления.
+    """
+    for node in ast.walk(test):
+        if not (isinstance(node, ast.Compare) and len(node.ops) == 1):
+            continue
+        left, op, right = node.left, node.ops[0], node.comparators[0]
+        if isinstance(op, ast.Eq):
+            if (_is_status_code(left) and _is_int_code(right)) or (
+                _is_status_code(right) and _is_int_code(left)
+            ):
+                return True
+        elif isinstance(op, ast.In) and _is_status_code(left):
+            if isinstance(right, (ast.Tuple, ast.List, ast.Set)) and any(
+                _is_int_code(element) for element in right.elts
+            ):
+                return True
+    return False
+
+
+def _is_headers(node: ast.AST) -> bool:
+    return isinstance(node, ast.Attribute) and node.attr == "headers"
+
+
+def _is_location_key(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.lower() == LOCATION_HEADER
+    )
+
+
+def _is_location_read(node: ast.AST) -> bool:
+    """Обращение к заголовку ``location`` ответа.
+
+    ``….headers["location"]`` либо ``….headers.get("location")``; ключ сравнивается
+    без учёта регистра — заголовки HTTP регистронезависимы.
+    """
+    if isinstance(node, ast.Subscript):
+        return _is_headers(node.value) and _is_location_key(node.slice)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return (
+            node.func.attr == "get"
+            and _is_headers(node.func.value)
+            and bool(node.args)
+            and _is_location_key(node.args[0])
+        )
+    return False
+
+
+def _location_bound_names(function: ast.AST) -> set[str]:
+    """Имена, связанные в функции выражением, в котором читается ``location`` ответа.
+
+    Замыкание до неподвижной точки: имя, связанное выражением над уже вычитанным
+    из ответа именем, тоже вычитано из ответа.
+    """
+    bindings: list[tuple[list[str], ast.AST]] = []
+    for node in ast.walk(function):
+        if isinstance(node, ast.Assign):
+            targets = [
+                n.id for t in node.targets for n in ast.walk(t) if isinstance(n, ast.Name)
+            ]
+            bindings.append((targets, node.value))
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            targets = [n.id for n in ast.walk(node.target) if isinstance(n, ast.Name)]
+            bindings.append((targets, node.value))
+
+    tainted: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for targets, value in bindings:
+            if any(
+                _is_location_read(n) or (isinstance(n, ast.Name) and n.id in tainted)
+                for n in ast.walk(value)
+            ):
+                fresh = set(targets) - tainted
+                if fresh:
+                    tainted |= fresh
+                    changed = True
+    return tainted
+
+
+def _asserts_exact_location(function: ast.AST) -> bool:
+    """В функции есть ``assert``, сличающий адрес ответа с адресом НЕ из ответа.
+
+    Одна сторона равенства — обращение к ``location`` ответа (или имя, связанное
+    с ним); другая не содержит ни такого обращения, ни такого имени.
+    Самосравнение (``location == response.headers["location"]``, где ``location``
+    вычитан из того же ответа) адресом не является: оно истинно при любом адресе.
+    """
+    tainted = _location_bound_names(function)
+
+    def reads_location(node: ast.AST) -> bool:
+        return _is_location_read(node) or (
+            isinstance(node, ast.Name) and node.id in tainted
+        )
+
+    def derived(node: ast.AST) -> bool:
+        return any(reads_location(n) for n in ast.walk(node))
+
+    for assertion in ast.walk(function):
+        if not isinstance(assertion, ast.Assert):
+            continue
+        for node in ast.walk(assertion.test):
+            if not (
+                isinstance(node, ast.Compare)
+                and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.Eq)
+            ):
+                continue
+            left, right = node.left, node.comparators[0]
+            if (reads_location(left) and not derived(right)) or (
+                reads_location(right) and not derived(left)
+            ):
+                return True
+    return False
+
+
+def _redirecting_htmx_degradations(sources: dict[str, str]) -> set[str]:
+    """Имена ``*_degrades_without_htmx``, утверждающих код перенаправления."""
+    found: set[str] = set()
+    for path in sorted(sources):
+        tree = ast.parse(sources[path], filename=path)
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, FUNCTION_NODES)
+                and DEGRADATION_MARK in node.name
+                and _mechanism(node.name) == HTMX
+            ):
+                continue
+            if any(
+                isinstance(n, ast.Assert) and _asserts_redirect_status(n.test)
+                for n in ast.walk(node)
+            ):
+                found.add(node.name)
+    return found
+
+
+def _redirect_pairs_without_exact_location(sources: dict[str, str]) -> list[str]:
+    """Каждая ``*_degrades_without_htmx``, утверждающая перенаправление без точного адреса.
+
+    Чистая функция над отображением «путь → исходник» (разбор ``ast``, не греп).
+    Функция формы ``*_degrades_without_htmx``, в чьём теле есть ``assert`` о коде
+    перенаправления (``status_code == 302`` / ``== 303`` / ``in (302, 303)``),
+    обязана нести и ``assert`` равенства, одна сторона которого — обращение к
+    заголовку ``location`` ответа (``….headers["location"]`` /
+    ``….headers.get("location")``, или имя, связанное с таким обращением), а другая
+    — НЕ вычитана из ответа. Нарушитель называется ``файл:строка имя``.
+
+    ⚠️ НАЗВАННЫЕ ГРАНИЦЫ ПРАВИЛА — их три, и все выписаны здесь, а не оставлены на
+    догадку читателя (образец — `tests/test_pages/test_impersonation_gate.py`,
+    `_mutating_routes`):
+
+    1. Правило НЕ проверяет, ЧТО адрес ВЕРЕН. Литерал ``"/ads"`` и литерал
+       ``"/nowhere"`` для него равноценны: верность адреса утверждает сама пара,
+       сличая ответ с адресом ветки успеха, снятым чтением обработчика. Правило
+       утверждает только ФОРМУ — что пара вообще сличает адрес с чем-то, что
+       не вычитано из того же ответа.
+    2. Утверждение, вынесенное в ПОМОЩНИК другого модуля (или той же функции, но
+       вызовом — ``_assert_redirect(response, "/ads")``), правилу НЕ видно: разбор
+       смотрит на ``assert`` в теле самой функции деградации. Такая пара будет
+       названа нарушителем, хотя адрес утверждён, — и это принятая граница в
+       сторону ложной тревоги, а не ложной зелени: сличение адреса пары держится
+       в теле пары, где его видит и читатель.
+    3. Утверждение перенаправления иной формы (``response.is_redirect``,
+       ``status_code >= 300``, код, собранный выражением) правило НЕ узнаёт и
+       такую функцию не требует — но и в число перенаправляющих её не включает;
+       сегодня все пять пар GATE-10 утверждают код одной из трёх узнаваемых форм,
+       и правило утверждает это прямо (``PAIRED_HTMX_TESTS`` ⊆ перенаправляющих).
+    """
+    offences: list[str] = []
+    for path in sorted(sources):
+        tree = ast.parse(sources[path], filename=path)
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, FUNCTION_NODES)
+                and DEGRADATION_MARK in node.name
+                and _mechanism(node.name) == HTMX
+            ):
+                continue
+            redirecting = any(
+                isinstance(n, ast.Assert) and _asserts_redirect_status(n.test)
+                for n in ast.walk(node)
+            )
+            if redirecting and not _asserts_exact_location(node):
+                offences.append(f"{path}:{node.lineno} {node.name}")
+    return offences
+
+
+# ЗАМЕР (Фаза 15, план 15-17, 2026-09-25) — помощник правила, поданный исходниками
+# `tests/**/*.py` из `git show`, дословно:
+#   на дереве `583563d8` (ДО задачи 1 плана) перенаправляющих htmx-функций 8, названо
+#   ровно 4 — все четыре WR-03:
+#     tests/test_pages/test_ads_editor.py:1925 test_editor_ad_delete_confirm_degrades_without_htmx
+#     tests/test_pages/test_responsive_markup.py:1263 test_accounts_delete_confirm_degrades_without_htmx
+#     tests/test_pages/test_responsive_markup.py:3492 test_ads_delete_confirm_degrades_without_htmx
+#     tests/test_pages/test_responsive_markup.py:3560 test_admin_user_delete_confirm_degrades_without_htmx
+#   на дереве `95fb1d06` (ПОСЛЕ задачи 1) перенаправляющих 8, названо 0. Прочие
+#   четыре (`test_toggle_…`, `test_delete_…`, `test_editor_delete_…`, оплата) адрес
+#   утверждали и до плана.
+def test_every_redirecting_degradation_pair_asserts_the_exact_location():
+    """WR-03: пара, утверждающая перенаправление, утверждает и ТОЧНЫЙ адрес.
+
+    Без адреса пара зеленеет на отказе и на холостой ветке, отвечающих тем же видом
+    перенаправления, — и засчитывается уликой пути без htmx, не различая удаление и
+    отказ. Слабая пара краснит правило и называется ``файл:строка имя``.
+
+    Антивакуум: все пять пар GATE-10 (``PAIRED_HTMX_TESTS``) обязаны быть видны
+    правилу перенаправляющими — иначе зелёный цвет означал бы, что правило их не
+    смотрело.
+    """
+    sources = _suite_sources()
+
+    redirecting = _redirecting_htmx_degradations(sources)
+    unseen = sorted(set(PAIRED_HTMX_TESTS) - redirecting)
+    assert not unseen, (
+        f"пары GATE-10 не видны правилу перенаправляющими: {unseen} — код ответа "
+        f"утверждается формой, которой разбор не узнаёт, и правило их не смотрит"
+    )
+
+    offences = _redirect_pairs_without_exact_location(sources)
+    assert not offences, (
+        "пара деградации утверждает перенаправление без точного адреса Location — "
+        "она зеленеет и на отказе, и на холостой ветке (WR-03):\n" + "\n".join(offences)
+    )
+
+
+def test_control_a_pair_asserting_only_the_status_is_named():
+    """Контроль от вакуума: слабая пара НАЗЫВАЕТСЯ, сильная — нет.
+
+    Синтетическое отображение в памяти (на диск не пишется): функция с одним
+    статусом называется поимённо; функция с самосравнением
+    ``location == response.headers["location"]`` тоже называется — оно истинно при
+    любом адресе; функция с адресом-литералом НЕ называется (правило не
+    согласно со всем подряд); функция без перенаправления вне предмета правила.
+    """
+    status_only = "test_synthetic_status_only" + DEGRADATION_MARK + HTMX
+    self_compare = "test_synthetic_self_compare" + DEGRADATION_MARK + HTMX
+    exact = "test_synthetic_exact_location" + DEGRADATION_MARK + HTMX
+    fragment = "test_synthetic_fragment" + DEGRADATION_MARK + HTMX
+    path = "tests/test_pages/test_synthetic_location_control.py"
+    head = '    response = await client.post("/things/1/delete", follow_redirects=False)\n'
+    synthetic = {
+        path: (
+            f"async def {status_only}(client):\n"
+            + head
+            + "    assert response.status_code in (302, 303)\n"
+            + '    assert "HX-Location" not in response.headers\n'
+            + "\n\n"
+            + f"async def {self_compare}(client):\n"
+            + head
+            + "    assert response.status_code == 303\n"
+            + '    location = response.headers.get("location")\n'
+            + '    assert location == response.headers["location"]\n'
+            + "\n\n"
+            + f"async def {exact}(client):\n"
+            + head
+            + "    assert response.status_code == 302\n"
+            + '    assert response.headers["Location"] == "/things"\n'
+            + "\n\n"
+            + f"async def {fragment}(client):\n"
+            + head
+            + "    assert response.status_code == 200\n"
+        )
+    }
+
+    assert _redirecting_htmx_degradations(synthetic) == {
+        status_only,
+        self_compare,
+        exact,
+    }, "разбор не узнал синтетические формы кода перенаправления — контроль пуст"
+
+    named = {
+        offence.split(" ", 1)[1]
+        for offence in _redirect_pairs_without_exact_location(synthetic)
+    }
+    assert named == {status_only, self_compare}, (
+        f"названы {sorted(named)}, ожидались пара с одним статусом и пара с "
+        f"самосравнением адреса"
     )
