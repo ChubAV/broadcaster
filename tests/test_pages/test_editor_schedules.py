@@ -4839,6 +4839,128 @@ def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save
     )
 
 
+# --- Фаза 15, план 15-23, задача 1: ЗОНА ПРОФИЛЯ — ОДНИМ ПОМОЩНИКОМ ----------
+#
+# ПРЕДМЕТ (UI-ревью Фазы 15, пункт 4; решение владельца `chubav` Г-2 2026-09-25).
+# После плана 15-08 правка строки с нераспознанной сохранённой зоной переводит
+# её на «зону профиля или UTC» — молча. Задача 2 плана говорит человеку об этом
+# ДО сохранения строкой на карточке, и строка обязана назвать ТУ ЖЕ зону, в
+# которую сохранение строку переведёт. Два вычисления одного решения — одно в
+# обработчике, другое в карточке — разошлись бы молча: подсказка обещала бы
+# одно, сохранение делало бы другое. Поэтому решение вынесено в ОДИН помощник
+# `app/services/schedule_rules.py::profile_timezone_or_utc`, и правила ниже
+# утверждают его поведение и то, что создание и правка спрашивают именно его.
+#
+# ⚠️ ЧЕТЫРЕ ВЫРАЖЕНИЯ `tz_name = … else "UTC"` СПИСКОВ ЗДЕСЬ НЕ СЧИТАЮТСЯ, И
+# ЭТО ГРАНИЦА ПЛАНА, А НЕ УПУЩЕНИЕ. Они выбирают зону ПОКАЗА времени в сводном
+# списке и в строке списка после тумблера, а не зону, в которую уходит
+# СОХРАНЯЕМОЕ расписание; план 15-23 выносит ровно два выражения сохранения.
+
+PROFILE_TIMEZONE_HELPER = "profile_timezone_or_utc"
+
+
+@pytest.mark.parametrize(
+    ("profile_zone", "expected"),
+    [(PROFILE_ZONE, PROFILE_ZONE), ("Mars/Phobos", "UTC"), (None, "UTC")],
+    ids=["valid-profile-zone", "unrecognised-profile-zone", "no-profile-zone"],
+)
+def test_profile_timezone_or_utc_answers_the_profile_zone_or_utc(profile_zone, expected):
+    """Помощник: зона профиля, если она в перечне, иначе литерал `UTC`.
+
+    Помощник берётся атрибутом модуля, а не ввозом в шапке: отсутствие имени
+    обязано быть УТВЕРЖДЕНИЕМ правила, а не обрывом сборки всего модуля тестов.
+    """
+    from app.services import schedule_rules
+
+    helper = getattr(schedule_rules, PROFILE_TIMEZONE_HELPER, None)
+    assert helper is not None, (
+        f"в app/services/schedule_rules.py нет помощника {PROFILE_TIMEZONE_HELPER}"
+    )
+    assert helper(profile_zone) == expected
+
+
+def _profile_zone_literal_expressions(node) -> list[int]:
+    """Строки выражений вида `X if X in VALID_TIMEZONES else "UTC"` внутри узла."""
+    import ast
+
+    found = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.IfExp):
+            continue
+        test = sub.test
+        if not (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.In)
+            and isinstance(test.comparators[0], ast.Name)
+            and test.comparators[0].id == "VALID_TIMEZONES"
+        ):
+            continue
+        if isinstance(sub.orelse, ast.Constant) and sub.orelse.value == "UTC":
+            found.append(sub.lineno)
+    return found
+
+
+def _called_names(node) -> list[str]:
+    import ast
+
+    names = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            if isinstance(sub.func, ast.Name):
+                names.append(sub.func.id)
+            elif isinstance(sub.func, ast.Attribute):
+                names.append(sub.func.attr)
+    return names
+
+
+def test_profile_timezone_is_decided_by_one_helper_in_create_and_update():
+    """Создание и правка берут зону профиля у помощника, а не своим выражением.
+
+    По ДЕРЕВУ, а не по строке: комментарии над обоими местами цитируют прежнее
+    выражение, и греп различал бы цитату с кодом не лучше, чем никак.
+    """
+    import ast
+
+    source = Path(__file__).resolve().parents[2].joinpath(
+        "app", "pages", "schedules.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    for handler in ("schedules_create", "schedules_update"):
+        assert handler in functions, f"в app/pages/schedules.py нет {handler}"
+        literal = _profile_zone_literal_expressions(functions[handler])
+        assert literal == [], (
+            f"{handler} решает зону профиля своим выражением на строках {literal} — "
+            f"решение обязано жить в {PROFILE_TIMEZONE_HELPER}"
+        )
+        assert PROFILE_TIMEZONE_HELPER in _called_names(functions[handler]), (
+            f"{handler} не спрашивает {PROFILE_TIMEZONE_HELPER}"
+        )
+
+
+def test_control_profile_timezone_literal_expression_is_found_in_a_synthetic_source():
+    """Контроль от вакуума: сыщик выражения видит его и не видит соседнюю форму.
+
+    `stored_tz = … else profile_tz` правки — откат на ПРОВЕРЕННУЮ зону, а не
+    решение о зоне профиля, и сыщик обязан её пропускать: иначе правило выше
+    требовало бы снести откат плана 15-08.
+    """
+    import ast
+
+    synthetic = ast.parse(
+        "def f(user, schedule, profile_tz):\n"
+        "    a = user.timezone if user.timezone in VALID_TIMEZONES else \"UTC\"\n"
+        "    b = schedule.timezone if schedule.timezone in VALID_TIMEZONES else profile_tz\n"
+    )
+    assert _profile_zone_literal_expressions(synthetic) == [2]
+
+
 # =============================================================================
 # План 15-09, задача 2: ОСТАТОК ХОЛОСТОГО ПУТИ РЕДАКТОРА ВВЕДЁН В ПЕРЕЧЕНЬ.
 # =============================================================================
