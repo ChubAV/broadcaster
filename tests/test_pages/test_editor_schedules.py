@@ -4961,6 +4961,257 @@ def test_control_profile_timezone_literal_expression_is_found_in_a_synthetic_sou
     assert _profile_zone_literal_expressions(synthetic) == [2]
 
 
+# --- Фаза 15, план 15-23, задача 2: ПОДСКАЗКА О НЕРАСПОЗНАННОЙ ЗОНЕ -----------
+#
+# ПРЕДМЕТ (UI-ревью Фазы 15, пункт 4). Сохранение из редактора переводит строку
+# с нераспознанной зоной на зону профиля (или UTC) — цифры времени остаются те
+# же, но значат другой пояс. Человек узнаёт об этом ДО сохранения строкой на
+# карточке. Плашки успеха НЕТ и нового кода уведомления НЕТ: D-03 Фазы 10
+# запрещает плашку на успешном сохранении (запреты `10-01#3`, `10-24#2`,
+# `10-31#1`), поэтому слова стоят на карточке до действия, а не после него.
+#
+# ⚠️ ДВА ПУТИ ОТРИСОВКИ, И ПРОВЕРЯЮТСЯ ОБА: страница редактора
+# (`ads/form.html`) и фрагмент карточки (`ads/partials/sched_card_response.html`,
+# здесь — ответ htmx тумблера паузы, который зону строки НЕ переписывает).
+# Подсказка живёт в развёрнутом теле рядом с подписью «Время по …» — там же,
+# где кнопка сохранения, поэтому карточка в правилах развёрнута.
+
+HINT_PREFIX = "не распознан — при сохранении расписание перейдёт на"
+
+
+def _zone_hint(stored_zone_markup: str, fallback: str) -> str:
+    """Строка подсказки так, как её печатает разметка (зона уже экранирована)."""
+    return f"Часовой пояс «{stored_zone_markup}» {HINT_PREFIX} {fallback}"
+
+
+async def _expanded_editor_page(client: AsyncClient, ad_id: int, schedule_id: int) -> str:
+    page = await client.get(f"/ads/{ad_id}/edit?sched={schedule_id}")
+    assert page.status_code == 200, f"редактор ответил {page.status_code}"
+    assert f'id="sched-{schedule_id}"' in page.text, "карточки расписания на странице нет"
+    assert "СОХРАНИТЬ РАСПИСАНИЕ" in page.text, (
+        "карточка не развёрнута — подсказка живёт в развёрнутом теле, правило "
+        "измеряло бы свёрнутую карточку"
+    )
+    return page.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile_zone", "fallback"),
+    [(PROFILE_ZONE, PROFILE_ZONE), ("Mars/Phobos", "UTC")],
+    ids=["valid-profile-zone", "unrecognised-profile-zone"],
+)
+async def test_unrecognised_zone_hint_on_the_editor_page_names_the_fallback_zone(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    profile_zone: str,
+    fallback: str,
+):
+    """Страница редактора: карточка с зоной `Mars/Phobos` называет зону перехода.
+
+    Оба случая профиля: без второго правило не отличило бы проверенную зону
+    профиля от слепо напечатанного значения профиля.
+    """
+    owner.timezone = profile_zone
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    html = await _expanded_editor_page(authed_client, row.ad_id, row.schedule_id)
+
+    assert _zone_hint(form.timezone, fallback) in html, (
+        f"профиль {profile_zone!r}: на карточке нет подсказки о переходе на {fallback}"
+    )
+    assert f"Время по {form.timezone}" in html, "подпись «Время по …» пропала"
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_zone_hint_on_the_card_fragment(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Фрагмент карточки (ответ htmx тумблера паузы) несёт ту же подсказку.
+
+    Пауза зону строки не переписывает, поэтому фрагмент отрисован по ТОЙ ЖЕ
+    нераспознанной зоне, что и страница, — а вот путь отрисовки другой.
+    """
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    response = await htmx_client.post(
+        f"/schedules/{row.schedule_id}/toggle",
+        content=_form([("return_to", "editor"), ("keep_sched", str(row.schedule_id))]),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, f"тумблер ответил {response.status_code}"
+    assert "<!DOCTYPE" not in response.text, "приехал документ, а не фрагмент карточки"
+    assert f'id="sched-{row.schedule_id}"' in response.text
+    assert (await _reload(db_session, row.schedule_id)).timezone == form.timezone, (
+        "тумблер переписал зону — фрагмент измерял бы исправленную строку"
+    )
+    assert _zone_hint(form.timezone, PROFILE_ZONE) in response.text, (
+        "во фрагменте карточки нет подсказки о нераспознанной зоне"
+    )
+    assert f"Время по {form.timezone}" in response.text
+
+
+@pytest.mark.asyncio
+async def test_recognised_zone_card_carries_no_hint_on_either_path(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Карточка с верной зоной подсказки не несёт; подпись «Время по …» на месте."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, group_ids=[group.id])
+    schedule_id, ad_id = schedule.id, ad.id
+
+    # Страница — запросом БЕЗ признака htmx: заголовок сбрасывается на время
+    # запроса, потому что `htmx_client` — тот же объект клиента.
+    page = await authed_client.get(
+        f"/ads/{ad_id}/edit?sched={schedule_id}", headers={"HX-Request": "false"}
+    )
+    fragment = await htmx_client.post(
+        f"/schedules/{schedule_id}/toggle",
+        content=_form([("return_to", "editor"), ("keep_sched", str(schedule_id))]),
+        headers=FORM_HEADERS,
+    )
+
+    for label, body in (("страница", page.text), ("фрагмент", fragment.text)):
+        assert "СОХРАНИТЬ РАСПИСАНИЕ" in body, f"{label}: карточка не развёрнута"
+        assert HINT_PREFIX not in body, f"{label}: подсказка на карточке с верной зоной"
+        assert "Время по UTC" in body, f"{label}: подпись «Время по …» пропала"
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_zone_hint_is_gone_after_the_save_and_no_notice_is_shown(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """После сохранения зона переписана, подсказки нет, уведомления нет.
+
+    Исход сохранения не тронут (план 15-08): 302 в редактор без кода
+    уведомления, в строке — зона профиля. Плашки успеха нет — D-03 Фазы 10.
+    """
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    save = await _save_from_editor_response(
+        authed_client,
+        row,
+        _editor_save_pairs(row, days=[1], times=["10:00"], timezone_field=form.timezone),
+    )
+
+    assert save.status_code == 302, f"сохранение ответило {save.status_code}"
+    location = save.headers.get("location", "")
+    assert "notice" not in location, f"у сохранения появилось уведомление: {location}"
+    assert (await _reload(db_session, row.schedule_id)).timezone == PROFILE_ZONE
+
+    html = await _expanded_editor_page(authed_client, row.ad_id, row.schedule_id)
+    assert HINT_PREFIX not in html, "подсказка осталась на карточке после сохранения"
+    assert f"Время по {PROFILE_ZONE}" in html
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_zone_hint_escapes_the_stored_zone(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """T-15-87: зона из СУБД печатается в подсказку только автоэкранированием."""
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, group_ids=[group.id])
+    schedule.timezone = "<script>alert(1)</script>"
+    await db_session.commit()
+
+    html = await _expanded_editor_page(authed_client, ad.id, schedule.id)
+
+    assert "<script>alert(1)</script>" not in html, "зона строки вышла разметкой"
+    assert _zone_hint("&lt;script&gt;alert(1)&lt;/script&gt;", PROFILE_ZONE) in html, (
+        "подсказки с экранированной зоной на карточке нет"
+    )
+
+
+# Вызов макроса карточки: имя макроса и открывающая скобка. Определение макроса
+# (`{% macro sched_card(`) сюда не попадает — перед именем там стоит `macro `.
+_CARD_CALL_RE = re.compile(r"(?<!macro )\bsched_card(?:_article)?\(")
+
+
+def _card_calls(source: str) -> list[str]:
+    """Тексты аргументов каждого вызова макроса карточки — до парной скобки."""
+    calls = []
+    for match in _CARD_CALL_RE.finditer(source):
+        depth, index = 1, match.end()
+        while depth and index < len(source):
+            depth += {"(": 1, ")": -1}.get(source[index], 0)
+            index += 1
+        calls.append(source[match.end() : index - 1])
+    return calls
+
+
+def test_every_card_call_passes_the_hint_fallback_zone():
+    """Каждый вызов макроса карточки передаёт `fallback_timezone` явно.
+
+    Jinja не отказывает на пропущенном параметре макроса — она подставляет
+    пустое значение, и подсказка молча назвала бы «перейдёт на » без зоны.
+    Поэтому передача утверждается по исходникам ВСЕХ шаблонов, а не одного
+    отрисованного пути. Антивакуум: вызовов больше нуля, и среди них оба пути
+    отрисовки, названных планом.
+    """
+    templates_root = Path(__file__).resolve().parents[2] / "app" / "templates"
+    calls_by_file = {}
+    for path in sorted(templates_root.rglob("*.html")):
+        calls = _card_calls(path.read_text(encoding="utf-8"))
+        if calls:
+            calls_by_file[path.relative_to(templates_root).as_posix()] = calls
+
+    assert {"ads/form.html", "ads/partials/sched_card_response.html"} <= set(
+        calls_by_file
+    ), f"вызовы макроса карточки найдены не на обоих путях: {sorted(calls_by_file)}"
+    missing = [
+        (name, call.strip()[:80])
+        for name, calls in calls_by_file.items()
+        for call in calls
+        if "fallback_timezone=" not in call
+    ]
+    assert missing == [], f"вызовы карточки без fallback_timezone: {missing}"
+
+
+def test_hint_fallback_zone_comes_from_the_same_helper_as_the_save():
+    """Контекст редактора берёт зону подсказки у `profile_timezone_or_utc`.
+
+    Тот же помощник спрашивают создание и правка (задача 1 плана), поэтому
+    подсказка и сохранение называют одну зону по построению (T-15-88).
+    """
+    import ast
+
+    source = Path(__file__).resolve().parents[2].joinpath(
+        "app", "pages", "ads.py"
+    ).read_text(encoding="utf-8")
+    functions = {
+        node.name: node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "_editor_context" in functions, "в app/pages/ads.py нет _editor_context"
+    assert PROFILE_TIMEZONE_HELPER in _called_names(functions["_editor_context"]), (
+        f"_editor_context не спрашивает {PROFILE_TIMEZONE_HELPER} — зона подсказки "
+        f"вычислена не тем, чем зона сохранения"
+    )
+
+
 # =============================================================================
 # План 15-09, задача 2: ОСТАТОК ХОЛОСТОГО ПУТИ РЕДАКТОРА ВВЕДЁН В ПЕРЕЧЕНЬ.
 # =============================================================================
