@@ -74,6 +74,9 @@ TRUTHS_BLOCK = "truths"
 ASSUMPTIONS_BLOCK = "assumptions"
 STATEMENT_KEY = "statement"
 VERIFICATION_KEY = "verification"
+# Подпись отсутствующего ключа `verification` в выводе (`--list`, `--breakdown`). Пустая строка
+# ею не подписывается: ключ без значения — отказ разбора, а не «ключа нет» (IN-01).
+ABSENT_VERIFICATION_LABEL = "—"
 
 # Наивная сеть по строке — ради РАЗЛОЖЕНИЯ расхождения, а не ради счёта: перепись её не
 # использует. Сопоставляется построчно, чтобы `\s*` не перешагнул через перевод строки.
@@ -232,7 +235,9 @@ class ProhibitionRecord:
     """Элемент блока `must_haves.prohibitions`.
 
     `verification` — значение ключа либо `None` — ПРИЗНАК «ключа нет», а не значение `none`:
-    смешение двух вещей изъяло бы элемент из правила молча.
+    смешение двух вещей изъяло бы элемент из правила молча. Третьего состояния в записи НЕТ:
+    ключ, присутствующий без значения (`verification:` или `verification: ""`), — отказ разбора
+    `CensusError` с тождеством элемента, а не «ключа нет» (находка ревью IN-01, план 15-20).
     `first_key` — ключ, на котором стоит дефис списка; на счёт он не влияет и хранится ради
     разложения наивной сети.
     """
@@ -364,6 +369,29 @@ def _block_elements(frontmatter: Mapping, block: str) -> list:
     return elements
 
 
+def _verification_of(identity: ProhibitionIdentity, element: Mapping) -> str | None:
+    """Значение ключа `verification` элемента: строка, либо `None` — ПРИЗНАК «ключа нет».
+
+    Три случая, и третий — не значение: ключа нет → `None`; ключ есть, а значения нет (`None`
+    YAML или пустая строка) → `CensusError` с тождеством; иначе строка значения. Слить второй
+    случай с первым значило бы изъять элемент из правила двух значений молча (IN-01).
+    """
+    if VERIFICATION_KEY not in element:
+        return None
+    value = element[VERIFICATION_KEY]
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise CensusError(
+            f"`{identity}`: ключ `{VERIFICATION_KEY}` присутствует без значения — объявите "
+            f"значение или уберите ключ"
+        )
+    return str(value)
+
+
+def verification_label(record: ProhibitionRecord) -> str:
+    """Подпись значения `verification` в выводе прибора: «—» — ТОЛЬКО у записи без ключа."""
+    return ABSENT_VERIFICATION_LABEL if record.verification is None else record.verification
+
+
 def _records_of(plan_path: str, text: str) -> list[ProhibitionRecord]:
     records: list[ProhibitionRecord] = []
     for index, element in enumerate(_block_elements(_frontmatter(text), PROHIBITIONS_BLOCK)):
@@ -373,14 +401,15 @@ def _records_of(plan_path: str, text: str) -> list[ProhibitionRecord]:
                 f"ключом `{STATEMENT_KEY}`: форма записи, которую прибор не знает, называется, "
                 f"а не пропускается"
             )
-        verification = element.get(VERIFICATION_KEY) if VERIFICATION_KEY in element else None
+        identity = ProhibitionIdentity(plan_path, index)
+        verification = _verification_of(identity, element)
         status = element.get("status")
         records.append(
             ProhibitionRecord(
-                identity=ProhibitionIdentity(plan_path, index),
+                identity=identity,
                 phase=phase_of(plan_path),
                 statement=str(element[STATEMENT_KEY]),
-                verification=None if verification is None else str(verification),
+                verification=verification,
                 status=None if status is None else str(status),
                 first_key=str(next(iter(element))),
             )
@@ -962,7 +991,7 @@ def _list(root: Path, phase: str | None, klass: str | None = None) -> int:
         row = registry.get(record.identity, {})
         if klass is not None and row.get("class") != klass:
             continue
-        verification = record.verification if record.verification is not None else "—"
+        verification = verification_label(record)
         statement = " ".join(record.statement.split())[:100]
         print(
             f"{record.identity}  фаза {record.phase}  verification={verification}  "
@@ -994,7 +1023,7 @@ def _breakdown(root: Path) -> int:
     for phase, count in phase_breakdown(records).items():
         print(f"  фаза {phase}: {count}")
     print("по значениям `verification` (— ключа нет):")
-    values = Counter(record.verification or "—" for record in records)
+    values = Counter(verification_label(record) for record in records)
     for value, count in sorted(values.items()):
         print(f"  {value}: {count}")
     print("по диспозициям реестра (? — строки нет):")
