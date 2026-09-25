@@ -4606,13 +4606,200 @@ async def test_malformed_stored_days_str_refusal_over_htmx_is_a_location_with_th
     assert _snapshot(save.stored) == save.seeded
 
 
-def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save():
-    """`schedules_update` спрашивает `next_run_or_none` и не зовёт вычислитель сам.
+# --- Фаза 15, план 15-16, задача 2: СОЗДАНИЕ НА ВТОРОЙ ЛИНИИ (WR-02) -----------
+#
+# Основание то же, что у правки в плане 15-08, и применимо к созданию дословно:
+# `_clean_ints` / `_clean_times` отбрасывают негодное ДО расчёта, и помощник
+# `next_run_or_none` держит исход, если первая линия пропустит значение, —
+# регрессией санитайзера или новым полем. До плана 15-16 создание звало
+# вычислитель напрямую: на полной строке без момента пара «включено + нет
+# момента» роняла фиксацию ограничением `ck_schedules_active_requires_next_run`,
+# а исключение вычислителя уходило в общую пятисотку. Исход теперь тот же, что
+# у правки и тумблера: отказ с кодом `SCHEDULE_VALUES_OUT_OF_DOMAIN`, и ни одной
+# новой строки.
 
-    По ДЕРЕВУ, а не по строке: комментарии и импорт имени вычислителя в модуле
-    остаются, и счёт вхождений текста различал бы их с вызовом не лучше грепа.
-    Прямой вызов вычислителя в модуле обязан остаться РОВНО ОДИН — в
-    `schedules_create`, где входы отсекаются на создании.
+
+class _SecondLineCreate(NamedTuple):
+    status: int
+    response: object
+    error: str | None
+    ad_id: int
+    rows_before: int
+    rows_after: list
+
+
+async def _ad_schedules(db: AsyncSession, ad_id: int) -> list[Schedule]:
+    return list(
+        (
+            await db.execute(
+                select(Schedule)
+                .where(Schedule.ad_id == ad_id)
+                .order_by(Schedule.id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _create_on_the_second_line(
+    client: AsyncClient,
+    db: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+) -> _SecondLineCreate:
+    """Создание ПОЛНОГО расписания со значениями формы, прошедшими мимо санитайзеров.
+
+    Приём тот же, что у `_save_on_the_second_line`: `_open_the_first_line`.
+    Исключение, дошедшее до клиента, переводится в код 500 с названной причиной —
+    отказ правила остаётся УТВЕРЖДЕНИЕМ о коде ответа, а не обрывом теста; сессия
+    теста та же, что у обработчика, и после обрыва её надо откатить, чтобы
+    сосчитать строки.
+    """
+    ad = await _seed_ad(db, owner.id, f"Объявление создания {form.label}")
+    account = await _seed_account(db, owner.id)
+    group = await _seed_group(db, owner.id, account.id, name=f"Группа {form.label}")
+    # Идентификаторы снимаются ДО запроса: после пятисотки сессия теста (та же,
+    # что у обработчика) стоит в упавшей транзакции, и чтение атрибута модели
+    # ушло бы в ленивую загрузку на ней.
+    ad_id, account_id, group_id = ad.id, account.id, group.id
+    rows_before = len(await _ad_schedules(db, ad_id))
+    _open_the_first_line(monkeypatch, form)
+    pairs = [
+        ("ad_id", str(ad_id)),
+        ("account_id", str(account_id)),
+        ("group_ids", str(group_id)),
+        *[("days_of_week", str(day)) for day in form.days_of_week],
+        *[("times_of_day", str(moment)) for moment in form.times_of_day],
+        ("timezone", form.timezone),
+        ("return_to", "editor"),
+    ]
+    response, error = None, None
+    try:
+        response = await client.post(
+            "/schedules/new",
+            content=_form(pairs),
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — перевод обрыва в код ответа
+        error = f"{type(exc).__name__}: {exc}"
+    status = 500 if response is None else response.status_code
+    if status >= 500:
+        # Общий обработчик `app/main.py` мог превратить исключение в ответ 500,
+        # и тогда причины у клиента нет. Упавшая фиксация оставляет её в сессии:
+        # первый же запрос на ней называет исходное исключение дословно.
+        if error is None:
+            try:
+                await db.execute(select(func.count()).select_from(Schedule))
+            except Exception as exc:  # noqa: BLE001 — снятие причины пятисотки
+                error = f"{type(exc).__name__}: {exc}"
+            else:
+                error = f"ответ 500: {response.text[:300]}"
+        await db.rollback()
+    return _SecondLineCreate(
+        status, response, error, ad_id, rows_before, await _ad_schedules(db, ad_id)
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_on_the_second_line_refuses_the_days_str_form_with_the_notice(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Создание полного расписания формы `days-str-1` — отказ с кодом, строк не прибавилось.
+
+    `days-str-1` — форма, где вычислитель отвечает `None`, а не исключением:
+    до плана 15-16 создание писало пару «включено + нет момента», и фиксация
+    падала ограничением `ck_schedules_active_requires_next_run`.
+    """
+    form = _malformed_stored_form("days-str-1")
+
+    made = await _create_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+
+    assert made.status == 302, (
+        f"форма {form.label}: создание ответило {made.status}: {made.error}"
+    )
+    location = made.response.headers.get("location", "")
+    assert location == _refusal_landing(made.ad_id), (
+        f"форма {form.label}: переход {location!r} — не отказ с кодом "
+        f"{notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}"
+    )
+    assert len(made.rows_after) == made.rows_before, (
+        f"форма {form.label}: неисполнимое расписание создано "
+        f"(было {made.rows_before} строк, стало {len(made.rows_after)})"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_create_on_the_second_line_never_answers_500(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+):
+    """Создание на второй линии: 302 на каждой форме; неисполнимые — отказ и ноль строк.
+
+    Форма, исправленная откатом зоны (зона профиля вместо невалидной зоны
+    поля), создаётся ВКЛЮЧЁННОЙ с моментом и без кода отказа — защита не имеет
+    права проглотить исправный случай.
+    """
+    made = await _create_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+
+    assert made.status == 302, (
+        f"форма {form.label} ({form.description}): создание ответило "
+        f"{made.status}: {made.error}; замер вычислителя: {form.measured}"
+    )
+    location = made.response.headers.get("location", "")
+    if form.label in REPAIRED_BY_THE_ZONE_ROLLBACK:
+        assert len(made.rows_after) == made.rows_before + 1, made.rows_after
+        created = made.rows_after[-1]
+        assert created.is_active is True
+        assert created.next_run_at is not None, (
+            f"форма {form.label}: исправимая форма создана без момента"
+        )
+        assert notices.SCHEDULE_VALUES_OUT_OF_DOMAIN not in location, location
+    else:
+        assert location == _refusal_landing(made.ad_id), (
+            f"форма {form.label}: переход {location!r} — не отказ с кодом"
+        )
+        assert len(made.rows_after) == made.rows_before, (
+            f"форма {form.label}: неисполнимое расписание создано"
+        )
+
+
+def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save():
+    """Ни один обработчик страниц расписаний не зовёт вычислитель напрямую.
+
+    Правка (`schedules_update`) и создание (`schedules_create`) спрашивают
+    `next_run_or_none`; прямых вызовов `compute_next_run_at` в модуле
+    `app/pages/schedules.py` НОЛЬ. По ДЕРЕВУ, а не по строке: комментарии с
+    именем вычислителя в модуле остаются, и счёт вхождений текста различал бы их
+    с вызовом не лучше грепа. Вызов учитывается и по голому имени, и по
+    атрибуту (`schedule_service.compute_next_run_at(...)`): иначе ввоз модуля
+    вместо имени обходил бы правило.
+
+    ⚠️ ЛЕТОПИСЬ ПРАВИЛА (идиома D-30/D-32; прежняя формулировка процитирована,
+    а не стёрта). До плана 15-16 докстринг гласил: «`schedules_update`
+    спрашивает `next_run_or_none` и не зовёт вычислитель сам. … Прямой вызов
+    вычислителя в модуле обязан остаться РОВНО ОДИН — в `schedules_create`, где
+    входы отсекаются на создании», — а последнее утверждение требовало
+    `len(module_direct) == 1 and create_direct == ["compute_next_run_at"]`.
+    Правило тем самым ЗАКРЕПЛЯЛО предсуществующую асимметрию: прямой вызов в
+    создании старше фазы, а основание второй линии, данное правке планом 15-08,
+    применимо к созданию дословно (ревью WR-02; память проекта «тесты фазы
+    закрепляют старые дефекты»). Правило ослаблено до «ни один обработчик не
+    зовёт вычислитель напрямую» по решению владельца `chubav` 2026-09-25 (Г-2).
     """
     import ast
 
@@ -4622,36 +4809,33 @@ def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save
     tree = ast.parse(source)
 
     def calls_in(node: ast.AST) -> list[tuple[str, int]]:
-        return [
-            (sub.func.id, sub.lineno)
-            for sub in ast.walk(node)
-            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
-        ]
+        found = []
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            if isinstance(sub.func, ast.Name):
+                found.append((sub.func.id, sub.lineno))
+            elif isinstance(sub.func, ast.Attribute):
+                found.append((sub.func.attr, sub.lineno))
+        return found
 
     functions = {
         node.name: node
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
-    update_calls = [name for name, _ in calls_in(functions["schedules_update"])]
     module_direct = [
         (name, line) for name, line in calls_in(tree) if name == "compute_next_run_at"
     ]
-    create_direct = [
-        name
-        for name, _ in calls_in(functions["schedules_create"])
-        if name == "compute_next_run_at"
-    ]
 
-    assert "next_run_or_none" in update_calls, (
-        "schedules_update не спрашивает next_run_or_none"
-    )
-    assert "compute_next_run_at" not in update_calls, (
-        "schedules_update по-прежнему зовёт вычислитель напрямую"
-    )
-    assert len(module_direct) == 1 and create_direct == ["compute_next_run_at"], (
-        f"прямых вызовов вычислителя в модуле {module_direct}, ожидался один — "
-        f"в schedules_create"
+    for handler in ("schedules_update", "schedules_create"):
+        handler_calls = [name for name, _ in calls_in(functions[handler])]
+        assert "next_run_or_none" in handler_calls, (
+            f"{handler} не спрашивает next_run_or_none"
+        )
+    assert module_direct == [], (
+        f"прямые вызовы вычислителя в app/pages/schedules.py: {module_direct} — "
+        f"обработчик страниц обязан спрашивать next_run_or_none"
     )
 
 
@@ -4669,6 +4853,14 @@ def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save
 #
 # Импорт перечня и помощников — внутри правила, а не в шапке модуля: строка в
 # шапке сдвинула бы номера строк, которые цитируют записи о других планах.
+#
+# ⚠️ ОСНОВАНИЕ ПРЕДЫДУЩЕЙ ФРАЗЫ УСТАРЕЛО (отметка плана 15-16, 2026-09-25,
+# ревью IN-04; идиома D-30/D-32 — фраза названа, а не стёрта). Оно перестало
+# быть верным с планом 15-08: тот уже поставил в шапку модуля шестистрочный
+# ввоз перечня форм (`from tests.test_schedules_out_of_domain_resume import …`),
+# и номера строк ниже шапки сдвинулись тогда же. Настоящее основание — ввоз
+# обслуживает ОДНО правило и потому живёт рядом с ним, а не в шапке всего
+# модуля.
 
 
 @pytest.mark.asyncio
