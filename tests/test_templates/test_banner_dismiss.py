@@ -71,11 +71,15 @@ FAILURE_STACK_SELECTOR_BOUNDARY_NOTE), чтобы двух носителей о
 орган виден, щёлкается мышью или отвечает на пробел. И он НЕ означает, что
 заготовка скрывается: скрытие выражено объявлением таблицы стилей, и его
 отрисовка есть предмет глаз. Сам файл стилей запрещает подмену дословно
-(``app/static/css/app.css:1255-1258``): «объявлять их пройденными по зелени
-правил НЕЛЬЗЯ — окно 77 журнала записывает, чем такая подмена уже обошлась
-фазе».
+(``app/static/css/app.css``, абзац стопки «⚠️ ГРАНИЦА ДОКАЗАННОГО НАЗВАНА
+ЗДЕСЬ, А НЕ ОСТАВЛЕНА ЧИТАТЕЛЮ: правила утверждают ОБЪЯВЛЕНИЯ этой таблицы»):
+«объявлять их пройденными по зелени правил НЕЛЬЗЯ — окно 77 журнала
+записывает, чем такая подмена уже обошлась фазе». Летопись указателя: прежде
+здесь стояли номера строк ``:1255-1258`` — их сдвигает первая же правка выше
+(ревью IN-04, план 15-19).
 
-ГРАНИЦЫ ГЕЙТА — их ЧЕТЫРЕ, и каждая названа с основанием (форма
+ГРАНИЦЫ ГЕЙТА — их ПЯТЬ (летопись: ЧЕТЫРЕ до плана 15-19, пятую добавило
+решение владельца Г-3), и каждая названа с основанием (форма
 ``tests/test_pages/test_impersonation_gate.py:456-476``: граница НАЗВАНА, а
 невидимая гейту форма, где это возможно, отдельным правилом ЗАПРЕЩЕНА).
 
@@ -98,13 +102,19 @@ FAILURE_STACK_SELECTOR_BOUNDARY_NOTE), чтобы двух носителей о
    и ``DEF-09-04``. Попытка починить следствие будет ВИДНА: правило-сторож
    ``test_boundary_the_open_banner_top_consequence_is_guarded_not_fixed``
    держит число блоков, объявляющих эту величину, и запись следствия в CSS.
+5. Потеря фокуса при снятии клавишей (WCAG 2.4.3) и роль «флажок» — ПРИНЯТЫЕ
+   следствия ветви `A` (решение владельца `chubav` 2026-09-25, Г-3): записаны в
+   ``app/static/css/app.css`` и стерегутся правилом
+   ``test_boundary_the_keyboard_focus_and_the_checkbox_role_consequences_are_guarded_not_fixed``.
+   Куда фокус падает НА ДЕЛЕ, гейт не утверждает — это шаг У-8 обхода.
 
 ЧТО ОСТАЁТСЯ ГЛАЗАМ — пять наблюдений, перечисленных поимённо, чтобы план
 ``15-14`` внёс их в ``15-UAT.md`` РАЗДЕЛОМ УЛИКИ (окно 1280 px, обе заготовки
 видимы — двойная авария: отказ 500 и обрыв сети):
 
 1. виден ли обвод фокуса на органе снятия при переходе табуляцией
-   (``outline: 2px solid var(--focus-ring)``, объявлен в ``app.css:1329``,
+   (``outline: 2px solid var(--focus-ring)``, объявлен в ``app.css`` правилом
+   ``.banner-dismiss:focus-visible`` — прежде указатель ``:1329``, летопись;
    существование утверждено планом 15-05);
 2. срабатывает ли ПРОБЕЛ на ``<input type="checkbox">`` (заготовка скрывается);
 3. есть ли нарисованное столкновение текста с крестиком после добавления
@@ -779,3 +789,171 @@ def test_boundary_the_open_banner_top_consequence_is_guarded_not_fixed() -> None
         "      адресат: решение ВЕХИ, а не плана (как `DEF-09-04`) — починка требует "
         "НОВОГО решения владельца"
     )
+
+
+# =============================================================================
+# План 15-19, задача 1: ДВА ПРИНЯТЫХ СЛЕДСТВИЯ ВЕТВИ A — ЗАПИСАНЫ И СТЕРЕЖЕНЫ
+# =============================================================================
+#
+# ПОВОД — приоритет 1 UI-ревью фазы (`15-UI-REVIEW.md`, §Top 3): снятие плашки
+# КЛАВИШЕЙ теряет фокус (WCAG 2.4.3), и орган объявляется ролью «флажок» — ролевая
+# половина записи D-18.3 не была ни починена, ни записана принятой. Решение
+# владельца `chubav` 2026-09-25 (Г-3, «записать следствием»): ветвь `A` остаётся —
+# без нового обработчика и без замены органа на `<button>`; оба следствия
+# записываются в `app.css` ПРИНЯТЫМИ рядом со следствием смещения второй заготовки
+# и стерегутся в той же форме, что
+# `test_boundary_the_open_banner_top_consequence_is_guarded_not_fixed`.
+#
+# ⚠️ ГРАНИЦА ЭТОГО СТОРОЖА. Он читает ТЕКСТ таблицы стилей и ТЕКСТ шаблона и
+# утверждает ровно четыре вещи: обе записи на месте и называют основание; орган
+# остаётся флажком; скрытие снятой стопки остаётся объявлением `display: none` по
+# `:has(> .banner-dismiss:checked)`; регистраций обработчика в файле плашки столько
+# же, сколько было. Куда фокус падает НА ДЕЛЕ (в Chrome и в Firefox по-разному) и
+# что именно произносит скринридер, он НЕ утверждает и утверждать не может: движка
+# раскладки и дерева доступности в суите нет. Это шаг У-8 ручного обхода
+# `15-UAT.md`, и отметки его ставит человек.
+
+# Подстроки двух записей в `app.css`. Молчаливое удаление записи — второй способ
+# «починить» следствие, не починив его.
+KEYBOARD_FOCUS_CONSEQUENCE_MARK = "ПРИНЯТОЕ СЛЕДСТВИЕ ВЕТВИ A: СНЯТИЕ КЛАВИШЕЙ ТЕРЯЕТ ФОКУС"
+CHECKBOX_ROLE_CONSEQUENCE_MARK = "ПРИНЯТОЕ СЛЕДСТВИЕ ВЕТВИ A: ОРГАН ОБЪЯВЛЯЕТСЯ ФЛАЖКОМ"
+ACCEPTED_CONSEQUENCE_MARKS: tuple[str, ...] = (
+    KEYBOARD_FOCUS_CONSEQUENCE_MARK,
+    CHECKBOX_ROLE_CONSEQUENCE_MARK,
+)
+
+# Основание, которое каждая запись обязана назвать дословно (сличение — после
+# сведения пробелов и переводов строк к одному пробелу).
+ACCEPTED_CONSEQUENCE_BASIS = "решение владельца `chubav` 2026-09-25 (Г-3, «записать следствием»)"
+
+# Правило скрытия снятой стопки — механизм ветви `A`.
+DISMISSED_STACK_SELECTOR = f"{STACK_CLASS_SELECTOR}:has(> .{BANNER_DISMISS_CLASS}:checked)"
+
+# Любой элемент, несущий класс органа, — чтобы замена `<input>` на `<button>` была
+# НАЗВАНА, а не только посчитана недостачей.
+_ANY_DISMISS_TAG_RE = re.compile(
+    rf'<(\w+)\b[^>]*\bclass="[^"]*\b{BANNER_DISMISS_CLASS}\b[^"]*"[^>]*>', re.IGNORECASE
+)
+
+_CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+_FIX_ADDRESSEE = (
+    "      адресат: починка — НОВОЕ решение владельца, а не плана (Г-3 2026-09-25: ветвь `A` "
+    "остаётся, следствие записано принятым)"
+)
+
+
+def _record_paragraph(raw_css: str, mark: str) -> str | None:
+    """Абзац записи от её подстроки до пустой строки или конца комментария; пробелы сведены."""
+    start = raw_css.find(mark)
+    if start < 0:
+        return None
+    ends = [end for end in (raw_css.find("\n\n", start), raw_css.find("*/", start)) if end >= 0]
+    paragraph = raw_css[start : min(ends) if ends else len(raw_css)]
+    return " ".join(paragraph.split())
+
+
+def _accepted_consequence_findings(raw_css: str, banner_source: str) -> tuple[str, ...]:
+    """Расхождения сторожа двух принятых следствий. Пусто — записаны и не починены молча.
+
+    Принимает ТЕКСТЫ, а не пути: иначе контроль на синтетических копиях невыразим.
+    """
+    findings: list[str] = []
+    basis = " ".join(ACCEPTED_CONSEQUENCE_BASIS.split())
+    for mark in ACCEPTED_CONSEQUENCE_MARKS:
+        paragraph = _record_paragraph(raw_css, mark)
+        if paragraph is None:
+            findings.append(
+                f"записи «{mark}» в `app.css` НЕТ — принятое следствие снято молча, а не "
+                "починено работой\n" + _FIX_ADDRESSEE
+            )
+        elif basis not in paragraph:
+            findings.append(
+                f"запись «{mark}» не называет основания «{ACCEPTED_CONSEQUENCE_BASIS}»\n"
+                f"      получено: {paragraph[:200]}…"
+            )
+
+    stripped = _strip_comments(banner_source)
+    for match in _ANY_DISMISS_TAG_RE.finditer(stripped):
+        tag = match.group(0)
+        if match.group(1).lower() != "input" or 'type="checkbox"' not in tag:
+            findings.append(
+                "орган снятия ПЕРЕСТАЛ БЫТЬ ФЛАЖКОМ — следствие ветви `A` починено без "
+                f"решения владельца\n      получено: {tag}\n" + _FIX_ADDRESSEE
+            )
+    controls = _banner_dismiss_controls(banner_source)
+    if len(controls) != BANNER_DISMISS_CONTROLS:
+        findings.append(
+            f"органов снятия `<input type=\"checkbox\">` {len(controls)}, объявлено "
+            f"{BANNER_DISMISS_CONTROLS}: {[c.owner for c in controls]}"
+        )
+
+    hide_bodies = [
+        body
+        for selector, body in _css_rules(_CSS_COMMENT_RE.sub("", raw_css))
+        if selector == DISMISSED_STACK_SELECTOR
+    ]
+    if [_declaration(body, "display") for body in hide_bodies] != ["none"]:
+        findings.append(
+            f"скрытие снятой стопки ушло с `{DISMISSED_STACK_SELECTOR} {{ display: none; }}` — "
+            f"получено {len(hide_bodies)} блок(ов): {hide_bodies}\n" + _FIX_ADDRESSEE
+        )
+
+    registrations = _handler_registrations(banner_source)
+    if registrations != BANNER_SCRIPT_HANDLER_REGISTRATIONS:
+        findings.append(
+            f"регистраций обработчика в {BANNER_TEMPLATE}: {registrations}, объявлено "
+            f"{BANNER_SCRIPT_HANDLER_REGISTRATIONS} — в файл плашки пришёл обработчик\n"
+            + _FIX_ADDRESSEE
+        )
+    return tuple(findings)
+
+
+def test_boundary_the_keyboard_focus_and_the_checkbox_role_consequences_are_guarded_not_fixed() -> None:
+    """СТОРОЖ (Г-3): потеря фокуса и роль «флажок» ЗАПИСАНЫ принятыми и НЕ починены молча.
+
+    Краснеет и при молчаливой починке (орган перестал быть флажком, скрытие ушло
+    со `:has(> .banner-dismiss:checked)`, в файл плашки пришла регистрация
+    обработчика), и при молчаливом снятии любой из двух записей.
+    """
+    raw = APP_CSS.read_text(encoding="utf-8")
+    source = _banner_source()
+    assert _banner_dismiss_controls(source), "органов снятия нет — сторож вакуумен"
+
+    findings = _accepted_consequence_findings(raw, source)
+
+    assert findings == (), "app.css / " + BANNER_TEMPLATE + ":\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+def test_control_a_silently_fixed_or_dropped_consequence_reddens() -> None:
+    """Контроль сторожа на синтетических копиях: `<button>`, вырезанная запись, ушедшее скрытие."""
+    raw = APP_CSS.read_text(encoding="utf-8")
+    source = _banner_source()
+
+    server_input = re.search(r'<input type="checkbox" id="htmx-failure-server-close"[^>]*>', source)
+    assert server_input is not None, "органа #htmx-failure-server-close в шаблоне нет — подменять нечего"
+    as_button = source.replace(
+        server_input.group(0),
+        server_input.group(0).replace('<input type="checkbox"', '<button type="button"', 1) + "</button>",
+        1,
+    )
+    assert as_button != source
+    button_findings = _accepted_consequence_findings(raw, as_button)
+    assert any("ПЕРЕСТАЛ БЫТЬ ФЛАЖКОМ" in line and "<button" in line for line in button_findings), (
+        f"сторож зелен на органе `<button>` — молчаливая починка прошла: {button_findings}"
+    )
+
+    for mark in ACCEPTED_CONSEQUENCE_MARKS:
+        assert raw.count(mark) == 1, f"запись «{mark}» встречается {raw.count(mark)} раз(а), а не один"
+        dropped = raw.replace(mark, "")
+        dropped_findings = _accepted_consequence_findings(dropped, source)
+        assert any(mark in line and "НЕТ" in line for line in dropped_findings), (
+            f"сторож зелен без записи «{mark}» — молчаливое снятие прошло: {dropped_findings}"
+        )
+
+    hide_rule = f"{DISMISSED_STACK_SELECTOR} {{ display: none; }}"
+    assert raw.count(hide_rule) == 1, f"{hide_rule!r} встречается {raw.count(hide_rule)} раз(а)"
+    moved = raw.replace(hide_rule, "")
+    assert any("скрытие снятой стопки ушло" in line for line in _accepted_consequence_findings(moved, source))
