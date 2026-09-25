@@ -1043,3 +1043,104 @@ def test_control_a_silently_fixed_or_dropped_consequence_reddens() -> None:
     assert raw.count(hide_rule) == 1, f"{hide_rule!r} встречается {raw.count(hide_rule)} раз(а)"
     moved = raw.replace(hide_rule, "")
     assert any("скрытие снятой стопки ушло" in line for line in _accepted_consequence_findings(moved, source))
+
+
+# =============================================================================
+# План 15-19, задача 3: ОБВОД ФОКУСА НЕПРОЗРАЧЕН — МАШИННАЯ ПОЛОВИНА КОНТРАСТА
+# =============================================================================
+#
+# ПОВОД — UI-ревью фазы, пункт 5: токен `--focus-ring` был фиолетовым с альфой .5,
+# оценка ≈2.6:1 на фоне плашки отказа и ≈2.7:1 на `--surface` — ниже 3:1 WCAG
+# 1.4.11 для нетекстовых элементов. Решение Г-2: непрозрачный обвод.
+#
+# ⚠️ ГРАНИЦА ЭТОГО ПРАВИЛА. Оно утверждает НЕПРОЗРАЧНОСТЬ объявленного токена, а не
+# контраст: контраст есть отношение обвода к фону, на котором он нарисован, а фон
+# плашки смешан `color-mix` и зависит от отрисовки. Видимость обвода на настоящем
+# экране остаётся шагу У-8 обхода `15-UAT.md`.
+
+FOCUS_RING_TOKEN = "--focus-ring"
+FOCUS_RING_MIN_ALPHA = 0.7
+
+_HEX_COLOUR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+_RGB_RE = re.compile(r"^rgba?\((?P<args>[^()]*)\)$")
+
+
+def _focus_ring_declaration(css: str) -> str | None:
+    """Значение токена в блоке `:root` (CSS без комментариев)."""
+    for selector, body in _css_rules(css):
+        if selector == ":root":
+            return _declaration(body, FOCUS_RING_TOKEN)
+    return None
+
+
+def _colour_alpha(value: str) -> float | None:
+    """Альфа цвета: `#rgb`/`#rrggbb` и `rgb(r, g, b)` — 1; `rgba(…, a)` / `rgb(r g b / a)` — a."""
+    value = value.strip()
+    if _HEX_COLOUR_RE.match(value):
+        return 1.0
+    match = _RGB_RE.match(value)
+    if match is None:
+        return None
+    args = match.group("args")
+    alpha_part: str | None
+    if "/" in args:
+        channels_text, _slash, alpha_text = args.partition("/")
+        channels, alpha_part = channels_text.split(), alpha_text.strip()
+    else:
+        parts = [part.strip() for part in args.split(",")]
+        if len(parts) not in (3, 4):
+            return None
+        channels, alpha_part = parts[:3], (parts[3] if len(parts) == 4 else None)
+    if len(channels) != 3:
+        return None
+    if alpha_part is None:
+        return 1.0
+    try:
+        return float(alpha_part[:-1]) / 100 if alpha_part.endswith("%") else float(alpha_part)
+    except ValueError:
+        return None
+
+
+def _focus_ring_opacity_offence(css: str) -> str:
+    """Пустая строка, если токен обвода непрозрачен не ниже порога; иначе — что не сошлось."""
+    declared = _focus_ring_declaration(css)
+    if declared is None:
+        return f"объявления `{FOCUS_RING_TOKEN}` в `:root` НЕТ — обвод фокуса без цвета"
+    alpha = _colour_alpha(declared)
+    if alpha is None:
+        return (
+            f"`{FOCUS_RING_TOKEN}: {declared}` — форма не разобрана: допустимы `#rrggbb`, "
+            "`rgb(r, g, b)` либо `rgba(r, g, b, a)` с альфой не ниже "
+            f"{FOCUS_RING_MIN_ALPHA}"
+        )
+    if alpha < FOCUS_RING_MIN_ALPHA:
+        return (
+            f"`{FOCUS_RING_TOKEN}: {declared}` — альфа {alpha:g} ниже {FOCUS_RING_MIN_ALPHA}: "
+            "полупрозрачный обвод на фоне плашки отказа оценён ≈2.6:1, ниже 3:1 WCAG 1.4.11"
+        )
+    return ""
+
+
+def test_the_focus_ring_token_is_opaque_enough_for_non_text_contrast() -> None:
+    """Токен `--focus-ring` непрозрачен (альфа не ниже 0.7) — машинная половина WCAG 1.4.11."""
+    offence = _focus_ring_opacity_offence(_app_css())
+
+    assert offence == "", offence
+
+
+def test_control_a_half_transparent_focus_ring_reddens() -> None:
+    """Контроль: альфа .5 — краснеет с текстом объявления; альфа .7 и `#rrggbb` проходят."""
+    css = _app_css()
+    declared = _focus_ring_declaration(css)
+    assert declared is not None, "токена обвода в `:root` нет — подменять нечего"
+    line = f"{FOCUS_RING_TOKEN}: {declared};"
+    assert css.count(line) == 1, f"{line!r} встречается {css.count(line)} раз(а), а не один"
+
+    half = css.replace(line, f"{FOCUS_RING_TOKEN}: rgba(196, 132, 252, .5);")
+    offence = _focus_ring_opacity_offence(half)
+    assert "rgba(196, 132, 252, .5)" in offence and "0.5" in offence, (
+        f"правило зелено на альфе .5 — полупрозрачный обвод прошёл: {offence!r}"
+    )
+
+    for passing in ("rgba(196, 132, 252, .7)", "#c484fc", "rgb(196 132 252 / 100%)"):
+        assert _focus_ring_opacity_offence(css.replace(line, f"{FOCUS_RING_TOKEN}: {passing};")) == "", passing
