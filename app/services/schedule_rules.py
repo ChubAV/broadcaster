@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfoNotFoundError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.constants import VALID_TIMEZONES
 from app.models.group import Group
 from app.services.schedule_service import compute_next_run_at
 
@@ -206,3 +207,29 @@ def next_run_or_none(schedule: "Schedule") -> "datetime | None":
         )
     except UNRUNNABLE_STORED_VALUE_ERRORS:
         return None
+
+
+def profile_timezone_or_utc(user_timezone: str | None) -> str:
+    """Зона, в которую уходит расписание без собственной проверенной зоны.
+
+    Зона профиля, если она принадлежит перечню `VALID_TIMEZONES`, иначе литерал
+    `UTC` последним рубежом. Литерал не становится умолчанием вместо профиля по
+    основанию, записанному у `schedules_create`: с ним расписание молча
+    создавалось бы в чужом часовом поясе, а подпись карточки обещала бы
+    пользовательский.
+
+    ⚠️ ЭТО ЕДИНСТВЕННОЕ МЕСТО РЕШЕНИЯ (план 15-23, UI-ревью Фазы 15, пункт 4).
+    Его спрашивают три стороны: создание (`schedules_create` — умолчание зоны
+    новой строки), правка (`schedules_update` — откат нераспознанной сохранённой
+    зоны, CR-01, план 15-08) и карточка редактора — подсказка «при сохранении
+    расписание перейдёт на …», которую человек видит ДО сохранения. Подсказка и
+    сохранение обязаны назвать ОДНУ зону; два выражения одного решения — одно в
+    обработчике, другое у карточки — разошлись бы молча, и подсказка обещала бы
+    не то, что сделает сохранение. Сюда же вынесены оба прежних выражения
+    `user.timezone if user.timezone in VALID_TIMEZONES else "UTC"` страничного
+    слоя; правило по дереву —
+    `tests/test_pages/test_editor_schedules.py::test_profile_timezone_is_decided_by_one_helper_in_create_and_update`.
+
+    Функция чистая: не читает СУБД и ничего не перехватывает.
+    """
+    return user_timezone if user_timezone in VALID_TIMEZONES else "UTC"

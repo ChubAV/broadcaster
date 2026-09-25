@@ -19,6 +19,7 @@ from app.services.schedule_rules import (
     is_schedule_complete,
     is_valid_time_of_day,
     next_run_or_none,
+    profile_timezone_or_utc,
 )
 from app.pages import notices
 # Контекст редактора ввозится у модуля объявлений, а не собирается здесь второй
@@ -1090,7 +1091,12 @@ async def schedules_create(
     # С литералом UTC расписание после переезда молча создавалось бы в чужом
     # часовом поясе, а подпись обещала бы пользовательский — расхождение,
     # которое видно только по неотправленной вовремя рассылке.
-    profile_tz = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    #
+    # Выражение «зона профиля, если она в перечне, иначе UTC» вынесено в
+    # помощник `profile_timezone_or_utc` (план 15-23, 2026-09-25): то же решение
+    # спрашивают правка ниже и подсказка карточки редактора, и три копии
+    # разошлись бы молча.
+    profile_tz = profile_timezone_or_utc(user.timezone)
     tz = form_data.get("timezone", profile_tz)
     if tz not in VALID_TIMEZONES:
         tz = profile_tz
@@ -1330,7 +1336,12 @@ async def schedules_update(
     #
     # Откат стои́т ПОСЛЕ проверок владения выше: предикат доступа не сдвинут, и
     # отказ по доступу в строку не пишет ничего.
-    profile_tz = user.timezone if user.timezone in VALID_TIMEZONES else "UTC"
+    #
+    # Зона профиля берётся у помощника `profile_timezone_or_utc` (план 15-23,
+    # 2026-09-25) — ТОГО ЖЕ, у которого её берёт подсказка карточки «при
+    # сохранении расписание перейдёт на …»: подсказка обязана назвать ровно ту
+    # зону, в которую эта строка уйдёт здесь.
+    profile_tz = profile_timezone_or_utc(user.timezone)
     stored_tz = (
         schedule.timezone if schedule.timezone in VALID_TIMEZONES else profile_tz
     )
