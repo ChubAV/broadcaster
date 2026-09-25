@@ -180,6 +180,13 @@ BANNER_DISMISS_SUBJECT_MARKS: dict[str, str] = {
     "htmx-failure-network": "обрыве связи",
 }
 
+# Узел заготовки → ПЕРВОЕ слово имени его органа (план 15-19, UI-ревью пункт 7):
+# различающее слово стоит первым, а не последним после общего префикса.
+BANNER_DISMISS_LEADING_WORDS: dict[str, str] = {
+    "htmx-failure-server": "Отказ",
+    "htmx-failure-network": "Обрыв",
+}
+
 # Регистраций обработчика в файле заготовок — снято ДО правки плана 15-07
 # (`grep -o 'addEventListener(' … | wc -l` → 3, 2026-09-24). Рост этого числа
 # отменил бы ветвь `A` решения владельца 2026-09-13 («снятие без регистрации»)
@@ -390,6 +397,54 @@ def test_each_accessible_name_names_its_own_failure() -> None:
     )
 
 
+def _leading_word(name: str) -> str:
+    """Первое слово имени — до первого пробела, без знаков препинания по краям."""
+    words = name.split()
+    return words[0].strip(".,:;—-«»") if words else ""
+
+
+def _leading_word_findings(source: str) -> tuple[str, ...]:
+    """Расхождения порядка слов. Пусто — имя каждого органа НАЧИНАЕТСЯ признаком своей аварии.
+
+    Первые слова двух органов обязаны быть различны: при быстрой речи и в списке
+    элементов управления различие, пришедшее последним, человек слышит последним.
+    """
+    findings: list[str] = []
+    names = _accessible_names(_banner_dismiss_controls(source))
+    for owner, word in BANNER_DISMISS_LEADING_WORDS.items():
+        name = names.get(owner)
+        if name is None:
+            findings.append(f"#{owner}: органа снятия с доступным именем нет — сличать не с чем")
+            continue
+        if _leading_word(name) != word:
+            findings.append(
+                f"#{owner}: доступное имя «{name}» начинается словом «{_leading_word(name)}», а не "
+                f"признаком своей аварии «{word}» — различающее слово стои́т не первым"
+            )
+    leading = [_leading_word(name) for name in names.values() if name]
+    if len(set(leading)) != len(leading):
+        findings.append(
+            f"первые слова имён органов совпадают: {leading} — при двойной аварии имена "
+            "различаются не с первого слова"
+        )
+    return tuple(findings)
+
+
+def test_each_accessible_name_leads_with_its_own_failure() -> None:
+    """Имя каждого органа НАЧИНАЕТСЯ признаком своей аварии, и первые слова двух органов различны.
+
+    Прежние имена плана 15-07 были различимы, но различающее слово стояло
+    последним после общего префикса (UI-ревью, пункт 7); правило требует его
+    первым.
+    """
+    assert len(set(BANNER_DISMISS_LEADING_WORDS.values())) == len(BANNER_DISMISS_LEADING_WORDS), (
+        "объявленные первые слова совпадают — правило различимости порядка вакуумно"
+    )
+    findings = _leading_word_findings(_banner_source())
+
+    assert findings == (), f"{BANNER_TEMPLATE}:\n" + "\n".join(f"  — {line}" for line in findings)
+
+
 def test_no_handler_registration_is_added_to_the_banner_file() -> None:
     """Регистраций обработчика в файле заготовок — ровно объявленное число.
 
@@ -452,6 +507,20 @@ def test_control_a_control_without_an_accessible_name_reddens() -> None:
     assert findings, "правило различимости зелено на органе без имени — пустое читается «различимым»"
     assert any("#htmx-failure-network" in line and "НЕТ доступного имени" in line
                for line in findings), f"отказ не назвал узел без имени: {findings}"
+
+
+def test_control_names_that_differ_only_at_the_end_redden() -> None:
+    """Имена плана 15-07 (различие в последнем слове) — правило порядка краснеет на обоих узлах."""
+    source = _synthetic(
+        ("htmx-failure-server", "Скрыть сообщение об отказе сервера"),
+        ("htmx-failure-network", "Скрыть сообщение об обрыве связи"),
+    )
+
+    findings = _leading_word_findings(source)
+
+    assert any("#htmx-failure-server" in line and "«Скрыть»" in line for line in findings), findings
+    assert any("#htmx-failure-network" in line and "«Скрыть»" in line for line in findings), findings
+    assert any("первые слова имён органов совпадают" in line for line in findings), findings
 
 
 def test_control_the_untouched_tree_is_a_nonempty_universe() -> None:
