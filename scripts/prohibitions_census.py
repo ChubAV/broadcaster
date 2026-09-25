@@ -39,6 +39,15 @@
   --seed-registry   засев скелета реестра; идемпотентен по тождествам — уже записанные поля
                     строк не двигаются, новые строки получают засеянные значения; блок ответа
                     владельца по классам (`class_decisions`) переносится как есть, не пишется
+  --record ТОЖДЕСТВО --disposition D --rule tests/…::имя [--rule …] [--coverage-note ТЕКСТ]
+                    запись МЕРЫ ПОКРЫТИЯ одной строки области решений (план 15-22): диспозиция
+                    `enforced` / `partially-enforced`, имена правил и их координаты через
+                    `RULE_SEPARATOR`, непокрытая часть у частичной. Каждое правило ищется
+                    разбором `ast` в файле своей ссылки; всё, чего записывать нельзя, — отказ
+                    `CensusError` по имени, и реестр тогда не пишется вовсе. ⚠️ Режим пишет
+                    ТОЛЬКО меру покрытия: класса, разрешения владельца и вердикта он не пишет
+                    (снимает лишь поля, которые запись меры делает ложными, — причину
+                    «неразобрано» и область разрешения строки)
 
 Зависимость: PyYAML приходит транзитивно (`uvicorn[standard]`), объявленной не является; риск
 назван в модуле теста. Решение оставить её транзитивной записано в журнале решений
@@ -49,6 +58,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import os
 import re
@@ -136,6 +146,23 @@ RULE_UNDECLARED = "<undeclared>"
 # засевом и коммитится; гейт предъявляет существование имени разбором `ast`, а не этим
 # выражением.
 DECLARED_RULE_TOKEN = re.compile(r"`(test_\w+)`")
+
+# МЕРА ПОКРЫТИЯ И ЕЁ ЗАПИСЬ (план 15-22, задача 1). Строка реестра может назвать НЕСКОЛЬКО правил:
+# `rule_name` и `rule_site` несут значения через `RULE_SEPARATOR` равной длины, и пары сличаются
+# ПО ПОЗИЦИИ. Летопись: до плана 15-22 строка называла одно правило, и запрет, который держат два
+# правила вместе, так не выражался. Одна строка YAML на запрет сохраняется. Модуль теста ввозит
+# разделитель отсюда — второго носителя у него нет.
+RULE_SEPARATOR = "; "
+# Ссылка на правило в режиме записи: `tests/…/файл.py::имя` — путь от корня дерева и имя функции.
+RULE_REFERENCE_SEPARATOR = "::"
+SUITE_PREFIX = "tests/"
+ENFORCED = "enforced"
+PARTIALLY_ENFORCED = "partially-enforced"
+COVERAGE_DISPOSITIONS = (ENFORCED, PARTIALLY_ENFORCED)
+RULE_NAME_FIELD = "rule_name"
+RULE_SITE_FIELD = "rule_site"
+COVERAGE_NOTE_FIELD = "coverage_note"
+UNRESOLVED_REASON_FIELD = "unresolved_reason"
 
 REGISTRY_HEADER = """\
 # Реестр тождеств запретов планов вехи v2.1 — строка на каждый элемент переписи.
@@ -674,6 +701,181 @@ def dump_registry(document: Mapping) -> str:
     return REGISTRY_HEADER + "\n" + body
 
 
+# --- запись меры покрытия (план 15-22) ---------------------------------------------
+
+
+def _resolve_identity(
+    records: Iterable[ProhibitionRecord], identity: str
+) -> ProhibitionRecord:
+    """Запись переписи по тождеству: полный путь `…/10-01-PLAN.md#2` либо уникальный хвост.
+
+    Хвост сличается по границе сегмента пути (`10-01-PLAN.md#2` не совпадает с
+    `110-01-PLAN.md#2`). Ни одного совпадения — «вне переписи»; больше одного — отказ, а не
+    первая попавшаяся строка.
+    """
+    matches = [
+        record
+        for record in records
+        if str(record.identity) == identity or str(record.identity).endswith(f"/{identity}")
+    ]
+    if not matches:
+        raise CensusError(f"тождество `{identity}` вне переписи")
+    if len(matches) > 1:
+        listed = ", ".join(str(record.identity) for record in matches)
+        raise CensusError(f"тождество `{identity}` неоднозначно: {listed}")
+    return matches[0]
+
+
+def _definition_line(path: Path, name: str) -> int | None:
+    """Строка первого определения функции `name` в файле — по дереву `ast`, а не по тексту."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except SyntaxError as error:
+        raise CensusError(f"`{path.name}` не разбирается `ast`: {error}") from error
+    lines = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+    ]
+    return min(lines) if lines else None
+
+
+def _rule_pairs(row: Mapping) -> list[tuple[str, str]]:
+    """Записанные пары «имя, координата» строки; строка без правил — пустой список."""
+    names, sites = row.get(RULE_NAME_FIELD), row.get(RULE_SITE_FIELD)
+    if not isinstance(names, str) or not isinstance(sites, str):
+        return []
+    return list(zip(names.split(RULE_SEPARATOR), sites.split(RULE_SEPARATOR)))
+
+
+def _measured_rules(
+    rules: list[str], recorded: list[tuple[str, str]], suite_root: Path
+) -> list[tuple[str, str]]:
+    """Пары «имя, координата» по ссылкам `tests/…::имя`; каждое правило найдено деревом.
+
+    Координата — `путь:строка` определения, снятая разбором `ast`. ⚠️ КООРДИНАТА ЕСТЬ ДЕНЬ
+    ЗАМЕРА: если строка уже называет то же правило в том же файле, записанная координата
+    сохраняется — иначе запись меры по одной строке двигала бы номер строки у каждой
+    перезаписанной строки, чей файл с тех пор вырос (гейт номер строки не утверждает). Новое
+    правило получает координату, снятую сейчас.
+    """
+    if not rules:
+        raise CensusError("не названо ни одного правила: мера покрытия без правил не пишется")
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for reference in rules:
+        path, separator, name = reference.rpartition(RULE_REFERENCE_SEPARATOR)
+        if not separator or not path or not name:
+            raise CensusError(
+                f"ссылка на правило `{reference}` не в форме `tests/…py{RULE_REFERENCE_SEPARATOR}имя`"
+            )
+        if not path.startswith(SUITE_PREFIX) or not path.endswith(".py"):
+            raise CensusError(f"ссылка `{reference}`: файл правила не в каталоге `{SUITE_PREFIX}`")
+        if reference in seen:
+            raise CensusError(f"правило `{reference}` названо дважды")
+        seen.add(reference)
+        source = suite_root / path[len(SUITE_PREFIX):]
+        if not source.is_file():
+            raise CensusError(f"ссылка `{reference}`: файла `{path}` в дереве суиты нет")
+        line = _definition_line(source, name)
+        if line is None:
+            raise CensusError(
+                f"правила `{name}` в `{path}` по разбору `ast` нет — объявление правила не есть "
+                f"правило"
+            )
+        kept = next(
+            (
+                site
+                for recorded_name, site in recorded
+                if recorded_name == name and site.rpartition(":")[0] == path
+            ),
+            None,
+        )
+        pairs.append((name, kept or f"{path}:{line}"))
+    return pairs
+
+
+def record_coverage(
+    document: dict,
+    records: list[ProhibitionRecord],
+    identity: str,
+    disposition: str,
+    rules: list[str],
+    coverage_note: str | None,
+    permit_uncovered: bool,
+    suite_root: Path,
+) -> dict:
+    """ЕДИНСТВЕННОЕ место записи меры покрытия строки области решений; возвращает строку.
+
+    Находит строку по тождеству (полный путь либо уникальный хвост), требует область решений
+    (D-02), диспозицию из `COVERAGE_DISPOSITIONS`, правило каждой ссылки `tests/…::имя` —
+    найденным разбором `ast` в файле ссылки, непустую непокрытую часть у частичной и её
+    отсутствие у полной. Пишет `disposition`, `rule_name` и `rule_site` (через
+    `RULE_SEPARATOR`), `coverage_note` у частичной; снимает `unresolved_reason` и
+    `permit_scope` — поля, которые запись меры делает ложными. Класса, блока `class_decisions`
+    и вердикта не пишет.
+
+    Любой отказ — `CensusError` ДО первой записи: документ либо изменён целиком, либо не изменён
+    вовсе. `suite_root` — каталог суиты (`tests/`), от которого разрешаются ссылки.
+    """
+    record = _resolve_identity(records, identity)
+    row = _registry_rows(document).get(record.identity)
+    if row is None:
+        raise CensusError(f"тождество `{record.identity}` без строки реестра — засейте реестр")
+    if record.phase != DECISION_SCOPE_PHASE:
+        raise CensusError(
+            f"`{record.identity}` вне области решений (D-02, фаза {DECISION_SCOPE_PHASE}): "
+            f"мера покрытия там не пишется"
+        )
+    if disposition not in COVERAGE_DISPOSITIONS:
+        raise CensusError(
+            f"диспозиция `{disposition}` не есть мера покрытия: режим записи пишет только "
+            f"{', '.join(f'`{value}`' for value in COVERAGE_DISPOSITIONS)}"
+        )
+    note = coverage_note.strip() if isinstance(coverage_note, str) else ""
+    if disposition == PARTIALLY_ENFORCED and not note:
+        raise CensusError(
+            f"`{record.identity}`: частичная диспозиция без `{COVERAGE_NOTE_FIELD}` — непокрытая "
+            f"часть называется, а не подразумевается"
+        )
+    if disposition == ENFORCED and note:
+        raise CensusError(
+            f"`{record.identity}`: `{COVERAGE_NOTE_FIELD}` при полной диспозиции — непокрытой "
+            f"части у неё нет"
+        )
+    pairs = _measured_rules(rules, _rule_pairs(row), suite_root)
+    permit_fields = _permit_uncovered_fields(document, row, disposition, permit_uncovered)
+
+    updated = {
+        field: value
+        for field, value in row.items()
+        if field not in (UNRESOLVED_REASON_FIELD, PERMIT_SCOPE_FIELD, COVERAGE_NOTE_FIELD)
+        and field not in permit_fields
+    }
+    updated["disposition"] = disposition
+    updated[RULE_NAME_FIELD] = RULE_SEPARATOR.join(name for name, _ in pairs)
+    updated[RULE_SITE_FIELD] = RULE_SEPARATOR.join(site for _, site in pairs)
+    if disposition == PARTIALLY_ENFORCED:
+        updated[COVERAGE_NOTE_FIELD] = coverage_note.strip()
+    updated.update({field: value for field, value in permit_fields.items() if value is not None})
+    ordered = _ordered(updated)
+    position = next(index for index, item in enumerate(document["rows"]) if item is row)
+    document["rows"][position] = ordered
+    return ordered
+
+
+def _permit_uncovered_fields(
+    document: Mapping, row: Mapping, disposition: str, permit_uncovered: bool
+) -> dict:
+    """Поля разрешения непокрытой части, которые запись ставит (значение) или снимает (`None`).
+
+    До плана 15-22 (задача 2) поля нет: флаг — отказ, снимать нечего.
+    """
+    if permit_uncovered:
+        raise CensusError("разрешение непокрытой части ещё не объявлено")
+    return {}
+
+
 # --- исторические сети ------------------------------------------------------------
 #
 # Четыре сети, давшие на 57 планах Фазы 10 четыре числа (374 / 76 / 57 / 38; критерий 6 ROADMAP
@@ -1209,6 +1411,32 @@ def _seed(root: Path) -> int:
     return 0
 
 
+def _record(root: Path, arguments: argparse.Namespace) -> int:
+    """Режим `--record`: одна запись меры покрытия и реестр, записанный `dump_registry`.
+
+    Формат строки прежний — одна строка YAML на запрет; отказ `record_coverage` поднимается до
+    записи файла, и файл тогда не меняется ни на символ.
+    """
+    path = root / REGISTRY_RELATIVE_PATH
+    document = load_registry(path)
+    row = record_coverage(
+        document,
+        census(_plan_sources(root)),
+        arguments.record,
+        arguments.disposition,
+        arguments.rule or [],
+        arguments.coverage_note,
+        arguments.permit_uncovered,
+        root / SUITE_PREFIX.rstrip("/"),
+    )
+    path.write_text(dump_registry(document), encoding="utf-8")
+    print(
+        f"записано: {row['plan']}#{row['index']} — {row['disposition']}; "
+        f"{RULE_NAME_FIELD}: {row[RULE_NAME_FIELD]}; {RULE_SITE_FIELD}: {row[RULE_SITE_FIELD]}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Вход прибора. Каждый вид порчи ввода проходит путём `ОТКАЗ:`.
 
@@ -1226,14 +1454,48 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument(
         "--draft-classes", action="store_true", help="черновая разбивка: ВСЕ кандидаты"
     )
+    mode.add_argument(
+        "--record",
+        metavar="ТОЖДЕСТВО",
+        help="запись меры покрытия строки области решений (путь#N либо уникальный хвост)",
+    )
     parser.add_argument("--phase", help="только эта фаза (с --list), например 10")
     parser.add_argument("--class", dest="klass", help="только этот класс (с --list)")
+    parser.add_argument(
+        "--disposition", choices=COVERAGE_DISPOSITIONS, help="мера покрытия (с --record)"
+    )
+    parser.add_argument(
+        "--rule",
+        action="append",
+        metavar="tests/…py::имя",
+        help="правило меры покрытия (с --record); повторяется для нескольких правил",
+    )
+    parser.add_argument(
+        "--coverage-note", help="непокрытая часть предмета у частичной (с --record)"
+    )
+    parser.add_argument(
+        "--permit-uncovered",
+        action="store_true",
+        help="непокрытая часть частичной строки разрешена разрешением её класса (с --record)",
+    )
     arguments = parser.parse_args(argv)
     if arguments.phase is not None and not arguments.list:
         parser.error("--phase применим только с --list")
     if arguments.klass is not None and not arguments.list:
         parser.error("--class применим только с --list")
+    record_flags = (
+        arguments.disposition is not None
+        or arguments.rule is not None
+        or arguments.coverage_note is not None
+        or arguments.permit_uncovered
+    )
+    if record_flags and arguments.record is None:
+        parser.error("--disposition, --rule, --coverage-note и --permit-uncovered — только с --record")
+    if arguments.record is not None and arguments.disposition is None:
+        parser.error("--record требует --disposition")
     try:
+        if arguments.record is not None:
+            return _record(TREE_ROOT, arguments)
         if arguments.check:
             return _check(TREE_ROOT)
         if arguments.list:

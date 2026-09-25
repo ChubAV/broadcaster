@@ -361,6 +361,9 @@ REGISTRY_ROW_FIELDS = frozenset(
 REGISTRY_ROW_FIELDS_DECLARED = 13
 RULE_NAME_FIELD = "rule_name"
 RULE_SITE_FIELD = "rule_site"
+# Разделитель нескольких правил одной строки (план 15-22) — ввезён из прибора: второго носителя у
+# модуля нет. Пары «имя, координата» сличаются по позиции.
+RULE_SEPARATOR = tool.RULE_SEPARATOR
 # Диспозиции, при которых правило СУЩЕСТВУЕТ: только у них стоят поля правила. Непокрытая часть
 # стоит только у частичной — у полной её нет по определению, у прочих нет правила.
 COVERED_DISPOSITIONS = frozenset({"enforced", "partially-enforced"})
@@ -2202,26 +2205,54 @@ def test_control_positive_the_suite_function_universe_is_not_empty(suite_sources
 # `test_the_lever_note_points_by_name_and_not_by_line_number`). Числа запретов без правила не
 # знает ни одно утверждение: это литерал сегодняшнего незакрытого состояния, и он
 # ДОКЛАДЫВАЕТСЯ в отказе.
+#
+# НЕСКОЛЬКО ПРАВИЛ В ОДНОЙ СТРОКЕ (план 15-22, задача 1). `rule_name` и `rule_site` несут значения
+# через `RULE_SEPARATOR` равной длины, пары сличаются ПО ПОЗИЦИИ, и существование КАЖДОГО правила
+# предъявляется разбором `ast` в файле своей координаты. Летопись: до плана 15-22 строка называла
+# одно правило, и запрет, который держат два правила вместе, так не выражался — одна строка, одно
+# правило. Одиночная форма (значение без разделителя) читается, как прежде: это пара длины один.
+# Записывает меру покрытия режим прибора `--record` (`tool.record_coverage`) — той же проверкой
+# `ast`, которую ниже гейт повторяет независимо.
+
+
+def _rule_parts(value) -> list[str]:
+    """Части поля правила по `RULE_SEPARATOR`; не строка — пустой список."""
+    return value.split(RULE_SEPARATOR) if isinstance(value, str) else []
 
 
 def _coverage_offences(rows) -> list[str]:
     """Нарушения ФОРМЫ записи меры покрытия — все, с тождествами, а не первое.
 
     (1) у `enforced` и `partially-enforced` названы и имя правила, и его координата — непустыми
-    строками; (2) у прочих диспозиций полей правила нет: правила при них нет по определению, и
-    поле при `permitted` читалось бы как принуждение; (3) непокрытая часть стоит только у
-    частичной (её отсутствие у частичной судит `partial_disposition_offences`).
+    строками, после деления по `RULE_SEPARATOR` — равной длины и без пустых частей; (2) у прочих
+    диспозиций полей правила нет: правила при них нет по определению, и поле при `permitted`
+    читалось бы как принуждение; (3) непокрытая часть стоит только у частичной (её отсутствие у
+    частичной судит `partial_disposition_offences`).
     """
     offences = []
     for row in rows:
         disposition = row.get("disposition")
         if disposition in COVERED_DISPOSITIONS:
+            present = True
             for field in (RULE_NAME_FIELD, RULE_SITE_FIELD):
                 value = row.get(field)
                 if not isinstance(value, str) or not value.strip():
+                    present = False
                     offences.append(
                         f"{_row_name(row)}: диспозиция `{disposition}` без поля `{field}`"
                     )
+                elif any(not part.strip() for part in _rule_parts(value)):
+                    offences.append(
+                        f"{_row_name(row)}: поле `{field}` несёт пустую часть между "
+                        f"разделителями `{RULE_SEPARATOR}`"
+                    )
+            names = _rule_parts(row.get(RULE_NAME_FIELD))
+            sites = _rule_parts(row.get(RULE_SITE_FIELD))
+            if present and len(names) != len(sites):
+                offences.append(
+                    f"{_row_name(row)}: правил {len(names)}, координат {len(sites)} — пары "
+                    f"сличаются по позиции"
+                )
         else:
             for field in (RULE_NAME_FIELD, RULE_SITE_FIELD):
                 if field in row:
@@ -2244,24 +2275,34 @@ def _rule_site_offences(rows, suite) -> list[str]:
     `ast.AsyncFunctionDef` его исходника. Имя в докстринге, комментарии или закомментированном
     коде в счёт не идёт; имя из ДРУГОГО файла — тоже. `suite` — отображение «путь от каталога
     суиты → исходник», чтобы контроль мог подать изменённую копию.
+
+    Поля делятся по `RULE_SEPARATOR`, и КАЖДАЯ пара «имя, координата» судится этим способом
+    (план 15-22); отказ называет ровно отсутствующее правило. Пары разной длины здесь не судятся
+    — это предмет `_coverage_offences`.
     """
     offences = []
     for row in rows:
-        site = row.get(RULE_SITE_FIELD)
-        if not isinstance(site, str) or not site.strip():
+        site_value = row.get(RULE_SITE_FIELD)
+        if not isinstance(site_value, str) or not site_value.strip():
             continue  # отсутствие координаты — предмет `_coverage_offences`, а не этого
-        path, _, line = site.rpartition(":")
-        if not path.startswith(SUITE_PREFIX) or not line.isdigit() or int(line) < 1:
-            offences.append(f"{_row_name(row)}: координата `{site}` не в форме `tests/…:строка`")
-            continue
-        text = suite.get(path[len(SUITE_PREFIX):])
-        if text is None:
-            offences.append(f"{_row_name(row)}: файла `{path}` в дереве суиты нет")
-        elif row.get(RULE_NAME_FIELD) not in _functions_defined_in(text):
-            offences.append(
-                f"{_row_name(row)}: правила `{row.get(RULE_NAME_FIELD)}` в `{path}` по разбору "
-                f"`ast` нет"
-            )
+        names = _rule_parts(row.get(RULE_NAME_FIELD))
+        sites = _rule_parts(site_value)
+        if len(names) != len(sites):
+            continue  # пары не сличаются — предмет `_coverage_offences`, а не этого
+        for name, site in zip(names, sites):
+            path, _, line = site.rpartition(":")
+            if not path.startswith(SUITE_PREFIX) or not line.isdigit() or int(line) < 1:
+                offences.append(
+                    f"{_row_name(row)}: координата `{site}` не в форме `tests/…:строка`"
+                )
+                continue
+            text = suite.get(path[len(SUITE_PREFIX):])
+            if text is None:
+                offences.append(f"{_row_name(row)}: файла `{path}` в дереве суиты нет")
+            elif name not in _functions_defined_in(text):
+                offences.append(
+                    f"{_row_name(row)}: правила `{name}` в `{path}` по разбору `ast` нет"
+                )
     return offences
 
 
