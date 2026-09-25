@@ -34,6 +34,7 @@ from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import AD_STATUS_PUBLISHED, VALID_TIMEZONES
+from app.pages import notices
 from app.pages.common import format_datetime_for_user, templates
 from app.pages.schedules import ID_MAX
 from app.models.ad import Ad
@@ -4001,16 +4002,19 @@ def _editor_save_pairs(
     return pairs
 
 
-async def _save_from_editor(client: AsyncClient, row: _SeededRow, pairs) -> int:
-    """Код ответа правки; исключение, дошедшее до клиента, есть та же пятисотка.
+async def _save_from_editor_response(client: AsyncClient, row: _SeededRow, pairs):
+    """Ответ правки целиком; исключение, дошедшее до клиента, есть та же пятисотка.
 
     Общий обработчик `app/main.py` отвечает человеку 500, а транспорт теста
-    вдобавок пробрасывает исключение наружу. Оно переводится в код здесь, чтобы
+    вдобавок пробрасывает исключение наружу. Оно переводится в отказ здесь, чтобы
     отказ правила был УТВЕРЖДЕНИЕМ о коде ответа с названным исключением, а не
     обрывом теста посреди запроса.
+
+    Ответ целиком (а не один код) нужен с плана 15-16: отказ второй линии
+    утверждается кодом уведомления в адресе перехода.
     """
     try:
-        response = await client.post(
+        return await client.post(
             f"/schedules/{row.schedule_id}/edit",
             content=_form(pairs),
             headers=FORM_HEADERS,
@@ -4020,7 +4024,11 @@ async def _save_from_editor(client: AsyncClient, row: _SeededRow, pairs) -> int:
         pytest.fail(
             f"правка из редактора ответила пятисоткой: {type(exc).__name__}: {exc}"
         )
-    return response.status_code
+
+
+async def _save_from_editor(client: AsyncClient, row: _SeededRow, pairs) -> int:
+    """Код ответа правки — см. `_save_from_editor_response`."""
+    return (await _save_from_editor_response(client, row, pairs)).status_code
 
 
 @pytest.mark.asyncio
@@ -4271,8 +4279,18 @@ async def test_malformed_stored_zone_next_run_agrees_with_completeness(
 # ⚠️ ИСХОД ОДИН И НА ДВУХ СПОСОБАХ СКАЗАТЬ «НЕТ». Вычислитель сообщает о
 # неисполнимости исключением (четыре формы времени) и значением `None`
 # (`days-str-1`); обработчик получает от помощника ОДИН ответ, и полное
-# включённое расписание без момента сохраняется ВЫКЛЮЧЕННЫМ — пару «включено +
-# нет момента» схема не примет (`ck_schedules_active_requires_next_run`).
+# включённое расписание без момента ОТКАЗЫВАЕТ: ничего не записано, переход в
+# редактор с кодом `SCHEDULE_VALUES_OUT_OF_DOMAIN` — тем же исходом, что у
+# тумблера и JSON-API (план 15-16, ревью WR-01).
+#
+# ⚠️ ЛЕТОПИСЬ АБЗАЦА (идиома D-30/D-32; прежняя редакция названа, а не стёрта).
+# До плана 15-16 абзац кончался словами «полное включённое расписание без
+# момента сохраняется ВЫКЛЮЧЕННЫМ — пару „включено + нет момента“ схема не
+# примет (`ck_schedules_active_requires_next_run`)». Это описывало дерево плана
+# 15-08 верно, но закрепляло ПРЕДСУЩЕСТВУЮЩУЮ политику второй линии, которая
+# противоречила тумблеру и JSON-API: работающее расписание гасло молча, без
+# единого слова человеку (ревью WR-01). Владелец `chubav` 2026-09-25 (Г-2)
+# выбрал ОТКАЗ, а не «сохранить паузой с уведомлением».
 
 # ⚠️ ЧИСЛО ФОРМ ПЕРЕЧНЯ ОБЪЯВЛЕНО ЛИТЕРАЛОМ, А НЕ ВЫВЕДЕНО (идиома SP-1).
 # Параметризованное правило над ОПУСТЕВШИМ перечнем собрало бы ноль случаев, и
@@ -4306,16 +4324,65 @@ def _open_the_first_line(monkeypatch, form: MalformedStoredForm) -> None:
     monkeypatch.setattr(page, "_clean_times", lambda values: list(form.times_of_day))
 
 
+class _RowSnapshot(NamedTuple):
+    """Значения строки, СНЯТЫЕ копией: объект карты идентичности сессии теста —
+    тот же, что у обработчика, и сравнивать его с самим собой было бы вакуумом."""
+
+    ad_id: int
+    account_id: int | None
+    group_ids: list
+    days_of_week: list
+    times_of_day: list
+    timezone: str
+    is_active: bool
+    next_run_at: datetime | None
+
+
+def _snapshot(schedule: Schedule) -> _RowSnapshot:
+    return _RowSnapshot(
+        schedule.ad_id,
+        schedule.account_id,
+        list(schedule.group_ids or []),
+        list(schedule.days_of_week or []),
+        list(schedule.times_of_day or []),
+        schedule.timezone,
+        schedule.is_active,
+        schedule.next_run_at,
+    )
+
+
+class _SecondLineSave(NamedTuple):
+    """Исход правки на второй линии.
+
+    Первые два поля — прежние значения помощника (код ответа и строка из СУБД);
+    ответ целиком и снимок посева добавлены планом 15-16: отказ утверждается
+    кодом уведомления в адресе и НЕТРОНУТОЙ строкой.
+    """
+
+    status: int
+    stored: Schedule
+    response: object
+    seeded: _RowSnapshot
+
+
+# Адрес отказа второй линии — ТОТ ЖЕ, что у тумблера (`schedules_toggle`) и у
+# пары реестра `tests/test_pages/test_htmx_post_pairs.py`: редактор объявления с
+# кодом закрытого реестра, и больше ничего.
+def _refusal_landing(ad_id: int) -> str:
+    return f"/ads/{ad_id}/edit?notice={notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}"
+
+
 async def _save_on_the_second_line(
     client: AsyncClient,
     db: AsyncSession,
     owner: User,
     monkeypatch,
     form: MalformedStoredForm,
-) -> tuple[int, Schedule]:
+) -> _SecondLineSave:
     row = await _seed_malformed_stored_row(db, owner, form)
+    seeded = _snapshot(await _reload(db, row.schedule_id))
     _open_the_first_line(monkeypatch, form)
-    status = await _save_from_editor(
+    response = await _save_from_editor_response(
         client,
         row,
         _editor_save_pairs(
@@ -4325,7 +4392,9 @@ async def _save_on_the_second_line(
             timezone_field=form.timezone,
         ),
     )
-    return status, await _reload(db, row.schedule_id)
+    return _SecondLineSave(
+        response.status_code, await _reload(db, row.schedule_id), response, seeded
+    )
 
 
 def test_malformed_stored_forms_list_is_declared_and_not_empty():
@@ -4378,9 +4447,10 @@ async def test_malformed_stored_form_on_the_second_line_never_answers_500(
     form: MalformedStoredForm,
 ):
     """Тест 1: сохранённые значения дошли до расчёта — пятисотки нет ни на одной форме."""
-    status, _ = await _save_on_the_second_line(
+    save = await _save_on_the_second_line(
         authed_client, db_session, owner, monkeypatch, form
     )
+    status = save.status
 
     assert status == 302, (
         f"форма {form.label} ({form.description}): правка ответила {status}; "
@@ -4397,14 +4467,26 @@ async def test_malformed_stored_form_on_the_second_line_lands_one_outcome(
     monkeypatch,
     form: MalformedStoredForm,
 ):
-    """Тест 2: неисполнимая форма — `next_run_at` пуст и строка выключена.
+    """Тест 2: неисполнимая форма — ОТКАЗ: код уведомления в адресе, строка нетронута.
 
     Оба способа сказать «нет» (значение и исключение) пришли обработчику ОДНИМ
-    исходом. Форма, исправленная откатом зоны, обязана получить момент.
+    исходом. Форма, исправленная откатом зоны, обязана получить момент — и
+    никакого кода отказа в адресе.
+
+    ⚠️ ЛЕТОПИСЬ ПРАВИЛА (идиома D-30/D-32; прежние утверждения названы, а не
+    стёрты молча). До плана 15-16 докстринг гласил «неисполнимая форма —
+    `next_run_at` пуст и строка выключена», а ветка неисполнимых форм утверждала
+    `assert stored.next_run_at is None` и `assert stored.is_active is False` и в
+    адрес ответа не смотрела вовсе. Правило закрепляло ПРЕДСУЩЕСТВУЮЩУЮ политику
+    второй линии — молчаливое выключение работающего расписания, — которая
+    противоречила тумблеру и JSON-API (ревью WR-01; память проекта «тесты фазы
+    закрепляют старые дефекты»). Владелец `chubav` выбрал ОТКАЗ 2026-09-25 (Г-2).
     """
-    _, stored = await _save_on_the_second_line(
+    save = await _save_on_the_second_line(
         authed_client, db_session, owner, monkeypatch, form
     )
+    stored = save.stored
+    location = save.response.headers.get("location", "")
 
     if form.label in REPAIRED_BY_THE_ZONE_ROLLBACK:
         assert stored.next_run_at is not None, (
@@ -4412,12 +4494,19 @@ async def test_malformed_stored_form_on_the_second_line_lands_one_outcome(
             f"а момента нет — защита проглотила исправный случай"
         )
         assert stored.is_active is True
-    else:
-        assert stored.next_run_at is None, (
-            f"форма {form.label}: у неисполнимой строки момент {stored.next_run_at!r}"
+        assert notices.SCHEDULE_VALUES_OUT_OF_DOMAIN not in location, (
+            f"форма {form.label}: исправный случай получил отказ — {location}"
         )
-        assert stored.is_active is False, (
-            f"форма {form.label}: неисполнимая строка осталась включённой"
+    else:
+        assert save.status == 302, f"форма {form.label}: правка ответила {save.status}"
+        assert f"notice={notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}" in location, (
+            f"форма {form.label}: переход {location!r} не несёт кода отказа — "
+            f"неисполнимое сохранение прошло молча"
+        )
+        assert location == _refusal_landing(save.seeded.ad_id), location
+        assert _snapshot(stored) == save.seeded, (
+            f"форма {form.label}: отказ тронул строку — было {save.seeded}, "
+            f"стало {_snapshot(stored)}"
         )
 
 
@@ -4433,9 +4522,10 @@ async def test_malformed_stored_legal_form_on_the_second_line_gets_a_moment(
     Без этого правила тесты 1–2 зеленели бы и у обработчика, выключающего
     расписание ВСЕГДА, то есть у защиты, проглотившей исправный случай.
     """
-    status, stored = await _save_on_the_second_line(
+    save = await _save_on_the_second_line(
         authed_client, db_session, owner, monkeypatch, LEGAL_STORED_FORM
     )
+    status, stored = save.status, save.stored
 
     assert status == 302
     assert stored.is_active is True
@@ -4456,17 +4546,64 @@ async def test_malformed_stored_days_str_form_goes_the_same_way(
     Утверждается отдельно, потому что она и до починки шла через значение, а не
     через исключение: без помощника `None` на полной включённой строке уходил в
     СУБД парой «включено + нет момента» и ронял фиксацию ограничением.
+
+    Исход — ОТКАЗ (план 15-16, WR-01, решение владельца Г-2): переход в
+    редактор с кодом `SCHEDULE_VALUES_OUT_OF_DOMAIN`, строка в СУБД ровно та,
+    что посеяна, — ВКЛЮЧЁННАЯ и целая.
+
+    ⚠️ ЛЕТОПИСЬ ПРАВИЛА (идиома D-30/D-32; прежние утверждения названы, а не
+    стёрты молча). До плана 15-16 правило после кода ответа утверждало
+    `assert stored.next_run_at is None` и `assert stored.is_active is False` —
+    молчаливое выключение. Оно закрепляло ПРЕДСУЩЕСТВУЮЩУЮ политику второй
+    линии, противоречившую тумблеру и JSON-API (ревью WR-01); владелец выбрал
+    отказ 2026-09-25 (Г-2).
     """
     form = _malformed_stored_form("days-str-1")
     assert form.measured.startswith("None"), form.measured
 
-    status, stored = await _save_on_the_second_line(
+    save = await _save_on_the_second_line(
         authed_client, db_session, owner, monkeypatch, form
     )
+    location = save.response.headers.get("location", "")
 
-    assert status == 302, f"форма {form.label}: правка ответила {status}"
-    assert stored.next_run_at is None
-    assert stored.is_active is False
+    assert save.status == 302, f"форма {form.label}: правка ответила {save.status}"
+    assert f"notice={notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}" in location, (
+        f"форма {form.label}: переход {location!r} не несёт кода отказа — "
+        f"работающее расписание погашено молча"
+    )
+    assert location == _refusal_landing(save.seeded.ad_id), location
+    assert save.stored.is_active is True, "отказ выключил работающее расписание"
+    assert _snapshot(save.stored) == save.seeded, (
+        f"отказ тронул строку — было {save.seeded}, стало {_snapshot(save.stored)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_days_str_refusal_over_htmx_is_a_location_with_the_notice(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Тест 4а: тот же отказ на транспорте htmx — заголовок перехода с кодом, тела нет.
+
+    Исход уводит с экрана (D-06): слой ответа кладёт тот же адрес, что уезжает
+    перенаправлением без htmx, в `HX-Location`, и фрагмента карточки в теле нет —
+    карточка с выключенным тумблером была бы тем самым молчаливым исходом.
+    """
+    form = _malformed_stored_form("days-str-1")
+
+    save = await _save_on_the_second_line(
+        htmx_client, db_session, owner, monkeypatch, form
+    )
+
+    assert save.status == 204, f"отказ на htmx ответил {save.status}"
+    assert save.response.headers.get("HX-Location") == _refusal_landing(
+        save.seeded.ad_id
+    ), save.response.headers.get("HX-Location")
+    assert save.response.content == b"", "у отказа приехало тело (фрагмент карточки?)"
+    assert _snapshot(save.stored) == save.seeded
 
 
 def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save():
