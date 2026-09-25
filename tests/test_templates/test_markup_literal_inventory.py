@@ -116,11 +116,29 @@ PAGE_SIZE_LITERAL_SITES: dict[str, str] = {}
 # мест: мёртвый ключ приглашал бы вернуть `limit={{ page_size }}` в адрес.
 PAGE_SIZE_CONTEXT_KEY = "page_size"
 
-# Литерал размера страницы: параметр `limit`, значение которого набрано ЦИФРАМИ.
-# Граница слова слева отсекает имена, у которых `limit` лишь хвост. Шаблонное
-# выражение (`limit={{ page_size }}`) под образец не попадает: после знака
-# равенства у него стоит скобка, а не цифра.
-PAGE_SIZE_LITERAL = re.compile(r"(?<![-\w])limit=\d")
+# Литерал размера страницы: число, набранное ЦИФРАМИ там, где разметка передаёт
+# серверу `limit`. Перечень ФОРМ такой записи: имя формы → образец. Граница слова
+# слева отсекает имена, у которых `limit` лишь хвост. Шаблонное выражение от
+# ИМЕНИ (`limit={{ page_size }}`, `limit={{ next_limit }}`) ни под один образец не
+# попадает: после скобок у него стоит буква, а не цифра и не кавычка с цифрой.
+#
+# ЛЕТОПИСЬ ЧИСЛА ФОРМ: 1 → 5 (план 15-21, задача 2, 2026-09-25; ревью Фазы 15,
+# находка IN-05). БЫЛО: одно выражение `(?<![-\w])limit=\d` — оно ловило только
+# параметр адреса и пропускало четыре иные записи того же второго носителя
+# числа: `limit={{ 30 }}`, `limit={{ '30' }}`, число в `hx-vals` и скрытое поле
+# `<input name="limit" value="30">`. Прежнее выражение не было ошибкой: оно
+# держало ту единственную форму, которую дерево знало на плане 15-09, и осталось
+# первой строкой перечня без изменений.
+PAGE_SIZE_LITERAL_FORMS: dict[str, re.Pattern[str]] = {
+    "адрес limit=<цифра>": re.compile(r"(?<![-\w])limit=\d"),
+    "выражение limit={{ <цифра> }}": re.compile(r"(?<![-\w])limit=\{\{\s*\d"),
+    "выражение limit={{ '<цифра>' }}": re.compile(r"""(?<![-\w])limit=\{\{\s*['"]\d"""),
+    'hx-vals "limit": <цифра>': re.compile(r"""["']limit["']\s*:\s*['"]?\d"""),
+    'скрытое поле <input name="limit" value="<цифра>">': re.compile(
+        r"""<input\b(?=[^>]*\bname\s*=\s*["']?limit\b)(?=[^>]*\bvalue\s*=\s*["']?\d)[^>]*>"""
+    ),
+}
+PAGE_SIZE_FORMS_DECLARED = 5
 
 # Три пары «страница + карточки порции». Строка сборки адреса порции в обеих
 # половинах пары ОДНА И ТА ЖЕ посимвольно: страница отдаёт первую порцию, а
@@ -159,6 +177,39 @@ SYNTHETIC_SENTINEL = (
     '<div hx-get="/future/partial?offset={{ next_offset }}&limit=30"'
     ' hx-trigger="revealed" hx-swap="outerHTML">Загрузка...</div>\n'
 )
+SYNTHETIC_FORM = "адрес limit=<цифра>"
+
+# По одному синтетическому образцу на каждую форму перечня. Ключ — имя формы:
+# контроль требует, чтобы место было найдено И названо ИМЕННО ею.
+PAGE_SIZE_LITERAL_FORM_SAMPLES: dict[str, str] = {
+    "адрес limit=<цифра>": SYNTHETIC_SENTINEL,
+    "выражение limit={{ <цифра> }}": (
+        '<div hx-get="/future/partial?offset={{ next_offset }}&limit={{ 30 }}"'
+        ' hx-trigger="revealed" hx-swap="outerHTML">Загрузка…</div>\n'
+    ),
+    "выражение limit={{ '<цифра>' }}": (
+        '<div hx-get="/future/partial?offset={{ next_offset }}&limit={{ \'30\' }}"'
+        ' hx-trigger="revealed" hx-swap="outerHTML">Загрузка…</div>\n'
+    ),
+    'hx-vals "limit": <цифра>': (
+        '<div hx-get="/future/partial" hx-vals=\'{"offset": 30, "limit": 30}\''
+        ' hx-trigger="revealed" hx-swap="outerHTML">Загрузка…</div>\n'
+    ),
+    'скрытое поле <input name="limit" value="<цифра>">': (
+        '<form hx-get="/future/partial"><input type="hidden" name="limit" value="30">'
+        "</form>\n"
+    ),
+}
+
+# Точность сети: записи, которые НЕ являются вторым носителем числа. Размер,
+# пришедший ИМЕНЕМ, а не цифрами, сеть не ловит ни одной формой.
+PAGE_SIZE_EXPRESSION_SAMPLES: tuple[str, ...] = (
+    '<div hx-get="/future/partial?offset={{ next_offset }}&limit={{ page_size }}"></div>\n',
+    '<div hx-get="/future/partial?offset={{ next_offset }}&limit={{ next_limit }}"></div>\n',
+    '<div hx-get="/future/partial" hx-vals=\'{"limit": {{ page_size }}}\'></div>\n',
+    '<input type="hidden" name="limit" value="{{ page_size }}">\n',
+    '<input type="hidden" name="rate_limit" value="30">\n',
+)
 
 
 # --- РАЗБОРЩИКИ ---------------------------------------------------------------
@@ -172,18 +223,31 @@ def _template_sources() -> dict[str, str]:
 def _page_size_literal_places(
     sources: dict[str, str], *, strip_comments: bool = True
 ) -> list[str]:
-    """Места литерала размера страницы ключами `путь#индекс`, отсортированно.
+    """Места литерала размера страницы ключами `путь#индекс [форма]`, отсортированно.
 
     Исходники приходят СЛОВАРЁМ, чтобы контроли могли подать изменённую копию
-    дерева. Индекс — порядковый номер вхождения внутри файла. Номер строки не
-    берётся: переформатирование разметки меняло бы ключ, хотя место то же.
+    дерева. Индекс — порядковый номер вхождения внутри файла (по всем формам, в
+    порядке положения). Номер строки не берётся: переформатирование разметки
+    меняло бы ключ, хотя место то же. Имя формы — ключ перечня
+    `PAGE_SIZE_LITERAL_FORMS`: отказ говорит не только ГДЕ, но и КАКОЙ записью
+    число вернулось в разметку.
     """
     places: list[str] = []
     for path in sorted(sources):
         text = _strip_comments(sources[path]) if strip_comments else sources[path]
-        for index, _ in enumerate(PAGE_SIZE_LITERAL.finditer(text)):
-            places.append(f"{path}#{index}")
+        found = sorted(
+            (match.start(), form)
+            for form, pattern in PAGE_SIZE_LITERAL_FORMS.items()
+            for match in pattern.finditer(text)
+        )
+        for index, (_, form) in enumerate(found):
+            places.append(_place(path, index, form))
     return places
+
+
+def _place(path: str, index: int, form: str) -> str:
+    """Ключ места: `путь#индекс [форма]`."""
+    return f"{path}#{index} [{form}]"
 
 
 def _portion_url_line(source: str, mark: str) -> str:
@@ -216,7 +280,7 @@ def test_no_page_size_literal_is_left_in_the_template_sources():
     """Правило 1: литерала размера страницы в исходниках шаблонов НЕТ.
 
     Утверждение сформулировано как отсутствие предмета. Отказ называет каждое
-    найденное место ключом `путь#индекс`.
+    найденное место ключом `путь#индекс [форма]` по всем пяти формам перечня.
     """
     places = _page_size_literal_places(_template_sources())
 
@@ -243,12 +307,56 @@ def test_control_negative_a_synthetic_template_with_the_literal_is_found_and_nam
 
     places = _page_size_literal_places(sources)
 
-    assert f"{SYNTHETIC_TEMPLATE}#0" in places, (
+    assert _place(SYNTHETIC_TEMPLATE, 0, SYNTHETIC_FORM) in places, (
         "СЕТЬ НЕ НАШЛА ЛИТЕРАЛ В СИНТЕТИЧЕСКОМ ШАБЛОНЕ — ноль правила 1 доказывал "
         "бы слепоту измерителя, а не отсутствие литерала"
     )
     assert not (places == sorted(PAGE_SIZE_LITERAL_SITES)), (
         "утверждение отсутствия осталось истинным при литерале в дереве"
+    )
+
+
+def test_control_every_page_size_literal_form_is_found_and_named():
+    """Контроль к правилу 1 (IN-05): КАЖДАЯ из пяти форм найдена и названа своим именем.
+
+    На синтетическом отображении — по одному шаблону на форму, ключи которого
+    в дереве нет. Каждый образец обязан дать РОВНО одно место, названное ИМЕННО
+    его формой: образец, пойманный чужой формой, значил бы, что своя слепа.
+    Вторая половина — точность: размер, записанный ИМЕНЕМ
+    (`limit={{ page_size }}`, `limit={{ next_limit }}` и их родня в `hx-vals` и
+    в скрытом поле), сеть не ловит, иначе правило 1 краснело бы на законной
+    записи.
+    """
+    assert len(PAGE_SIZE_LITERAL_FORMS) == PAGE_SIZE_FORMS_DECLARED
+    assert set(PAGE_SIZE_LITERAL_FORM_SAMPLES) == set(PAGE_SIZE_LITERAL_FORMS), (
+        "у формы перечня нет синтетического образца, или образец без формы"
+    )
+    live = _template_sources()
+    sources = {
+        f"a_screen_some_future_phase_will_add/form_{number}.html": sample
+        for number, sample in enumerate(PAGE_SIZE_LITERAL_FORM_SAMPLES.values())
+    }
+    assert not set(sources) & set(live), "синтетический ключ совпал с живым шаблоном"
+
+    places = _page_size_literal_places(sources)
+
+    expected = sorted(
+        _place(path, 0, form)
+        for path, form in zip(sources, PAGE_SIZE_LITERAL_FORM_SAMPLES, strict=True)
+    )
+    assert places == expected, (
+        "СЕТЬ ЛИТЕРАЛА СЛЕПА К ФОРМЕ или называет её чужим именем. Ожидалось: "
+        + ", ".join(expected)
+        + "; найдено: "
+        + ", ".join(places)
+    )
+
+    precision = {
+        f"a_screen_some_future_phase_will_add/expression_{number}.html": sample
+        for number, sample in enumerate(PAGE_SIZE_EXPRESSION_SAMPLES)
+    }
+    assert _page_size_literal_places(precision) == [], (
+        "сеть ловит размер, записанный ИМЕНЕМ, — правило 1 краснело бы на законном"
     )
 
 
@@ -283,7 +391,7 @@ def test_control_a_literal_inside_a_comment_is_not_counted():
     raw = _page_size_literal_places(sources, strip_comments=False)
 
     assert stripped == []
-    assert raw == [f"{SYNTHETIC_TEMPLATE}#0"]
+    assert raw == [_place(SYNTHETIC_TEMPLATE, 0, SYNTHETIC_FORM)]
     assert len(raw) - len(stripped) == 1
 
 
