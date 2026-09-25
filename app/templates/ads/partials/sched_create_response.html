@@ -52,6 +52,6 @@
    `inactive_group_ids`, `schedules_count`, `editor` — все из ОДНОЙ сборки
    обработчика. #}
 {%- from "ads/includes/sched_card.html" import sched_card -%}
-{{ sched_card(s, ad, accounts, groups, user, expanded_id=expanded_id, inactive_group_ids=inactive_group_ids) }}
+{{ sched_card(s, ad, accounts, groups, user, fallback_timezone=editor.fallback_timezone, expanded_id=expanded_id, inactive_group_ids=inactive_group_ids) }}
 <div hx-swap-oob="innerHTML:#sched-count">{% include "ads/includes/sched_count_rule.html" %}</div>
 <div id="ad-summary" hx-swap-oob="true">{% include "ads/includes/summary.html" %}</div>

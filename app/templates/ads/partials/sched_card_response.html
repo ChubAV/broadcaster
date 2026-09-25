@@ -38,6 +38,6 @@
    Ожидаемые переменные: `s`, `ad`, `accounts`, `groups`, `user`, `expanded_id`,
    `inactive_group_ids`, `editor` — все из `_editor_context`. #}
 {%- from "ads/includes/sched_card.html" import sched_card_article, sched_card_panel_text -%}
-{{ sched_card_article(s, ad, accounts, groups, user, expanded_id=expanded_id, inactive_group_ids=inactive_group_ids) }}
+{{ sched_card_article(s, ad, accounts, groups, user, fallback_timezone=editor.fallback_timezone, expanded_id=expanded_id, inactive_group_ids=inactive_group_ids) }}
 <div id="ad-summary" hx-swap-oob="true">{% include "ads/includes/summary.html" %}</div>
 <div hx-swap-oob="innerHTML:#sched-del-{{ s.id }}-text">{{ sched_card_panel_text(s, accounts) }}</div>

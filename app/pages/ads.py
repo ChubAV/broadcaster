@@ -69,6 +69,9 @@ from app.services.image_upload import (
     upload_limit_message,
     upload_parts_message,
 )
+# Зона, на которую сохранение переведёт расписание с нераспознанной зоной, —
+# у ТОГО ЖЕ помощника, что спрашивают создание и правка (план 15-23).
+from app.services.schedule_rules import profile_timezone_or_utc
 
 router = APIRouter(tags=["pages"])
 
@@ -439,6 +442,16 @@ async def _editor_context(
     # существенно ниже. Один порог на оба случая либо пугал бы там, где всё в
     # порядке, либо молчал бы перед гарантированной ошибкой длины.
     has_images = bool(ad and ad.images)
+
+    # Зона подсказки карточки о нераспознанной зоне (UI-ревью Фазы 15, пункт 4;
+    # план 15-23): «при сохранении расписание перейдёт на …». Вычисляется ТЕМ
+    # ЖЕ помощником, которым `schedules_update` откатывает такую зону, — иначе
+    # подсказка обещала бы одну зону, а сохранение записывало бы другую. Ключ
+    # едет в контексте редактора, а не считается в шаблоне: оба пути отрисовки
+    # карточки (страница и фрагмент) берут контекст отсюда.
+    fallback_timezone = profile_timezone_or_utc(
+        user.timezone if user is not None else None
+    )
     return {
         "channels": channels,
         "schedules_count": schedules_count,
@@ -447,6 +460,7 @@ async def _editor_context(
         "accounts": accounts,
         "groups": groups,
         "inactive_group_ids": inactive_group_ids,
+        "fallback_timezone": fallback_timezone,
         "expanded_schedule_id": expanded_id,
         "text_limit": TEXT_LIMIT,
         "text_warn_at": CAPTION_LIMIT if has_images else int(TEXT_LIMIT * TEXT_WARN_RATIO),
