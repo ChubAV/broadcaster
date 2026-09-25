@@ -110,6 +110,14 @@ PyYAML 6.0.3 закреплён в `uv.lock` и приходит транзит�
 `uvicorn[standard]>=0.41.0`. Риск назван строкой, а не закрыт правкой `pyproject.toml` (рамка
 вехи «0 новых Python-зависимостей», допущение A4 разведки): смена экстры `uvicorn` унесёт PyYAML
 и уронит прибор отказом импорта — громко, а не молча.
+Летопись (план 15-15, находка ревью IN-06 от 2026-09-24): ревью назвало прибор переписи НОВЫМ
+потребителем необъявленной зависимости. Решение — запись в журнале решений
+(`.planning/STATE.md`, раздел `### Decisions`, 2026-09-25, решение владельца Г-2), а не правка
+`pyproject.toml`: новой объявленной зависимости веха не получает. Круг ПРЯМЫХ импортёров отныне
+объявлен перечнем `YAML_DIRECT_IMPORTERS`, и новый импортёр краснит правило, а не появляется
+молча. Уточнение замером того же дня: сам этот модуль `import yaml` НЕ несёт — разбор он
+получает через прибор (`tool._safe_yaml`); фраза «`import yaml` голый» выше верна о приборе и о
+прецеденте, а не о модуле, и не правится.
 """
 
 import ast
@@ -2346,3 +2354,99 @@ def test_reconcile_seed_of_the_registry_is_idempotent_by_identity(
     """Повторный засев не меняет реестра ни на символ: дата замера и поля строк остаются."""
     again = tool.dump_registry(tool.seed_registry(live_census, registry_document, "1999-01-01"))
     assert again == REGISTRY_FILE.read_text(encoding="utf-8")
+
+
+# --- зависимость PyYAML: круг прямых импортёров объявлен (план 15-15, находка IN-06) ------
+#
+# PyYAML — необъявленная ТРАНЗИТИВНАЯ зависимость (`uvicorn[standard]` → `pyyaml>=5.1`);
+# решение оставить её такой записано в `.planning/STATE.md` (`### Decisions`, 2026-09-25).
+# Риск необъявленной зависимости растёт с числом её потребителей, поэтому круг ПРЯМЫХ
+# импортёров объявлен перечнем: новый импортёр краснит правило ниже и называется поимённо, а
+# решение о нём — расширить перечень с летописью или объявить зависимость — принимает человек.
+#
+# ЛЕТОПИСЬ ЧИСЛА: 3 — замер 2026-09-25 (`grep -rln '^\s*import yaml' app/ tests/ scripts/
+# main.py`), подтверждённый разбором `ast` правила ниже. ⚠️ Граница сети: импорт по имени
+# в рантайме (`importlib.import_module("yaml")`, `__import__`) узлом `Import` не является и
+# сюда не попадает; в дереве таких нет.
+YAML_DIRECT_IMPORTERS = frozenset(
+    {
+        "scripts/prohibitions_census.py",
+        "tests/test_pages/test_https_asset_scheme.py",
+        "tests/test_planning/test_state_progress_matches_roadmap.py",
+    }
+)
+YAML_IMPORTERS_DECLARED = 3
+YAML_MODULE = "yaml"
+YAML_SCAN_DIRECTORIES = ("app", "scripts", "tests")
+YAML_SCAN_FILES = ("main.py",)
+
+
+def _yaml_scan_sources(root: Path) -> dict[str, str]:
+    """«Путь относительно корня → исходник» по `app/`, `scripts/`, `tests/` и `main.py`."""
+    paths = [path for name in YAML_SCAN_DIRECTORIES for path in (root / name).rglob("*.py")]
+    paths += [root / name for name in YAML_SCAN_FILES]
+    return {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(paths)
+    }
+
+
+def _imports_yaml(node) -> bool:
+    if isinstance(node, ast.Import):
+        names = [alias.name for alias in node.names]
+    elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+        names = [node.module]
+    else:
+        return False
+    return any(name == YAML_MODULE or name.startswith(f"{YAML_MODULE}.") for name in names)
+
+
+def yaml_direct_importers(sources) -> frozenset[str]:
+    """Пути, чьё дерево `ast` несёт узел `Import` / `ImportFrom` с модулем `yaml`.
+
+    По дереву, а не по строке: `import yaml` в строке или комментарии узлом импорта не
+    является и не считается; относительный `from .yaml import …` — не PyYAML.
+    """
+    return frozenset(path for path, source in sources.items() if _source_imports_yaml(path, source))
+
+
+@lru_cache(maxsize=None)
+def _source_imports_yaml(path: str, source: str) -> bool:
+    """Вердикт по одному исходнику; ключ — путь И текст, поэтому подменённая копия не спутается."""
+    return any(_imports_yaml(node) for node in ast.walk(ast.parse(source, filename=path)))
+
+
+@pytest.fixture(scope="module")
+def yaml_scan_sources():
+    return _yaml_scan_sources(TREE_ROOT)
+
+
+def test_the_undeclared_yaml_dependency_has_only_the_declared_direct_importers(
+    yaml_scan_sources,
+):
+    """Множество прямых импортёров PyYAML РАВНО объявленному перечню — ни больше, ни меньше."""
+    assert len(YAML_DIRECT_IMPORTERS) == YAML_IMPORTERS_DECLARED
+    assert len(yaml_scan_sources) > PLAN_FILES_FLOOR, len(yaml_scan_sources)
+    found = yaml_direct_importers(yaml_scan_sources)
+    assert found == YAML_DIRECT_IMPORTERS, (
+        f"новые прямые импортёры PyYAML: {sorted(found - YAML_DIRECT_IMPORTERS)}; "
+        f"объявленные, но не импортирующие: {sorted(YAML_DIRECT_IMPORTERS - found)}. "
+        f"PyYAML — необъявленная транзитивная зависимость (`.planning/STATE.md`, "
+        f"`### Decisions`, 2026-09-25): новый потребитель — решение человека, а не молчание"
+    )
+
+
+def test_control_a_new_direct_yaml_importer_is_named(yaml_scan_sources):
+    """Синтетический модуль с `import yaml` называется поимённо; строка и комментарий — нет."""
+    doctored = dict(yaml_scan_sources)
+    doctored["tests/test_synthetic_yaml_importer.py"] = "import os, yaml\n"
+    doctored["app/synthetic_from_import.py"] = "from yaml import safe_load\n"
+    doctored["app/synthetic_prose.py"] = (
+        '"""import yaml"""\n# import yaml\nTEXT = "import yaml"\nfrom .yaml import thing\n'
+    )
+    found = yaml_direct_importers(doctored)
+    assert found - YAML_DIRECT_IMPORTERS == {
+        "tests/test_synthetic_yaml_importer.py",
+        "app/synthetic_from_import.py",
+    }, sorted(found)
+    assert YAML_DIRECT_IMPORTERS <= found
