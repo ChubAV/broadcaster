@@ -54,7 +54,11 @@
   --accent-cta: oklch(0.79 0.14 305);
   --accent-link: oklch(0.78 0.16 310);
   --accent-link-hover: oklch(0.87 0.11 310);
-  --focus-ring: rgba(196, 132, 252, .5);
+  /* Летопись обвода фокуса: до 2026-09-25 — `rgba(196, 132, 252, .5)`, оценка
+     UI-ревью ≈2.6:1 на фоне плашки отказа, ниже 3:1 WCAG 1.4.11; решение Г-2,
+     пункт 5 (план 15-19). Непрозрачность стережёт
+     `test_the_focus_ring_token_is_opaque_enough_for_non_text_contrast`. */
+  --focus-ring: rgb(196, 132, 252);
 
   /* Статусы */
   --ok: oklch(0.75 0.17 150);
