@@ -493,23 +493,85 @@ def phase_breakdown(records: Iterable[ProhibitionRecord]) -> dict[str, int]:
 
 
 def load_registry(path: Path) -> dict:
-    """Документ реестра как есть; отсутствие файла — пустой реестр, а не падение."""
+    """Документ реестра как есть; отсутствие файла или пустой документ — пустой реестр.
+
+    Документ, не являющийся отображением, — `CensusError` с его типом, а не `AttributeError`
+    мимо пути отказа `main()` (находка ревью IN-02, план 15-20). Строки судит `_registry_rows`,
+    решения по классам — `_class_decisions`: порча называется, а не чинится подстановкой.
+    """
     if not path.exists():
         return {"rows_declared": 0, "rows": []}
-    document = _safe_yaml(path.read_text(encoding="utf-8")) or {}
+    try:
+        document = _safe_yaml(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as error:
+        raise CensusError(f"реестр `{path.name}` не разбирается YAML: {error}") from error
+    if document is None:
+        document = {}
+    if not isinstance(document, dict):
+        raise CensusError(
+            f"реестр `{path.name}` — не отображение, а {type(document).__name__}"
+        )
     document.setdefault("rows", [])
     return document
 
 
+def _registry_row_problem(row: object) -> str:
+    """Порча одной строки реестра словами, либо пустая строка. Чистая функция строки."""
+    if not isinstance(row, dict):
+        return f"строка — не отображение, а {type(row).__name__}"
+    if "plan" not in row:
+        return "нет ключа `plan`"
+    if not isinstance(row["plan"], str):
+        return f"`plan` — не строка, а {type(row['plan']).__name__}"
+    if "index" not in row:
+        return "нет ключа `index`"
+    # Булево в Python — подкласс целого: `index: true` иначе прошёл бы как 1.
+    if isinstance(row["index"], bool) or not isinstance(row["index"], int):
+        return f"`index` — не целое, а {type(row['index']).__name__}"
+    return ""
+
+
 def _registry_rows(document: Mapping) -> dict[ProhibitionIdentity, dict]:
-    """Строки реестра по тождеству. Повтор тождества — отказ: биекция не терпит дублей."""
+    """Строки реестра по тождеству. Повтор тождества — отказ: биекция не терпит дублей.
+
+    Каждая строка — отображение с `plan` (строка) и `index` (целое, не булево); иначе
+    `CensusError` с позицией строки и найденным. Проверка формы — чистая функция поданного
+    документа: порча отказывает, в каком бы месте списка она ни стояла.
+    """
+    listed = document.get("rows") or []
+    if not isinstance(listed, list):
+        raise CensusError(f"блок `rows` реестра — не список, а {type(listed).__name__}")
     rows: dict[ProhibitionIdentity, dict] = {}
-    for row in document.get("rows") or []:
-        identity = ProhibitionIdentity(str(row["plan"]), int(row["index"]))
+    for position, row in enumerate(listed):
+        problem = _registry_row_problem(row)
+        if problem:
+            raise CensusError(f"строка реестра на позиции {position}: {problem}; найдено {row!r}")
+        identity = ProhibitionIdentity(row["plan"], row["index"])
         if identity in rows:
             raise CensusError(f"тождество `{identity}` встречается в реестре дважды")
         rows[identity] = row
     return rows
+
+
+def _class_decisions(document: Mapping) -> list[dict]:
+    """Блок `CLASS_DECISIONS_KEY` — список отображений, либо `CensusError` с позицией.
+
+    Единственный вход в блок для `_check` и `_branch_by_class`: решение-строка иначе прошло бы
+    подстрочным тестом `in` и упало бы `TypeError` на индексации (IN-02). Отсутствие блока —
+    пустой список, как прежде.
+    """
+    decisions = document.get(CLASS_DECISIONS_KEY) or []
+    if not isinstance(decisions, list):
+        raise CensusError(
+            f"блок `{CLASS_DECISIONS_KEY}` реестра — не список, а {type(decisions).__name__}"
+        )
+    for position, decision in enumerate(decisions):
+        if not isinstance(decision, dict):
+            raise CensusError(
+                f"решение блока `{CLASS_DECISIONS_KEY}` на позиции {position} — не "
+                f"отображение, а {type(decision).__name__}; найдено {decision!r}"
+            )
+    return decisions
 
 
 def declared_rule_of(record: ProhibitionRecord) -> str:
@@ -956,7 +1018,7 @@ def _check(root: Path) -> int:
     )
     print(f"ключей разрешения (`{PERMIT_PREFIX}*`) в строках реестра: {permit_keys}")
     # Ответ владельца по классам — ПЕЧАТАЕТСЯ, а не судится: форму судит модуль теста.
-    decisions = document.get(CLASS_DECISIONS_KEY) or []
+    decisions = _class_decisions(document)
     permitted = sorted(
         str(decision[PERMIT_SCOPE_FIELD])
         for decision in decisions
@@ -1004,7 +1066,7 @@ def _list(root: Path, phase: str | None, klass: str | None = None) -> int:
 def _branch_by_class(document: Mapping) -> dict[str, str]:
     """Ветвь ответа владельца по имени класса — для глаз человека, не для гейта."""
     branches: dict[str, str] = {}
-    for decision in document.get(CLASS_DECISIONS_KEY) or []:
+    for decision in _class_decisions(document):
         if PERMIT_SCOPE_FIELD in decision:
             branches[str(decision[PERMIT_SCOPE_FIELD])] = str(decision.get("permit_branch"))
         elif DECISION_SCOPE_FIELD in decision:
@@ -1148,6 +1210,12 @@ def _seed(root: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Вход прибора. Каждый вид порчи ввода проходит путём `ОТКАЗ:`.
+
+    Порча шапки плана, ключ без значения, испорченный документ реестра, его строка или решение
+    по классу — `CensusError`, и она печатается строкой `ОТКАЗ: …` в поток ошибок с кодом 1,
+    а не трассой мимо этого пути (IN-01, IN-02, план 15-20).
+    """
     parser = argparse.ArgumentParser(description="Перепись запретов планов вехи.")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true", help="число, разбивка, согласие с реестром")
