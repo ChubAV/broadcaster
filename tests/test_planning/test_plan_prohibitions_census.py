@@ -809,7 +809,66 @@ def _row_decision_offences(decisions, rows) -> list[str]:
     `partially-enforced` с `permit_scope_uncovered` = тождество. Сколько строк разрешено, помощник
     не знает: это ответ владельца.
     """
-    return []  # RED: поведение ещё не написано
+    by_identity = {_row_name(row): row for row in rows}
+    offences: list[str] = []
+    seen: Counter = Counter()
+    for position, decision in enumerate(decisions):
+        name = f"решение строки #{position}"
+        if not isinstance(decision, dict) or set(decision) != PERMIT_DECISION_FIELDS:
+            fields = sorted(decision) if isinstance(decision, dict) else type(decision).__name__
+            offences.append(f"{name}: поля {fields} не совпадают с формой разрешения")
+            continue
+        if decision["permit_branch"] not in ROW_DECISION_BRANCHES:
+            offences.append(f"{name}: ветвь `{decision['permit_branch']}` вне ветвей решения строки")
+        for flag in PERMIT_SPREAD_FLAGS:
+            if decision[flag] is not False:
+                offences.append(
+                    f"{name}: `{flag}` = `{decision[flag]}` — разрешение строки читалось бы "
+                    f"шире строки"
+                )
+        for label, field in (
+            ("кто", "permitted_by"),
+            ("когда", "permitted_on"),
+            ("основание", "permit_basis"),
+        ):
+            value = decision[field]
+            if not isinstance(value, str) or not value.strip():
+                offences.append(f"{name}: поле «{label}» пусто или не строка")
+        covers = decision["permit_covers_prohibitions"]
+        if type(covers) is not int or covers != 1:
+            offences.append(
+                f"{name}: объявлено покрытыми {covers!r} запретов — разрешение строки покрывает "
+                f"ровно один"
+            )
+        scope = decision[PERMIT_SCOPE_FIELD]
+        seen[scope] += 1
+        row = by_identity.get(scope)
+        if row is None:
+            offences.append(f"{name}: область `{scope}` не есть тождество строки реестра")
+            continue
+        if str(row.get("phase")) != DECISION_SCOPE_PHASE:
+            offences.append(f"{name}: строка `{scope}` вне области решений (D-02)")
+        if row.get("verification") == VERIFICATION_TEST:
+            offences.append(
+                f"{name}: строка `{scope}` объявила `verification: test` — разрешения строки по "
+                f"такому запрету нет (D-05)"
+            )
+        carried = (
+            row.get("disposition") == PERMITTED and row.get(PERMIT_SCOPE_FIELD) == scope
+        ) or (
+            row.get("disposition") == PARTIALLY_ENFORCED
+            and row.get(PERMIT_SCOPE_UNCOVERED_FIELD) == scope
+        )
+        if not carried:
+            offences.append(
+                f"{name}: строка `{scope}` разрешения не несёт — ни `{PERMITTED}` с "
+                f"`{PERMIT_SCOPE_FIELD}`, ни частичной с `{PERMIT_SCOPE_UNCOVERED_FIELD}` = "
+                f"тождество (диспозиция `{row.get('disposition')}`)"
+            )
+    for scope, times in sorted(seen.items(), key=lambda item: str(item[0])):
+        if times > 1:
+            offences.append(f"строка `{scope}` решена {times} раза — ответ владельца двузначен")
+    return offences
 
 
 def _superseded_by_offences(rows, records, plans) -> list[str]:
@@ -822,7 +881,45 @@ def _superseded_by_offences(rows, records, plans) -> list[str]:
     уникальный хвост либо полный путь), не сама строка, и строка преемника САМА ПРИНУЖДЕНА
     (`COVERED_DISPOSITIONS`) — иначе ссылка на преемника закрывала бы строку ничем.
     """
-    return []  # RED: поведение ещё не написано
+    by_identity = {_row_name(row): row for row in rows}
+    offences: list[str] = []
+    for row in rows:
+        if SUPERSEDED_BY_FIELD not in row:
+            continue
+        name = _row_name(row)
+        if str(row.get("phase")) != DECISION_SCOPE_PHASE:
+            offences.append(f"{name}: `{SUPERSEDED_BY_FIELD}` вне области решений (D-02)")
+            continue
+        if row.get("disposition") not in COVERED_DISPOSITIONS:
+            offences.append(
+                f"{name}: `{SUPERSEDED_BY_FIELD}` при диспозиции `{row.get('disposition')}` — "
+                f"преемника называет строка, принуждённая правилом преемника"
+            )
+            continue
+        parts = _rule_parts(row[SUPERSEDED_BY_FIELD])
+        if not parts or any(not part.strip() for part in parts):
+            offences.append(f"{name}: `{SUPERSEDED_BY_FIELD}` несёт пустую часть")
+            continue
+        if len(set(parts)) != len(parts):
+            offences.append(f"{name}: преемник назван дважды")
+        for part in parts:
+            if PLAN_NUMBER_FORM.fullmatch(part):
+                if part not in plans:
+                    offences.append(f"{name}: преемник `{part}` — номер плана, файла которого нет")
+                continue
+            try:
+                successor = str(tool._resolve_identity(records, part).identity)
+            except tool.CensusError as error:
+                offences.append(f"{name}: преемник `{part}` — {error}")
+                continue
+            if successor == name:
+                offences.append(f"{name}: строка названа своим же преемником")
+            elif by_identity.get(successor, {}).get("disposition") not in COVERED_DISPOSITIONS:
+                offences.append(
+                    f"{name}: преемник `{part}` сам не принуждён (диспозиция "
+                    f"`{by_identity.get(successor, {}).get('disposition')}`)"
+                )
+    return offences
 
 
 def decision_distribution(decisions) -> str:

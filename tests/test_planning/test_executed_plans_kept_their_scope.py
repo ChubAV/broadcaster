@@ -742,7 +742,24 @@ def _refusal_predicate_changes(
     меняет. Сличаются функции, стоявшие до коммита; снятая функция теряет все свои предикаты.
     Не `.py` — не предмет вида (`[]`). Модуль без единого предиката до коммита — отказ: сличать
     нечего (антивакуум)."""
-    return []  # RED: поведение ещё не написано
+    if not path.endswith(".py"):
+        return []
+    if before is None:
+        return []
+    predicates_before = _refusal_predicates(before)
+    if not any(predicates_before.values()):
+        raise HistoryRefusal(
+            f"`{path}`: предикатов отказа до коммита нет ни одного — факт ничего не проверил бы"
+        )
+    predicates_after = _refusal_predicates(after) if after is not None else {}
+    changes: list[str] = []
+    for name, kept in predicates_before.items():
+        now = predicates_after.get(name, Counter())
+        for predicate in sorted(kept - now):
+            changes.append(f"`{name}`: предикат отказа `{predicate}` снят или изменён")
+        for predicate in sorted(now - kept):
+            changes.append(f"`{name}`: предикат отказа `{predicate}` добавлен")
+    return changes
 
 
 ROUTE_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
@@ -817,7 +834,14 @@ def _identifier_source_offences(
     страничный модуль, оставляет границу на КАЖДОМ параметре-идентификаторе каждого обработчика
     маршрута этого модуля, а не на замеренном. Не `.py` — не предмет. Модуль без единого
     источника идентификатора до коммита — отказ (сличать нечего)."""
-    return []  # RED: поведение ещё не написано
+    if not path.endswith(".py") or after is None:
+        return []
+    if before is None or not _unbounded_identifier_sources(before)[1]:
+        raise HistoryRefusal(
+            f"`{path}`: источников идентификатора до коммита нет — факт ничего не проверил бы"
+        )
+    unbounded, _total = _unbounded_identifier_sources(after)
+    return [f"источник идентификатора {name} остался без границы" for name in unbounded]
 
 
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
@@ -850,7 +874,25 @@ def _visible_text_losses(
     добавленным в том же коммите; переформулировка (ушёл старый, пришёл новый) называет старый.
     Новый текст без убранного предметом не является. Ни в одной паре до коммита нет видимого
     текста — отказ (сличать нечего)."""
-    return []  # RED: поведение ещё не написано
+    befores = {path: _visible_text(before) for path, before, _after in pairs}
+    afters = {path: _visible_text(after) for path, _before, after in pairs}
+    if not any(befores.values()):
+        raise HistoryRefusal(
+            "видимого текста до коммита нет ни в одном наблюдаемом пути — факт ничего не проверил бы"
+        )
+    added: Counter = Counter()
+    for path in befores:
+        added += afters[path] - befores[path]
+    losses: list[tuple[str, str]] = []
+    for path in befores:
+        for fragment, count in sorted((befores[path] - afters[path]).items()):
+            carried = min(count, added[fragment])
+            added[fragment] -= carried
+            if count > carried:
+                losses.append(
+                    (path, f"фрагмент видимого текста {fragment!r} убран и не перенесён дословно")
+                )
+    return losses
 
 
 # Виды, чей предикат читает данные `subject`; у остальных `subject` пуст.

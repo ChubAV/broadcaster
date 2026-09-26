@@ -6862,7 +6862,23 @@ def layer_literals_in(source: str, layers: frozenset[int]) -> list[str]:
     """Литералы исполняемого кода модуля, выписывающие слой таблицы: целое, равное слою, и
     строка, где слой стоит отдельным числом (`"z-index: …"`, `"…"`). Число внутри другого числа
     (`"…0px"`, `"….5"`) отдельным не является. Строки документации не читаются."""
-    return []  # RED: поведение ещё не написано
+    if not layers:
+        return []
+    number = re.compile(
+        r"(?<![\w.])(" + "|".join(str(layer) for layer in sorted(layers)) + r")(?![\w.])"
+    )
+    tree = ast.parse(source)
+    prose = _docstring_constants(tree)
+    found: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or id(node) in prose:
+            continue
+        value = node.value
+        integer = isinstance(value, int) and not isinstance(value, bool) and value in layers
+        text = isinstance(value, str) and number.search(value)
+        if integer or text:
+            found.append((node.lineno, node.col_offset, f"строка {node.lineno}: литерал {value!r}"))
+    return [finding for _line, _column, finding in sorted(found)]
 
 
 def test_no_layer_of_the_table_is_written_into_the_shell_rules():
@@ -6936,7 +6952,45 @@ TEMPLATE_CHAIN_MODULE = "tests.test_pages.test_hx_location_destinations"
 
 def template_chain_reuses(source: str) -> list[str]:
     """Употребления `_template_chain` в исходнике, кроме вызова правым операндом вычитания."""
-    return []  # RED: поведение ещё не написано
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == TEMPLATE_CHAIN_MODULE
+        for alias in node.names
+        if alias.name == TEMPLATE_CHAIN
+    }
+    uses: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in imported and isinstance(node.ctx, ast.Load):
+            uses.append(node)
+        elif isinstance(node, ast.Attribute) and node.attr == TEMPLATE_CHAIN:
+            uses.append(node)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and any(
+                isinstance(argument, ast.Constant) and argument.value == TEMPLATE_CHAIN
+                for argument in node.args
+            )
+        ):
+            uses.append(node)
+    findings: list[str] = []
+    for use in uses:
+        call = parents.get(use)
+        operation = parents.get(call) if call is not None else None
+        subtrahend = (
+            isinstance(call, ast.Call)
+            and call.func is use
+            and isinstance(operation, ast.BinOp)
+            and isinstance(operation.op, ast.Sub)
+            and operation.right is call
+        )
+        if not subtrahend:
+            findings.append(f"строка {use.lineno}: `{ast.unparse(call if call is not None else use)}`")
+    return findings
 
 
 def _template_chain_readers() -> dict[str, str]:
