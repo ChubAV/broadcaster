@@ -6,7 +6,7 @@ slug: "uprochnenie-i-svodnyy-obhod-47-form"
 status: validated
 nyquist_compliant: true
 wave_0_complete: true
-validated: "2026-09-24"
+validated: "2026-09-26"
 created: "2026-09-23"
 ---
 
@@ -77,46 +77,46 @@ Open Questions #4): **шапка `14-UAT.md` возвращается в нет�
 | 15-08 T1–T2 | 15-08 | 1 | D-18.1 (CR-01) | — | правка расписания на невалидной сохранённой зоне не даёт пятисотки И записывает валидную зону | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -k malformed_stored -q` | ✅ | ✅ green (32) |
 | 15-08 T3 | 15-08 | 1 | D-18.2 | — | запрет огульного `except` в `schedule_rules.py` принуждён разбором `ast` тела, не грепом | unit | `uv run pytest tests/test_services/ -k schedule_rules_gate -q` | ✅ | ✅ green (9) |
 | 15-07 T1–T3 | 15-07 | 1 | D-18.3 | — | орган снятия плашки: два `aria-label` различимы; компенсация перекрытия объявлена | unit | `uv run pytest tests/test_templates/ -k banner_dismiss -q` | ✅ | ✅ green (21) |
-| 15-15 T1 | 15-15 | 5 | критерий 6 | T-15-69, T-15-70, T-15-71 | числа Фазы 15 меряются над фиксированным набором 156 файлов; новые планы держит растущая биекция с реестром без литерала | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-15 T2 | 15-15 | 5 | критерий 6 (IN-06) | T-15-72 | прямые импортёры PyYAML объявлены перечнем; новый импортёр называется | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k yaml` | ✅ | ⬜ pending |
-| 15-16 T1 | 15-16 | 5 | долг D-18 (WR-01) | T-15-73, T-15-75 | правка из редактора на неисполнимых значениях отказывает с `SCHEDULE_VALUES_OUT_OF_DOMAIN`, строка не тронута | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -q -p no:randomly -k "malformed_stored or second_line"` | ✅ | ⬜ pending |
-| 15-16 T2 | 15-16 | 5 | долг D-18 (WR-02) | T-15-74 | создание спрашивает вторую линию; прямых вызовов вычислителя в страничном модуле ноль | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -q -p no:randomly -k "second_line or asked_through_the_helper or create"` | ✅ | ⬜ pending |
-| 15-17 T1 | 15-17 | 5 | GATE-10 (WR-03) | T-15-76 | четыре пары удаления утверждают точный `Location` и исчезновение сущности | integration | `uv run pytest tests/test_pages/test_responsive_markup.py tests/test_pages/test_ads_editor.py -q -p no:randomly -k delete_confirm_degrades_without_htmx` | ✅ | ⬜ pending |
-| 15-17 T2 | 15-17 | 5 | GATE-10 | T-15-77 | пара с перенаправлением без точного адреса краснит гейт пар | unit | `uv run pytest tests/test_templates/test_degradation_pairs.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-18 T1 | 15-18 | 5 | QUAL-04, GATE-09 (IN-03) | T-15-78 | единый разборщик: многосимвольный разделитель, три вида скобок, кавычки | unit | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly -k split_top_level` | ✅ | ⬜ pending |
-| 15-18 T2 | 15-18 | 5 | QUAL-04, GATE-09 (IN-03) | T-15-78 | гейт страниц ввозит разборщик, второе определение снято | unit | `uv run pytest tests/test_pages/test_htmx_gates.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-19 T1 | 15-19 | 5 | GATE-09 (Г-3, IN-04) | T-15-79 | потеря фокуса и роль флажка записаны принятыми следствиями и стережены | unit | `uv run pytest tests/test_templates/test_banner_dismiss.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-19 T2 | 15-19 | 5 | GATE-09 (UI 6, 7) | T-15-80 | имена органов с различающим словом первым; тексты плашек не тронуты | unit | `uv run pytest tests/test_templates/test_banner_dismiss.py tests/test_pages/test_shell.py -q -p no:randomly -k "banner or dismiss or accessible or stack"` | ✅ | ⬜ pending |
-| 15-19 T3 | 15-19 | 5 | GATE-09 (UI 5) | — | токен обвода фокуса непрозрачен не ниже 0.7 | unit | `uv run pytest tests/test_templates/test_banner_dismiss.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly -k focus` | ✅ | ⬜ pending |
-| 15-20 T1 | 15-20 | 6 | критерий 6 (IN-01) | T-15-81 | пустой ключ `verification` — отказ по имени | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k verification` | ✅ | ⬜ pending |
-| 15-20 T2 | 15-20 | 6 | критерий 6 (IN-02) | T-15-82 | испорченный реестр — строка `ОТКАЗ:` и код 1 | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k "refused or malformed or registry"` | ✅ | ⬜ pending |
-| 15-21 T1 | 15-21 | 6 | GATE-09, GATE-10 (UI 3, 8) | T-15-83 | шесть сентинелов без размера; умолчание сервера — `PAGE_SIZE` | integration | `uv run pytest tests/test_templates/test_markup_literal_inventory.py tests/test_pages/test_htmx_preserved.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-21 T2 | 15-21 | 6 | GATE-09, GATE-10 (IN-05) | T-15-84 | сеть литерала размера — пять форм с контролями | unit | `uv run pytest tests/test_templates/test_markup_literal_inventory.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-22 T1 | 15-22 | 7 | критерий 6 | T-15-85 | несколько правил в строке; запись меры покрытия только по правилу, найденному `ast` | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k "coverage or rule_site or record"` | ✅ | ⬜ pending |
-| 15-22 T2 | 15-22 | 7 | критерий 6 | T-15-86, T-15-04 | разрешение остатка частичной строки — только у разрешённого класса, построчно | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-23 T1 | 15-23 | 7 | долг D-18 | T-15-88 | один помощник зоны профиля на создание, правку и карточку | unit | `uv run pytest tests/test_pages/test_editor_schedules.py tests/test_services/ -q -p no:randomly -k "malformed_stored or profile_timezone or schedule_rules"` | ✅ | ⬜ pending |
-| 15-23 T2 | 15-23 | 7 | долг D-18 (UI 4) | T-15-87 | подсказка о нераспознанной зоне на обоих путях отрисовки; плашки успеха нет | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -q -p no:randomly -k "hint or unrecognised or malformed_stored"` | ✅ | ⬜ pending |
-| 15-24 T1 | 15-24 | 8 | критерий 6 (Г-1) | T-15-89, T-15-90 | строки поведения панели записаны только с доказанным направлением | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-24 T2 | 15-24 | 8 | критерий 6 (Г-1) | T-15-89 | новые правила поведения панели с контролями | unit | `uv run pytest tests/test_templates/test_confirmation_panel_invariants.py -q -p no:randomly` | ❌ W0 (создаёт план) | ⬜ pending |
-| 15-25 T1 | 15-25 | 9 | критерий 6 (Г-1) | T-15-91 | строки устройства рычага записаны с доказанным направлением | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-25 T2 | 15-25 | 9 | критерий 6 (Г-1) | T-15-92 | `hx-confirm` запрещён машинно; место панели по всем местам | unit | `uv run pytest tests/test_templates/test_confirmation_panel_invariants.py -q -p no:randomly` | ❌ W0 (план 15-24) | ⬜ pending |
-| 15-26 T1 | 15-26 | 10 | критерий 6 (Г-1) | T-15-93, T-15-94 | строки серверной стороны записаны с доказанным направлением | integration | `uv run pytest tests/test_pages/test_origin_guard_on_destructive_routes.py tests/test_pages/test_identifier_bounds.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-26 T2 | 15-26 | 10 | критерий 6 (Г-1) | T-15-93, T-15-94 | правила остатков серверной стороны с контролями | unit | `uv run pytest tests/test_pages/test_write_path_invariants.py -q -p no:randomly` | ❌ W0 (создаёт план) | ⬜ pending |
-| 15-27 T1 | 15-27 | 11 | критерий 6 (Г-1) | T-15-96 | строки сценария плашки записаны с доказанным направлением | unit | `uv run pytest tests/test_pages/test_shell.py -q -p no:randomly -k "banner or failure"` | ✅ | ⬜ pending |
-| 15-27 T2 | 15-27 | 11 | критерий 6 (Г-1) | T-15-95, T-15-96 | тексты плашек, тело третьего обработчика, закрытый перечень чтений ответа | unit | `uv run pytest tests/test_pages/test_failure_banner_invariants.py -q -p no:randomly` | ❌ W0 (создаёт план) | ⬜ pending |
-| 15-28 T1 | 15-28 | 12 | критерий 6 (Г-1) | T-15-96 | строки подъёма и стопки записаны с доказанным направлением | unit | `uv run pytest tests/test_pages/test_shell.py -q -p no:randomly -k "lift or stack"` | ✅ | ⬜ pending |
-| 15-28 T2 | 15-28 | 12 | критерий 6 (Г-1) | T-15-97 | второй блок подъёма любым селектором; объявление блокировки прокрутки | unit | `uv run pytest tests/test_pages/test_failure_banner_invariants.py -q -p no:randomly` | ❌ W0 (план 15-27) | ⬜ pending |
-| 15-29 T1 | 15-29 | 13 | критерий 6 (Г-1) | T-15-99 | строки правил расписания записаны с доказанным направлением | unit | `uv run pytest tests/test_services/ tests/test_routes/test_schedules_api_value_domain.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-29 T2 | 15-29 | 13 | критерий 6 (Г-1, D-05) | T-15-98, T-15-99 | отпечаток вычислителя; скоуп владельца чтений ответа удаления; форма ответа | integration | `uv run pytest tests/test_pages/test_schedule_invariants.py -q -p no:randomly` | ❌ W0 (создаёт план) | ⬜ pending |
-| 15-30 T1 | 15-30 | 14 | критерий 6 (Г-1, D-05) | T-15-100, T-15-101 | отбор коммитов плана по теме; пустота и мелкий клон — отказ | unit | `uv run pytest tests/test_planning/test_executed_plans_kept_their_scope.py -q -p no:randomly` | ❌ W0 (создаёт план) | ⬜ pending |
-| 15-30 T2 | 15-30 | 14 | критерий 6 (Г-1, D-05) | T-15-100 | 14 исторических фактов держатся над коммитами своих планов | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ❌ W0 (план 15-30) | ⬜ pending |
-| 15-31 T1 | 15-31 | 15 | критерий 6 (Г-1, D-05) | T-15-102 | 5 исторических фактов содержания, у каждого вида контроль | unit | `uv run pytest tests/test_planning/test_executed_plans_kept_their_scope.py -q -p no:randomly` | ❌ W0 (план 15-30) | ⬜ pending |
-| 15-31 T2 | 15-31 | 15 | критерий 6 (Г-1, D-05) | T-15-102, T-15-103 | 4 правила предметов D-05 в суите; `10-48#3` частичная с разрешением остатка | unit | `uv run pytest tests/test_templates/test_walkthrough_anchors.py tests/test_planning/test_the_walkthrough_stand_is_seedable.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-32 T1 | 15-32 | 16 | критерий 6 | T-15-104 | предмет решения собран: строки, замеры, варианты | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ❌ W0 (артефакт создаёт план) | ⬜ pending |
-| 15-32 T2 | 15-32 | 16 | критерий 6 | T-15-104 | решение владельца по каждой строке (чекпойнт) | manual | — (ответ владельца; записывается задачей 3) | — | ⬜ pending |
-| 15-32 T3 | 15-32 | 16 | критерий 6 | T-15-105, T-15-106 | ответ владельца записан полями; формы невыбранных ветвей не заведены | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ⬜ pending |
-| 15-33 T1 | 15-33 | 17 | критерий 6 (Г-1) | T-15-107 | закрывающее правило в сильной форме краснит в правильную сторону | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k "closing or strong or reason"` | ✅ | ⬜ pending |
-| 15-33 T2 | 15-33 | 17 | критерий 6 | T-15-108 | человеческий реестр и адресат класса приведены к машинному | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ⬜ pending |
+| 15-15 T1 | 15-15 | 5 | критерий 6 | T-15-69, T-15-70, T-15-71 | числа Фазы 15 меряются над фиксированным набором 156 файлов; новые планы держит растущая биекция с реестром без литерала | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
+| 15-15 T2 | 15-15 | 5 | критерий 6 (IN-06) | T-15-72 | прямые импортёры PyYAML объявлены перечнем; новый импортёр называется | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k yaml` | ✅ | ✅ green (2) |
+| 15-16 T1 | 15-16 | 5 | долг D-18 (WR-01) | T-15-73, T-15-75 | правка из редактора на неисполнимых значениях отказывает с `SCHEDULE_VALUES_OUT_OF_DOMAIN`, строка не тронута | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -q -p no:randomly -k "malformed_stored or second_line"` | ✅ | ✅ green (40) |
+| 15-16 T2 | 15-16 | 5 | долг D-18 (WR-02) | T-15-74 | создание спрашивает вторую линию; прямых вызовов вычислителя в страничном модуле ноль | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -q -p no:randomly -k "second_line or asked_through_the_helper or create"` | ✅ | ✅ green (26) |
+| 15-17 T1 | 15-17 | 5 | GATE-10 (WR-03) | T-15-76 | четыре пары удаления утверждают точный `Location` и исчезновение сущности | integration | `uv run pytest tests/test_pages/test_responsive_markup.py tests/test_pages/test_ads_editor.py -q -p no:randomly -k delete_confirm_degrades_without_htmx` | ✅ | ✅ green (4) |
+| 15-17 T2 | 15-17 | 5 | GATE-10 | T-15-77 | пара с перенаправлением без точного адреса краснит гейт пар | unit | `uv run pytest tests/test_templates/test_degradation_pairs.py -q -p no:randomly` | ✅ | ✅ green (17) |
+| 15-18 T1 | 15-18 | 5 | QUAL-04, GATE-09 (IN-03) | T-15-78 | единый разборщик: многосимвольный разделитель, три вида скобок, кавычки | unit | `uv run pytest tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly -k split_top_level` | ✅ | ✅ green (3) |
+| 15-18 T2 | 15-18 | 5 | QUAL-04, GATE-09 (IN-03) | T-15-78 | гейт страниц ввозит разборщик, второе определение снято | unit | `uv run pytest tests/test_pages/test_htmx_gates.py -q -p no:randomly` | ✅ | ✅ green (84) |
+| 15-19 T1 | 15-19 | 5 | GATE-09 (Г-3, IN-04) | T-15-79 | потеря фокуса и роль флажка записаны принятыми следствиями и стережены | unit | `uv run pytest tests/test_templates/test_banner_dismiss.py -q -p no:randomly` | ✅ | ✅ green (26) |
+| 15-19 T2 | 15-19 | 5 | GATE-09 (UI 6, 7) | T-15-80 | имена органов с различающим словом первым; тексты плашек не тронуты | unit | `uv run pytest tests/test_templates/test_banner_dismiss.py tests/test_pages/test_shell.py -q -p no:randomly -k "banner or dismiss or accessible or stack"` | ✅ | ✅ green (64) |
+| 15-19 T3 | 15-19 | 5 | GATE-09 (UI 5) | — | токен обвода фокуса непрозрачен не ниже 0.7 | unit | `uv run pytest tests/test_templates/test_banner_dismiss.py tests/test_templates/test_htmx_markup_gates.py -q -p no:randomly -k focus` | ✅ | ✅ green (6) |
+| 15-20 T1 | 15-20 | 6 | критерий 6 (IN-01) | T-15-81 | пустой ключ `verification` — отказ по имени | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k verification` | ✅ | ✅ green (10) |
+| 15-20 T2 | 15-20 | 6 | критерий 6 (IN-02) | T-15-82 | испорченный реестр — строка `ОТКАЗ:` и код 1 | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k "refused or malformed or registry"` | ✅ | ✅ green (23) |
+| 15-21 T1 | 15-21 | 6 | GATE-09, GATE-10 (UI 3, 8) | T-15-83 | шесть сентинелов без размера; умолчание сервера — `PAGE_SIZE` | integration | `uv run pytest tests/test_templates/test_markup_literal_inventory.py tests/test_pages/test_htmx_preserved.py -q -p no:randomly` | ✅ | ✅ green (36) |
+| 15-21 T2 | 15-21 | 6 | GATE-09, GATE-10 (IN-05) | T-15-84 | сеть литерала размера — пять форм с контролями | unit | `uv run pytest tests/test_templates/test_markup_literal_inventory.py -q -p no:randomly` | ✅ | ✅ green (11) |
+| 15-22 T1 | 15-22 | 7 | критерий 6 | T-15-85 | несколько правил в строке; запись меры покрытия только по правилу, найденному `ast` | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k "coverage or rule_site or record"` | ✅ | ✅ green (14) |
+| 15-22 T2 | 15-22 | 7 | критерий 6 | T-15-86, T-15-04 | разрешение остатка частичной строки — только у разрешённого класса, построчно | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
+| 15-23 T1 | 15-23 | 7 | долг D-18 | T-15-88 | один помощник зоны профиля на создание, правку и карточку | unit | `uv run pytest tests/test_pages/test_editor_schedules.py tests/test_services/ -q -p no:randomly -k "malformed_stored or profile_timezone or schedule_rules"` | ✅ | ✅ green (47) |
+| 15-23 T2 | 15-23 | 7 | долг D-18 (UI 4) | T-15-87 | подсказка о нераспознанной зоне на обоих путях отрисовки; плашки успеха нет | integration | `uv run pytest tests/test_pages/test_editor_schedules.py -q -p no:randomly -k "hint or unrecognised or malformed_stored"` | ✅ | ✅ green (42) |
+| 15-24 T1 | 15-24 | 8 | критерий 6 (Г-1) | T-15-89, T-15-90 | строки поведения панели записаны только с доказанным направлением | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
+| 15-24 T2 | 15-24 | 8 | критерий 6 (Г-1) | T-15-89 | новые правила поведения панели с контролями | unit | `uv run pytest tests/test_templates/test_confirmation_panel_invariants.py -q -p no:randomly` | ✅ | ✅ green (26) |
+| 15-25 T1 | 15-25 | 9 | критерий 6 (Г-1) | T-15-91 | строки устройства рычага записаны с доказанным направлением | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
+| 15-25 T2 | 15-25 | 9 | критерий 6 (Г-1) | T-15-92 | `hx-confirm` запрещён машинно; место панели по всем местам | unit | `uv run pytest tests/test_templates/test_confirmation_panel_invariants.py -q -p no:randomly` | ✅ | ✅ green (26) |
+| 15-26 T1 | 15-26 | 10 | критерий 6 (Г-1) | T-15-93, T-15-94 | строки серверной стороны записаны с доказанным направлением | integration | `uv run pytest tests/test_pages/test_origin_guard_on_destructive_routes.py tests/test_pages/test_identifier_bounds.py -q -p no:randomly` | ✅ | ✅ green (33) |
+| 15-26 T2 | 15-26 | 10 | критерий 6 (Г-1) | T-15-93, T-15-94 | правила остатков серверной стороны с контролями | unit | `uv run pytest tests/test_pages/test_write_path_invariants.py -q -p no:randomly` | ✅ | ✅ green (13) |
+| 15-27 T1 | 15-27 | 11 | критерий 6 (Г-1) | T-15-96 | строки сценария плашки записаны с доказанным направлением | unit | `uv run pytest tests/test_pages/test_shell.py -q -p no:randomly -k "banner or failure"` | ✅ | ✅ green (38) |
+| 15-27 T2 | 15-27 | 11 | критерий 6 (Г-1) | T-15-95, T-15-96 | тексты плашек, тело третьего обработчика, закрытый перечень чтений ответа | unit | `uv run pytest tests/test_pages/test_failure_banner_invariants.py -q -p no:randomly` | ✅ | ✅ green (20) |
+| 15-28 T1 | 15-28 | 12 | критерий 6 (Г-1) | T-15-96 | строки подъёма и стопки записаны с доказанным направлением | unit | `uv run pytest tests/test_pages/test_shell.py -q -p no:randomly -k "lift or stack"` | ✅ | ✅ green (7) |
+| 15-28 T2 | 15-28 | 12 | критерий 6 (Г-1) | T-15-97 | второй блок подъёма любым селектором; объявление блокировки прокрутки | unit | `uv run pytest tests/test_pages/test_failure_banner_invariants.py -q -p no:randomly` | ✅ | ✅ green (20) |
+| 15-29 T1 | 15-29 | 13 | критерий 6 (Г-1) | T-15-99 | строки правил расписания записаны с доказанным направлением | unit | `uv run pytest tests/test_services/ tests/test_routes/test_schedules_api_value_domain.py -q -p no:randomly` | ✅ | ✅ green (395) |
+| 15-29 T2 | 15-29 | 13 | критерий 6 (Г-1, D-05) | T-15-98, T-15-99 | отпечаток вычислителя; скоуп владельца чтений ответа удаления; форма ответа | integration | `uv run pytest tests/test_pages/test_schedule_invariants.py -q -p no:randomly` | ✅ | ✅ green (15) |
+| 15-30 T1 | 15-30 | 14 | критерий 6 (Г-1, D-05) | T-15-100, T-15-101 | отбор коммитов плана по теме; пустота и мелкий клон — отказ | unit | `uv run pytest tests/test_planning/test_executed_plans_kept_their_scope.py -q -p no:randomly` | ✅ | ✅ green (53) |
+| 15-30 T2 | 15-30 | 14 | критерий 6 (Г-1, D-05) | T-15-100 | 14 исторических фактов держатся над коммитами своих планов | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
+| 15-31 T1 | 15-31 | 15 | критерий 6 (Г-1, D-05) | T-15-102 | 5 исторических фактов содержания, у каждого вида контроль | unit | `uv run pytest tests/test_planning/test_executed_plans_kept_their_scope.py -q -p no:randomly` | ✅ | ✅ green (53) |
+| 15-31 T2 | 15-31 | 15 | критерий 6 (Г-1, D-05) | T-15-102, T-15-103 | 4 правила предметов D-05 в суите; `10-48#3` частичная с разрешением остатка | unit | `uv run pytest tests/test_templates/test_walkthrough_anchors.py tests/test_planning/test_the_walkthrough_stand_is_seedable.py -q -p no:randomly` | ✅ | ✅ green (27) |
+| 15-32 T1 | 15-32 | 16 | критерий 6 | T-15-104 | предмет решения собран: строки, замеры, варианты | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
+| 15-32 T2 | 15-32 | 16 | критерий 6 | T-15-104 | решение владельца по каждой строке (чекпойнт) | manual | — (ответ владельца; записывается задачей 3) | — | ✅ ответ владельца 2026-09-26 (записан задачей 3) |
+| 15-32 T3 | 15-32 | 16 | критерий 6 | T-15-105, T-15-106 | ответ владельца записан полями; формы невыбранных ветвей не заведены | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
+| 15-33 T1 | 15-33 | 17 | критерий 6 (Г-1) | T-15-107 | закрывающее правило в сильной форме краснит в правильную сторону | unit | `uv run pytest tests/test_planning/test_plan_prohibitions_census.py -q -p no:randomly -k "closing or strong or reason"` | ✅ | ✅ green (6) |
+| 15-33 T2 | 15-33 | 17 | критерий 6 | T-15-108 | человеческий реестр и адресат класса приведены к машинному | unit | `uv run pytest tests/test_planning/ -q -p no:randomly` | ✅ | ✅ green (208) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -162,6 +162,8 @@ Open Questions #4): **шапка `14-UAT.md` возвращается в нет�
 
 **Approval:** validated 2026-09-24 (`/gsd-validate-phase 15`, in `/gsd-execute-phase 15`)
 
+**Approval (партия закрытия 15-15…15-33):** validated 2026-09-26 (`/gsd-validate-phase 15`, in `/gsd-execute-phase 15 --gaps-only`) — 40 строк карты переизмерены, все зелены; прежняя строка одобрения 2026-09-24 относится к планам 15-01…15-14 и не вычёркивается (D-30/D-32).
+
 2026-09-25 — партия закрытия гэпа верификации 15-15…15-33 (19 планов, 40 задач) спланирована прогоном `/gsd-plan-phase 15 --gaps`; строки карты выше добавлены ПЛАНИРОВАНИЕМ и стоят `⬜ pending` — ЗАПЛАНИРОВАНО, АУДИТОМ НЕ ПРОВЕРЕНО. Поля шапки `status`, `nyquist_compliant`, `validated` этой записью не тронуты: их ставит `/gsd-validate-phase` после исполнения партии. Строка карты «15-13 T2» (закрывающее правило в ослабленной форме) остаётся записью своего дня; сильную форму вводит план 15-33, и строку переписывает аудит, а не планирование.
 
 ---
@@ -175,3 +177,15 @@ Open Questions #4): **шапка `14-UAT.md` возвращается в нет�
 | Escalated | 0 |
 
 Замер: 20 строк карты прогнаны командами на дереве после плана 15-14 (полная суита на нём же — `3867 passed, 0 failed`). Все требования COVERED. Четыре селектора засева не отбирали тестов (см. карту) — это расхождение ИМЁН, а не пробел покрытия: поведение под ними принуждено правилами с иными именами, отобранными заново. Одна строка сужена решением владельца, а не аудитом: критерий 6 закрыт правилом «решён или названа причина», а 70 запретов класса `product-invariant` остаются открытыми по его выбору `require-enforcement` (запись — `15-12-SUMMARY.md`, `15-13-SUMMARY.md`). Пункты «Wave 0» отмечены по факту существования артефактов; таблицы отметок `15-UAT.md` существуют и ПУСТЫ — их заполняет человек (D-17), и отметка «Wave 0» этого не утверждает.
+
+## Validation Audit 2026-09-26
+
+Прогон `/gsd-validate-phase 15` внутри `/gsd-execute-phase 15 --gaps-only` (шаг `aggregate_results`) после исполнения партии закрытия 15-15…15-33. Каждая автоматическая команда строк 15-15 T1…15-33 T2 карты прогнана по отдельности на дереве `b277ff2e`; ни одна не вернула пустой отбор (`-k`), все зелены — числа проставлены в колонке Status. Строка 15-32 T2 — ответ владельца (чекпойнт), команды у неё нет по построению. Полная суита на том же дереве (гейт оркестратора): `4082 passed, 0 failed`.
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+| Rows re-measured | 40 |
+
