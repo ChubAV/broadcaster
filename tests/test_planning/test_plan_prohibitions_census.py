@@ -2081,6 +2081,46 @@ def test_control_permit_scope_uncovered_offences_are_named_for_every_kind():
     assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in (2, 3, 4, 5, 6)], named
 
 
+def _partial_awaiting_enforcement(registry_document) -> tuple[dict, dict]:
+    """КОПИЯ документа реестра и в ней частичная строка класса `require-enforcement`, остаток
+    которой НЕ РАЗРЕШЁН ничем, — жертва отказа флага `--permit-uncovered`.
+
+    ЛЕТОПИСЬ (план 15-32, задача 3). До плана 15-32 такие строки стояли в живом реестре (`10-33#1`,
+    `10-35#0`). Ответ владельца на чекпойнте 15-32 поднял их до `enforced`, а единственная
+    оставшаяся частичная строка класса (`10-03#6`) несёт разрешение остатка строкой. Поэтому жертва
+    берётся возвратом В КОПИИ: строка класса `require-enforcement`, принуждённая целиком и без
+    `verification: test`, получает `partially-enforced` с названной непокрытой частью — состояние
+    частичной строки до её плана принуждения. Живая строка такого вида, если она есть, берётся как
+    прежде. Дерево не правится.
+    """
+    document = copy.deepcopy(registry_document)
+    scope = _decision_scope_rows(document["rows"])
+    branches = _branch_of_class(document.get(tool.CLASS_DECISIONS_KEY) or [])
+    live = next(
+        (
+            row
+            for row in scope
+            if row.get("disposition") == PARTIALLY_ENFORCED
+            and branches.get(row.get("class")) == REQUIRE_ENFORCEMENT_BRANCH
+            and PERMIT_SCOPE_UNCOVERED_FIELD not in row
+        ),
+        None,
+    )
+    if live is not None:
+        return document, live
+    victim = next(
+        row
+        for row in scope
+        if branches.get(row.get("class")) == REQUIRE_ENFORCEMENT_BRANCH
+        and row.get("verification") != VERIFICATION_TEST
+        and row.get("disposition") == "enforced"
+        and SUPERSEDED_BY_FIELD not in row
+    )
+    victim["disposition"] = PARTIALLY_ENFORCED
+    victim[UNCOVERED_PART_FIELD] = "синтетика: половина предмета не покрыта ничем"
+    return document, victim
+
+
 def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_class(
     registry_document, live_census
 ):
@@ -2090,20 +2130,13 @@ def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_clas
     """
     decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
     branches = _branch_of_class(decisions)
+    base, required = _partial_awaiting_enforcement(registry_document)
     partial = [
         row
-        for row in _decision_scope_rows(registry_document["rows"])
+        for row in _decision_scope_rows(base["rows"])
         if row.get("disposition") == PARTIALLY_ENFORCED
     ]
     permitted = next(row for row in partial if branches[row["class"]] == PERMIT_CLASS_BRANCH)
-    # Остаток частичной строки `require-enforcement` может быть разрешён ответом владельца ПО
-    # СТРОКЕ (план 15-32: `10-03#6`); жертва отказа — строка без такого разрешения.
-    required = next(
-        row
-        for row in partial
-        if branches[row["class"]] == REQUIRE_ENFORCEMENT_BRANCH
-        and PERMIT_SCOPE_UNCOVERED_FIELD not in row
-    )
 
     def rules_of(row) -> list[str]:
         return [
@@ -2117,7 +2150,7 @@ def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_clas
     def identity_of(row) -> str:
         return f"{row['plan']}#{row['index']}"
 
-    document = copy.deepcopy(registry_document)
+    document = copy.deepcopy(base)
     written = tool.record_coverage(
         document, live_census, identity_of(permitted), PARTIALLY_ENFORCED, rules_of(permitted),
         permitted[UNCOVERED_PART_FIELD], True, SUITE_ROOT,
@@ -2137,7 +2170,7 @@ def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_clas
     assert PERMIT_SCOPE_UNCOVERED_FIELD not in lifted, lifted
 
     left = tool.record_coverage(
-        copy.deepcopy(registry_document), live_census, identity_of(required), PARTIALLY_ENFORCED,
+        copy.deepcopy(base), live_census, identity_of(required), PARTIALLY_ENFORCED,
         rules_of(required), required[UNCOVERED_PART_FIELD], False, SUITE_ROOT,
     )
     assert PERMIT_SCOPE_UNCOVERED_FIELD not in left, left
@@ -2153,14 +2186,14 @@ def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_clas
         ),
     }
     for kind, (row, disposition, note, flag, word) in refusals.items():
-        fresh = copy.deepcopy(registry_document)
+        fresh = copy.deepcopy(base)
         with pytest.raises(tool.CensusError) as refusal:
             tool.record_coverage(
                 fresh, live_census, identity_of(row), disposition, rules_of(row), note, flag,
                 SUITE_ROOT,
             )
         assert word in str(refusal.value), (kind, str(refusal.value))
-        assert fresh == registry_document, f"{kind}: копия изменена отказавшей записью"
+        assert fresh == base, f"{kind}: копия изменена отказавшей записью"
 
 
 # --- ответ владельца по строкам (план 15-32, задача 3) ---------------------------------------
