@@ -53,7 +53,13 @@
 # предметом в дереве нет (находка D-05, не разрешение). Остальным — по ответу владельца:
 # `permitted` с `permit_scope` у разрешённых классов, `unresolved` с причиной
 # `enforcement-required` у класса `require-enforcement`. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ.
-# Строки вне Фазы 10 не несут ни одного поля решения (D-02).
+# Строки вне Фазы 10 не несут ни одного поля решения (D-02). (Летопись абзаца, план 15-33: абзац
+# выше описывает диспозиции дня плана 15-13 и верен для него. По решению владельца Г-1
+# (2026-09-25) планы 15-24…15-32 закрыли строки `product-invariant` и находки D-05 правилами —
+# мера покрытия записана режимом `--record`; 16 строк, которые нельзя было принудить как написаны,
+# закрыты ответом владельца на чекпойнте плана 15-32 (`superseded_by`, блок `row_decisions`).
+# С 2026-09-26 ни одна строка области решений не несёт `unresolved`, и закрывающее правило
+# критерия 6 стоит в СИЛЬНОЙ форме: причина «неразобрано» законной не считается.)
 #
 # `rows_declared` — длина реестра, равная переписи ВСЕЙ вселенной; строк, чьё тождество лежит в
 # ФИКСИРОВАННОМ НАБОРЕ (планы по 15-14 включительно), ровно столько, сколько объявляет литерал
@@ -71,7 +77,7 @@
 measured: '2026-09-25'
 rows_declared: 741
 class_decisions:
-- {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он'}
+- {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'планы 15-24…15-32 Фазы 15 — гэп-закрытие критерия 6 (б), решение владельца Г-1, 2026-09-25; прежде: «будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он» — верно на день ответа 2026-09-24'}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: gate-integrity, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 61}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: self-certification, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 45}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: plan-file-scope, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 39}
