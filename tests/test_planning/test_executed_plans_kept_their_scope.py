@@ -65,6 +65,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts import prohibitions_census as tool
+
 # Предмет модуля — ЗАПИСЬ проекта (история исполненных планов), а не его продукт. Основание
 # маркера и запрет выключать каталог — `tests/test_planning/__init__.py`.
 pytestmark = pytest.mark.planning
@@ -125,9 +127,91 @@ class HistoryFact:
     forbidden: tuple[str, ...]
 
 
+# СУИТА — каталог `tests/`.
+SUITE = ("tests/",)
+
+# ПРОДУКТ — всё отслеживаемое, из чего собирается и запускается система. Перечень снят с
+# `git ls-tree --name-only HEAD` 2026-09-26 (план 15-30): взяты все корни, кроме записей и
+# документов — `.planning/`, `CLAUDE.md`, `README.md`, `design/`, `new_broadcaster_design.html`,
+# `.gitignore`. Прочтение шире таблицы планирования (`app/`): формулировки говорят «ПРОДУКТ», а
+# не «`app/`», и по указанию плана берётся полная формулировка. Корень, заведённый позже, в
+# коммиты исполненных планов Фазы 10 попасть не мог иначе как новым коммитом с их областью.
+PRODUCT = (
+    "app/",
+    "main.py",
+    "alembic/",
+    "alembic.ini",
+    "wa_worker/",
+    "wa_bridge/",
+    "max_worker/",
+    "scripts/",
+    "nginx/",
+    "monitoring/",
+    "Dockerfile",
+    "docker-compose.yml",
+    "docker-compose.dev.yml",
+    "docker-compose.prod.yml",
+    "docker-compose.monitoring.yml",
+    "entrypoint.sh",
+    "init-letsencrypt.sh",
+    "justfile",
+    "pyproject.toml",
+    "uv.lock",
+    ".env.example",
+    ".python-version",
+)
+
+TEMPLATES = "app/templates/"
+STYLESHEET = "app/static/css/app.css"
+PHASE_10_DIR = ".planning/phases/10-rychag-components-modal-html/"
+
 # Ключ — тождество строки реестра в форме `10-NN-PLAN.md#i`; значение — область темы и
-# запрещённые пути по ПОЛНОЙ формулировке запрета. Заполняется задачей 2 плана 15-30.
-HISTORY_FACTS: dict[str, HistoryFact] = {}
+# запрещённые пути по ПОЛНОЙ формулировке запрета. Прочтение каждой формулировки — в
+# комментарии над записью; где формулировка говорит больше, чем пути, это названо там же.
+HISTORY_FACTS: dict[str, HistoryFact] = {
+    # «РАЗМЕТКА НЕ ПРАВИТСЯ НИ НА СИМВОЛ: … дописать узел в шаблон …» — разметка есть шаблоны.
+    "10-36-PLAN.md#2": HistoryFact("10-36", (TEMPLATES,)),
+    # «НИ ОДНО ОБЪЯВЛЕНИЕ `app/static/css/app.css` НЕ ПРАВИТСЯ» — файл целиком (строже «объявления»).
+    "10-37-PLAN.md#0": HistoryFact("10-37", (STYLESHEET,)),
+    # «НИ ОДИН ШАБЛОН `app/templates/` НЕ ПРАВИТСЯ».
+    "10-38-PLAN.md#2": HistoryFact("10-38", (TEMPLATES,)),
+    # «НИ ОДНО ОБЪЯВЛЕНИЕ `app/static/css/app.css` НЕ ПРАВИТСЯ: контроли доктóрят КОПИИ …» —
+    # после двоеточия описан способ (копии во временном каталоге), а запрет — правка файла.
+    "10-38-PLAN.md#3": HistoryFact("10-38", (STYLESHEET,)),
+    # «ПЯТЬ ЗАМЕЧАНИЙ НЕ ЧИНЯТСЯ …: правка `tests/test_pages/test_shell.py` либо
+    # `app/static/css/app.css` настоящим планом запрещена» — формулировка сама сводит запрет к
+    # двум файлам.
+    "10-39-PLAN.md#4": HistoryFact("10-39", ("tests/test_pages/test_shell.py", STYLESHEET)),
+    # «ПРОДУКТ И СУИТА НЕ ПРАВЯТСЯ НИ НА СТРОКУ».
+    "10-39-PLAN.md#5": HistoryFact("10-39", PRODUCT + SUITE),
+    # «ЗАПИСЬ D-13 В `10-CONTEXT.md` НЕ ПРАВИТСЯ» — файл целиком (строже одной записи).
+    "10-40-PLAN.md#3": HistoryFact("10-40", (PHASE_10_DIR + "10-CONTEXT.md",)),
+    # «ПРОДУКТ И СУИТА НЕ ПРАВЯТСЯ НИ НА СТРОКУ: ветвь отказа НЕ ОТКАТЫВАЕТ ни двух строк
+    # обёртки, ни правки плана 10-35 …» — обёртка (`app/templates/ads/form.html`) и правки 10-35
+    # (`app/…`, `tests/…`) лежат в продукте и суите; откат был бы их правкой.
+    "10-40-PLAN.md#4": HistoryFact("10-40", PRODUCT + SUITE),
+    # «`10-VERIFICATION.md` НЕ ПРАВИТСЯ».
+    "10-44-PLAN.md#2": HistoryFact("10-44", (PHASE_10_DIR + "10-VERIFICATION.md",)),
+    # «ПРОДУКТ И СУИТА НЕ ПРАВЯТСЯ НИ НА СТРОКУ НИ ОДНОЙ ВЕТВЬЮ».
+    "10-44-PLAN.md#5": HistoryFact("10-44", PRODUCT + SUITE),
+    # «ПРОДУКТ НЕ ПРАВИТСЯ НИ НА СИМВОЛ: `app/` этим планом не трогается вовсе» — суита правилась.
+    "10-48-PLAN.md#4": HistoryFact("10-48", PRODUCT),
+    # «`app/static/css/app.css` НЕ ТРОГАЕТСЯ».
+    "10-49-PLAN.md#4": HistoryFact("10-49", (STYLESHEET,)),
+    # «`…/htmx_error_banner.html`, `…/modal.html` И `app/static/css/app.css` НЕ ТРОГАЮТСЯ».
+    "10-50-PLAN.md#4": HistoryFact(
+        "10-50",
+        (
+            "app/templates/includes/htmx_error_banner.html",
+            "app/templates/components/modal.html",
+            STYLESHEET,
+        ),
+    ),
+    # «`app/templates/` НЕ ПРАВИТСЯ НИ НА СИМВОЛ».
+    "10-51-PLAN.md#0": HistoryFact("10-51", (TEMPLATES,)),
+}
+
+HISTORY_RULE = "test_every_declared_history_fact_holds_over_its_plans_commits"
 
 
 # --- журнал ------------------------------------------------------------------------------
@@ -316,3 +400,71 @@ def test_control_a_shallow_clone_is_refused_before_the_journal_is_parsed():
     with pytest.raises(HistoryRefusal, match="неразборчив"):
         _read_journal(git_answering("--is-shallow-repository\n"))
     assert requested == [SHALLOW_ARGS, SHALLOW_ARGS], requested
+
+
+# --- правила над живым журналом ---------------------------------------------------------------
+
+
+def _offences_of(journal: Iterable[Commit], identity: str) -> list[PathOffence]:
+    fact = HISTORY_FACTS[identity]
+    return _path_offences(_plan_commits(journal, fact.scope), fact.forbidden)
+
+
+@pytest.mark.parametrize("identity", sorted(HISTORY_FACTS))
+def test_every_declared_history_fact_holds_over_its_plans_commits(identity):
+    """НЕСУЩЕЕ ПРАВИЛО: коммиты плана найдены (антивакуум) и ни один не коснулся пути, который
+    запрет плана объявил нетронутым. Мелкий клон и пустой отбор — отказ, а не зелень."""
+    offences = _offences_of(_git_journal(), identity)
+    assert not offences, (
+        f"запрет `{identity}` нарушен коммитами своего плана:\n"
+        + "\n".join(str(offence) for offence in offences)
+    )
+
+
+def test_every_history_fact_names_a_phase_10_prohibition_by_identity():
+    """Правило согласия: каждый ключ `HISTORY_FACTS` — тождество записи переписи Фазы 10 с
+    `verification: test`, его область есть номер его плана, перечень путей не пуст; и каждая
+    строка реестра, называющая несущее правило, имеет запись здесь — иначе строка числилась бы
+    принуждённой правилом, которое её не проверяет.
+
+    ⚠️ ОБРАТНОЕ НАПРАВЛЕНИЕ (каждая запись здесь названа строкой реестра) НЕ утверждается: лишняя
+    запись есть лишняя проверка, а не ложное принуждение."""
+    assert HISTORY_FACTS, "перечень исторических фактов пуст — несущее правило зеленело бы вакуумом"
+    records = tool.census(tool._plan_sources(tool.TREE_ROOT))
+    problems: list[str] = []
+    for identity, fact in sorted(HISTORY_FACTS.items()):
+        try:
+            record = tool._resolve_identity(records, identity)
+        except tool.CensusError as error:
+            problems.append(f"`{identity}`: {error}")
+            continue
+        if record.phase != tool.DECISION_SCOPE_PHASE or record.verification != "test":
+            problems.append(
+                f"`{identity}`: фаза {record.phase}, verification {record.verification!r} — "
+                f"не запрет Фазы {tool.DECISION_SCOPE_PHASE} с `verification: test`"
+            )
+        plan_number = identity.partition("-PLAN.md#")[0]
+        if fact.scope != plan_number:
+            problems.append(f"`{identity}`: область `{fact.scope}`, а план `{plan_number}`")
+        if not fact.forbidden:
+            problems.append(f"`{identity}`: перечень запрещённых путей пуст")
+
+    registry = tool.load_registry(tool.TREE_ROOT / tool.REGISTRY_RELATIVE_PATH)
+    for row_identity, row in tool._registry_rows(registry).items():
+        names = str(row.get(tool.RULE_NAME_FIELD) or "").split(tool.RULE_SEPARATOR)
+        tail = row_identity.plan_path.rpartition("/")[2] + f"#{row_identity.index}"
+        if HISTORY_RULE in names and tail not in HISTORY_FACTS:
+            problems.append(f"строка реестра `{row_identity}` называет `{HISTORY_RULE}`, а записи нет")
+
+    assert not problems, "\n".join(problems)
+
+
+def test_control_a_synthetic_commit_on_a_forbidden_path_reddens_10_44_5():
+    """Замер направления на ЖИВОМ журнале: копия журнала с добавленным коммитом `feat(10-44): x`
+    на пути `app/x.py` краснит запись `10-44-PLAN.md#5`, и назван ровно этот коммит."""
+    journal = _git_journal()
+    assert _offences_of(journal, "10-44-PLAN.md#5") == []
+    synthetic = Commit("f" * 40, "feat(10-44): x", ("app/x.py",))
+    assert _offences_of(journal + (synthetic,), "10-44-PLAN.md#5") == [
+        PathOffence(synthetic.sha, synthetic.subject, "app/x.py", "app/")
+    ]
