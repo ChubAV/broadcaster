@@ -122,6 +122,7 @@ PyYAML 6.0.3 закреплён в `uv.lock` и приходит транзит�
 
 import ast
 import copy
+import re
 from collections import Counter
 from functools import lru_cache
 from pathlib import Path
@@ -349,6 +350,7 @@ REGISTRY_ROW_FIELDS = frozenset(
         "unresolved_reason",
         "permit_scope",
         "permit_scope_uncovered",
+        "superseded_by",
     }
 )
 # ЛЕТОПИСЬ ЧИСЛА: 11 → 13, план 15-13, задача 2 — пришли `unresolved_reason` (названная причина
@@ -371,7 +373,18 @@ REGISTRY_ROW_FIELDS = frozenset(
 # нет по-прежнему. (Фраза абзаца выше «строка несёт `permit_scope` ТОЛЬКО если её класс получил
 # ветвь `permit-class`» верна и о новом поле: разрешение в строке стоит только по ответу
 # владельца по классу.)
-REGISTRY_ROW_FIELDS_DECLARED = 14
+#
+# ЛЕТОПИСЬ ЧИСЛА: 14 → 15, план 15-32, задача 3 — пришло `superseded_by`: ЧЕМ ЗАМЕЩЕНА
+# формулировка строки, которую владелец на чекпойнте плана 15-32 выбрал закрыть ПРИНУЖДЕНИЕМ
+# ПРЕЕМНИКА (ветвь (а), `chubav`, 2026-09-26, выбранный вариант, а не слова владельца). Значение —
+# тождества переписи (`10-52-PLAN.md#0`) и/или номера планов (`10-49`, `11-02`) через
+# `RULE_SEPARATOR`. Строка при нём `enforced` правилом преемника: она держит БУКВУ ПРЕЕМНИКА, а не
+# свою, и поле говорит это машинно (идиома D-30/D-32 — опровергнутое помечено с названным
+# преемником). Ставит его только режим записи (`--record --superseded-by`); форму судит
+# `test_every_superseded_by_names_existing_successors_of_an_enforced_row`. Фраза абзаца плана
+# 15-12 «Полей … любого поля вердикта здесь НЕТ НАМЕРЕННО» верна по-прежнему: поле называет
+# преемника, а не выносит вердикт.
+REGISTRY_ROW_FIELDS_DECLARED = 15
 RULE_NAME_FIELD = "rule_name"
 RULE_SITE_FIELD = "rule_site"
 # Разделитель нескольких правил одной строки (план 15-22) — ввезён из прибора: второго носителя у
@@ -392,6 +405,8 @@ UNRESOLVED_REASON_FIELD = "unresolved_reason"
 PERMIT_SCOPE_FIELD = "permit_scope"
 # Разрешение непокрытой части частичной строки разрешённого класса (план 15-22, задача 2).
 PERMIT_SCOPE_UNCOVERED_FIELD = "permit_scope_uncovered"
+# Преемники формулировки строки, принуждённой правилом преемника (план 15-32, задача 3).
+SUPERSEDED_BY_FIELD = "superseded_by"
 
 # ПЕРЕЧЕНЬ ПРИЧИН «НЕРАЗОБРАНО» В ОБЛАСТИ РЕШЕНИЙ (план 15-13, задача 2). Каждая строка Фазы 10,
 # не получившая решения, несёт ОДНУ причину из перечня, и причина СОГЛАСНА со строкой:
@@ -423,6 +438,7 @@ ROW_DECISION_FIELDS = (
     "unresolved_reason",
     "permit_scope",
     "permit_scope_uncovered",
+    "superseded_by",
 )
 
 # ПЕРЕЧЕНЬ КЛЮЧЕЙ ДОКУМЕНТА РЕЕСТРА. ЛЕТОПИСЬ ЧИСЛА: 3 → 4, план 15-12, задача 3 — пришёл блок
@@ -432,8 +448,18 @@ ROW_DECISION_FIELDS = (
 # блоком после шапки замера, по форме образца `10-PROHIBITIONS-SUBJECT.md:1-36`. ⚠️ Ключ, пришедший
 # в документ и не внесённый сюда, краснит правило ниже — в том числе поле вердикта, поставленное
 # шапкой реестра: исполнитель, поставивший его сам, вынес бы вердикт вместо владельца.
-REGISTRY_DOCUMENT_KEYS = frozenset({"measured", "rows_declared", "class_decisions", "rows"})
-REGISTRY_DOCUMENT_KEYS_DECLARED = 4
+#
+# ЛЕТОПИСЬ ЧИСЛА: 4 → 5, план 15-32, задача 3 — пришёл блок `row_decisions` с ОТВЕТОМ ВЛАДЕЛЬЦА
+# ПО СТРОКАМ (`chubav`, 2026-09-26, чекпойнт плана 15-32: выбранные варианты, а не слова
+# владельца). Он стоит после блока по классам. Заведена ТОЛЬКО форма выбранной ветви (б) —
+# разрешение строки (`permit-row`): владелец выбрал её для `10-18#3` целиком и для половины
+# «ответ без слоя письма» строки `10-03#6`. Формы ветви (в) «оставить открытой» нет: её не выбрали
+# ни для одной строки. Засев блок ПЕРЕНОСИТ, как блок по классам, и не пишет.
+REGISTRY_DOCUMENT_KEYS = frozenset(
+    {"measured", "rows_declared", "class_decisions", "row_decisions", "rows"}
+)
+REGISTRY_DOCUMENT_KEYS_DECLARED = 5
+ROW_DECISIONS_KEY = "row_decisions"
 
 # ВЕТВИ РЕШЕНИЯ ПО КЛАССУ — три ветви чекпойнта плана 15-12 (задача 3), дословно их `option id`.
 # ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ: ветвь `permit-class` закрывает долг класса РЕШЕНИЕМ, а не
@@ -477,6 +503,16 @@ OTHER_DECISION_FIELDS = frozenset(
     }
 )
 OTHER_DECISION_FIELDS_DECLARED = 7
+
+# ВЕТВИ РЕШЕНИЯ ПО СТРОКЕ (план 15-32, задача 3) — только ВЫБРАННЫЕ владельцем. Запись блока
+# `row_decisions` несёт форму полей разрешения класса (`PERMIT_DECISION_FIELDS`), но её область —
+# ТОЖДЕСТВО ОДНОЙ СТРОКИ (`plan#index`), и покрывает она ровно один запрет. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ
+# СОБЛЮДЕНИЕ. По D-05 строке с `verification: test` разрешения строки нет вовсе.
+ROW_DECISION_BRANCHES = frozenset({"permit-row"})
+ROW_DECISION_BRANCHES_DECLARED = 1
+PERMIT_ROW_BRANCH = "permit-row"
+# Номер плана в перечне преемников `superseded_by`: `ФАЗА-ПЛАН` без суффикса файла.
+PLAN_NUMBER_FORM = re.compile(r"\d+-\d+")
 
 # --- группа D-05: объявленные числа поля `verification` Фазы 10 ----------------------------
 # Замер 2026-09-23 (15-CONTEXT.md D-05, воспроизведён разведкой Ф-02), воспроизведён прибором
@@ -728,15 +764,65 @@ def _permitted_classes(decisions) -> frozenset:
     )
 
 
-def _permitted_without_permission(rows, decisions) -> list[str]:
-    """Строки с диспозицией «разрешено», чей класс РАЗРЕШЕНИЯ владельца не получил."""
+def _permitted_without_permission(rows, decisions, row_permits=frozenset()) -> list[str]:
+    """Строки с диспозицией «разрешено», у которых нет разрешения владельца — ни класса, ни строки.
+
+    ЛЕТОПИСЬ (план 15-32, задача 3): до плана 15-32 разрешение давал только ответ по КЛАССУ.
+    Ответ владельца на чекпойнте 15-32 дал разрешение ОДНОЙ СТРОКЕ (`10-18#3`), и оно стоит
+    записью блока `row_decisions`; `row_permits` — тождества таких записей (`_row_permits`).
+    """
     permitted = _permitted_classes(decisions)
     return [
         f"{_row_name(row)}: диспозиция `{PERMITTED}` при классе `{row.get('class')}` без "
         f"разрешения владельца"
         for row in rows
-        if row.get("disposition") == PERMITTED and row.get("class") not in permitted
+        if row.get("disposition") == PERMITTED
+        and row.get("class") not in permitted
+        and _row_name(row) not in row_permits
     ]
+
+
+def _row_permits(decisions) -> frozenset:
+    """Тождества строк, которым записан ответ владельца ветви `permit-row` (план 15-32).
+
+    Берётся только запись ФОРМЫ разрешения с ветвью строки: запись иной формы разрешения не
+    даёт, и её называет `_row_decision_offences`.
+    """
+    return frozenset(
+        decision[PERMIT_SCOPE_FIELD]
+        for decision in decisions
+        if isinstance(decision, dict)
+        and set(decision) == PERMIT_DECISION_FIELDS
+        and decision["permit_branch"] == PERMIT_ROW_BRANCH
+    )
+
+
+def _row_decision_offences(decisions, rows) -> list[str]:
+    """Нарушения формы ответа владельца ПО СТРОКАМ (блок `row_decisions`) — все, с номером.
+
+    Предметы: (1) поля записи — ровно форма разрешения (`PERMIT_DECISION_FIELDS`), ветвь —
+    из `ROW_DECISION_BRANCHES`; (2) кто, когда и основание — непустые строки, оба флага
+    распространения `false`, покрыт ровно ОДИН запрет (`1`, целое, не булево); (3) область —
+    тождество строки реестра области решений (D-02), решённое не дважды; (4) строка не объявила
+    `verification: test` (D-05 — по такому запрету предъявляется правило, а не разрешение);
+    (5) строка НЕСЁТ разрешение: `permitted` с `permit_scope` = тождество, либо
+    `partially-enforced` с `permit_scope_uncovered` = тождество. Сколько строк разрешено, помощник
+    не знает: это ответ владельца.
+    """
+    return []  # RED: поведение ещё не написано
+
+
+def _superseded_by_offences(rows, records, plans) -> list[str]:
+    """Нарушения формы поля `superseded_by` (план 15-32) — все, с тождествами.
+
+    Предметы: (1) поле стоит только у строки области решений (D-02) с диспозицией принуждения
+    (`COVERED_DISPOSITIONS`): преемника называет строка, принуждённая правилом преемника;
+    (2) части по `RULE_SEPARATOR` непусты и не повторяются; (3) часть формы `ФАЗА-ПЛАН` — номер
+    файла плана из `plans`; (4) иная часть — тождество переписи (`tool._resolve_identity`:
+    уникальный хвост либо полный путь), не сама строка, и строка преемника САМА ПРИНУЖДЕНА
+    (`COVERED_DISPOSITIONS`) — иначе ссылка на преемника закрывала бы строку ничем.
+    """
+    return []  # RED: поведение ещё не написано
 
 
 def decision_distribution(decisions) -> str:
@@ -1364,7 +1450,8 @@ def test_no_row_is_permitted_unless_its_class_was_permitted(registry_document):
     """«Разрешено» стоит только там, где владелец разрешил КЛАСС: иначе это вердикт за него."""
     rows = registry_document["rows"]
     decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
-    offences = _permitted_without_permission(rows, decisions)
+    row_permits = _row_permits(registry_document.get(ROW_DECISIONS_KEY) or [])
+    offences = _permitted_without_permission(rows, decisions, row_permits)
     assert not offences, (
         "\n".join(offences)
         + f"\n\nраспределение диспозиций реестра: {disposition_distribution(rows)}"
@@ -1514,16 +1601,23 @@ def _closing_offences(rows, decisions) -> list[str]:
     return offences
 
 
-def _permit_scope_offences(rows) -> list[str]:
-    """Строка «разрешено» несёт `permit_scope` ИМЕНЕМ СВОЕГО КЛАССА; иная строка — не несёт."""
+def _permit_scope_offences(rows, row_permits=frozenset()) -> list[str]:
+    """Строка «разрешено» несёт `permit_scope` ИМЕНЕМ СВОЕГО КЛАССА; иная строка — не несёт.
+
+    ЛЕТОПИСЬ (план 15-32, задача 3): область может быть и ТОЖДЕСТВОМ САМОЙ СТРОКИ — но только
+    если блок `row_decisions` несёт запись ответа владельца с этой областью (`row_permits`).
+    """
     offences = []
     for row in rows:
         scope = row.get(PERMIT_SCOPE_FIELD)
         if row.get("disposition") == PERMITTED:
-            if scope != row.get("class") or scope not in PROHIBITION_CLASSES:
+            by_class = scope == row.get("class") and scope in PROHIBITION_CLASSES
+            by_row = scope == _row_name(row) and scope in row_permits
+            if not (by_class or by_row):
                 offences.append(
                     f"{_row_name(row)}: `{PERMIT_SCOPE_FIELD}` = `{scope}` при классе "
-                    f"`{row.get('class')}` — область разрешения не есть имя класса строки"
+                    f"`{row.get('class')}` — область разрешения не есть ни имя класса строки, "
+                    f"ни её тождество с записью блока `{ROW_DECISIONS_KEY}`"
                 )
         elif PERMIT_SCOPE_FIELD in row:
             offences.append(
@@ -1594,14 +1688,50 @@ def test_the_closing_rule_of_criterion_6_every_phase_10_row_is_decided_or_names_
 
 
 def test_every_permitted_disposition_carries_its_class_as_permit_scope(registry_document):
-    """Разрешение строки — с машинно читаемой областью: `permit_scope` есть ИМЯ КЛАССА (D-04).
+    """Разрешение строки — с машинно читаемой областью: `permit_scope` есть ИМЯ КЛАССА (D-04)
+    либо, с плана 15-32, тождество самой строки при записи блока `row_decisions`.
 
     Что класс строки действительно получил разрешение, судит соседнее правило
     `test_no_row_is_permitted_unless_its_class_was_permitted`.
     """
     rows = registry_document["rows"]
-    offences = _permit_scope_offences(rows)
+    row_permits = _row_permits(registry_document.get(ROW_DECISIONS_KEY) or [])
+    offences = _permit_scope_offences(rows, row_permits)
     assert not offences, "\n".join(offences) + f"\n\n{_disposition_distribution(rows)}"
+
+
+def _awaiting_enforcement(registry_document) -> tuple[dict, dict]:
+    """КОПИЯ документа реестра и строка в ней, ждущая принуждения (`enforcement-required`).
+
+    ЛЕТОПИСЬ (план 15-32, задача 3). До плана 15-32 такие строки стояли в живом реестре, и
+    контроли брали жертву оттуда. Ответ владельца на чекпойнте 15-32 решил последние из них, и
+    жертва больше не берётся из живого реестра: строка класса с ветвью `require-enforcement`,
+    принуждённая целиком и без `verification: test`, возвращается В КОПИИ к `unresolved` с
+    причиной `enforcement-required` — к состоянию, которое она несла до своего плана принуждения.
+    Живая строка с этой причиной, если она есть, берётся как прежде. Дерево не правится.
+    """
+    document = copy.deepcopy(registry_document)
+    scope = _decision_scope_rows(document["rows"])
+    live = next(
+        (row for row in scope if row.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED),
+        None,
+    )
+    if live is not None:
+        return document, live
+    branches = _branch_of_class(document.get(tool.CLASS_DECISIONS_KEY) or [])
+    victim = next(
+        row
+        for row in scope
+        if branches.get(row.get("class")) == REQUIRE_ENFORCEMENT_BRANCH
+        and row.get("verification") != VERIFICATION_TEST
+        and row.get("disposition") == "enforced"
+        and SUPERSEDED_BY_FIELD not in row
+    )
+    for field in ROW_DECISION_FIELDS:
+        victim.pop(field, None)
+    victim["disposition"] = tool.SEED_DISPOSITION
+    victim[UNRESOLVED_REASON_FIELD] = REASON_ENFORCEMENT_REQUIRED
+    return document, victim
 
 
 def test_control_the_closing_rule_reddens_on_the_seeded_registry_and_on_a_reasonless_row(
@@ -1641,15 +1771,12 @@ def test_control_the_closing_rule_reddens_on_the_seeded_registry_and_on_a_reason
     named = [offence.split(":")[0] for offence in _closing_offences(reverted, decisions)]
     assert named == [_row_name(decided)], named
 
-    required = next(
-        row
-        for row in _decision_scope_rows(rows)
-        if row.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
-    )
+    awaiting, required = _awaiting_enforcement(registry_document)
     assert required.get("verification") != VERIFICATION_TEST
+    assert _closing_offences(awaiting["rows"], decisions) == []
     swapped = [
         {**row, UNRESOLVED_REASON_FIELD: REASON_DECLARED_RULE_ABSENT} if row is required else row
-        for row in rows
+        for row in awaiting["rows"]
     ]
     named = [offence.split(":")[0] for offence in _closing_offences(swapped, decisions)]
     assert named == [_row_name(required)], named
@@ -1714,13 +1841,18 @@ def test_control_a_permit_scope_other_than_the_row_class_is_named():
 # --- разрешение непокрытой части частичной строки (план 15-22, задача 2) --------------------------
 
 
-def _permit_scope_uncovered_offences(rows, decisions) -> list[str]:
+def _permit_scope_uncovered_offences(rows, decisions, row_permits=frozenset()) -> list[str]:
     """Нарушения формы поля `permit_scope_uncovered` — все, с тождествами, а не первое.
 
     Поле стоит ТОЛЬКО у строки области решений с диспозицией `partially-enforced`, значение —
     класс строки, и класс получил ветвь `permit-class`. И обратно: КАЖДАЯ частичная строка
     области решений, чей класс разрешён, поле несёт — иначе остаток её предмета не закрыт ничем.
     Частичная строка класса с ветвью `require-enforcement` поля не несёт: она ждёт принуждения.
+
+    ЛЕТОПИСЬ (план 15-32, задача 3): значение может быть и ТОЖДЕСТВОМ САМОЙ СТРОКИ — остаток
+    разрешён ответом владельца по строке (`10-03#6`, половина «ответ без слоя письма»), и блок
+    `row_decisions` несёт запись с этой областью (`row_permits`). Что частичная строка с такой
+    записью поле несёт, судит `_row_decision_offences`.
     """
     branches = _branch_of_class(decisions)
     offences = []
@@ -1739,6 +1871,8 @@ def _permit_scope_uncovered_offences(rows, decisions) -> list[str]:
                     f"{name}: `{PERMIT_SCOPE_UNCOVERED_FIELD}` при диспозиции `{disposition}` — "
                     f"непокрытая часть есть только у частичной"
                 )
+            elif value == name and name in row_permits:
+                continue  # остаток разрешён записью ответа владельца по строке
             elif value != klass:
                 offences.append(
                     f"{name}: `{PERMIT_SCOPE_UNCOVERED_FIELD}` = `{value}` при классе `{klass}` — "
@@ -1804,7 +1938,8 @@ def test_every_permit_scope_uncovered_names_the_permitted_class_of_its_partial_r
     decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
     assert len(_decision_scope_rows(rows)) == PROHIBITIONS_IN_DECISION_SCOPE
     assert decisions, "блок ответа владельца по классам пуст или отсутствует"
-    offences = _permit_scope_uncovered_offences(rows, decisions)
+    row_permits = _row_permits(registry_document.get(ROW_DECISIONS_KEY) or [])
+    offences = _permit_scope_uncovered_offences(rows, decisions, row_permits)
     assert not offences, (
         f"нарушения формы `{PERMIT_SCOPE_UNCOVERED_FIELD}` ({len(offences)}):\n"
         + "\n".join(offences)
@@ -1864,7 +1999,14 @@ def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_clas
         if row.get("disposition") == PARTIALLY_ENFORCED
     ]
     permitted = next(row for row in partial if branches[row["class"]] == PERMIT_CLASS_BRANCH)
-    required = next(row for row in partial if branches[row["class"]] == REQUIRE_ENFORCEMENT_BRANCH)
+    # Остаток частичной строки `require-enforcement` может быть разрешён ответом владельца ПО
+    # СТРОКЕ (план 15-32: `10-03#6`); жертва отказа — строка без такого разрешения.
+    required = next(
+        row
+        for row in partial
+        if branches[row["class"]] == REQUIRE_ENFORCEMENT_BRANCH
+        and PERMIT_SCOPE_UNCOVERED_FIELD not in row
+    )
 
     def rules_of(row) -> list[str]:
         return [
@@ -1922,6 +2064,375 @@ def test_the_record_mode_writes_permit_scope_uncovered_only_for_a_permitted_clas
             )
         assert word in str(refusal.value), (kind, str(refusal.value))
         assert fresh == registry_document, f"{kind}: копия изменена отказавшей записью"
+
+
+# --- ответ владельца по строкам (план 15-32, задача 3) ---------------------------------------
+#
+# ПРЕДМЕТ ГРУППЫ. На чекпойнте плана 15-32 владелец (`chubav`, 2026-09-26) решил 16 строк, которые
+# нельзя было принудить так, как они написаны. Он выбирал из вариантов оркестратора, и своих слов
+# не дал: записаны ВЫБРАННЫЕ ВАРИАНТЫ (`15-SUPERSEDED-ROWS.md`, раздел «Ответ владельца»). Группа
+# держит ФОРМЫ ТОЛЬКО ВЫБРАННЫХ ветвей: (а) принуждение преемника — поле `superseded_by`;
+# (б) разрешение строки — блок `row_decisions`. Историческое прочтение (а′) держит модуль
+# `tests/test_planning/test_executed_plans_kept_their_scope.py`. Ветви (в) и (г) не выбраны ни для
+# одной строки, и их форм нет.
+#
+# ЧЕГО ГРУППА НЕ УТВЕРЖДАЕТ. Она не знает, СКОЛЬКО строк закрыто преемником и сколько разрешено:
+# это ответ владельца. Она не утверждает, что разрешённая строка соблюдена: РАЗРЕШЕНИЕ НЕ ЕСТЬ
+# СОБЛЮДЕНИЕ. И она не утверждает, что строка с `superseded_by` держит СВОЮ букву: она держит букву
+# преемника, и поле говорит это машинно.
+
+
+@pytest.fixture(scope="module")
+def live_plans(live_sources):
+    """Номера планов по файлам вселенной — `ФАЗА-ПЛАН`."""
+    return frozenset(Path(path).name.removesuffix("-PLAN.md") for path in live_sources)
+
+
+def test_the_row_decision_vocabularies_agree():
+    """Ветви ответа по строкам объявлены числом; ключ блока и форма — те же, что у прибора."""
+    assert len(ROW_DECISION_BRANCHES) == ROW_DECISION_BRANCHES_DECLARED
+    assert PERMIT_ROW_BRANCH in ROW_DECISION_BRANCHES
+    assert ROW_DECISIONS_KEY in REGISTRY_DOCUMENT_KEYS
+    assert tool.ROW_DECISIONS_KEY == ROW_DECISIONS_KEY
+    assert tool.PERMIT_ROW_BRANCH == PERMIT_ROW_BRANCH
+    assert tool.SUPERSEDED_BY_FIELD == SUPERSEDED_BY_FIELD
+    assert SUPERSEDED_BY_FIELD in ROW_DECISION_FIELDS
+    assert not ROW_DECISION_BRANCHES & CLASS_DECISION_BRANCHES
+
+
+def test_every_row_decision_has_the_permit_row_form_and_its_row_carries_it(registry_document):
+    """Каждая запись блока `row_decisions` — разрешение ОДНОЙ строки области решений, не D-05,
+    и строка его несёт (`permitted` либо частичная с разрешённым остатком).
+
+    Сколько строк разрешено, правило не знает. Исчезновение блока НЕ проходит молча: строки с
+    областью-тождеством называют `_permit_scope_offences` и `_permit_scope_uncovered_offences`.
+    """
+    decisions = registry_document.get(ROW_DECISIONS_KEY) or []
+    offences = _row_decision_offences(decisions, registry_document["rows"])
+    assert not offences, "нарушения формы ответа владельца по строкам:\n" + "\n".join(offences)
+
+
+def test_every_superseded_by_names_existing_successors_of_an_enforced_row(
+    registry_document, live_census, live_plans
+):
+    """`superseded_by` стоит только у принуждённой строки области решений; каждый преемник —
+    номер файла плана либо тождество переписи, чья строка САМА принуждена."""
+    offences = _superseded_by_offences(registry_document["rows"], live_census, live_plans)
+    assert not offences, "нарушения формы `superseded_by`:\n" + "\n".join(offences)
+
+
+SYNTHETIC_ROWS_PLAN_SOURCE = """---
+must_haves:
+  prohibitions:
+    - statement: "MUST NOT синтетика ноль"
+    - statement: "MUST NOT синтетика один"
+    - statement: "MUST NOT синтетика два"
+    - statement: "MUST NOT синтетика три"
+      verification: test
+---
+"""
+
+
+def _synthetic_decision_rows():
+    """Перепись синтетического плана Фазы 10 (четыре запрета) и их засеянные строки."""
+    records = tool.census({SYNTHETIC_DECISION_PLAN: SYNTHETIC_ROWS_PLAN_SOURCE})
+    return records, [tool.registry_row(record) for record in records]
+
+
+def test_control_superseded_by_offences_are_named_for_every_kind():
+    """Синтетика: по строке на каждый вид нарушения `superseded_by`; законная строка молчит.
+
+    Молчит: принуждённая строка с преемниками «принуждённая строка переписи; номер файла плана».
+    Названы: поле у `unresolved`; тождество вне переписи; номер плана без файла; строка —
+    преемник сама себе; преемник, который сам не принуждён; пустая часть; повтор; поле вне
+    области решений.
+    """
+    records, seeded = _synthetic_decision_rows()
+    plans = frozenset({"10-01", "10-02"})
+    enforced = {"disposition": "enforced", RULE_NAME_FIELD: "test_x", RULE_SITE_FIELD: "tests/x.py:1"}
+
+    def row(index, **fields):
+        return {**seeded[index], **fields}
+
+    rows = [
+        row(0, **enforced, **{SUPERSEDED_BY_FIELD: "10-01-PLAN.md#1; 10-02"}),
+        row(1, **enforced),
+        row(2, **{SUPERSEDED_BY_FIELD: "10-01-PLAN.md#1"}),
+        row(3, **enforced, **{SUPERSEDED_BY_FIELD: "10-01-PLAN.md#9"}),
+    ]
+    extra = [
+        {**rows[0], "index": 10, SUPERSEDED_BY_FIELD: "10-77"},
+        {**rows[0], "index": 11, SUPERSEDED_BY_FIELD: "10-01-PLAN.md#1; 10-01-PLAN.md#2"},
+        {**rows[0], "index": 12, SUPERSEDED_BY_FIELD: "10-02; "},
+        {**rows[0], "index": 13, SUPERSEDED_BY_FIELD: "10-02; 10-02"},
+        {**rows[0], "index": 14, "phase": "99", SUPERSEDED_BY_FIELD: "10-02"},
+    ]
+    self_named = row(1, **enforced, **{SUPERSEDED_BY_FIELD: "10-01-PLAN.md#1"})
+    offences = _superseded_by_offences(rows + extra, records, plans)
+    named = sorted({offence.split(":")[0] for offence in offences})
+    assert named == sorted(
+        f"{SYNTHETIC_DECISION_PLAN}#{index}" for index in (2, 3, 10, 11, 12, 13, 14)
+    ), offences
+    assert _superseded_by_offences(rows[:2], records, plans) == []
+    assert [offence.split(":")[0] for offence in _superseded_by_offences(
+        [self_named], records, plans
+    )] == [f"{SYNTHETIC_DECISION_PLAN}#1"]
+
+
+def _row_permit(scope: str, **fields) -> dict:
+    return {
+        "permit_branch": PERMIT_ROW_BRANCH,
+        "permitted_by": "синтетика",
+        "permitted_on": "1999-01-01",
+        "permit_basis": "синтетика",
+        PERMIT_SCOPE_FIELD: scope,
+        "permit_applies_to_phase": False,
+        "permit_applies_to_milestone": False,
+        "permit_covers_prohibitions": 1,
+        **fields,
+    }
+
+
+def test_control_row_decision_offences_are_named_for_every_kind():
+    """Синтетика: по записи на каждый вид нарушения формы ответа по строкам; законные молчат.
+
+    Молчат: разрешение строки целиком (`permitted` с областью-тождеством) и разрешение остатка
+    частичной строки. Названы: чужая ветвь; флаг распространения; покрыто не одно; область вне
+    реестра; строка D-05; строка, не несущая разрешения; повтор строки; лишнее поле.
+    """
+    records, seeded = _synthetic_decision_rows()
+    names = [_row_name(row) for row in seeded]
+    rows = [
+        {**seeded[0], "disposition": PERMITTED, PERMIT_SCOPE_FIELD: names[0]},
+        {**seeded[1], "disposition": PARTIALLY_ENFORCED, PERMIT_SCOPE_UNCOVERED_FIELD: names[1]},
+        {**seeded[2], "disposition": tool.SEED_DISPOSITION},
+        {**seeded[3], "disposition": PERMITTED, PERMIT_SCOPE_FIELD: names[3]},
+    ]
+    good = [_row_permit(names[0]), _row_permit(names[1])]
+    assert _row_decision_offences(good, rows) == []
+    broken = [
+        _row_permit(names[0], permit_branch="permit-class"),
+        _row_permit(names[0], permit_applies_to_phase=True),
+        _row_permit(names[0], permit_covers_prohibitions=2),
+        _row_permit(f"{SYNTHETIC_DECISION_PLAN}#99"),
+        _row_permit(names[3]),
+        _row_permit(names[2]),
+        {**_row_permit(names[1]), "verdict_of_the_phase": "синтетика"},
+    ]
+    offences = _row_decision_offences(broken, rows)
+    named = sorted({offence.split(":")[0] for offence in offences})
+    assert named == sorted(
+        [f"решение строки #{position}" for position in range(7)]
+        + [f"строка `{names[0]}` решена 3 раза — ответ владельца двузначен"]
+    ), offences
+
+
+def test_control_a_row_scoped_permission_is_accepted_only_with_its_record():
+    """Область-тождество у `permitted` и у остатка частичной строки молчит ТОЛЬКО при записи
+    ответа владельца по строке; без записи строку называют все три правила разрешения."""
+    klass = "product-invariant"
+    _, seeded = _synthetic_decision_rows()
+    whole = {**seeded[0], "class": klass, "disposition": PERMITTED,
+             PERMIT_SCOPE_FIELD: _row_name(seeded[0])}
+    half = {**seeded[1], "class": klass, "disposition": PARTIALLY_ENFORCED,
+            PERMIT_SCOPE_UNCOVERED_FIELD: _row_name(seeded[1])}
+    decisions = [{"decision_branch": REQUIRE_ENFORCEMENT_BRANCH, "decision_scope": klass}]
+    permits = _row_permits([_row_permit(_row_name(whole)), _row_permit(_row_name(half))])
+    assert _permit_scope_offences([whole], permits) == []
+    assert _permitted_without_permission([whole], decisions, permits) == []
+    assert _permit_scope_uncovered_offences([half], decisions, permits) == []
+    assert [o.split(":")[0] for o in _permit_scope_offences([whole])] == [_row_name(whole)]
+    assert [o.split(":")[0] for o in _permitted_without_permission([whole], decisions)] == [
+        _row_name(whole)
+    ]
+    assert [o.split(":")[0] for o in _permit_scope_uncovered_offences([half], decisions)] == [
+        _row_name(half)
+    ]
+
+
+def test_control_the_seed_carries_the_row_decisions_and_never_writes_them(live_census):
+    """Засев переносит блок ответа по строкам как есть, после блока по классам, и не заводит его."""
+    classes = [{"decision_scope": "синтетика"}]
+    answer = [_row_permit("синтетика")]
+    carried = tool.seed_registry(
+        live_census,
+        {"rows": [], tool.CLASS_DECISIONS_KEY: classes, ROW_DECISIONS_KEY: answer},
+        "x",
+    )
+    assert carried[ROW_DECISIONS_KEY] is answer
+    assert list(carried) == [
+        "measured", "rows_declared", tool.CLASS_DECISIONS_KEY, ROW_DECISIONS_KEY, "rows"
+    ]
+    assert ROW_DECISIONS_KEY not in tool.seed_registry(live_census, None, "x")
+
+
+def test_the_record_mode_writes_superseded_by_only_with_named_successors(
+    registry_document, live_census, live_plans
+):
+    """`--record … --superseded-by` пишет преемников хвостом тождества и номером плана, запись
+    проходит гейт; негодный преемник — `CensusError` до первой записи; запись без преемников
+    поле снимает. На копиях живого реестра."""
+    base, victim = _awaiting_enforcement(registry_document)
+    identity = f"{victim['plan']}#{victim['index']}"
+    successor = next(
+        row
+        for row in _decision_scope_rows(base["rows"])
+        if row.get("disposition") == "enforced" and row is not victim
+    )
+    successor_tail = f"{Path(successor['plan']).name}#{successor['index']}"
+    plan = sorted(live_plans)[0]
+    rules = [
+        f"{path}{tool.RULE_REFERENCE_SEPARATOR}{name}"
+        for path, name in _rule_references(registry_document)[:1]
+    ]
+    document = copy.deepcopy(base)
+    row = tool.record_coverage(
+        document, live_census, identity, "enforced", rules, None, False, SUITE_ROOT,
+        superseded_by=[f"{successor['plan']}#{successor['index']}", plan],
+        known_plans=live_plans,
+    )
+    assert row[SUPERSEDED_BY_FIELD] == f"{successor_tail}{RULE_SEPARATOR}{plan}", row
+    assert _superseded_by_offences(document["rows"], live_census, live_plans) == []
+    assert _coverage_offences([row]) == []
+    again = tool.record_coverage(
+        document, live_census, identity, "enforced", rules, None, False, SUITE_ROOT,
+        known_plans=live_plans,
+    )
+    assert SUPERSEDED_BY_FIELD not in again, again
+
+    refusals = {
+        "номер плана без файла": (["99-99"], "файла которого нет"),
+        "тождество вне переписи": (["99-01-PLAN.md#0"], "вне переписи"),
+        "сама себе": ([identity], "своим же"),
+        "повтор": ([plan, plan], "дважды"),
+        "пустой": ([" "], "пустой"),
+    }
+    for kind, (items, word) in refusals.items():
+        fresh = copy.deepcopy(base)
+        with pytest.raises(tool.CensusError) as refusal:
+            tool.record_coverage(
+                fresh, live_census, identity, "enforced", rules, None, False, SUITE_ROOT,
+                superseded_by=items, known_plans=live_plans,
+            )
+        assert word in str(refusal.value), (kind, str(refusal.value))
+        assert fresh == base, f"{kind}: копия изменена отказавшей записью"
+
+
+def test_the_record_mode_writes_a_row_permission_only_with_its_record(
+    registry_document, live_census
+):
+    """`--record … --disposition permitted` ставит `permitted` с областью-тождеством только при
+    записи ответа владельца по строке; без записи, у строки D-05 и вне области решений — отказ.
+    Разрешение остатка частичной строки (`--permit-uncovered`) при записи ставит тождество."""
+    base, victim = _awaiting_enforcement(registry_document)
+    identity = f"{victim['plan']}#{victim['index']}"
+    refused = copy.deepcopy(base)
+    with pytest.raises(tool.CensusError, match=ROW_DECISIONS_KEY):
+        tool.record_row_permission(refused, live_census, identity)
+    assert refused == base
+
+    answered = copy.deepcopy(base)
+    answered[ROW_DECISIONS_KEY] = [_row_permit(identity)]
+    before = copy.deepcopy(answered)
+    row = tool.record_row_permission(answered, live_census, identity)
+    assert row["disposition"] == PERMITTED and row[PERMIT_SCOPE_FIELD] == identity, row
+    assert UNRESOLVED_REASON_FIELD not in row and RULE_NAME_FIELD not in row, row
+    row_permits = _row_permits(answered[ROW_DECISIONS_KEY])
+    assert _row_decision_offences(answered[ROW_DECISIONS_KEY], answered["rows"]) == []
+    assert _permit_scope_offences([row], row_permits) == []
+    assert _closing_offences(answered["rows"], answered[tool.CLASS_DECISIONS_KEY]) == []
+
+    rules = [
+        f"{path}{tool.RULE_REFERENCE_SEPARATOR}{name}"
+        for path, name in _rule_references(registry_document)[:1]
+    ]
+    half = tool.record_coverage(
+        copy.deepcopy(before), live_census, identity, PARTIALLY_ENFORCED, rules, "половина",
+        True, SUITE_ROOT,
+    )
+    assert half[PERMIT_SCOPE_UNCOVERED_FIELD] == identity, half
+    with pytest.raises(tool.CensusError, match=PERMIT_SCOPE_UNCOVERED_FIELD):
+        tool.record_coverage(
+            copy.deepcopy(before), live_census, identity, PARTIALLY_ENFORCED, rules,
+            "половина", False, SUITE_ROOT,
+        )
+
+    tested = next(
+        row
+        for row in _decision_scope_rows(base["rows"])
+        if row.get("verification") == VERIFICATION_TEST
+    )
+    tested_identity = _row_name(tested)
+    fenced = copy.deepcopy(base)
+    fenced[ROW_DECISIONS_KEY] = [_row_permit(tested_identity)]
+    snapshot = copy.deepcopy(fenced)
+    with pytest.raises(tool.CensusError, match="D-05"):
+        tool.record_row_permission(fenced, live_census, tested_identity)
+    assert fenced == snapshot
+    outside = next(
+        row for row in base["rows"] if str(row.get("phase")) != DECISION_SCOPE_PHASE
+    )
+    with pytest.raises(tool.CensusError, match="D-02"):
+        tool.record_row_permission(copy.deepcopy(base), live_census, _row_name(outside))
+
+
+def test_control_main_records_a_successor_and_a_row_permission_or_refuses(
+    tmp_path, monkeypatch, capsys
+):
+    """Сквозной контроль CLI плана 15-32: `--superseded-by` и `--disposition permitted`.
+
+    Корень дерева — `tmp_path`: синтетический план Фазы 10 с тремя запретами, реестр с записью
+    ответа владельца по строке `#2`, модуль суиты с одним правилом. Запись без записи ответа и
+    флаг меры покрытия при `permitted` — `ОТКАЗ:`, и файл реестра не меняется.
+    """
+    source = (
+        '---\nmust_haves:\n  prohibitions:\n    - statement: "MUST NOT ноль"\n'
+        '    - statement: "MUST NOT один"\n    - statement: "MUST NOT два"\n---\n'
+    )
+    plan = tmp_path / SYNTHETIC_DECISION_PLAN
+    plan.parent.mkdir(parents=True)
+    plan.write_text(source, encoding="utf-8")
+    records = tool.census({SYNTHETIC_DECISION_PLAN: source})
+    rows = [{**tool.registry_row(record), "class": "product-invariant"} for record in records]
+    rows[1].update({"disposition": "enforced", RULE_NAME_FIELD: "test_synthetic_rule",
+                    RULE_SITE_FIELD: f"{SYNTHETIC_RULE_MODULE}:5"})
+    registry = tmp_path / tool.REGISTRY_RELATIVE_PATH
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        tool.dump_registry({
+            "measured": "1999-01-01", "rows_declared": 3,
+            ROW_DECISIONS_KEY: [_row_permit(_row_name(rows[2]))], "rows": rows,
+        }),
+        encoding="utf-8",
+    )
+    module = tmp_path / SYNTHETIC_RULE_MODULE
+    module.parent.mkdir(parents=True)
+    module.write_text(SYNTHETIC_RULE_SOURCE, encoding="utf-8")
+    monkeypatch.setattr(tool, "TREE_ROOT", tmp_path)
+    rule = f"{SYNTHETIC_RULE_MODULE}::test_synthetic_rule"
+
+    assert tool.main([
+        "--record", "10-01-PLAN.md#0", "--disposition", "enforced", "--rule", rule,
+        "--superseded-by", "10-01-PLAN.md#1", "--superseded-by", "10-01",
+    ]) == 0
+    assert tool.main(["--record", "10-01-PLAN.md#2", "--disposition", PERMITTED]) == 0
+    written = tool._registry_rows(tool.load_registry(registry))
+    assert written[records[0].identity][SUPERSEDED_BY_FIELD] == "10-01-PLAN.md#1; 10-01"
+    assert written[records[2].identity][PERMIT_SCOPE_FIELD] == str(records[2].identity)
+    capsys.readouterr()
+
+    before = registry.read_text(encoding="utf-8")
+    for argv in (
+        ["--record", "10-01-PLAN.md#1", "--disposition", PERMITTED],
+        ["--record", "10-01-PLAN.md#2", "--disposition", PERMITTED, "--rule", rule],
+        ["--record", "10-01-PLAN.md#0", "--disposition", "enforced", "--rule", rule,
+         "--superseded-by", "10-99"],
+    ):
+        assert tool.main(argv) == REFUSAL_EXIT_CODE, argv
+        assert capsys.readouterr().err.startswith(REFUSAL_PREFIX), argv
+        assert registry.read_text(encoding="utf-8") == before, argv
+    with pytest.raises(SystemExit):
+        tool.main(["--check", "--superseded-by", "10-01"])
 
 
 # --- зубы: подмена словаря исходников, а не правка дерева -------------------------------
@@ -2753,16 +3264,12 @@ def test_the_record_mode_writes_only_what_the_tree_proves(
     проходит целиком, либо не пишет ничего.
     """
     decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
-    victim = next(
-        row
-        for row in _decision_scope_rows(registry_document["rows"])
-        if row.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
-    )
+    base, victim = _awaiting_enforcement(registry_document)
     identity = f"{victim['plan']}#{victim['index']}"
     references = _rule_references(registry_document)
     rules = [f"{path}{tool.RULE_REFERENCE_SEPARATOR}{name}" for path, name in references]
 
-    document = copy.deepcopy(registry_document)
+    document = copy.deepcopy(base)
     row = tool.record_coverage(
         document, live_census, _tail(identity), "enforced", rules, None, False, SUITE_ROOT
     )
@@ -2781,7 +3288,7 @@ def test_the_record_mode_writes_only_what_the_tree_proves(
     assert _closing_offences(document["rows"], decisions) == []
     assert len(document["rows"]) == len(registry_document["rows"])
 
-    partial = copy.deepcopy(registry_document)
+    partial = copy.deepcopy(base)
     row = tool.record_coverage(
         partial, live_census, identity, PARTIALLY_ENFORCED, rules[:1], "половина", False,
         SUITE_ROOT,
@@ -2822,13 +3329,13 @@ def test_the_record_mode_writes_only_what_the_tree_proves(
         ),
     }
     for kind, (target, disposition, refs, note, word) in refusals.items():
-        fresh = copy.deepcopy(registry_document)
+        fresh = copy.deepcopy(base)
         with pytest.raises(tool.CensusError) as refusal:
             tool.record_coverage(
                 fresh, live_census, target, disposition, refs, note, False, SUITE_ROOT
             )
         assert word in str(refusal.value), (kind, str(refusal.value))
-        assert fresh == registry_document, f"{kind}: копия изменена отказавшей записью"
+        assert fresh == base, f"{kind}: копия изменена отказавшей записью"
 
 
 def test_the_record_mode_keeps_the_coordinate_of_a_rule_it_already_names(
@@ -2840,13 +3347,8 @@ def test_the_record_mode_keeps_the_coordinate_of_a_rule_it_already_names(
     файл с тех пор вырос, и дифф записи нёс бы чужие поля. Новое правило получает координату,
     снятую разбором.
     """
-    victim = next(
-        row
-        for row in _decision_scope_rows(registry_document["rows"])
-        if row.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
-    )
+    document, victim = _awaiting_enforcement(registry_document)
     (path, name), (other_path, other_name) = _rule_references(registry_document)
-    document = copy.deepcopy(registry_document)
     row = tool._registry_rows(document)[tool.ProhibitionIdentity(victim["plan"], victim["index"])]
     row.update(
         {"disposition": "enforced", RULE_NAME_FIELD: name, RULE_SITE_FIELD: f"{path}:1"}

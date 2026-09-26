@@ -55,6 +55,27 @@
    коммитом плана и отменённое другим, названо (строже буквы); изменение, внесённое коммитом без
    области плана, — невидимо (граница 2).
 
+ИСТОРИЧЕСКИЕ ПРОЧТЕНИЯ, ВЫБРАННЫЕ ВЛАДЕЛЬЦЕМ (план 15-32). На чекпойнте плана 15-32 владелец
+(`chubav`, 2026-09-26; записаны выбранные варианты, а не его слова) выбрал ветвь (а′) для строк,
+сформулированных ОБЛАСТЬЮ фазы или плана («фаза не заводит…», «этим планом…»): формулировка
+проверяется коммитами той области, о которой она говорит. Отсюда три перемены модуля.
+1. ОБЛАСТЬ ФАЗЫ. Область записи — номер плана `10-NN` либо номер фазы `10`. Коммит фазы — тот,
+   чья тема начинается `тип(10-NN):` для ЛЮБОГО плана NN этой фазы. ⚠️ ГРАНИЦА, ВЫБРАННАЯ
+   ВЛАДЕЛЬЦЕМ («plan commits only»): коммиты правок ревизии без номера плана — `fix(10): …`,
+   `docs(10): …` — в отбор фазы НЕ входят (граница 2). Пример — `aa516a2e fix(10): CR-01 …`: он
+   добавил код реестра уведомлений, и прочтение «навсегда» либо отбор «с `fix(10):`» были бы
+   красны. Этот коммит здесь невидим по выбору владельца, а не по недосмотру.
+2. ВИДЫ СОДЕРЖАНИЯ БЕЗ ВЕРИФИКАЦИИ `test`. Записи плана 15-32 названы строками с
+   `verification: none` (класс `product-invariant`), и правило согласия принимает любую строку
+   Фазы 10 (летопись — у правила согласия).
+3. ТРИ ВИДА ПРЕДИКАТА: дословный перенос видимого текста (судит ВЕСЬ КОММИТ, а не пару одного
+   пути: перенос из файла в файл законен), сохранение предикатов отказа и граница на каждом
+   источнике идентификатора.
+Летопись абзаца «ЧЕГО ЭТОТ ФАЙЛ НЕ УТВЕРЖДАЕТ» ниже: фраза «только то, чего план не трогал или
+не менял» верна для всех видов, кроме «граница на каждом источнике» (`10-12#1`) — он утверждает
+СОСТОЯНИЕ файла после коммита плана: запрет «правка не ставится только там, где предмет замерен»
+есть утверждение о полноте правки, и держится он именно так.
+
 ЧЕГО ЭТОТ ФАЙЛ НЕ УТВЕРЖДАЕТ (D-16). Он не судит вердикт отчёта своей фазы и не читает его. Он
 не видит правок, сделанных вне коммитов плана (граница 2), и не утверждает, что запрет соблюдён
 ПО ДУХУ за пределами путей: запрет «пять замечаний не чинятся» держится здесь ровно как «файлы,
@@ -75,6 +96,7 @@ import ast
 import difflib
 import re
 import subprocess
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import cache
@@ -108,6 +130,8 @@ JOURNAL_ARGS = (
 SHALLOW_ARGS = ("rev-parse", "--is-shallow-repository")
 
 PLAN_SCOPE = re.compile(r"(\d+)-(\d+)")
+# Область ФАЗЫ (план 15-32): номер фазы без номера плана — отбор коммитов ВСЕХ планов фазы.
+PHASE_SCOPE = re.compile(r"(\d+)")
 
 
 class HistoryRefusal(Exception):
@@ -159,6 +183,11 @@ HEADER_FIELDS = "header-fields"
 SECTION_LINE = "section-line"
 STATUS_LINES_KEPT = "status-lines-kept"
 EQUAL_WITHOUT_COMMENTS = "equal-without-comments"
+# Виды плана 15-32 (исторические прочтения, выбранные владельцем):
+REFUSAL_PREDICATES_KEPT = "refusal-predicates-kept"
+IDENTIFIER_SOURCES_BOUNDED = "identifier-sources-bounded"
+# Вид КОММИТА, а не пары одного пути: дословный перенос текста законно пересекает границу файла.
+VISIBLE_TEXT_CARRIED = "visible-text-carried"
 
 
 @dataclass(frozen=True)
@@ -238,6 +267,9 @@ PLAN_10_35_GROUP = (
 )
 STYLESHEET = "app/static/css/app.css"
 PHASE_10_DIR = ".planning/phases/10-rychag-components-modal-html/"
+# Реестр кодов уведомлений `?notice=` — единственное место, где код становится кодом реестра.
+NOTICES = "app/pages/notices.py"
+PAGES = "app/pages/"
 
 # Ключ — тождество строки реестра в форме `10-NN-PLAN.md#i`; значение — область темы и
 # запрещённые пути по ПОЛНОЙ формулировке запрета (вид `PATHS`) либо вид содержания, наблюдаемые
@@ -325,6 +357,43 @@ HISTORY_FACTS: dict[str, HistoryFact] = {
         kind=EQUAL_WITHOUT_COMMENTS,
         watched=("app/templates/components/modal.html", "app/pages/schedules.py") + PRODUCT,
     ),
+    # --- исторические прочтения, выбранные владельцем на чекпойнте плана 15-32 ---
+    # Строки `verification: none` класса `product-invariant`, сформулированные ОБЛАСТЬЮ фазы или
+    # плана. Выбор `chubav` 2026-09-26 (выбранные варианты, а не его слова): (а′) над коммитами
+    # с областью плана `(10-NN)`; коммиты без номера плана (`fix(10): …`, пример `aa516a2e`) в
+    # отбор не входят — граница названа в докстринге модуля.
+    # «новых кодов реестра ?notice= ФАЗА не заводит (D-03)» — ни один коммит ЛЮБОГО плана Фазы 10
+    # (область фазы) не тронул реестр кодов: строже буквы «не добавил кода» — файл целиком.
+    "10-01-PLAN.md#3": HistoryFact("10", (NOTICES,)),
+    # «новых кодов реестра уведомлений ФАЗА НЕ ЗАВОДИТ (D-03)» — то же прочтение, та же область.
+    "10-24-PLAN.md#2": HistoryFact("10", (NOTICES,)),
+    # «новых кодов реестра уведомлений ПЛАН НЕ ЗАВОДИТ (D-03), в том числе кода для
+    # неподтверждённого источника» — коммиты плана 10-31 реестр не тронули (файл целиком).
+    "10-31-PLAN.md#1": HistoryFact("10-31", (NOTICES,)),
+    # «тексты и подписи карточки расписания и панели её подтверждения переносятся ДОСЛОВНО» — в
+    # каждом коммите плана 10-01 каждый фрагмент видимого текста шаблонов, ушедший из файла,
+    # пришёл добавленным в том же коммите (перенос между файлами законен).
+    "10-01-PLAN.md#6": HistoryFact("10-01", kind=VISIBLE_TEXT_CARRIED, watched=(TEMPLATES,)),
+    # «правка НЕ ставится только там, где предмет замерен: закрытие одного из двух источников
+    # одной величины оставляет маршрут … открытым» — коммит плана 10-12, тронувший страничный
+    # модуль, оставил верхнюю границу на КАЖДОМ параметре-идентификаторе каждого обработчика
+    # маршрута (замер: `73df7780`, `app/pages/schedules.py`, 7 параметров, все ограничены).
+    # ⚠️ Источник величины вне параметров обработчика (поле формы, прочитанное руками,
+    # `_ad_id_from_form`) этим видом не судится: у него своя граница и свои правила.
+    "10-12-PLAN.md#1": HistoryFact("10-12", kind=IDENTIFIER_SOURCES_BOUNDED, watched=(PAGES,)),
+    # «цель третьего внеполосного узла НЕ становится динамической ЭТИМ ПЛАНОМ» — цель узла живёт в
+    # разметке шаблона, и сделать её динамической без правки шаблона нельзя: коммиты плана 10-22
+    # не изменили ни одного шаблона иначе, чем в комментарии `{# … #}` (замер: `1d93cb07`,
+    # `a3972cfd` — только комментарии). Правку докстринга `app/pages/schedules.py` (`a3972cfd`)
+    # вид не судит: цель узла там не живёт.
+    "10-22-PLAN.md#1": HistoryFact("10-22", kind=EQUAL_WITHOUT_COMMENTS, watched=(TEMPLATES,)),
+    # «предикат отказа и ответ тому, кто пришёл без слоя письма, не меняются ни на символ» —
+    # ПОЛОВИНА «предикат отказа»: коммиты плана 10-03 не сняли, не изменили и не добавили ни
+    # одного условия охранной ветки отказа и ни одного `raise` ни в одной функции тронутых
+    # модулей `app/` (замер: 3 коммита плана тронули `app/`, до них 131 предикат). Половину «ответ без слоя письма» этот
+    # вид не держит — текст ответа ушёл в слой ответа (`respond`); её разрешил владелец
+    # записью `row_decisions` (поведение держит `test_every_pair_case_answers_both_transports`).
+    "10-03-PLAN.md#6": HistoryFact("10-03", kind=REFUSAL_PREDICATES_KEPT, watched=("app/",)),
 }
 
 HISTORY_RULE = "test_every_declared_history_fact_holds_over_its_plans_commits"
@@ -397,12 +466,18 @@ def _git_journal() -> tuple[Commit, ...]:
 
 
 def _plan_commits(journal: Iterable[Commit], scope: str) -> tuple[Commit, ...]:
-    """Коммиты плана `scope` (`10-44`) — по ОБЛАСТИ В ТЕМЕ; пустой отбор — отказ."""
+    """Коммиты плана `scope` (`10-44`) либо всех планов фазы `scope` (`10`) — по ОБЛАСТИ В ТЕМЕ;
+    пустой отбор — отказ. Область фазы отбирает `тип(10-NN):` любого плана NN и НЕ отбирает
+    `тип(10):` — коммит без номера плана (граница выбора владельца, план 15-32)."""
     match = PLAN_SCOPE.fullmatch(scope)
-    if match is None:
-        raise HistoryRefusal(f"область `{scope}` не в форме `ФАЗА-ПЛАН`")
-    phase, plan = int(match[1]), int(match[2])
-    subject_scope = re.compile(rf"^[a-z]+\(0*{phase}-0*{plan}\)!?:")
+    phase_match = PHASE_SCOPE.fullmatch(scope)
+    if match is not None:
+        phase, plan = int(match[1]), int(match[2])
+        subject_scope = re.compile(rf"^[a-z]+\(0*{phase}-0*{plan}\)!?:")
+    elif phase_match is not None:
+        subject_scope = re.compile(rf"^[a-z]+\(0*{int(phase_match[1])}-\d+\)!?:")
+    else:
+        raise HistoryRefusal(f"область `{scope}` не в форме `ФАЗА-ПЛАН` и не номер фазы")
     selected = tuple(commit for commit in journal if subject_scope.match(commit.subject))
     if not selected:
         raise HistoryRefusal(
@@ -634,6 +709,150 @@ def _executable_changes(
     return []
 
 
+def _exits(statements: list[ast.stmt]) -> bool:
+    """Ветка уходит из функции: её последний оператор — `return` или `raise`."""
+    return bool(statements) and isinstance(statements[-1], (ast.Return, ast.Raise))
+
+
+def _refusal_predicates(text: str) -> dict[str, Counter]:
+    """Предикаты отказа каждой функции модуля (по имени, вложенные — тоже): текст условия каждого
+    охранного `if`, чья ветка уходит из функции, и текст каждого `raise`. Сличается ТЕКСТ
+    выражения (`ast.unparse`), а не номер строки: перенос строки предикат не меняет."""
+    found: dict[str, Counter] = {}
+    for node in ast.walk(ast.parse(text)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        predicates: Counter = Counter()
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.If) and _exits(inner.body):
+                predicates[f"if {ast.unparse(inner.test)}"] += 1
+            elif isinstance(inner, ast.Raise):
+                predicates[f"raise {ast.unparse(inner.exc) if inner.exc else ''}".strip()] += 1
+        found[node.name] = predicates
+    return found
+
+
+def _refusal_predicate_changes(
+    path: str, before: str | None, after: str | None, subject: tuple[str, ...]
+) -> list[str]:
+    """Предикаты отказа, которых после коммита нет или которых до коммита не было, — по функциям.
+
+    Предмет — ЧТО действие отвергает (условие охранной ветки и `raise`), а не КАК отвечает:
+    `return RedirectResponse(…)` → `return await respond(…)` под тем же условием предикат не
+    меняет. Сличаются функции, стоявшие до коммита; снятая функция теряет все свои предикаты.
+    Не `.py` — не предмет вида (`[]`). Модуль без единого предиката до коммита — отказ: сличать
+    нечего (антивакуум)."""
+    return []  # RED: поведение ещё не написано
+
+
+ROUTE_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
+
+
+def _upper_bounded(node: ast.expr | None) -> bool:
+    """Выражение объявляет верхнюю границу: вызов с ключом `le` (`Path(…, le=…)`)."""
+    return isinstance(node, ast.Call) and any(keyword.arg == "le" for keyword in node.keywords)
+
+
+def _bounded_annotation(annotation: ast.expr | None, aliases: frozenset[str]) -> bool:
+    """Аннотация несёт границу: псевдоним модуля с границей либо `Annotated[…, X(…, le=…)]`."""
+    if isinstance(annotation, ast.Name):
+        return annotation.id in aliases
+    if isinstance(annotation, ast.Subscript) and getattr(annotation.value, "id", None) == "Annotated":
+        parts = (
+            annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else [annotation.slice]
+        )
+        return any(_upper_bounded(part) for part in parts[1:])
+    return False
+
+
+def _unbounded_identifier_sources(text: str) -> tuple[list[str], int]:
+    """Параметры-идентификаторы обработчиков маршрутов без верхней границы и число всех таких.
+
+    Обработчик маршрута — функция верхнего уровня с декоратором `<роутер>.<метод>(…)`.
+    Идентификатор — параметр `id` либо `*_id`. Граница — псевдоним модуля, присвоенный
+    `Annotated[…, X(…, le=…)]`, та же форма прямо в аннотации либо значение по умолчанию
+    `X(…, le=…)`."""
+    tree = ast.parse(text)
+    aliases = frozenset(
+        node.targets[0].id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and _bounded_annotation(node.value, frozenset())
+    )
+    unbounded: list[str] = []
+    total = 0
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(
+            isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr in ROUTE_METHODS
+            for decorator in node.decorator_list
+        ):
+            continue
+        positional = node.args.posonlyargs + node.args.args
+        defaults = [None] * (len(positional) - len(node.args.defaults)) + list(node.args.defaults)
+        pairs = list(zip(positional, defaults)) + list(
+            zip(node.args.kwonlyargs, node.args.kw_defaults)
+        )
+        for argument, default in pairs:
+            if argument.arg != "id" and not argument.arg.endswith("_id"):
+                continue
+            total += 1
+            if not (_bounded_annotation(argument.annotation, aliases) or _upper_bounded(default)):
+                unbounded.append(f"`{node.name}({argument.arg})`")
+    return unbounded, total
+
+
+def _identifier_source_offences(
+    path: str, before: str | None, after: str | None, subject: tuple[str, ...]
+) -> list[str]:
+    """Каждый источник идентификатора в файле ПОСЛЕ коммита плана несёт верхнюю границу.
+
+    Прочтение `10-12#1` («правка НЕ ставится только там, где предмет замерен: закрытие одного
+    из двух источников одной величины оставляет маршрут … открытым»): коммит плана, тронувший
+    страничный модуль, оставляет границу на КАЖДОМ параметре-идентификаторе каждого обработчика
+    маршрута этого модуля, а не на замеренном. Не `.py` — не предмет. Модуль без единого
+    источника идентификатора до коммита — отказ (сличать нечего)."""
+    return []  # RED: поведение ещё не написано
+
+
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+CYRILLIC = re.compile(r"[А-Яа-яЁё]")
+TEXT_RUN = re.compile(r"[^<>{}\"'`]+")
+
+
+def _visible_text(text: str | None) -> Counter:
+    """Фрагменты видимого текста шаблона: отрезки между разметкой, кавычками и скобками
+    шаблонизатора, несущие кириллицу, — текст узлов, значения атрибутов, строковые литералы
+    шаблонизатора. Комментарии `{# … #}` и `<!-- … -->` гасятся, пробелы сводятся к одному:
+    перенос строки текста фрагмент не меняет."""
+    if text is None:
+        return Counter()
+    flattened = " ".join(HTML_COMMENT.sub(" ", JINJA_COMMENT.sub(" ", text)).split())
+    return Counter(
+        fragment
+        for fragment in (match.group().strip() for match in TEXT_RUN.finditer(flattened))
+        if CYRILLIC.search(fragment)
+    )
+
+
+def _visible_text_losses(
+    pairs: tuple[tuple[str, str | None, str | None], ...]
+) -> list[tuple[str, str]]:
+    """Фрагменты видимого текста, убранные коммитом и НЕ добавленные им же ни в одном файле.
+
+    Прочтение `10-01#6` («тексты и подписи … переносятся ДОСЛОВНО»): перенос законен и между
+    файлами, поэтому судится ВЕСЬ КОММИТ — каждый фрагмент, ушедший из файла, обязан прийти
+    добавленным в том же коммите; переформулировка (ушёл старый, пришёл новый) называет старый.
+    Новый текст без убранного предметом не является. Ни в одной паре до коммита нет видимого
+    текста — отказ (сличать нечего)."""
+    return []  # RED: поведение ещё не написано
+
+
 # Виды, чей предикат читает данные `subject`; у остальных `subject` пуст.
 SUBJECT_KINDS = (DEFINITION_SOURCES, HEADER_FIELDS, SECTION_LINE)
 
@@ -645,6 +864,16 @@ CONTENT_PREDICATES: dict[
     SECTION_LINE: _section_line_changes,
     STATUS_LINES_KEPT: _status_line_changes,
     EQUAL_WITHOUT_COMMENTS: _executable_changes,
+    REFUSAL_PREDICATES_KEPT: _refusal_predicate_changes,
+    IDENTIFIER_SOURCES_BOUNDED: _identifier_source_offences,
+}
+
+# Виды КОММИТА (план 15-32): предикат судит все наблюдаемые пары одного коммита вместе и
+# называет путь каждого изменения сам.
+COMMIT_PREDICATES: dict[
+    str, Callable[[tuple[tuple[str, str | None, str | None], ...]], list[tuple[str, str]]]
+] = {
+    VISIBLE_TEXT_CARRIED: _visible_text_losses,
 }
 
 
@@ -660,14 +889,24 @@ def _content_offences(
     наблюдаемого пути — отказ: факт ничего о плане не узнал (антивакуум)."""
     if not fact.watched:
         raise HistoryRefusal("перечень наблюдаемых путей пуст: факт содержания не судит ничего")
-    predicate = CONTENT_PREDICATES[fact.kind]
     offences: list[ContentOffence] = []
     touched = 0
     for commit in _plan_commits(journal, fact.scope):
-        for path in commit.paths:
-            if not any(_covered_by(path, item) for item in fact.watched):
-                continue
-            touched += 1
+        paths = [
+            path for path in commit.paths if any(_covered_by(path, item) for item in fact.watched)
+        ]
+        touched += len(paths)
+        if not paths:
+            continue
+        if fact.kind in COMMIT_PREDICATES:
+            pairs = tuple((path, *revisions(commit.sha, path)) for path in paths)
+            offences.extend(
+                ContentOffence(commit.sha, commit.subject, path, detail)
+                for path, detail in COMMIT_PREDICATES[fact.kind](pairs)
+            )
+            continue
+        predicate = CONTENT_PREDICATES[fact.kind]
+        for path in paths:
             before, after = revisions(commit.sha, path)
             offences.extend(
                 ContentOffence(commit.sha, commit.subject, path, detail)
@@ -1023,10 +1262,17 @@ def test_every_declared_history_fact_holds_over_its_plans_commits(identity):
 
 
 def test_every_history_fact_names_a_phase_10_prohibition_by_identity():
-    """Правило согласия: каждый ключ `HISTORY_FACTS` — тождество записи переписи Фазы 10 с
-    `verification: test`, его область есть номер его плана, перечень путей не пуст; и каждая
-    строка реестра, называющая несущее правило, имеет запись здесь — иначе строка числилась бы
+    """Правило согласия: каждый ключ `HISTORY_FACTS` — тождество записи переписи Фазы 10, его
+    область есть номер его плана либо номер его фазы, перечень путей не пуст; и каждая строка
+    реестра, называющая несущее правило, имеет запись здесь — иначе строка числилась бы
     принуждённой правилом, которое её не проверяет.
+
+    ЛЕТОПИСЬ (план 15-32, задача 3). До плана 15-32 правило требовало от строки
+    `verification: test`: записи планов 15-30/15-31 закрывали находки D-05. Владелец на чекпойнте
+    плана 15-32 выбрал историческое прочтение (а′) и для строк `verification: none` класса
+    `product-invariant`, сформулированных областью фазы или плана, — поэтому принимается любая
+    строка Фазы 10. Область ФАЗЫ (`10`) — прочтение формулировок «фаза не заводит» (`10-01#3`,
+    `10-24#2`): коммиты всех планов фазы, без коммитов `тип(10):` (граница выбора владельца).
 
     ⚠️ ОБРАТНОЕ НАПРАВЛЕНИЕ (каждая запись здесь названа строкой реестра) НЕ утверждается: лишняя
     запись есть лишняя проверка, а не ложное принуждение."""
@@ -1039,20 +1285,21 @@ def test_every_history_fact_names_a_phase_10_prohibition_by_identity():
         except tool.CensusError as error:
             problems.append(f"`{identity}`: {error}")
             continue
-        if record.phase != tool.DECISION_SCOPE_PHASE or record.verification != "test":
+        if record.phase != tool.DECISION_SCOPE_PHASE:
             problems.append(
-                f"`{identity}`: фаза {record.phase}, verification {record.verification!r} — "
-                f"не запрет Фазы {tool.DECISION_SCOPE_PHASE} с `verification: test`"
+                f"`{identity}`: фаза {record.phase} — не запрет Фазы {tool.DECISION_SCOPE_PHASE}"
             )
         plan_number = identity.partition("-PLAN.md#")[0]
-        if fact.scope != plan_number:
-            problems.append(f"`{identity}`: область `{fact.scope}`, а план `{plan_number}`")
+        if fact.scope not in (plan_number, record.phase):
+            problems.append(
+                f"`{identity}`: область `{fact.scope}`, а план `{plan_number}` (фаза {record.phase})"
+            )
         if fact.kind == PATHS:
             if not fact.forbidden or fact.watched or fact.subject:
                 problems.append(
                     f"`{identity}`: вид `{PATHS}` несёт непустой `forbidden` и ничего иного"
                 )
-        elif fact.kind in CONTENT_PREDICATES:
+        elif fact.kind in CONTENT_PREDICATES or fact.kind in COMMIT_PREDICATES:
             if fact.forbidden or not fact.watched:
                 problems.append(
                     f"`{identity}`: вид `{fact.kind}` несёт непустой `watched` и пустой `forbidden`"
@@ -1170,3 +1417,175 @@ def test_the_plan_10_38_control_group_in_the_shell_suite_is_what_history_introdu
         f"{sorted(set(declared) - surviving)}, пропущенные {sorted(surviving - set(declared))}; "
         f"заведено коммитом {introduced}"
     )
+
+
+# --- исторические прочтения плана 15-32: контроли видов и направление на живой истории --------
+
+
+def test_control_a_phase_scope_selects_every_plan_of_the_phase_and_no_unscoped_commit():
+    """Область ФАЗЫ `10`: коммиты `тип(10-NN):` любого плана и `тип(010-044):` — да; коммит
+    правки ревизии без номера плана (`docs(10): …`, `fix(10): …`), оркестратора без области и
+    чужой фазы — нет (граница выбора владельца, план 15-32)."""
+    review_fix = Commit("9" * 40, "fix(10): CR-01 правка ревизии", ("app/pages/notices.py",))
+    other_phase = Commit("8" * 40, "feat(11-14): чужая фаза", ("app/pages/notices.py",))
+    journal = SYNTHETIC_JOURNAL + (review_fix, other_phase)
+    selected = _plan_commits(journal, "10")
+    assert [commit.sha for commit in selected] == [
+        PLAN_COMMIT.sha,
+        PADDED_PLAN_COMMIT.sha,
+        NEIGHBOUR_COMMIT.sha,
+    ], [commit.subject for commit in selected]
+    with pytest.raises(HistoryRefusal, match="не в форме"):
+        _plan_commits(journal, "10-")
+
+
+def test_control_a_lost_visible_text_fragment_is_named_and_a_carried_one_is_not():
+    """Вид «видимый текст переносится дословно»: переформулировка подписи называет прежнюю;
+    перенос фрагмента в другой файл того же коммита, перенос строки и правка комментария — нет;
+    добавленный текст — не предмет; ни одного фрагмента до коммита — отказ."""
+    card = '<p class="hint">Заполните группы, дни и время</p>\n<span aria-label="Аккаунт">x</span>\n'
+    reworded = card.replace("Заполните группы", "Выберите группы")
+    assert _visible_text_losses((("a.html", card, reworded),)) == [
+        ("a.html", "фрагмент видимого текста 'Заполните группы, дни и время' убран и не перенесён дословно")
+    ]
+    moved_out = card.replace('<p class="hint">Заполните группы, дни и время</p>\n', "")
+    moved_in = "{# перенос #}<p>Заполните группы,\n   дни и время</p>\n"
+    assert _visible_text_losses((("a.html", card, moved_out), ("b.html", "", moved_in))) == []
+    assert _visible_text_losses((("a.html", card, card + "<p>Новая подпись</p>"),)) == []
+    commented = card.replace("<p", "{# комментарий #}<p", 1)
+    assert _visible_text_losses((("a.html", card, commented),)) == []
+    with pytest.raises(HistoryRefusal, match="видимого текста до коммита нет"):
+        _visible_text_losses((("a.html", "<div></div>", "<p>Текст</p>"),))
+
+
+REFUSING_HANDLER = (
+    "async def delete(request, user, account_id):\n"
+    "    if not user:\n"
+    '        return RedirectResponse(url="/login", status_code=302)\n'
+    "    if account_id < 1:\n"
+    "        raise HTTPException(status_code=404)\n"
+    '    return RedirectResponse(url="/accounts", status_code=302)\n'
+)
+
+
+def test_control_a_changed_refusal_predicate_is_named_and_a_changed_answer_is_not():
+    """Вид «предикаты отказа сохранены»: изменённое условие охранной ветки, снятый `raise` и
+    добавленная ветка отказа называются; тот же отказ через слой ответа (`respond`) — нет; не
+    `.py` — не предмет; модуль без предикатов до коммита — отказ."""
+    path = "app/pages/accounts.py"
+    layered = REFUSING_HANDLER.replace(
+        'return RedirectResponse(url="/login", status_code=302)',
+        'return await respond(request, redirect="/login")',
+    )
+    assert _refusal_predicate_changes(path, REFUSING_HANDLER, layered, ()) == []
+    widened = REFUSING_HANDLER.replace("if not user:", "if not user or user.blocked:")
+    assert _refusal_predicate_changes(path, REFUSING_HANDLER, widened, ()) == [
+        "`delete`: предикат отказа `if not user` снят или изменён",
+        "`delete`: предикат отказа `if not user or user.blocked` добавлен",
+    ]
+    unraised = REFUSING_HANDLER.replace(
+        "        raise HTTPException(status_code=404)\n", "        return None\n"
+    )
+    assert _refusal_predicate_changes(path, REFUSING_HANDLER, unraised, ()) == [
+        "`delete`: предикат отказа `raise HTTPException(status_code=404)` снят или изменён"
+    ]
+    assert _refusal_predicate_changes("app/templates/x.html", "<p>", "<div>", ()) == []
+    with pytest.raises(HistoryRefusal, match="предикатов отказа до коммита нет"):
+        _refusal_predicate_changes(path, "def f():\n    return 1\n", "def f():\n    return 2\n", ())
+
+
+ROUTES_BEFORE = (
+    "from typing import Annotated\n"
+    "from fastapi import APIRouter, Form, Path\n"
+    "router = APIRouter()\n\n\n"
+    '@router.post("/s/{schedule_id}/toggle")\n'
+    "async def toggle(schedule_id: int):\n"
+    "    return schedule_id\n\n\n"
+    '@router.post("/s")\n'
+    "async def create(ad_id: int = Form(...), account_id: int | None = Form(None)):\n"
+    "    return ad_id\n"
+)
+ROUTES_AFTER = ROUTES_BEFORE.replace(
+    "router = APIRouter()\n",
+    "router = APIRouter()\nIdPathBound = Annotated[int, Path(ge=1, le=ID_MAX)]\n",
+).replace("schedule_id: int)", "schedule_id: IdPathBound)").replace(
+    "ad_id: int = Form(...)", "ad_id: Annotated[int, Form(ge=1, le=ID_MAX)]"
+).replace("Form(None)", "Form(None, le=ID_MAX)")
+
+
+def test_control_an_unbounded_identifier_source_is_named():
+    """Вид «граница на каждом источнике»: все три источника ограничены (псевдоним, аннотация,
+    значение по умолчанию) — тишина; граница поставлена только на замеренном входе — остальные
+    названы; модуль без источников до коммита — отказ."""
+    path = "app/pages/schedules.py"
+    assert _identifier_source_offences(path, ROUTES_BEFORE, ROUTES_AFTER, ()) == []
+    only_measured = ROUTES_BEFORE.replace(
+        "schedule_id: int)", "schedule_id: Annotated[int, Path(ge=1, le=ID_MAX)])"
+    )
+    assert _identifier_source_offences(path, ROUTES_BEFORE, only_measured, ()) == [
+        "источник идентификатора `create(ad_id)` остался без границы",
+        "источник идентификатора `create(account_id)` остался без границы",
+    ]
+    with pytest.raises(HistoryRefusal, match="источников идентификатора до коммита нет"):
+        _identifier_source_offences(path, "x = 1\n", "x = 2\n", ())
+
+
+def _doctored_after(sha_prefix: str, path: str, old: str, new: str):
+    """Живые пары, у которых сторона «после» пары `sha_prefix`/`path` доктóрена заменой."""
+
+    def revisions(sha: str, touched: str) -> tuple[str | None, str | None]:
+        before, after = _revisions(sha, touched)
+        if sha.startswith(sha_prefix) and touched == path:
+            assert after is not None and old in after, f"якоря подмены нет: {sha_prefix} {path}"
+            after = after.replace(old, new, 1)
+        return before, after
+
+    return revisions
+
+
+PLAN_15_32_CONTENT_DIRECTIONS = {
+    "10-01-PLAN.md#6": (
+        "14face55", "app/templates/ads/includes/sched_card.html",
+        "Заполните группы, дни и время", "Выберите группы, дни и время",
+    ),
+    "10-03-PLAN.md#6": ("1889ac05", "app/pages/accounts.py", "    if not user:", "    if user is None:"),
+    "10-12-PLAN.md#1": (
+        "73df7780", "app/pages/schedules.py", "schedule_id: ScheduleIdPath,", "schedule_id: int,",
+    ),
+    "10-22-PLAN.md#1": (
+        "a3972cfd", "app/templates/ads/partials/sched_delete_response.html",
+        'hx-swap-oob="innerHTML:#sched-count"', 'hx-swap-oob="innerHTML:#{{ count_target }}"',
+    ),
+}
+
+
+@pytest.mark.parametrize("identity", sorted(PLAN_15_32_CONTENT_DIRECTIONS))
+def test_control_a_doctored_real_revision_reddens_each_plan_15_32_content_fact(identity):
+    """Замер направления видов содержания плана 15-32 на ЖИВОЙ истории: настоящие пары
+    зелены, а та же история с доктóренной стороной «после» одного настоящего коммита плана
+    краснит запись, и назван ровно этот коммит и путь."""
+    sha_prefix, path, old, new = PLAN_15_32_CONTENT_DIRECTIONS[identity]
+    journal = _git_journal()
+    assert _offences_of(journal, identity) == []
+    offences = _offences_of(journal, identity, _doctored_after(sha_prefix, path, old, new))
+    assert offences, f"`{identity}`: подмена стороны «после» {sha_prefix} не названа"
+    assert {(offence.sha[:8], offence.path) for offence in offences} == {(sha_prefix, path)}, [
+        str(offence) for offence in offences
+    ]
+
+
+@pytest.mark.parametrize("identity", ["10-01-PLAN.md#3", "10-24-PLAN.md#2", "10-31-PLAN.md#1"])
+def test_control_a_synthetic_plan_commit_on_the_notice_registry_reddens(identity):
+    """Замер направления фактов реестра кодов: копия живого журнала с синтетическим коммитом
+    плана области записи на `app/pages/notices.py` краснит запись; тот же путь коммитом правки
+    ревизии `fix(10): …` — нет (граница выбора владельца, план 15-32)."""
+    fact = HISTORY_FACTS[identity]
+    scope = fact.scope if "-" in fact.scope else f"{fact.scope}-99"
+    journal = _git_journal()
+    assert _offences_of(journal, identity) == []
+    review_fix = Commit("e" * 40, "fix(10): правка ревизии", (NOTICES,))
+    assert _offences_of(journal + (review_fix,), identity) == []
+    synthetic = Commit("f" * 40, f"feat({scope}): новый код", (NOTICES,))
+    assert _offences_of(journal + (synthetic,), identity) == [
+        PathOffence(synthetic.sha, synthetic.subject, NOTICES, NOTICES)
+    ]
