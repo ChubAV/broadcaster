@@ -6699,6 +6699,113 @@ def test_control_a_layer_on_an_in_flow_ancestor_does_not_redden(tmp_path):
     )
 
 
+# ⚠️ КОНТРОЛИ ЦЕПИ ПРЕДКОВ ПЛАНА 10-38 НЕ ВЫПИСЫВАЮТ ИМЁН СВОЙСТВ ЛИТЕРАЛАМИ (запрет
+# `10-38#5`, `must_haves.prohibitions[5]` плана 10-38: «ИМЕНА СВОЙСТВ В КОНТРОЛЕ НЕ
+# ВЫПИСЫВАЮТСЯ ЛИТЕРАЛАМИ ТАМ, ГДЕ ИХ МОЖНО ВЗЯТЬ ИЗ ПЕРЕЧНЯ: представитель группы
+# выбирается ИНДЕКСОМ в перечне, чтобы правка перечня не разошлась с контролем молча»).
+# Правило заведено планом 15-31 (решение владельца Г-1 «Правила сейчас»).
+#
+# СОСТАВ СНЯТ ИСТОРИЕЙ, А НЕ НАБРАН РУКАМИ (план 15-31, 2026-09-26): функции, которые коммит
+# `9809b643` («каждая ветвь гейта цепи предков исполняется контролем») завёл в этот файл и
+# которые стоя́т в нём сегодня. Коммит завёл ТРИ контроля; третий,
+# `test_control_a_trapping_ancestor_reddens`, СНЯТ планом 10-42 (приписка выше у
+# `_NON_STATIC_POSITION`), и его преемник перебирает КАНОН — ВЫПИСАННЫЙ литералами
+# НАМЕРЕННО (`ANCESTOR_TRAP_CANON`: «довод плана 10-38 против литеральной копии остаётся
+# верным и закрывается здесь, а не отменяется» — правилом согласия канона с перечнями).
+# Канон и преемник поэтому в состав НЕ входят: их литералы — решение плана 10-42, а не
+# нарушение запрета плана 10-38. Состав сверяет с историей
+# `tests/test_planning/test_executed_plans_kept_their_scope.py`.
+PLAN_10_38_ANCESTOR_CHAIN_CONTROLS = (
+    "test_control_a_banner_lift_block_without_a_fixed_position_reddens",
+    "test_control_a_layer_on_an_in_flow_ancestor_does_not_redden",
+)
+
+
+def _gate_property_names() -> frozenset[str]:
+    """Имена свойств, которые контроль может взять из перечня: оба перечня групп, свойство
+    слоя, свойство намерения и имена канона."""
+    return frozenset(
+        CONTAINING_BLOCK_PROPERTIES
+        + STACKING_CONTEXT_PROPERTIES
+        + (LAYER_PROPERTY, INTENT_PROPERTY)
+        + tuple(case.prop for case in ANCESTOR_TRAP_CANON)
+    )
+
+
+def property_literals_in(function: ast.FunctionDef, names: frozenset[str]) -> list[str]:
+    """Строковые литералы исполняемого тела функции, выписывающие имя свойства из `names`:
+    литерал, равный имени, либо литерал объявления `имя: значение`. Строка документации —
+    проза, а не исполняемый код, и не читается."""
+    body = list(function.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    declaration = re.compile(
+        r"(?<![\w-])(" + "|".join(re.escape(name) for name in sorted(names)) + r")\s*:"
+    )
+    findings: list[str] = []
+    for statement in body:
+        for node in ast.walk(statement):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if node.value.strip() in names or declaration.search(node.value):
+                findings.append(
+                    f"`{function.name}`, строка {node.lineno}: литерал {node.value!r}"
+                )
+    return findings
+
+
+def test_the_ancestor_chain_controls_take_property_names_from_the_canon():
+    """КОНТРОЛИ ЦЕПИ ПРЕДКОВ ПЛАНА 10-38 НЕ ВЫПИСЫВАЮТ ИМЁН СВОЙСТВ ЛИТЕРАЛАМИ (`10-38#5`).
+
+    Каждая функция состава `PLAN_10_38_ANCESTOR_CHAIN_CONTROLS` стои́т в модуле (снятая
+    функция — отказ, а не зелень: состав разошёлся бы с деревом), и ни один строковый литерал
+    её исполняемого тела не равен имени свойства из перечней гейта и канона и не объявляет его.
+    """
+    names = _gate_property_names()
+    assert names, "перечни свойств пусты — правило судило бы пустоту"
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    absent = [name for name in PLAN_10_38_ANCESTOR_CHAIN_CONTROLS if name not in functions]
+    assert not absent, f"контролей состава нет в модуле: {absent} — состав разошёлся с деревом"
+    findings = [
+        finding
+        for name in PLAN_10_38_ANCESTOR_CHAIN_CONTROLS
+        for finding in property_literals_in(functions[name], names)
+    ]
+    assert not findings, (
+        "контроль цепи предков выписал имя свойства литералом там, где его можно взять из "
+        "перечня:\n" + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+def test_control_a_control_that_writes_a_property_name_literally_reddens():
+    """Зубы на синтетике: литерал `"opacity"` и литерал объявления `"opacity: 0.5"` в теле
+    контроля названы; имя, взятое индексом из перечня, и то же слово в строке документации —
+    нет."""
+    names = _gate_property_names()
+    source = (
+        "def test_control_x(tmp_path):\n"
+        '    """Доктóрит `opacity` у предка."""\n'
+        "    first = declare(STACKING_CONTEXT_PROPERTIES[2])\n"
+        '    second = declare("opacity")\n'
+        '    third = inject("opacity: 0.5")\n'
+    )
+    function = ast.parse(source).body[0]
+    findings = property_literals_in(function, names)
+    assert [finding.split(": литерал ")[1] for finding in findings] == [
+        "'opacity'",
+        "'opacity: 0.5'",
+    ], findings
+    assert STACKING_CONTEXT_PROPERTIES[2] == "opacity", "индекс синтетики разошёлся с перечнем"
+
+
 # Имена трёх групп гейта. Одно место сборки на весь модуль: две копии слова
 # разошлись бы при первой же правке, и правило согласия сличало бы группу с
 # опечаткой в её названии.

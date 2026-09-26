@@ -1124,3 +1124,49 @@ def test_control_a_doctored_revision_of_a_real_commit_reddens_10_40_1():
             "поле шапки `status` изменено: 'human_needed' → 'passed'",
         )
     ]
+
+
+# Коммит плана 10-38, заведший контроли цепи предков (запрет `10-38#5`; правило —
+# `tests/test_pages/test_shell.py::test_the_ancestor_chain_controls_take_property_names_from_the_canon`).
+PLAN_10_38_CONTROLS_COMMIT = "9809b643"
+PLAN_10_38_CONTROLS_LITERAL = "PLAN_10_38_ANCESTOR_CHAIN_CONTROLS"
+
+
+def _declared_tuple(source: str, name: str) -> tuple[str, ...]:
+    """Литерал кортежа строк, присвоенный имени `name` на уровне модуля, — по `ast`, без ввоза."""
+    for node in ast.parse(source).body:
+        if (
+            isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+        ):
+            return tuple(ast.literal_eval(node.value))
+    raise HistoryRefusal(f"литерала `{name}` в модуле нет — сверять нечего")
+
+
+def test_the_plan_10_38_control_group_in_the_shell_suite_is_what_history_introduced():
+    """Состав `PLAN_10_38_ANCESTOR_CHAIN_CONTROLS` в `test_shell.py` СНЯТ ИСТОРИЕЙ: это контроли
+    (`test_control_*`), которые коммит `9809b643` плана 10-38 завёл в файл, за вычетом снятых с
+    тех пор (`test_control_a_trapping_ancestor_reddens` — план 10-42). Модуль читается текстом,
+    а не ввозится."""
+    commits = [
+        commit
+        for commit in _plan_commits(_git_journal(), "10-38")
+        if commit.sha.startswith(PLAN_10_38_CONTROLS_COMMIT)
+    ]
+    assert len(commits) == 1, f"коммит {PLAN_10_38_CONTROLS_COMMIT} плана 10-38 не найден ровно один"
+    before, after = _revisions(commits[0].sha, SHELL_SUITE)
+    known = _definitions(before or "")
+    introduced = [
+        name for name in _definitions(after or "") if name not in known and name.startswith("test_control_")
+    ]
+    assert introduced, "коммит не завёл ни одного контроля — сверять не с чем (антивакуум)"
+    source = (PROJECT_ROOT / SHELL_SUITE).read_text(encoding="utf-8")
+    today = _definitions(source)
+    surviving = {name for name in introduced if name in today}
+    declared = _declared_tuple(source, PLAN_10_38_CONTROLS_LITERAL)
+    assert len(set(declared)) == len(declared), f"повтор в `{PLAN_10_38_CONTROLS_LITERAL}`"
+    assert set(declared) == surviving, (
+        f"состав `{PLAN_10_38_CONTROLS_LITERAL}` разошёлся с историей: лишние "
+        f"{sorted(set(declared) - surviving)}, пропущенные {sorted(surviving - set(declared))}; "
+        f"заведено коммитом {introduced}"
+    )
