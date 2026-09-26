@@ -152,17 +152,39 @@ def _run_git(*args: str) -> str:
 
 def _is_shallow(git: Callable[..., str] = _run_git) -> bool:
     """Ответ `git rev-parse --is-shallow-repository`; неразборчивый ответ — отказ."""
-    return False
+    answer = git(*SHALLOW_ARGS).strip()
+    if answer in ("true", "false"):
+        return answer == "true"
+    raise HistoryRefusal(
+        f"ответ `git {' '.join(SHALLOW_ARGS)}` неразборчив: {answer!r} — полнота истории не "
+        f"установлена, и правило не судит (граница 1)"
+    )
 
 
 def _parse_journal(text: str) -> tuple[Commit, ...]:
     """Текст журнала в форме `JOURNAL_ARGS` → записи «хэш, тема, пути» в порядке журнала."""
-    return ()
+    commits: list[Commit] = []
+    for chunk in text.split(RECORD_SEPARATOR):
+        if not chunk.strip():
+            continue
+        header, _, body = chunk.partition("\n")
+        sha, separator, subject = header.partition(FIELD_SEPARATOR)
+        if not separator or not sha:
+            raise HistoryRefusal(f"запись журнала без хэша и темы: {chunk[:80]!r}")
+        paths = tuple(line for line in body.splitlines() if line.strip())
+        commits.append(Commit(sha, subject, paths))
+    return tuple(commits)
 
 
 def _read_journal(git: Callable[..., str] = _run_git) -> tuple[Commit, ...]:
     """Журнал истории; мелкий клон — отказ ДО чтения и разбора журнала (граница 1)."""
-    return ()
+    if _is_shallow(git):
+        raise HistoryRefusal(
+            "мелкий клон: история укорочена, и коммиты исполненных планов могли не дойти — "
+            "правило не судит неполную историю и не пропускается (граница 1); нужен полный "
+            "клон (`git fetch --unshallow`)"
+        )
+    return _parse_journal(git(*JOURNAL_ARGS))
 
 
 @cache
@@ -176,14 +198,40 @@ def _git_journal() -> tuple[Commit, ...]:
 
 def _plan_commits(journal: Iterable[Commit], scope: str) -> tuple[Commit, ...]:
     """Коммиты плана `scope` (`10-44`) — по ОБЛАСТИ В ТЕМЕ; пустой отбор — отказ."""
-    return ()
+    match = PLAN_SCOPE.fullmatch(scope)
+    if match is None:
+        raise HistoryRefusal(f"область `{scope}` не в форме `ФАЗА-ПЛАН`")
+    phase, plan = int(match[1]), int(match[2])
+    subject_scope = re.compile(rf"^[a-z]+\(0*{phase}-0*{plan}\)!?:")
+    selected = tuple(commit for commit in journal if subject_scope.match(commit.subject))
+    if not selected:
+        raise HistoryRefusal(
+            f"коммитов плана {scope} не найдено: ни одна тема журнала не начинается "
+            f"`тип({scope}):` — правило ничего о плане не узнало и не зеленеет (антивакуум)"
+        )
+    return selected
 
 
 def _path_offences(
     commits: Iterable[Commit], forbidden: Iterable[str]
 ) -> list[PathOffence]:
     """Каждый путь поданных коммитов, запрещённый перечнем, — с коммитом и элементом перечня."""
-    return []
+    forbidden = tuple(forbidden)
+    if not forbidden:
+        raise HistoryRefusal("перечень запрещённых путей пуст: запрещать нечего, и правило не судит")
+    commits = tuple(commits)
+    if not any(commit.paths for commit in commits):
+        raise HistoryRefusal(
+            f"у {len(commits)} поданных коммитов нет ни одного пути — журнал снят без "
+            f"`--name-only` либо разбор выродился (антивакуум)"
+        )
+    offences: list[PathOffence] = []
+    for commit in commits:
+        for path in commit.paths:
+            for item in forbidden:
+                if path == item or (item.endswith("/") and path.startswith(item)):
+                    offences.append(PathOffence(commit.sha, commit.subject, path, item))
+    return offences
 
 
 # --- контроли на синтетическом журнале -------------------------------------------------------
