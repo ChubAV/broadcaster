@@ -1651,13 +1651,31 @@ def _branch_of_class(decisions) -> dict:
 
 
 def _closing_offences(rows, decisions, row_permits=frozenset()) -> list[str]:
-    """Нарушения закрывающего утверждения критерия 6 — ВСЕ, с тождествами, а не первое.
+    """Нарушения закрывающего утверждения критерия 6 в СИЛЬНОЙ форме — ВСЕ, с тождествами.
 
-    В области решений: строка, чья диспозиция НЕ ПРИНАДЛЕЖИТ `DECIDED_DISPOSITIONS`, несёт
-    причину из `UNRESOLVED_REASONS`, и причина согласна со строкой (объявленный тест — у
+    В области решений у КАЖДОЙ строки:
+    (1) диспозиция ПРИНАДЛЕЖИТ `DECIDED_DISPOSITIONS`, и причины «неразобрано» строка не несёт —
+        ни согласной со строкой, ни несогласной: `unresolved` с причиной есть та же открытая
+        строка, только названная;
+    (2) `partially-enforced` — остаток закрыт РАЗРЕШЕНИЕМ: `permit_scope_uncovered` = имя класса
+        строки при ветви класса `permit-class` (решение плана 15-22) либо = тождество строки при
+        записи ответа владельца по строке (`row_permits`, блок `row_decisions`, план 15-32).
+        Частичная строка класса `require-enforcement` без такой записи — нарушение: владелец
+        класс не разрешал, и её остаток не закрыт ничем;
+    (3) `permitted` — строка не объявила `verification: test` (D-05, решение владельца Г-1), и
+        `permit_scope` = имя класса при ветви `permit-class` либо = тождество при записи по строке.
+    Вне области решений не стоит ни одного поля решения — D-02, принадлежностью, а не числом.
+
+    ИСКЛЮЧЕНИЙ ПО ТОЖДЕСТВАМ НЕТ: литерала ни одной строки в исполняемых строках помощника нет.
+    Закрывают строку только ФОРМЫ — правило (диспозиция принуждения), разрешение класса, запись
+    ответа владельца по строке; каждую форму судит своё правило гейта.
+
+    ЛЕТОПИСЬ (план 15-33, задача 1; D-30/D-32). До плана 15-33 помощник держал слабую
+    (безусловную) форму плана 15-13: «строка, чья диспозиция НЕ ПРИНАДЛЕЖИТ `DECIDED_DISPOSITIONS`,
+    несёт причину из `UNRESOLVED_REASONS`, и причина согласна со строкой (объявленный тест — у
     `verification: test`; требование принуждения — у класса с ветвью `require-enforcement`;
-    ожидание владельца — у класса без решения); решённая строка причины не несёт. Вне области
-    решений не стоит ни одного поля решения — D-02, принадлежностью, а не числом.
+    ожидание владельца — у класса без решения); решённая строка причины не несёт». Та форма была
+    верна для состояния плана 15-13; её сменила эта по решению владельца Г-1.
     """
     branches = _branch_of_class(decisions)
     offences = []
@@ -1669,32 +1687,40 @@ def _closing_offences(rows, decisions, row_permits=frozenset()) -> list[str]:
                 offences.append(f"{name}: поля решения {strays} вне области решений (D-02)")
             continue
         disposition = row.get("disposition")
-        reason = row.get(UNRESOLVED_REASON_FIELD)
-        if disposition in DECIDED_DISPOSITIONS:
-            if UNRESOLVED_REASON_FIELD in row:
-                offences.append(f"{name}: причина `{reason}` при решённой диспозиции `{disposition}`")
-            continue
-        if reason not in UNRESOLVED_REASONS:
-            offences.append(
-                f"{name}: диспозиция `{disposition}` без названной причины из перечня "
-                f"(причина `{reason}`)"
-            )
-            continue
         klass = row.get("class")
-        if reason == REASON_DECLARED_RULE_ABSENT and row.get("verification") != VERIFICATION_TEST:
-            offences.append(f"{name}: причина `{reason}` у строки без `verification: test`")
-        elif (
-            reason == REASON_ENFORCEMENT_REQUIRED
-            and branches.get(klass) != REQUIRE_ENFORCEMENT_BRANCH
-        ):
+        branch = branches.get(klass)
+        reason = row.get(UNRESOLVED_REASON_FIELD)
+        if disposition not in DECIDED_DISPOSITIONS:
             offences.append(
-                f"{name}: причина `{reason}` у класса `{klass}` с ветвью `{branches.get(klass)}`"
+                f"{name}: диспозиция `{disposition}` — строка не решена (класс `{klass}`, ветвь "
+                f"`{branch}`, причина `{reason}`); сильная форма причину законной не считает"
             )
-        elif reason == REASON_AWAITING_OWNER and klass in branches:
-            offences.append(
-                f"{name}: причина `{reason}` у класса `{klass}`, получившего ответ "
-                f"`{branches[klass]}` — ответ есть, и «ожидание» было бы неправдой"
-            )
+            continue
+        if UNRESOLVED_REASON_FIELD in row:
+            offences.append(f"{name}: причина `{reason}` при решённой диспозиции `{disposition}`")
+        by_class = branch == PERMIT_CLASS_BRANCH
+        by_row = name in row_permits
+        if disposition == PARTIALLY_ENFORCED:
+            uncovered = row.get(PERMIT_SCOPE_UNCOVERED_FIELD)
+            if not ((uncovered == klass and by_class) or (uncovered == name and by_row)):
+                offences.append(
+                    f"{name}: частичная строка класса `{klass}` (ветвь `{branch}`) — остаток не "
+                    f"закрыт разрешением (`{PERMIT_SCOPE_UNCOVERED_FIELD}` = `{uncovered}`, "
+                    f"запись блока `{ROW_DECISIONS_KEY}`: {'есть' if by_row else 'нет'})"
+                )
+        elif disposition == PERMITTED:
+            if row.get("verification") == VERIFICATION_TEST:
+                offences.append(
+                    f"{name}: `{PERMITTED}` у строки с `verification: test` — по D-05 такой "
+                    f"запрет закрывает правило, а не разрешение (решение владельца Г-1)"
+                )
+            scope = row.get(PERMIT_SCOPE_FIELD)
+            if not ((scope == klass and by_class) or (scope == name and by_row)):
+                offences.append(
+                    f"{name}: `{PERMITTED}` без разрешения, которое её закрывает (класс `{klass}`, "
+                    f"ветвь `{branch}`, `{PERMIT_SCOPE_FIELD}` = `{scope}`, запись блока "
+                    f"`{ROW_DECISIONS_KEY}`: {'есть' if by_row else 'нет'})"
+                )
     return offences
 
 
@@ -1761,7 +1787,47 @@ def _disposition_distribution(rows) -> str:
 def test_the_closing_rule_of_criterion_6_every_phase_10_row_is_decided_or_names_its_reason(
     registry_document,
 ):
-    """ЗАКРЫВАЮЩЕЕ УТВЕРЖДЕНИЕ КРИТЕРИЯ 6: ни одной строки «неразобрано» БЕЗ названной причины.
+    """ЗАКРЫВАЮЩЕЕ УТВЕРЖДЕНИЕ КРИТЕРИЯ 6 — СИЛЬНАЯ ФОРМА: у каждого запрета Фазы 10 решение.
+
+    СИЛЬНАЯ ФОРМА (план 15-33, задача 1). Решение владельца Г-1 «Правила сейчас» (`chubav`,
+    2026-09-25, прогон `/gsd-plan-phase 15 --gaps`): закрывающее правило переходит в сильную
+    форму. Ни одна строка области решений (Фаза 10, 321) не `unresolved` — ни без причины, ни с
+    причиной из `UNRESOLVED_REASONS`; ни одна `partially-enforced` строка класса с ветвью
+    `require-enforcement` не стоит без разрешения своего остатка; каждая `partially-enforced`
+    строка разрешённого класса несёт `permit_scope_uncovered` = свой класс; каждая `permitted`
+    строка несёт `permit_scope` = свой класс с разрешением класса либо = своё тождество с записью
+    блока `row_decisions`; ни одна строка с `verification: test` не `permitted` (D-05). Сильная
+    форма стала возможной работой планов 15-15…15-32: правила написаны (планы 15-24…15-31
+    записали меру покрытия режимом `--record`), 16 строк, которые нельзя было принудить как
+    написаны, решены ответом владельца на чекпойнте плана 15-32 (2026-09-26). Ветвь «оставить
+    открытой» (причина `owner-kept-open`) не выбрана ни для одной строки, и её формы нет.
+
+    ОТВЕТ ВЛАДЕЛЬЦА ПО СТРОКЕ (план 15-32) закрывает строку той же формой, что ответ по классу:
+    запись блока `row_decisions` ветви `permit-row` с областью-тождеством, судимая
+    `_row_decision_offences` (строке с `verification: test` такой записи нет). Так закрыт остаток
+    частичной строки `product-invariant` с ответом (б) — это не исключение по тождеству: помощник
+    не знает ни одного тождества, он принимает ФОРМУ ответа владельца, как принимает разрешение
+    класса. ⚠️ РАЗРЕШЕНИЕ НЕ ЕСТЬ СОБЛЮДЕНИЕ.
+
+    КАК СИЛЬНАЯ ФОРМА СУДИТ ЧАСТИЧНЫЕ СТРОКИ РАЗРЕШЁННЫХ КЛАССОВ — решение плана 15-22, дословно:
+    «РЕШЕНИЕ ПЛАНИРОВАНИЯ О 23 ЧАСТИЧНЫХ СТРОКАХ РАЗРЕШЁННЫХ КЛАССОВ (записано здесь и в докстринге
+    правила, по поручению Г-1): непокрытая часть частично принуждённого запрета класса с ветвью
+    `permit-class` покрыта разрешением ЭТОГО класса, и это стоит машинно читаемым полем СТРОКИ
+    `permit_scope_uncovered` = имя класса — каждая строка несёт свою запись (D-04), а не выводится
+    из блока `class_decisions` молча. D-05 соблюдён: существование правила предъявлено (оно
+    покрывает часть), разрешение закрывает лишь названный остаток». (На день плана 15-33 таких строк
+    24: план 15-31 добавил строку `10-48#3` класса `live-environment-safety`; правило числа не
+    знает.)
+
+    ИМЯ ПРАВИЛА ОСТАВЛЕНО ПРЕЖНИМ НАМЕРЕННО: ссылки на него живут в `15-VALIDATION.md`, в сводках
+    планов 15-13…15-32 и в `15-PROHIBITIONS-SUBJECT.md`. Вторая половина имени («или называет свою
+    причину») — летопись слабой формы, а не её возврат: ни одна причина правило больше не зеленит.
+
+    Летопись: слабая форма, план 15-13 (D-30/D-32 — процитировано, а не вычеркнуто). Первая строка
+    докстринга тогда: «ЗАКРЫВАЮЩЕЕ УТВЕРЖДЕНИЕ КРИТЕРИЯ 6: ни одной строки «неразобрано» БЕЗ
+    названной причины». Слабая форма была верна для состояния плана 15-13 (ответ
+    `require-enforcement` оставил класс открытым, правил не было); с 2026-09-25 её сменила сильная
+    по решению владельца Г-1. Абзац того дня — дословно:
 
     КАКАЯ ИЗ ДВУХ ФОРМ ВЫБРАНА И ПОЧЕМУ (план 15-13, задача 2 — объявлено здесь, а не оставлено
     на догадку проверяющему). Сильная форма — «ни один запрет Фазы 10 не несёт `unresolved`
@@ -1781,15 +1847,21 @@ def test_the_closing_rule_of_criterion_6_every_phase_10_row_is_decided_or_names_
     причины) и зеленеет работой — то есть краснеет в ПРАВИЛЬНУЮ сторону; возврат работы назад
     его не зеленит (контроль ниже). Нетерминальность выражена ОТРИЦАНИЕМ принадлежности
     `DECIDED_DISPOSITIONS`, литерала сегодняшнего состояния в исполняемых строках нет.
+    (С плана 15-33 красно и на строке, возвращённой к «неразобрано» С причиной, — контроль
+    `test_control_the_strong_closing_rule_reddens_on_a_reasoned_unresolved_row`; на частичной
+    строке без разрешения остатка и на разрешённой без разрешения — два соседних контроля.)
 
     Антивакуум: область решений в реестре непуста и равна объявленной, а блок ответа
     владельца непуст — без него «ожидание владельца» стало бы законным у любой строки.
+    (С плана 15-33 без блока ответа по классам ни одна строка `permitted` класса не закрыта, и
+    правило красно и само — утверждение сохранено, чтобы отказ назвал причину словами.)
     """
     rows = registry_document["rows"]
     decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
+    row_permits = _row_permits(registry_document.get(ROW_DECISIONS_KEY) or [])
     assert len(_decision_scope_rows(rows)) == PROHIBITIONS_IN_DECISION_SCOPE
     assert decisions, "блок ответа владельца по классам пуст или отсутствует"
-    offences = _closing_offences(rows, decisions)
+    offences = _closing_offences(rows, decisions, row_permits)
     assert not offences, (
         f"нарушения закрывающего утверждения критерия 6 ({len(offences)}):\n"
         + "\n".join(offences)
@@ -2616,7 +2688,10 @@ def test_the_record_mode_writes_a_row_permission_only_with_its_record(
     assert refused == base
 
     answered = copy.deepcopy(base)
-    answered[ROW_DECISIONS_KEY] = [_row_permit(identity)]
+    # ЛЕТОПИСЬ (план 15-33): запись ДОБАВЛЯЕТСЯ к живому блоку, а не заменяет его. До плана 15-33
+    # блок заменялся одной синтетической записью, и слабая форма закрывающего правила этого не
+    # видела; сильная назвала бы живые строки, чьё разрешение — ответ владельца по строке.
+    answered[ROW_DECISIONS_KEY] = [*(base.get(ROW_DECISIONS_KEY) or []), _row_permit(identity)]
     before = copy.deepcopy(answered)
     row = tool.record_row_permission(answered, live_census, identity)
     assert row["disposition"] == PERMITTED and row[PERMIT_SCOPE_FIELD] == identity, row
