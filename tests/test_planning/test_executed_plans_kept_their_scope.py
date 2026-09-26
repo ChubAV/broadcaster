@@ -120,11 +120,46 @@ class PathOffence:
 
 
 @dataclass(frozen=True)
+class ContentOffence:
+    """Коммит плана, изменивший СОДЕРЖАНИЕ наблюдаемого пути вопреки факту: КТО, ГДЕ и ЧТО."""
+
+    sha: str
+    subject: str
+    path: str
+    detail: str
+
+    def __str__(self) -> str:
+        return f"{self.sha[:8]} «{self.subject}» — `{self.path}`: {self.detail}"
+
+
+# ВИДЫ ФАКТА (план 15-31). `PATHS` — вид плана 15-30: коммиты плана не касаются путей перечня
+# `forbidden`. Остальные — факты о СОДЕРЖАНИИ правки: коммиты плана касаться наблюдаемых путей
+# `watched` МОГУТ, но содержимое до и после каждого такого коммита (`git show <коммит>^:<путь>`
+# и `<коммит>:<путь>`) обязано держать предикат вида над данными `subject`.
+PATHS = "paths"
+DEFINITION_SOURCES = "definition-sources"
+HEADER_FIELDS = "header-fields"
+SECTION_LINE = "section-line"
+STATUS_LINES_KEPT = "status-lines-kept"
+EQUAL_WITHOUT_COMMENTS = "equal-without-comments"
+
+
+@dataclass(frozen=True)
 class HistoryFact:
-    """Исторический факт плана: область темы `10-NN` и пути, которых его коммиты не касаются."""
+    """Исторический факт плана: область темы `10-NN` и то, чего его коммиты не делают.
+
+    Вид `PATHS` — пути `forbidden` коммитами плана не тронуты. Вид содержания — наблюдаемые пути
+    `watched` тронуты могут быть, но предикат вида над данными `subject` держится на каждой паре
+    «до / после» такого коммита. `owner` — у вида `DEFINITION_SOURCES` план, чьи определения
+    составляют группу `subject` (состав сверяется с историей правилом ниже).
+    """
 
     scope: str
-    forbidden: tuple[str, ...]
+    forbidden: tuple[str, ...] = ()
+    kind: str = PATHS
+    watched: tuple[str, ...] = ()
+    subject: tuple[str, ...] = ()
+    owner: str = ""
 
 
 # СУИТА — каталог `tests/`.
@@ -318,6 +353,58 @@ def _path_offences(
     return offences
 
 
+# --- факты содержания: чистые предикаты пары «до / после» -----------------------------------
+#
+# Каждый предикат — чистая функция `(путь, до, после, subject) → [описание изменения]`; `None`
+# вместо текста — пути в этой ревизии нет. Пара, о которой предикат ничего узнать не может
+# (группы нет до коммита, поля нет в шапке, раздела нет, дифф пуст), — отказ `HistoryRefusal`,
+# а не пустой список: факт, ничего не узнавший, не зеленеет (антивакуум).
+
+
+def _definition_source_changes(
+    path: str, before: str | None, after: str | None, names: tuple[str, ...]
+) -> list[str]:
+    """Определения группы `names`, чей исходник после коммита не равен исходнику до."""
+    return []
+
+
+def _header_field_changes(
+    path: str, before: str | None, after: str | None, fields: tuple[str, ...]
+) -> list[str]:
+    """Поля `fields` шапки, чьё значение после коммита не равно значению до."""
+    return []
+
+
+def _section_line_changes(
+    path: str, before: str | None, after: str | None, subject: tuple[str, ...]
+) -> list[str]:
+    """Строка пункта `subject[1]` раздела `subject[0]`, не равная себе до коммита."""
+    return []
+
+
+def _status_line_changes(
+    path: str, before: str | None, after: str | None, subject: tuple[str, ...]
+) -> list[str]:
+    """Строки `status:`, удалённые или изменённые диффом пары."""
+    return []
+
+
+def _executable_changes(
+    path: str, before: str | None, after: str | None, subject: tuple[str, ...]
+) -> list[str]:
+    """Изменение пары за вычетом комментариев: `.py` — `ast.dump`, `.html` — без `{# … #}`."""
+    return []
+
+
+def _content_offences(
+    journal: Iterable[Commit],
+    fact: HistoryFact,
+    revisions: Callable[[str, str], tuple[str | None, str | None]],
+) -> list[ContentOffence]:
+    """Каждое изменение содержания наблюдаемого пути коммитами плана — с коммитом и путём."""
+    return []
+
+
 # --- контроли на синтетическом журнале -------------------------------------------------------
 
 PLAN_COMMIT = Commit("a" * 40, "feat(10-44): правка плана", ("tests/test_planning/y.py",))
@@ -400,6 +487,199 @@ def test_control_a_shallow_clone_is_refused_before_the_journal_is_parsed():
     with pytest.raises(HistoryRefusal, match="неразборчив"):
         _read_journal(git_answering("--is-shallow-repository\n"))
     assert requested == [SHALLOW_ARGS, SHALLOW_ARGS], requested
+
+
+# --- контроли видов содержания на синтетических парах ------------------------------------------
+
+GROUP_BEFORE = (
+    "import pytest\n\n\n"
+    "GROUP_FLAG = 3\n\n\n"
+    "@pytest.mark.slow\n"
+    "def kept_rule():\n"
+    "    # комментарий внутри тела — тоже символ исходника группы\n"
+    "    return GROUP_FLAG\n\n\n"
+    "def outside_rule():\n"
+    "    return 2\n"
+)
+GROUP = ("GROUP_FLAG", "kept_rule")
+
+
+def test_control_a_changed_group_definition_is_named_and_an_outside_one_is_not():
+    """Вид «исходник определений группы равен»: правка тела, декоратора, комментария внутри
+    тела и значения константы группы называются; правка определения вне группы — нет; снятое
+    определение названо; группы нет до коммита — отказ."""
+    path = "tests/test_pages/test_shell.py"
+    body = GROUP_BEFORE.replace("return GROUP_FLAG", "return GROUP_FLAG + 1")
+    assert _definition_source_changes(path, GROUP_BEFORE, body, GROUP) == [
+        "`kept_rule`: исходник определения изменён"
+    ]
+    for doctored in (
+        GROUP_BEFORE.replace("@pytest.mark.slow\n", ""),
+        GROUP_BEFORE.replace("тоже символ", "тоже знак"),
+        GROUP_BEFORE.replace("GROUP_FLAG = 3", "GROUP_FLAG = 4"),
+    ):
+        assert len(_definition_source_changes(path, GROUP_BEFORE, doctored, GROUP)) == 1, doctored
+    outside = GROUP_BEFORE.replace("return 2", "return 20")
+    assert _definition_source_changes(path, GROUP_BEFORE, outside, GROUP) == []
+    removed = GROUP_BEFORE.replace("GROUP_FLAG = 3\n", "")
+    assert _definition_source_changes(path, GROUP_BEFORE, removed, GROUP) == [
+        "`GROUP_FLAG`: определение снято"
+    ]
+    with pytest.raises(HistoryRefusal, match="нет до коммита"):
+        _definition_source_changes(path, GROUP_BEFORE, GROUP_BEFORE, ("absent_rule",))
+
+
+HEADER_BEFORE = (
+    "---\n"
+    "phase: 10\n"
+    "status: human_needed\n"
+    "score: 7/8 must-haves verified\n"
+    "re_verification:\n"
+    "  previous_status: gaps_found\n"
+    "gaps:\n"
+    "  - truth: x\n"
+    "    status: failed\n"
+    "---\n\n"
+    "# Отчёт\n\nstatus: это тело, а не шапка\n"
+)
+HEADER_FIELDS_OF_10_40 = ("status", "score", "gaps", "re_verification")
+
+
+def test_control_a_changed_header_field_is_named_and_an_added_one_is_not():
+    """Вид «поля шапки равны»: изменённый `status` и изменённый гэп называются; добавленный
+    блок `overrides` и правка тела — нет; поля нет в шапке до коммита — отказ."""
+    path = PHASE_10_DIR + "10-VERIFICATION.md"
+    status = HEADER_BEFORE.replace("status: human_needed", "status: passed")
+    assert _header_field_changes(path, HEADER_BEFORE, status, HEADER_FIELDS_OF_10_40) == [
+        "поле шапки `status` изменено: 'human_needed' → 'passed'"
+    ]
+    gap = HEADER_BEFORE.replace("    status: failed", "    status: resolved")
+    assert len(_header_field_changes(path, HEADER_BEFORE, gap, HEADER_FIELDS_OF_10_40)) == 1
+    overrides = HEADER_BEFORE.replace("gaps:\n", "overrides:\n  - must_have: y\ngaps:\n")
+    assert _header_field_changes(path, HEADER_BEFORE, overrides, HEADER_FIELDS_OF_10_40) == []
+    prose = HEADER_BEFORE.replace("это тело", "это правленое тело")
+    assert _header_field_changes(path, HEADER_BEFORE, prose, HEADER_FIELDS_OF_10_40) == []
+    with pytest.raises(HistoryRefusal, match="нет в шапке до коммита"):
+        _header_field_changes(path, HEADER_BEFORE, HEADER_BEFORE, ("verdict",))
+
+
+ROADMAP_BEFORE = (
+    "## Phase Details\n\n"
+    "### Phase 9: Пилот\n\n"
+    "  3. третий критерий чужой фазы\n\n"
+    "### Phase 10: Рычаг\n\n"
+    "**Success Criteria** (what must be TRUE):\n\n"
+    "  1. первый критерий\n"
+    "  2. второй критерий\n"
+    "  3. третий критерий: новых строк JS фаза не добавляет\n"
+    "  4. четвёртый критерий\n\n"
+    "#### Подраздел фазы\n\n"
+    "- [x] 10-40-PLAN.md — отметка плана\n\n"
+    "### Phase 11: Разделы\n\n"
+    "  3. третий критерий следующей фазы\n"
+)
+CRITERION_3_OF_PHASE_10 = ("### Phase 10:", "3")
+
+
+def test_control_a_changed_section_line_is_named_and_a_neighbour_is_not():
+    """Вид «строка раздела равна»: правка критерия 3 Фазы 10 называется; правка соседнего
+    критерия, критерия 3 соседних фаз и отметки плана — нет; раздела нет — отказ."""
+    path = ".planning/ROADMAP.md"
+    changed = ROADMAP_BEFORE.replace("новых строк JS", "новых сущностей JS")
+    assert _section_line_changes(path, ROADMAP_BEFORE, changed, CRITERION_3_OF_PHASE_10) == [
+        "строка пункта 3 раздела `### Phase 10:` изменена: было "
+        "'  3. третий критерий: новых строк JS фаза не добавляет', стало "
+        "['  3. третий критерий: новых сущностей JS фаза не добавляет']"
+    ]
+    for neighbour in (
+        ROADMAP_BEFORE.replace("четвёртый критерий", "четвёртый критерий, правленый"),
+        ROADMAP_BEFORE.replace("третий критерий чужой", "третий критерий правленый чужой"),
+        ROADMAP_BEFORE.replace("третий критерий следующей", "третий правленый следующей"),
+        ROADMAP_BEFORE.replace("- [x] 10-40", "- [ ] 10-40"),
+    ):
+        assert _section_line_changes(path, ROADMAP_BEFORE, neighbour, CRITERION_3_OF_PHASE_10) == []
+    with pytest.raises(HistoryRefusal, match="раздела `### Phase 12:` нет"):
+        _section_line_changes(path, ROADMAP_BEFORE, ROADMAP_BEFORE, ("### Phase 12:", "3"))
+
+
+UAT_BEFORE = (
+    "---\nstatus: partial\n---\n\n"
+    "## Gaps\n\n```yaml\n"
+    "- truth: панель закрывается\n"
+    "  status: failed\n"
+    "  reason: не наблюдено\n"
+    "```\n"
+)
+
+
+def test_control_a_removed_status_line_is_named_and_an_insertion_is_not():
+    """Вид «строки `status:` не удалены»: удалённая и изменённая строка `status:` называются;
+    дифф из одних вставок (отдельный ключ `status_note`) — нет; пустой дифф — отказ."""
+    path = PHASE_10_DIR + "10-UAT.md"
+    removed = UAT_BEFORE.replace("  status: failed\n", "")
+    assert _status_line_changes(path, UAT_BEFORE, removed, ()) == [
+        "строка `status: failed` удалена или изменена"
+    ]
+    changed = UAT_BEFORE.replace("status: failed", "status: resolved")
+    assert _status_line_changes(path, UAT_BEFORE, changed, ()) == [
+        "строка `status: failed` удалена или изменена"
+    ]
+    inserted = UAT_BEFORE.replace(
+        "  reason: не наблюдено\n", "  reason: не наблюдено\n  status_note: закрыт планом\n"
+    )
+    assert _status_line_changes(path, UAT_BEFORE, inserted, ()) == []
+    with pytest.raises(HistoryRefusal, match="дифф пуст"):
+        _status_line_changes(path, UAT_BEFORE, UAT_BEFORE, ())
+
+
+PY_BEFORE = 'def handler():\n    # пометка, протухающая громко\n    return "ok"\n'
+TEMPLATE_BEFORE = '<div class="modal">{# пометка #}\n  {{ body }}\n</div>\n'
+
+
+def test_control_an_executable_change_is_named_and_a_comment_change_is_not():
+    """Вид «равно без комментариев»: `.py` — `ast.dump`, шаблон — без `{# … #}`; правка
+    исполняемой строки называется, правка комментария — нет; иной файл сличается целиком."""
+    py = "app/pages/schedules.py"
+    assert _executable_changes(py, PY_BEFORE, PY_BEFORE.replace("громко", "тихо"), ()) == []
+    assert _executable_changes(py, PY_BEFORE, PY_BEFORE.replace('"ok"', '"no"'), ()) == [
+        "исполняемое содержание изменено (сличение без комментариев)"
+    ]
+    html = "app/templates/components/modal.html"
+    comment = TEMPLATE_BEFORE.replace("{# пометка #}", "{# другая пометка #}")
+    assert _executable_changes(html, TEMPLATE_BEFORE, comment, ()) == []
+    body = TEMPLATE_BEFORE.replace("{{ body }}", "{{ other }}")
+    assert len(_executable_changes(html, TEMPLATE_BEFORE, body, ())) == 1
+    css = "app/static/css/app.css"
+    assert len(_executable_changes(css, "a{}\n", "/* x */a{}\n", ())) == 1
+    assert _executable_changes(py, None, PY_BEFORE, ()) == ["файл заведён коммитом"]
+
+
+def test_control_a_content_fact_reads_every_touched_watched_path_and_refuses_on_none():
+    """Разводка вида содержания: читается каждый наблюдаемый путь, которого коснулся коммит
+    плана (и только он), изменение названо с коммитом; ни одного наблюдаемого пути коммиты
+    плана не коснулись — отказ, а не зелень (антивакуум)."""
+    watched = PHASE_10_DIR + "10-UAT.md"
+    journal = (
+        Commit("1" * 40, "docs(10-39): правка", (watched, "app/pages/x.py")),
+        Commit("2" * 40, "docs(10): чужой", (watched,)),
+    )
+    removed = UAT_BEFORE.replace("  status: failed\n", "")
+    read: list[tuple[str, str]] = []
+
+    def revisions(sha: str, path: str) -> tuple[str | None, str | None]:
+        read.append((sha, path))
+        return UAT_BEFORE, removed
+
+    fact = HistoryFact("10-39", kind=STATUS_LINES_KEPT, watched=(watched,))
+    assert _content_offences(journal, fact, revisions) == [
+        ContentOffence(
+            "1" * 40, "docs(10-39): правка", watched, "строка `status: failed` удалена или изменена"
+        )
+    ]
+    assert read == [("1" * 40, watched)], read
+    elsewhere = HistoryFact("10-39", kind=STATUS_LINES_KEPT, watched=("docs/other.md",))
+    with pytest.raises(HistoryRefusal, match="ни одного наблюдаемого пути"):
+        _content_offences(journal, elsewhere, revisions)
 
 
 # --- правила над живым журналом ---------------------------------------------------------------
