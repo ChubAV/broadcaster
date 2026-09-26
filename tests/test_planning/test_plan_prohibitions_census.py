@@ -1650,7 +1650,7 @@ def _branch_of_class(decisions) -> dict:
     }
 
 
-def _closing_offences(rows, decisions) -> list[str]:
+def _closing_offences(rows, decisions, row_permits=frozenset()) -> list[str]:
     """Нарушения закрывающего утверждения критерия 6 — ВСЕ, с тождествами, а не первое.
 
     В области решений: строка, чья диспозиция НЕ ПРИНАДЛЕЖИТ `DECIDED_DISPOSITIONS`, несёт
@@ -1696,6 +1696,20 @@ def _closing_offences(rows, decisions) -> list[str]:
                 f"`{branches[klass]}` — ответ есть, и «ожидание» было бы неправдой"
             )
     return offences
+
+
+def _document_closing_offences(document) -> list[str]:
+    """Закрывающее правило над ДОКУМЕНТОМ реестра: строки, ответ по классам и ответ по строкам."""
+    return _closing_offences(
+        document["rows"],
+        document.get(tool.CLASS_DECISIONS_KEY) or [],
+        _row_permits(document.get(ROW_DECISIONS_KEY) or []),
+    )
+
+
+def _named(offences) -> list[str]:
+    """Тождества, названные нарушениями, — по одному, в порядке первого упоминания."""
+    return list(dict.fromkeys(offence.split(":")[0] for offence in offences))
 
 
 def _permit_scope_offences(rows, row_permits=frozenset()) -> list[str]:
@@ -1838,25 +1852,40 @@ def test_control_the_closing_rule_reddens_on_the_seeded_registry_and_on_a_reason
 
     (а) Засеянное состояние (решений нет ни одного) краснит правило на КАЖДОЙ строке области
     решений — правило красно ДО работы. (б) Подмена диспозиции одной решённой строки на
-    засеянную без причины краснит ровно её. (в) Причина, не согласная со строкой, называется.
-    (г) Поле решения, поставленное строке вне области, называется.
+    засеянную без причины краснит ровно её. (в) Строка, возвращённая к `unresolved` С ПРИЧИНОЙ, —
+    согласной со строкой или нет, — называется. (г) Поле решения, поставленное строке вне области,
+    называется.
+
+    ЛЕТОПИСЬ (план 15-33, задача 1; D-30/D-32). До плана 15-33 пункт (в) утверждал обратное для
+    согласной причины: «строка `enforcement-required` класса `require-enforcement` правило НЕ
+    краснит» (`assert _closing_offences(awaiting["rows"], decisions) == []`), и краснела только
+    причина, со строкой не согласная. Это было верно для слабой (безусловной) формы плана 15-13.
+    С решения владельца Г-1 правило стоит в сильной форме, и строка с причиной — любой — нарушение.
+    Имя контроля оставлено прежним: его цитируют сводки и `15-PROHIBITIONS-SUBJECT.md`.
     """
     rows = registry_document["rows"]
     decisions = registry_document.get(tool.CLASS_DECISIONS_KEY) or []
-    assert _closing_offences(rows, decisions) == []
+    assert _document_closing_offences(registry_document) == []
 
-    seeded = [
+    seeded = copy.deepcopy(registry_document)
+    seeded["rows"] = [
         {
             **{key: value for key, value in row.items() if key not in ROW_DECISION_FIELDS},
             "disposition": tool.SEED_DISPOSITION,
         }
         for row in rows
     ]
-    offences = _closing_offences(seeded, decisions)
+    offences = _document_closing_offences(seeded)
     assert len(offences) == PROHIBITIONS_IN_DECISION_SCOPE, offences[:3]
+    assert _named(offences) == [_row_name(row) for row in _decision_scope_rows(seeded["rows"])]
 
-    decided = next(row for row in _decision_scope_rows(rows) if row["disposition"] == PERMITTED)
-    reverted = [
+    decided = next(
+        row
+        for row in _decision_scope_rows(rows)
+        if row["disposition"] == PERMITTED and row.get(PERMIT_SCOPE_FIELD) == row.get("class")
+    )
+    reverted = copy.deepcopy(registry_document)
+    reverted["rows"] = [
         {
             **{key: value for key, value in row.items() if key != PERMIT_SCOPE_FIELD},
             "disposition": tool.SEED_DISPOSITION,
@@ -1865,39 +1894,55 @@ def test_control_the_closing_rule_reddens_on_the_seeded_registry_and_on_a_reason
         else row
         for row in rows
     ]
-    named = [offence.split(":")[0] for offence in _closing_offences(reverted, decisions)]
+    named = _named(_document_closing_offences(reverted))
     assert named == [_row_name(decided)], named
 
     awaiting, required = _awaiting_enforcement(registry_document)
     assert required.get("verification") != VERIFICATION_TEST
-    assert _closing_offences(awaiting["rows"], decisions) == []
-    swapped = [
-        {**row, UNRESOLVED_REASON_FIELD: REASON_DECLARED_RULE_ABSENT} if row is required else row
-        for row in awaiting["rows"]
-    ]
-    named = [offence.split(":")[0] for offence in _closing_offences(swapped, decisions)]
+    assert required.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
+    named = _named(_document_closing_offences(awaiting))
+    assert named == [_row_name(required)], named
+    swapped = copy.deepcopy(awaiting)
+    for row in swapped["rows"]:
+        if _row_name(row) == _row_name(required):
+            row[UNRESOLVED_REASON_FIELD] = REASON_DECLARED_RULE_ABSENT
+    named = _named(_document_closing_offences(swapped))
     assert named == [_row_name(required)], named
 
     outside = next(row for row in rows if str(row.get("phase")) != DECISION_SCOPE_PHASE)
-    widened = [
+    widened = copy.deepcopy(registry_document)
+    widened["rows"] = [
         {**row, UNRESOLVED_REASON_FIELD: REASON_AWAITING_OWNER} if row is outside else row
         for row in rows
     ]
-    named = [offence.split(":")[0] for offence in _closing_offences(widened, decisions)]
+    named = _named(_document_closing_offences(widened))
     assert named == [_row_name(outside)], named
 
 
 def test_control_every_reason_is_judged_against_its_row():
-    """Синтетика: по одной строке на каждую несогласную причину и на каждый вид нарушения."""
+    """Синтетика: КАЖДАЯ строка области решений с причиной «неразобрано» — нарушение.
+
+    Причина согласная (0–2: по одной на каждое значение `UNRESOLVED_REASONS`) называется так же,
+    как несогласная (4–6), как строка без причины (7), с причиной вне перечня (8) и решённая строка
+    с причиной (9). Молчат законные строки: разрешённая именем своего разрешённого класса (3) и
+    принуждённая (10).
+
+    ЛЕТОПИСЬ (план 15-33, задача 1; D-30/D-32). До плана 15-33 строки 0–2 молчали: слабая
+    (безусловная) форма плана 15-13 принимала «неразобрано» с причиной, СОГЛАСНОЙ со строкой, и
+    контроль утверждал `range(4, 10)`. Сильная форма (решение владельца Г-1) причину законной не
+    считает. Перечень `UNRESOLVED_REASONS` остаётся объявленным: его читают `--breakdown` прибора и
+    правило согласия перечней — но закрывающее правило ни одну причину не принимает.
+    """
     enforced_class, permitted_class, silent_class = sorted(PROHIBITION_CLASSES)[:3]
     decisions = [
         {"decision_branch": REQUIRE_ENFORCEMENT_BRANCH, "decision_scope": enforced_class},
         {"permit_branch": PERMIT_CLASS_BRANCH, "permit_scope": permitted_class},
     ]
 
-    def row(index, klass, disposition, reason=None, verification=VERIFICATION_NONE):
+    def row(index, klass, disposition, reason=None, verification=VERIFICATION_NONE, **fields):
         built = {"plan": SYNTHETIC_PLAN, "index": index, "phase": DECISION_SCOPE_PHASE,
-                 "class": klass, "verification": verification, "disposition": disposition}
+                 "class": klass, "verification": verification, "disposition": disposition,
+                 **fields}
         if reason is not None:
             built[UNRESOLVED_REASON_FIELD] = reason
         return built
@@ -1907,16 +1952,125 @@ def test_control_every_reason_is_judged_against_its_row():
         row(1, permitted_class, tool.SEED_DISPOSITION, REASON_DECLARED_RULE_ABSENT,
             VERIFICATION_TEST),
         row(2, silent_class, tool.SEED_DISPOSITION, REASON_AWAITING_OWNER),
-        row(3, permitted_class, PERMITTED),
+        row(3, permitted_class, PERMITTED, permit_scope=permitted_class),
         row(4, permitted_class, tool.SEED_DISPOSITION, REASON_ENFORCEMENT_REQUIRED),
         row(5, permitted_class, tool.SEED_DISPOSITION, REASON_DECLARED_RULE_ABSENT),
         row(6, enforced_class, tool.SEED_DISPOSITION, REASON_AWAITING_OWNER),
         row(7, permitted_class, tool.SEED_DISPOSITION),
         row(8, permitted_class, tool.SEED_DISPOSITION, "waived"),
-        row(9, permitted_class, PERMITTED, REASON_AWAITING_OWNER),
+        row(9, permitted_class, PERMITTED, REASON_AWAITING_OWNER, permit_scope=permitted_class),
+        row(10, enforced_class, "enforced"),
     ]
-    named = [offence.split(":")[0] for offence in _closing_offences(rows, decisions)]
-    assert named == [f"{SYNTHETIC_PLAN}#{index}" for index in range(4, 10)], named
+    assert {row[UNRESOLVED_REASON_FIELD] for row in rows[:3]} == UNRESOLVED_REASONS
+    named = _named(_closing_offences(rows, decisions))
+    expected = [f"{SYNTHETIC_PLAN}#{index}" for index in (0, 1, 2, 4, 5, 6, 7, 8, 9)]
+    assert named == expected, named
+    reasoned = [_row_name(row) for row in rows if UNRESOLVED_REASON_FIELD in row]
+    assert set(reasoned) <= set(named), sorted(set(reasoned) - set(named))
+
+
+def test_control_the_strong_closing_rule_reddens_on_a_reasoned_unresolved_row(registry_document):
+    """RED-ЦЕЛЬ ПЛАНА 15-33: строка, возвращённая к `unresolved` С ЗАКОННОЙ ПРИЧИНОЙ, — нарушение.
+
+    На копии живого реестра одна строка области решений класса `require-enforcement` (без
+    `verification: test`) возвращена к `unresolved` с причиной `enforcement-required` — к
+    состоянию, которое она несла до своего плана принуждения. Причина согласна со строкой, и
+    слабая форма плана 15-13 её принимала: правило молчало. Сильная форма называет ровно эту
+    строку. Живой реестр — зелен. Дерево не правится.
+    """
+    assert _document_closing_offences(registry_document) == []
+    document, victim = _awaiting_enforcement(registry_document)
+    assert victim.get(UNRESOLVED_REASON_FIELD) == REASON_ENFORCEMENT_REQUIRED
+    assert victim.get("disposition") not in DECIDED_DISPOSITIONS
+    named = _named(_document_closing_offences(document))
+    assert named == [_row_name(victim)], named
+
+
+def test_control_the_strong_closing_rule_names_a_partial_row_whose_remainder_is_not_permitted(
+    registry_document,
+):
+    """Частичная строка, чей остаток не закрыт РАЗРЕШЕНИЕМ, — нарушение сильной формы.
+
+    На копиях живого реестра: (а) частичная строка класса `require-enforcement` без поля
+    `permit_scope_uncovered` — названа; (б) та же строка с полем = имя СВОЕГО класса — названа:
+    владелец этот класс не разрешал; (в) частичная строка разрешённого класса, у которой снято
+    `permit_scope_uncovered`, — названа. Каждый раз — ровно она.
+    """
+    branches = _branch_of_class(registry_document.get(tool.CLASS_DECISIONS_KEY) or [])
+
+    document, victim = _partial_awaiting_enforcement(registry_document)
+    assert branches[victim["class"]] == REQUIRE_ENFORCEMENT_BRANCH
+    named = _named(_document_closing_offences(document))
+    assert named == [_row_name(victim)], named
+
+    victim[PERMIT_SCOPE_UNCOVERED_FIELD] = victim["class"]
+    named = _named(_document_closing_offences(document))
+    assert named == [_row_name(victim)], named
+
+    stripped = copy.deepcopy(registry_document)
+    partial = next(
+        row
+        for row in _decision_scope_rows(stripped["rows"])
+        if row.get("disposition") == PARTIALLY_ENFORCED
+        and branches.get(row.get("class")) == PERMIT_CLASS_BRANCH
+    )
+    partial.pop(PERMIT_SCOPE_UNCOVERED_FIELD)
+    named = _named(_document_closing_offences(stripped))
+    assert named == [_row_name(partial)], named
+
+
+def test_control_the_strong_closing_rule_names_a_permitted_row_without_its_permission(
+    registry_document,
+):
+    """Строка «разрешено» без разрешения, которое её закрывает, — нарушение сильной формы.
+
+    На копиях живого реестра: (а) строка с `verification: test` (D-05, решение Г-1), поставленная
+    `permitted` именем своего разрешённого класса, — названа; (б) строка класса
+    `require-enforcement`, поставленная `permitted` именем своего класса, — названа; (в) строка
+    разрешённого класса, чья область — её тождество без записи блока `row_decisions`, — названа;
+    (г) без блока `row_decisions` названы ровно строки, чьё разрешение — ответ по строке.
+    """
+    branches = _branch_of_class(registry_document.get(tool.CLASS_DECISIONS_KEY) or [])
+
+    tested_document = copy.deepcopy(registry_document)
+    tested = next(
+        row
+        for row in _decision_scope_rows(tested_document["rows"])
+        if row.get("verification") == VERIFICATION_TEST
+        and row.get("disposition") == "enforced"
+        and branches.get(row.get("class")) == PERMIT_CLASS_BRANCH
+    )
+    for field in ROW_DECISION_FIELDS:
+        tested.pop(field, None)
+    tested.update({"disposition": PERMITTED, PERMIT_SCOPE_FIELD: tested["class"]})
+    named = _named(_document_closing_offences(tested_document))
+    assert named == [_row_name(tested)], named
+
+    required_document, required = _awaiting_enforcement(registry_document)
+    required.pop(UNRESOLVED_REASON_FIELD)
+    required.update({"disposition": PERMITTED, PERMIT_SCOPE_FIELD: required["class"]})
+    named = _named(_document_closing_offences(required_document))
+    assert named == [_row_name(required)], named
+
+    unrecorded_document = copy.deepcopy(registry_document)
+    unrecorded = next(
+        row
+        for row in _decision_scope_rows(unrecorded_document["rows"])
+        if row.get("disposition") == PERMITTED
+        and row.get(PERMIT_SCOPE_FIELD) == row.get("class")
+    )
+    unrecorded[PERMIT_SCOPE_FIELD] = _row_name(unrecorded)
+    named = _named(_document_closing_offences(unrecorded_document))
+    assert named == [_row_name(unrecorded)], named
+
+    unanswered = copy.deepcopy(registry_document)
+    unanswered[ROW_DECISIONS_KEY] = []
+    by_row = sorted(
+        _row_name(row)
+        for row in _decision_scope_rows(unanswered["rows"])
+        if _row_name(row) in (row.get(PERMIT_SCOPE_FIELD), row.get(PERMIT_SCOPE_UNCOVERED_FIELD))
+    )
+    assert sorted(_named(_document_closing_offences(unanswered))) == by_row, by_row
 
 
 def test_control_a_permit_scope_other_than_the_row_class_is_named():
@@ -2470,7 +2624,7 @@ def test_the_record_mode_writes_a_row_permission_only_with_its_record(
     row_permits = _row_permits(answered[ROW_DECISIONS_KEY])
     assert _row_decision_offences(answered[ROW_DECISIONS_KEY], answered["rows"]) == []
     assert _permit_scope_offences([row], row_permits) == []
-    assert _closing_offences(answered["rows"], answered[tool.CLASS_DECISIONS_KEY]) == []
+    assert _document_closing_offences(answered) == []
 
     rules = [
         f"{path}{tool.RULE_REFERENCE_SEPARATOR}{name}"
@@ -3415,7 +3569,7 @@ def test_the_record_mode_writes_only_what_the_tree_proves(
     assert written is row
     assert _coverage_offences([row]) == []
     assert _rule_site_offences([row], suite_sources) == []
-    assert _closing_offences(document["rows"], decisions) == []
+    assert _document_closing_offences(document) == []
     assert len(document["rows"]) == len(registry_document["rows"])
 
     partial = copy.deepcopy(base)
