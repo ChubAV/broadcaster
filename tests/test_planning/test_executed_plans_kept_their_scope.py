@@ -27,6 +27,17 @@
 отказом, а не зеленью, кончаются пустой перечень запрещённых путей и отбор, в котором коммиты
 есть, а путей нет ни одного.
 
+ФАКТЫ СОДЕРЖАНИЯ (план 15-31). Пять запретов Фазы 10 говорят не «путь не тронут», а «в
+тронутом пути не изменено ВОТ ЭТО»: исходник группы правил, поля шапки отчёта, строка критерия
+раздела, строки `status:` гэпов, исполняемое содержание продукта. Для них запись `HISTORY_FACTS`
+несёт ВИД предиката, наблюдаемые пути и данные вида; для каждого коммита плана, коснувшегося
+наблюдаемого пути, читается пара «до / после» (`git show <коммит>^:<путь>` и `<коммит>:<путь>`,
+один раз за прогон), и предикат вида — чистая функция этой пары — называет каждое изменение.
+Каждый вид показан контролем на синтетической паре, направление — на настоящей паре коммита
+`415b0cfe` с подменённой стороной «после». Антивакуум вида: коммиты плана не коснулись ни одного
+наблюдаемого пути — отказ; предикат, которому сличать нечего (группы нет до коммита, поля нет в
+шапке, раздела нет, дифф пуст), — отказ. Прочтение каждой формулировки — над её записью.
+
 ⚠️ ГРАНИЦЫ ПРАВИЛА — НАЗВАНЫ, А НЕ ПОДРАЗУМЕВАЮТСЯ.
 1. История обязана быть ПОЛНОЙ: `git rev-parse --is-shallow-repository` обязан ответить `false`.
    Мелкий клон вне области и кончается ОТКАЗОМ с названной причиной ДО разбора журнала, а не
@@ -40,12 +51,16 @@
    судит историю, достижимую из `HEAD` сегодня, а не ту, что была в день исполнения плана.
 4. Коммиты слияния путей в журнале не несут (`--name-only` без `-m`); переименование читается
    обеими сторонами (`--no-renames`: удаление старого пути и добавление нового).
+5. Факт содержания судит ПАРУ КАЖДОГО КОММИТА ПЛАНА, а не сумму: изменение, внесённое одним
+   коммитом плана и отменённое другим, названо (строже буквы); изменение, внесённое коммитом без
+   области плана, — невидимо (граница 2).
 
 ЧЕГО ЭТОТ ФАЙЛ НЕ УТВЕРЖДАЕТ (D-16). Он не судит вердикт отчёта своей фазы и не читает его. Он
 не видит правок, сделанных вне коммитов плана (граница 2), и не утверждает, что запрет соблюдён
 ПО ДУХУ за пределами путей: запрет «пять замечаний не чинятся» держится здесь ровно как «файлы,
 в которых их чинили бы, не тронуты». Он не утверждает, что план сделал то, что обещал, — только
-то, чего план не трогал. И он ничего не говорит о планах, которых нет в `HISTORY_FACTS`.
+то, чего план не трогал или не менял. И он ничего не говорит о планах, которых нет в
+`HISTORY_FACTS`.
 
 ПОЧЕМУ ЭТО НЕ ОТМЕНА РЕШЕНИЯ D-33. D-33 отказал машинному гейту на ПРОЗЕ операционного
 документа. Предмет здесь другой: машинно читаемый журнал git (тема коммита и пути) и объявленное
@@ -56,6 +71,8 @@
 
 from __future__ import annotations
 
+import ast
+import difflib
 import re
 import subprocess
 from collections.abc import Callable, Iterable
@@ -197,11 +214,34 @@ PRODUCT = (
 )
 
 TEMPLATES = "app/templates/"
+SHELL_SUITE = "tests/test_pages/test_shell.py"
+
+# ГРУППА ПРАВИЛ СНЯТИЯ ЗАГОТОВОК ПЛАНА 10-35 — определения верхнего уровня, которые коммиты
+# `(10-35)` завели в `test_shell.py`, в порядке появления. Снята ИСТОРИЕЙ, а не набрана руками
+# (план 15-31, 2026-09-26): `ba908912` — пять констант и три функции, `6f3b8b55` — пять функций;
+# `b3a3fa3c` новых определений не завёл (правил чужую `test_failure_banner_has_single_source`).
+# Состав сверяет с историей `test_every_definition_group_is_what_its_owner_plan_introduced`.
+PLAN_10_35_GROUP = (
+    "MODAL_OPEN_METHOD",
+    "MODAL_CLOSE_METHOD",
+    "FAILURE_BANNER_HIDDEN_ATTR",
+    "_JS_BLOCK_COMMENT_RE",
+    "_MODAL_OPEN_METHOD_RE",
+    "_lever_show_body",
+    "_lever_clearing_findings",
+    "test_the_lever_clears_both_failure_banners_when_the_panel_opens",
+    "_lever_raises_the_scroll_lock",
+    "_scratch_lever",
+    "_lever_clearing_chunk",
+    "test_control_a_lever_that_keeps_a_stale_banner_reddens",
+    "test_control_a_lever_that_names_the_flag_only_in_prose_reddens",
+)
 STYLESHEET = "app/static/css/app.css"
 PHASE_10_DIR = ".planning/phases/10-rychag-components-modal-html/"
 
 # Ключ — тождество строки реестра в форме `10-NN-PLAN.md#i`; значение — область темы и
-# запрещённые пути по ПОЛНОЙ формулировке запрета. Прочтение каждой формулировки — в
+# запрещённые пути по ПОЛНОЙ формулировке запрета (вид `PATHS`) либо вид содержания, наблюдаемые
+# пути и данные вида (план 15-31). Прочтение каждой формулировки — в
 # комментарии над записью; где формулировка говорит больше, чем пути, это названо там же.
 HISTORY_FACTS: dict[str, HistoryFact] = {
     # «РАЗМЕТКА НЕ ПРАВИТСЯ НИ НА СИМВОЛ: … дописать узел в шаблон …» — разметка есть шаблоны.
@@ -244,6 +284,47 @@ HISTORY_FACTS: dict[str, HistoryFact] = {
     ),
     # «`app/templates/` НЕ ПРАВИТСЯ НИ НА СИМВОЛ».
     "10-51-PLAN.md#0": HistoryFact("10-51", (TEMPLATES,)),
+    # --- факты СОДЕРЖАНИЯ правки (план 15-31) ---
+    # «ГРУППА ПРАВИЛ СНЯТИЯ ЗАГОТОВОК (план 10-35) НЕ ТРОГАЕТСЯ НИ НА СИМВОЛ» — группа есть ВСЕ
+    # определения верхнего уровня, которые коммиты `(10-35)` завели в `test_shell.py`: восемь
+    # функций и пять констант, на которых они стоят (прочтение шире «функций» таблицы планирования:
+    # «ни на символ» и «группа правил» включают их данные). Состав снят историей и сверяется с ней
+    # правилом `test_every_definition_group_is_what_its_owner_plan_introduced`.
+    "10-37-PLAN.md#3": HistoryFact(
+        "10-37",
+        kind=DEFINITION_SOURCES,
+        watched=(SHELL_SUITE,),
+        subject=PLAN_10_35_GROUP,
+        owner="10-35",
+    ),
+    # «ПОЛЕ СОСТОЯНИЯ НИ У ОДНОГО ГЭПА НЕ ПРАВИТСЯ И НЕ ВЫЧЁРКИВАЕТСЯ … запись о закрытии идёт
+    # ОТДЕЛЬНЫМ ключом» — реестр гэпов обхода живёт в ТЕЛЕ `10-UAT.md` (блок YAML), в шапке гэпов
+    # нет (замер планирования: 0 до и после). Держится строже буквы: ни одна строка `status:`
+    # файла — гэпа или шапки — диффом коммитов плана не удалена и не изменена.
+    "10-39-PLAN.md#2": HistoryFact(
+        "10-39", kind=STATUS_LINES_KEPT, watched=(PHASE_10_DIR + "10-UAT.md",)
+    ),
+    # «ПОЛЕ СОСТОЯНИЯ ОТЧЁТА, СЧЁТ ИСТИН, СПИСОК ГЭПОВ И БЛОК ПОВТОРНОЙ ВЕРИФИКАЦИИ НЕ ПРАВЯТСЯ» —
+    # четыре поля шапки `10-VERIFICATION.md`: `status`, `score`, `gaps`, `re_verification`.
+    "10-40-PLAN.md#1": HistoryFact(
+        "10-40",
+        kind=HEADER_FIELDS,
+        watched=(PHASE_10_DIR + "10-VERIFICATION.md",),
+        subject=("status", "score", "gaps", "re_verification"),
+    ),
+    # «ФОРМУЛИРОВКА КРИТЕРИЯ 3 В `.planning/ROADMAP.md` НЕ ПРАВИТСЯ НИ НА СИМВОЛ» — строка пункта 3
+    # раздела `### Phase 10:`.
+    "10-40-PLAN.md#2": HistoryFact(
+        "10-40", kind=SECTION_LINE, watched=(".planning/ROADMAP.md",), subject=("### Phase 10:", "3")
+    ),
+    # «ПОВЕДЕНИЕ ПРОДУКТА НЕ ПРАВИТСЯ: в `…/modal.html` и `app/pages/schedules.py` правится
+    # ИСКЛЮЧИТЕЛЬНО тело комментария» — оба названных файла и, по полной формулировке, весь
+    # ПРОДУКТ: любой его файл, которого коснулся коммит плана, равен себе без комментариев.
+    "10-46-PLAN.md#3": HistoryFact(
+        "10-46",
+        kind=EQUAL_WITHOUT_COMMENTS,
+        watched=("app/templates/components/modal.html", "app/pages/schedules.py") + PRODUCT,
+    ),
 }
 
 HISTORY_RULE = "test_every_declared_history_fact_holds_over_its_plans_commits"
@@ -331,6 +412,11 @@ def _plan_commits(journal: Iterable[Commit], scope: str) -> tuple[Commit, ...]:
     return selected
 
 
+def _covered_by(path: str, item: str) -> bool:
+    """Путь покрыт элементом перечня: равен ему либо лежит под ним (элемент с `/` — каталог)."""
+    return path == item or (item.endswith("/") and path.startswith(item))
+
+
 def _path_offences(
     commits: Iterable[Commit], forbidden: Iterable[str]
 ) -> list[PathOffence]:
@@ -348,7 +434,7 @@ def _path_offences(
     for commit in commits:
         for path in commit.paths:
             for item in forbidden:
-                if path == item or (item.endswith("/") and path.startswith(item)):
+                if _covered_by(path, item):
                     offences.append(PathOffence(commit.sha, commit.subject, path, item))
     return offences
 
@@ -361,39 +447,205 @@ def _path_offences(
 # а не пустой список: факт, ничего не узнавший, не зеленеет (антивакуум).
 
 
+def _definitions(text: str) -> dict[str, str]:
+    """Определения верхнего уровня → их исходник: функции и классы (с декораторами) и имена,
+    присвоенные на уровне модуля (исходник всего оператора присваивания)."""
+    return dict(_definitions_cached(text))
+
+
+@cache
+def _definitions_cached(text: str) -> tuple[tuple[str, str], ...]:
+    lines = text.splitlines(keepends=True)
+    found: dict[str, str] = {}
+    for node in ast.parse(text).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            first = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)])
+            found[node.name] = "".join(lines[first - 1 : node.end_lineno])
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            source = "".join(lines[node.lineno - 1 : node.end_lineno])
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    found[target.id] = source
+    return tuple(found.items())
+
+
 def _definition_source_changes(
     path: str, before: str | None, after: str | None, names: tuple[str, ...]
 ) -> list[str]:
-    """Определения группы `names`, чей исходник после коммита не равен исходнику до."""
-    return []
+    """Определения группы `names`, чей исходник после коммита не равен исходнику до.
+
+    Исходник — строки определения целиком, от первого декоратора до последней строки тела:
+    комментарий внутри тела есть символ группы («не трогается ни на символ»). Определения группы
+    нет до коммита — отказ: факт о группе, которой ещё нет, ничего не проверяет."""
+    before_definitions = _definitions(before or "")
+    absent = [name for name in names if name not in before_definitions]
+    if absent:
+        raise HistoryRefusal(
+            f"`{path}`: определений группы {', '.join(absent)} нет до коммита — состав группы "
+            f"не тот, и факт о ней ничего не проверил бы (антивакуум)"
+        )
+    after_definitions = _definitions(after) if after is not None else {}
+    changes: list[str] = []
+    for name in names:
+        if name not in after_definitions:
+            changes.append(f"`{name}`: определение снято")
+        elif after_definitions[name] != before_definitions[name]:
+            changes.append(f"`{name}`: исходник определения изменён")
+    return changes
+
+
+_MISSING = object()
 
 
 def _header_field_changes(
     path: str, before: str | None, after: str | None, fields: tuple[str, ...]
 ) -> list[str]:
-    """Поля `fields` шапки, чьё значение после коммита не равно значению до."""
-    return []
+    """Поля `fields` шапки, чьё значение после коммита не равно значению до.
+
+    Шапка разбирается прибором переписи (`_frontmatter`); прочие поля — в том числе добавленные
+    коммитом — предмет не этого вида. Поля нет в шапке до коммита — отказ."""
+    try:
+        header_before = tool._frontmatter(before or "")
+        header_after = tool._frontmatter(after or "")
+    except tool.CensusError as error:
+        raise HistoryRefusal(f"`{path}`: шапка не разбирается — {error}") from error
+    absent = [field for field in fields if field not in header_before]
+    if absent:
+        raise HistoryRefusal(
+            f"`{path}`: полей {', '.join(absent)} нет в шапке до коммита — факт о них ничего "
+            f"не проверил бы (антивакуум)"
+        )
+    changes: list[str] = []
+    for field in fields:
+        value = header_after.get(field, _MISSING)
+        if value is _MISSING:
+            changes.append(f"поле шапки `{field}` снято")
+        elif value != header_before[field]:
+            changes.append(
+                f"поле шапки `{field}` изменено: {header_before[field]!r} → {value!r}"
+            )
+    return changes
+
+
+def _section_lines(text: str, heading: str, item: str) -> list[str] | None:
+    """Строки пункта `item.` раздела, чей заголовок начинается `heading`; раздела нет — None.
+
+    Раздел — от своего заголовка до следующего заголовка того же или старшего уровня
+    (подразделы входят в раздел); пункт — строка, которая после отступа начинается `<item>. `."""
+    level = len(heading) - len(heading.lstrip("#"))
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line.startswith(heading)]
+    if not starts:
+        return None
+    closing = re.compile(rf"^#{{1,{level}}} ")
+    item_line = re.compile(rf"^\s*{re.escape(item)}\.\s")
+    found: list[str] = []
+    for line in lines[starts[0] + 1 :]:
+        if closing.match(line):
+            break
+        if item_line.match(line):
+            found.append(line)
+    return found
 
 
 def _section_line_changes(
     path: str, before: str | None, after: str | None, subject: tuple[str, ...]
 ) -> list[str]:
-    """Строка пункта `subject[1]` раздела `subject[0]`, не равная себе до коммита."""
+    """Строка пункта `subject[1]` раздела `subject[0]`, не равная себе до коммита.
+
+    До коммита строка пункта обязана быть РОВНО ОДНА — иначе отказ: раздела нет либо пункт
+    неоднозначен, и сличать нечего."""
+    heading, item = subject
+    lines_before = _section_lines(before or "", heading, item)
+    if lines_before is None:
+        raise HistoryRefusal(f"`{path}`: раздела `{heading}` нет до коммита (антивакуум)")
+    if len(lines_before) != 1:
+        raise HistoryRefusal(
+            f"`{path}`: строк пункта {item} в разделе `{heading}` до коммита "
+            f"{len(lines_before)}, а не одна — сличать нечего"
+        )
+    lines_after = _section_lines(after or "", heading, item)
+    if lines_after != lines_before:
+        return [
+            f"строка пункта {item} раздела `{heading}` изменена: было {lines_before[0]!r}, "
+            f"стало {lines_after!r}"
+        ]
     return []
+
+
+STATUS_LINE = re.compile(r"^\s*(?:-\s+)?status\s*:")
 
 
 def _status_line_changes(
     path: str, before: str | None, after: str | None, subject: tuple[str, ...]
 ) -> list[str]:
-    """Строки `status:`, удалённые или изменённые диффом пары."""
-    return []
+    """Строки `status:`, удалённые или изменённые диффом пары.
+
+    Дифф строк (`difflib`, без эвристики «мусора»): каждая строка `status:` стороны «до» в
+    блоке замены или удаления названа. Вставка — в том числе отдельного ключа `status_note` —
+    предметом не является. Пустой дифф и файл без строк `status:` до коммита — отказ."""
+    if before is None:
+        raise HistoryRefusal(f"`{path}`: файла нет до коммита — строк `status:` не было")
+    if before == after:
+        raise HistoryRefusal(f"`{path}`: дифф пуст — коммит файла не менял (антивакуум)")
+    lines_before = before.splitlines()
+    if not any(STATUS_LINE.match(line) for line in lines_before):
+        raise HistoryRefusal(
+            f"`{path}`: строк `status:` до коммита нет ни одной — факт ничего не проверил бы"
+        )
+    lines_after = (after or "").splitlines()
+    matcher = difflib.SequenceMatcher(None, lines_before, lines_after, autojunk=False)
+    changes: list[str] = []
+    for tag, first, last, _, _ in matcher.get_opcodes():
+        if tag in ("replace", "delete"):
+            changes.extend(
+                f"строка `{line.strip()}` удалена или изменена"
+                for line in lines_before[first:last]
+                if STATUS_LINE.match(line)
+            )
+    return changes
+
+
+JINJA_COMMENT = re.compile(r"\{#.*?#\}", re.S)
+
+
+def _without_comments(path: str, text: str) -> str:
+    """Исполняемое содержание файла: `.py` — `ast.dump` (комментариев в дереве нет, строка
+    документации есть); `.html` — текст без комментариев шаблонизатора `{# … #}` (комментарий
+    HTML `<!-- … -->` уходит в ответ и потому содержание); иной файл — текст целиком."""
+    if path.endswith(".py"):
+        return ast.dump(ast.parse(text))
+    if path.endswith(".html"):
+        return JINJA_COMMENT.sub("", text)
+    return text
 
 
 def _executable_changes(
     path: str, before: str | None, after: str | None, subject: tuple[str, ...]
 ) -> list[str]:
     """Изменение пары за вычетом комментариев: `.py` — `ast.dump`, `.html` — без `{# … #}`."""
+    if before is None:
+        return ["файл заведён коммитом"]
+    if after is None:
+        return ["файл снят коммитом"]
+    if _without_comments(path, before) != _without_comments(path, after):
+        return ["исполняемое содержание изменено (сличение без комментариев)"]
     return []
+
+
+# Виды, чей предикат читает данные `subject`; у остальных `subject` пуст.
+SUBJECT_KINDS = (DEFINITION_SOURCES, HEADER_FIELDS, SECTION_LINE)
+
+CONTENT_PREDICATES: dict[
+    str, Callable[[str, str | None, str | None, tuple[str, ...]], list[str]]
+] = {
+    DEFINITION_SOURCES: _definition_source_changes,
+    HEADER_FIELDS: _header_field_changes,
+    SECTION_LINE: _section_line_changes,
+    STATUS_LINES_KEPT: _status_line_changes,
+    EQUAL_WITHOUT_COMMENTS: _executable_changes,
+}
 
 
 def _content_offences(
@@ -401,8 +653,46 @@ def _content_offences(
     fact: HistoryFact,
     revisions: Callable[[str, str], tuple[str | None, str | None]],
 ) -> list[ContentOffence]:
-    """Каждое изменение содержания наблюдаемого пути коммитами плана — с коммитом и путём."""
-    return []
+    """Каждое изменение содержания наблюдаемого пути коммитами плана — с коммитом и путём.
+
+    Читаются только пары путей, которых коснулся коммит плана и которые покрыты перечнем
+    `watched` (элемент с `/` на конце — каталог). Коммиты плана не коснулись ни одного
+    наблюдаемого пути — отказ: факт ничего о плане не узнал (антивакуум)."""
+    if not fact.watched:
+        raise HistoryRefusal("перечень наблюдаемых путей пуст: факт содержания не судит ничего")
+    predicate = CONTENT_PREDICATES[fact.kind]
+    offences: list[ContentOffence] = []
+    touched = 0
+    for commit in _plan_commits(journal, fact.scope):
+        for path in commit.paths:
+            if not any(_covered_by(path, item) for item in fact.watched):
+                continue
+            touched += 1
+            before, after = revisions(commit.sha, path)
+            offences.extend(
+                ContentOffence(commit.sha, commit.subject, path, detail)
+                for detail in predicate(path, before, after, fact.subject)
+            )
+    if not touched:
+        raise HistoryRefusal(
+            f"коммиты плана {fact.scope} не коснулись ни одного наблюдаемого пути "
+            f"({', '.join(fact.watched[:3])}…) — факт содержания ничего не узнал (антивакуум)"
+        )
+    return offences
+
+
+def _blob(revision: str, path: str, git: Callable[..., str] = _run_git) -> str | None:
+    """Содержимое `path` в ревизии; пути в ревизии нет — None, прочий сбой git — отказ."""
+    listing = git("-c", "core.quotePath=false", "ls-tree", "--name-only", revision, "--", path)
+    if path not in listing.splitlines():
+        return None
+    return git("show", f"{revision}:{path}")
+
+
+@cache
+def _revisions(sha: str, path: str) -> tuple[str | None, str | None]:
+    """Живая пара «до / после» коммита `sha` для `path`, прочитанная один раз за прогон."""
+    return _blob(f"{sha}^", path), _blob(sha, path)
 
 
 # --- контроли на синтетическом журнале -------------------------------------------------------
@@ -685,9 +975,40 @@ def test_control_a_content_fact_reads_every_touched_watched_path_and_refuses_on_
 # --- правила над живым журналом ---------------------------------------------------------------
 
 
-def _offences_of(journal: Iterable[Commit], identity: str) -> list[PathOffence]:
+def _offences_of(
+    journal: Iterable[Commit],
+    identity: str,
+    revisions: Callable[[str, str], tuple[str | None, str | None]] = _revisions,
+) -> list[PathOffence] | list[ContentOffence]:
     fact = HISTORY_FACTS[identity]
-    return _path_offences(_plan_commits(journal, fact.scope), fact.forbidden)
+    if fact.kind == PATHS:
+        return _path_offences(_plan_commits(journal, fact.scope), fact.forbidden)
+    return _content_offences(journal, fact, revisions)
+
+
+def _introduced_definitions(
+    journal: Iterable[Commit],
+    scope: str,
+    path: str,
+    revisions: Callable[[str, str], tuple[str | None, str | None]] = _revisions,
+) -> tuple[str, ...]:
+    """Определения верхнего уровня, которые коммиты плана `scope` завели в `path`, в порядке
+    появления (журнал — от новых к старым, обход — от старых). Ни один коммит плана `path` не
+    касался — отказ."""
+    introduced: list[str] = []
+    touched = False
+    for commit in reversed(_plan_commits(journal, scope)):
+        if path not in commit.paths:
+            continue
+        touched = True
+        before, after = revisions(commit.sha, path)
+        known = _definitions(before or "")
+        introduced.extend(
+            name for name in _definitions(after or "") if name not in known and name not in introduced
+        )
+    if not touched:
+        raise HistoryRefusal(f"коммиты плана {scope} не касались `{path}` — состав не снять")
+    return tuple(introduced)
 
 
 @pytest.mark.parametrize("identity", sorted(HISTORY_FACTS))
@@ -726,8 +1047,22 @@ def test_every_history_fact_names_a_phase_10_prohibition_by_identity():
         plan_number = identity.partition("-PLAN.md#")[0]
         if fact.scope != plan_number:
             problems.append(f"`{identity}`: область `{fact.scope}`, а план `{plan_number}`")
-        if not fact.forbidden:
-            problems.append(f"`{identity}`: перечень запрещённых путей пуст")
+        if fact.kind == PATHS:
+            if not fact.forbidden or fact.watched or fact.subject:
+                problems.append(
+                    f"`{identity}`: вид `{PATHS}` несёт непустой `forbidden` и ничего иного"
+                )
+        elif fact.kind in CONTENT_PREDICATES:
+            if fact.forbidden or not fact.watched:
+                problems.append(
+                    f"`{identity}`: вид `{fact.kind}` несёт непустой `watched` и пустой `forbidden`"
+                )
+            if fact.kind in SUBJECT_KINDS and not fact.subject:
+                problems.append(f"`{identity}`: вид `{fact.kind}` без данных `subject`")
+            if (fact.kind == DEFINITION_SOURCES) != bool(fact.owner):
+                problems.append(f"`{identity}`: `owner` стоит ровно у вида `{DEFINITION_SOURCES}`")
+        else:
+            problems.append(f"`{identity}`: вид `{fact.kind}` неизвестен")
 
     registry = tool.load_registry(tool.TREE_ROOT / tool.REGISTRY_RELATIVE_PATH)
     for row_identity, row in tool._registry_rows(registry).items():
@@ -747,4 +1082,45 @@ def test_control_a_synthetic_commit_on_a_forbidden_path_reddens_10_44_5():
     synthetic = Commit("f" * 40, "feat(10-44): x", ("app/x.py",))
     assert _offences_of(journal + (synthetic,), "10-44-PLAN.md#5") == [
         PathOffence(synthetic.sha, synthetic.subject, "app/x.py", "app/")
+    ]
+
+
+def test_every_definition_group_is_what_its_owner_plan_introduced():
+    """Состав группы вида `DEFINITION_SOURCES` СНЯТ ИСТОРИЕЙ: литерал `subject` равен множеству
+    определений, которые коммиты плана `owner` завели в наблюдаемом файле, — без пропусков,
+    лишних и повторов. Группа, набранная руками, разошлась бы с историей молча."""
+    groups = {
+        identity: fact for identity, fact in HISTORY_FACTS.items() if fact.kind == DEFINITION_SOURCES
+    }
+    assert groups, "фактов вида исходника определений нет — правило зеленело бы вакуумом"
+    for identity, fact in sorted(groups.items()):
+        (path,) = fact.watched
+        introduced = _introduced_definitions(_git_journal(), fact.owner, path)
+        assert len(set(fact.subject)) == len(fact.subject), f"`{identity}`: повтор в составе"
+        assert set(fact.subject) == set(introduced), (
+            f"`{identity}`: состав группы разошёлся с историей плана {fact.owner}: лишние "
+            f"{sorted(set(fact.subject) - set(introduced))}, пропущенные "
+            f"{sorted(set(introduced) - set(fact.subject))}"
+        )
+
+
+def test_control_a_doctored_revision_of_a_real_commit_reddens_10_40_1():
+    """Замер направления вида содержания на ЖИВОЙ истории: настоящая пара коммита `415b0cfe`
+    зелена, а та же пара с `status: passed` в шапке стороны «после» краснит запись
+    `10-40-PLAN.md#1`, и назван ровно этот коммит, путь и поле."""
+    journal = _git_journal()
+    assert _offences_of(journal, "10-40-PLAN.md#1") == []
+
+    def doctored(sha: str, path: str) -> tuple[str | None, str | None]:
+        before, after = _revisions(sha, path)
+        assert after is not None and "\nstatus: human_needed\n" in after, "якоря подмены нет"
+        return before, after.replace("\nstatus: human_needed\n", "\nstatus: passed\n", 1)
+
+    offences = _offences_of(journal, "10-40-PLAN.md#1", doctored)
+    assert [(offence.sha[:8], offence.path, offence.detail) for offence in offences] == [
+        (
+            "415b0cfe",
+            PHASE_10_DIR + "10-VERIFICATION.md",
+            "поле шапки `status` изменено: 'human_needed' → 'passed'",
+        )
     ]
