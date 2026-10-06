@@ -917,6 +917,22 @@ def _with_flag(text: str, requirement: str, *, checked: bool) -> str:
     return doctored
 
 
+def _flipped_flag(text: str, requirement: str) -> str:
+    """Копия записи с флажком ОДНОГО требования, ПЕРЕВЁРНУТЫМ относительно дерева.
+
+    ⚠️ ПЕРЕВОРОТ, А НЕ «ПОСТАВИТЬ ГАЛОЧКУ» (поправка 2026-10-06). Прежние
+    контроли ставили флажок `FORM-01` в `[x]`, опираясь на то, что на дереве
+    требование ещё не завершено. Закрытие Фазы 15 законно завершило его, и
+    контроли покраснели, хотя правило не сломалось: они закрепили временное
+    состояние записи как норму. Переворот создаёт несогласие при любом
+    сегодняшнем значении.
+    """
+    checked_now = re.search(
+        rf"^- \[x\] \*\*{re.escape(requirement)}\*\*", text, re.M
+    ) is not None
+    return _with_flag(text, requirement, checked=not checked_now)
+
+
 def _without_row(text: str, requirement: str) -> str:
     """Копия записи БЕЗ строки таблицы одного требования. Файл дерева не правится."""
     pattern = re.compile(
@@ -955,15 +971,17 @@ def test_the_flag_and_the_status_cell_of_every_requirement_agree():
 def test_control_negative_a_disagreeing_flag_reddens_the_agreement_rule():
     """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: флажок заполнен, клетка — нет.
 
-    `FORM-01` на дереве читается незавершённым ОБОИМИ местами. Копия, в которой
-    заполнен только флажок, обязана покраснеть с названным требованием.
+    `FORM-01` на дереве читается согласно ОБОИМИ местами. Копия, в которой
+    перевёрнут только флажок, обязана покраснеть с названным требованием.
+    (До 2026-10-06 контроль ставил флажок в `[x]` и опирался на незавершённость
+    требования — основание переворота у `_flipped_flag`.)
     """
     original = REQUIREMENTS_PATH.read_text(encoding="utf-8")
     assert not any(flag_cell_disagreements(original).values()), (
         "положительный контроль: на непрáвленой записи правило обязано быть зелено"
     )
 
-    doctored = _with_flag(original, "FORM-01", checked=True)
+    doctored = _flipped_flag(original, "FORM-01")
     disagreements = flag_cell_disagreements(doctored)
 
     assert {item.requirement for item in disagreements[VALUES_DIVERGE]} == {
@@ -981,9 +999,7 @@ def test_control_negative_the_three_kinds_of_disagreement_are_named_apart():
     отказ заставил бы следующего читателя разбирать, какое из трёх случилось.
     """
     doctored = _without_row(
-        _with_flag(
-            REQUIREMENTS_PATH.read_text(encoding="utf-8"), "FORM-01", checked=True
-        ),
+        _flipped_flag(REQUIREMENTS_PATH.read_text(encoding="utf-8"), "FORM-01"),
         "QUAL-04",
     )
     disagreements = flag_cell_disagreements(doctored)
