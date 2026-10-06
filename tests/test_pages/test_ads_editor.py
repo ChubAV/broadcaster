@@ -1887,6 +1887,54 @@ async def test_a_removal_at_the_ceiling_brings_the_add_tile_back(
 
 
 @pytest.mark.asyncio
+async def test_the_file_field_is_reachable_from_the_keyboard(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """«+ ФАЙЛ» доступна с клавиатуры: файловое поле в обходе Tab, обвод на плитке.
+
+    ⚠️ НАХОДКА ОБХОДА, А НЕ ПРЕДПОЛОЖЕНИЕ (`15-UAT.md` У-12, 2026-10-06).
+    Плитка — `<label for="file-input">`, а файловое поле несло `hidden`:
+    подпись не фокусируема, скрытое поле выпадает из обхода, и Tab с последней
+    «Убрать вложение» уходил сразу на «СВЕРНУТЬ». Добавить вложение без мыши
+    было нельзя, а правило `.media-tile--add:focus-visible` не срабатывало
+    никогда.
+
+    Починка — без обработчика: новый узел `x-data` запрещён критерием 3
+    (`test_criterion_three_holds_by_the_numbers`), `hx-on` в проекте ноль.
+    Поле скрывается ВИЗУАЛЬНО и остаётся фокусируемым; Enter и пробел на нём
+    открывают диалог силами браузера, обвод рисуется на плитке через
+    `:has(#file-input:focus-visible)`, а на потолке поле уходит из обхода
+    вместе со скрытой плиткой.
+    """
+    ad = await _seed_ad(db_session, title="Без вложений", images=[])
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    anchor = html.index('id="file-input"')
+    tag = html[html.rindex("<", 0, anchor) : html.index(">", anchor) + 1]
+
+    assert " hidden" not in tag, (
+        f"файловое поле снова несёт `hidden`: {tag!r} — оно выпадает из обхода "
+        "Tab, и вложение не добавить без мыши"
+    )
+    assert "media-file-input" in tag, (
+        f"файловое поле без класса визуального скрытия: {tag!r} — оно встанет "
+        "на экран вторым элементом выбора файла"
+    )
+
+    css = (Path(__file__).resolve().parents[2] / "app/static/css/app.css").read_text(
+        encoding="utf-8"
+    )
+    for required in (
+        "body:has(#file-input:focus-visible) .media-tile--add",
+        "body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }",
+    ):
+        assert required in css, (
+            f"в app.css нет `{required}`: фокус на поле не виден на плитке либо "
+            "поле остаётся в обходе на потолке, где плитка скрыта"
+        )
+
+
+@pytest.mark.asyncio
 async def test_attachment_remove_is_a_named_submit_inside_the_form(
     authed_client: AsyncClient, db_session: AsyncSession
 ):

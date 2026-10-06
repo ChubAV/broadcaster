@@ -2171,7 +2171,16 @@ a:hover { color: var(--accent-link-hover); }
   letter-spacing: .08em; cursor: pointer;
 }
 .media-tile--add:hover { color: var(--text); border-color: var(--border-control-strong); }
-.media-tile--add:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* Фокус живёт на файловом поле, а виден на плитке: подпись не фокусируема, и
+   без поля в обходе Tab вложение было не добавить без мыши (`15-UAT.md` У-12).
+   На потолке плитка скрыта — поле уходит из обхода вместе с ней. */
+.media-tile--add:focus-visible,
+body:has(#file-input:focus-visible) .media-tile--add { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.media-file-input {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
 /* На лимите плитка добавления скрывается, а не удаляется. Правило нужно явно:
    у признака hidden правило браузера слабее классового, и без этой строки
    `display: flex` выше пересилил бы его. */
