@@ -201,7 +201,6 @@ def test_the_next_run_calculator_source_is_unchanged():
     )
 
 
-@pytest.mark.characterisation
 def test_control_a_body_edit_of_the_calculator_changes_its_digest():
     """Прибор отпечатка краснеет на перехвате внутри тела и на правке в один знак."""
     source = _SYNTHETIC_CALCULATOR
@@ -217,7 +216,6 @@ def test_control_a_body_edit_of_the_calculator_changes_its_digest():
     assert _function_source_digest(one_character, NEXT_RUN_CALCULATOR) != original
 
 
-@pytest.mark.characterisation
 def test_control_a_helper_next_to_the_calculator_keeps_its_digest():
     """Формулировка РАЗРЕШАЕТ помощника рядом: он отпечаток не сдвигает."""
     source = _SYNTHETIC_CALCULATOR

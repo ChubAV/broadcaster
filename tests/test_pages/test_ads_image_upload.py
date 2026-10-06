@@ -663,47 +663,43 @@ async def test_ceiling_takes_the_free_slots_and_refuses_the_rest(
 
 @pytest.mark.asyncio
 @patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
-async def test_an_upload_reaching_the_ceiling_lands_focus_on_the_last_remove(
+async def test_no_upload_response_steals_focus(
     mock_s3,
     authed_client: AsyncClient,
     htmx_client: AsyncClient,
     owner: User,
     test_settings,
 ):
-    """Загрузка, дошедшая до потолка, сажает фокус на последнюю «Убрать вложение».
+    """Ни ответ загрузки, ни страница редактора не печатают `autofocus`.
 
-    ⚠️ НАХОДКА WR-09 РЕВЬЮ 2026-10-06. Загрузка клавиатурой идёт с файлового
-    поля; на потолке плитка «+ ФАЙЛ» скрыта, и поле уходит из обхода вместе с
-    ней — без посадки фокус падал на `<body>`. Ниже потолка фокус остаётся на
-    поле, и `autofocus` не печатается вовсе: украсть его у человека, который
-    продолжает выбирать файлы, было бы хуже потери.
+    ⚠️ ЛЕТОПИСЬ ПРАВИЛА (ревью 2026-10-06). Находка WR-09: загрузка клавиатурой,
+    дошедшая до потолка, теряет фокус. Её починка `autofocus` на последней
+    «Убрать вложение» (`568b8f75`) дала CR-01: фокус уходил и у человека,
+    печатавшего текст во время загрузки, и следующий пробел убирал только что
+    загруженный файл. Посадка снята; потеря фокуса на потолке принята владельцем
+    `chubav` следствием (2026-10-06). Правило держит снятие: `autofocus`,
+    вернувшийся в полосу, снова отдал бы клавишу пробела чужой кнопке.
     """
     test_settings.max_images_per_ad = 4
     attached = [image_key(owner.id, f"old{index}.png") for index in range(2)]
     png = make_real_png_with_alpha_bytes()
 
-    below = await htmx_client.post(
-        "/ads/images",
-        data={"images": attached},
-        files=[(UPLOAD_FIELD, ("a.png", png, "image/png"))],
-    )
-    assert below.status_code == 200
-    assert "autofocus" not in below.text, (
-        "ниже потолка ответ загрузки сажает фокус: человек, продолжающий выбирать "
-        "файлы с поля, теряет своё место"
-    )
+    for files in (["a"], ["a", "b"]):
+        response = await htmx_client.post(
+            "/ads/images",
+            data={"images": attached},
+            files=[(UPLOAD_FIELD, (f"{name}.png", png, "image/png")) for name in files],
+        )
+        assert response.status_code == 200
+        assert "autofocus" not in response.text, (
+            f"ответ загрузки ({len(attached) + len(files)} из 4) печатает "
+            "`autofocus`: фокус уйдёт и у человека, печатающего текст, а пробел "
+            "уберёт загруженный файл (CR-01)"
+        )
 
-    at_ceiling = await htmx_client.post(
-        "/ads/images",
-        data={"images": attached},
-        files=[(UPLOAD_FIELD, (f"{letter}.png", png, "image/png")) for letter in "ab"],
-    )
-    assert at_ceiling.status_code == 200
-    remove_buttons = re.findall(r"<button class=\"media-tile__remove\"[^>]*>", at_ceiling.text)
-    assert len(remove_buttons) == 4
-    assert [("autofocus" in tag) for tag in remove_buttons] == [False, False, False, True], (
-        "на потолке фокус не посажен на ПОСЛЕДНЮЮ «Убрать вложение»: "
-        f"{remove_buttons!r} — поле ушло из обхода, и фокус упадёт на <body>"
+    page = await authed_client.get("/ads/new")
+    assert "autofocus" not in page.text, (
+        "страница редактора печатает `autofocus`: браузер исполнит его при загрузке"
     )
 
 
