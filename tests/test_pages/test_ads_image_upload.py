@@ -663,6 +663,52 @@ async def test_ceiling_takes_the_free_slots_and_refuses_the_rest(
 
 @pytest.mark.asyncio
 @patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
+async def test_an_upload_reaching_the_ceiling_lands_focus_on_the_last_remove(
+    mock_s3,
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    owner: User,
+    test_settings,
+):
+    """Загрузка, дошедшая до потолка, сажает фокус на последнюю «Убрать вложение».
+
+    ⚠️ НАХОДКА WR-09 РЕВЬЮ 2026-10-06. Загрузка клавиатурой идёт с файлового
+    поля; на потолке плитка «+ ФАЙЛ» скрыта, и поле уходит из обхода вместе с
+    ней — без посадки фокус падал на `<body>`. Ниже потолка фокус остаётся на
+    поле, и `autofocus` не печатается вовсе: украсть его у человека, который
+    продолжает выбирать файлы, было бы хуже потери.
+    """
+    test_settings.max_images_per_ad = 4
+    attached = [image_key(owner.id, f"old{index}.png") for index in range(2)]
+    png = make_real_png_with_alpha_bytes()
+
+    below = await htmx_client.post(
+        "/ads/images",
+        data={"images": attached},
+        files=[(UPLOAD_FIELD, ("a.png", png, "image/png"))],
+    )
+    assert below.status_code == 200
+    assert "autofocus" not in below.text, (
+        "ниже потолка ответ загрузки сажает фокус: человек, продолжающий выбирать "
+        "файлы с поля, теряет своё место"
+    )
+
+    at_ceiling = await htmx_client.post(
+        "/ads/images",
+        data={"images": attached},
+        files=[(UPLOAD_FIELD, (f"{letter}.png", png, "image/png")) for letter in "ab"],
+    )
+    assert at_ceiling.status_code == 200
+    remove_buttons = re.findall(r"<button class=\"media-tile__remove\"[^>]*>", at_ceiling.text)
+    assert len(remove_buttons) == 4
+    assert [("autofocus" in tag) for tag in remove_buttons] == [False, False, False, True], (
+        "на потолке фокус не посажен на ПОСЛЕДНЮЮ «Убрать вложение»: "
+        f"{remove_buttons!r} — поле ушло из обхода, и фокус упадёт на <body>"
+    )
+
+
+@pytest.mark.asyncio
+@patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
 async def test_own_keys_over_the_ceiling_are_not_erased_by_a_new_batch(
     mock_s3,
     authed_client: AsyncClient,

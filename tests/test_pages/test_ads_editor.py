@@ -49,6 +49,9 @@ from app.services.image_keys import media_dom_id
 # читателей у имени в этом модуле не осталось, и оставленный импорт утверждал
 # бы связь, которой нет. Гарантия «человек читает точную причину» переехала на
 # тест фрагмента полосы.
+# Разбор таблицы стилей — помощниками `test_shell.py`, а не третьим разборщиком
+# (находка WR-10 ревью 2026-10-06): комментарии гасятся, селекторы разделяются.
+from tests.test_pages.test_shell import _css_rules_of, _css_value
 
 # Форма ключа вложения — источник правды `app/services/image_upload.py`
 # (переезд плана 12-01; прежде правду держал модуль маршрутов загрузки):
@@ -1905,6 +1908,12 @@ async def test_the_file_field_is_reachable_from_the_keyboard(
     открывают диалог силами браузера, обвод рисуется на плитке через
     `:has(#file-input:focus-visible)`, а на потолке поле уходит из обхода
     вместе со скрытой плиткой.
+
+    ⚠️ УТВЕРЖДАЮТСЯ СВОЙСТВА, А НЕ НАПИСАНИЕ (находка WR-10 ревью 2026-10-06).
+    Прежняя редакция сличала подстроки и зеленела, когда поле снова
+    становилось недостижимым (`disabled`, `tabindex="-1"`, `display: none`
+    внутри класса скрытия, форма перед полосой, плитка без `for`), а краснела
+    на простом переформатировании правила.
     """
     ad = await _seed_ad(db_session, title="Без вложений", images=[])
 
@@ -1912,26 +1921,57 @@ async def test_the_file_field_is_reachable_from_the_keyboard(
     anchor = html.index('id="file-input"')
     tag = html[html.rindex("<", 0, anchor) : html.index(">", anchor) + 1]
 
-    assert " hidden" not in tag, (
-        f"файловое поле снова несёт `hidden`: {tag!r} — оно выпадает из обхода "
-        "Tab, и вложение не добавить без мыши"
+    for attribute in ("hidden", "disabled", "inert"):
+        assert not re.search(rf"\s{attribute}(?=[\s=>])", tag), (
+            f"файловое поле несёт `{attribute}`: {tag!r} — оно выпадает из обхода "
+            "Tab, и вложение не добавить без мыши"
+        )
+    assert not re.search(r'tabindex="-\d+"', tag), (
+        f"файловое поле снято с обхода отрицательным tabindex: {tag!r}"
     )
     assert "media-file-input" in tag, (
         f"файловое поле без класса визуального скрытия: {tag!r} — оно встанет "
         "на экран вторым элементом выбора файла"
     )
-
-    css = (Path(__file__).resolve().parents[2] / "app/static/css/app.css").read_text(
-        encoding="utf-8"
+    assert html.index('id="media-strip"') < anchor, (
+        "форма загрузки стоит ПЕРЕД полосой: Tab встанет на поле раньше кнопок "
+        "убирания, а обвод нарисуется на плитке в конце полосы"
     )
-    for required in (
-        "body:has(#file-input:focus-visible) .media-tile--add",
-        "body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }",
-    ):
-        assert required in css, (
-            f"в app.css нет `{required}`: фокус на поле не виден на плитке либо "
-            "поле остаётся в обходе на потолке, где плитка скрыта"
+    tile = _add_tile_tag(html)
+    assert 'for="file-input"' in tile, (
+        f"плитка «+ ФАЙЛ» не называет поле атрибутом `for`: {tile!r} — поле "
+        "потеряет доступное имя"
+    )
+
+    rules = _css_rules_of(Path(__file__).resolve().parents[2] / "app/static/css/app.css")
+
+    def _selectors(selectors: str) -> list[str]:
+        return [" ".join(part.split()) for part in selectors.split(",")]
+
+    hidden_bodies = [body for sel, body, _ in rules if ".media-file-input" in _selectors(sel)]
+    assert hidden_bodies, "в app.css нет правила `.media-file-input`"
+    for body in hidden_bodies:
+        assert _css_value(body, "display") is None and _css_value(body, "visibility") is None, (
+            f"класс визуального скрытия гасит поле совсем: {body!r} — `display`/"
+            "`visibility` выводят его из обхода Tab"
         )
+    ceiling = [
+        body for sel, body, _ in rules
+        if "body:has(.media-tile--add[hidden]) .media-file-input" in _selectors(sel)
+    ]
+    assert ceiling and all(_css_value(body, "visibility") == "hidden" for body in ceiling), (
+        "на потолке поле остаётся в обходе Tab, хотя плитка «+ ФАЙЛ» скрыта: "
+        "нет правила `body:has(.media-tile--add[hidden]) .media-file-input "
+        "{ visibility: hidden }`"
+    )
+    ring = [
+        body for sel, body, _ in rules
+        if "body:has(#file-input:focus-visible) .media-tile--add" in _selectors(sel)
+    ]
+    assert ring and any("var(--focus-ring)" in (_css_value(body, "outline") or "") for body in ring), (
+        "фокус на файловом поле не виден на плитке «+ ФАЙЛ»: нет обвода "
+        "`body:has(#file-input:focus-visible) .media-tile--add`"
+    )
 
 
 @pytest.mark.asyncio

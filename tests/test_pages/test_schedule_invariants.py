@@ -135,8 +135,27 @@ def _substituted(source: str, old: str, new: str) -> str:
 # «Task 19»), а план 10-55 записал дифф модуля от своей базы ПУСТЫМ
 # (`10-55-SUMMARY.md`). Форма отпечатка — первые двенадцать знаков sha256,
 # та же, что у `statement_digest` прибора переписи (`scripts/prohibitions_census.py`).
-# Правка ОБЯЗАНА сопровождаться решением владельца, снимающим запрет, а не
-# подъёмом константы в том же коммите.
+# Правка, ЧИНЯЩАЯ вычислитель, переписывает отпечаток тем же коммитом (решение
+# владельца `chubav` 2026-10-06, H4 (б) отчёта Фазы 15: правило — слепок,
+# `characterisation`). Правка, вносящая перехват ВНУТРЬ вычислителя, —
+# нарушение `10-55#0`, и подъём константы её не узаконивает.
+#
+# ⚠️ ЛЕТОПИСЬ АБЗАЦА (прежняя редакция названа, а не стёрта). До 2026-10-06 здесь
+# стояло: «Правка ОБЯЗАНА сопровождаться решением владельца, снимающим запрет,
+# а не подъёмом константы в том же коммите». Её противоречие новому докстрингу
+# правила — находка WR-11 ревью 2026-10-06.
+#
+# Контроли ниже меряют ПРИБОР отпечатка на синтетическом исходнике, а не живой
+# вычислитель: починка вычислителя не обязана их трогать (WR-11).
+
+_SYNTHETIC_CALCULATOR = (
+    "from zoneinfo import ZoneInfo\n\n\n"
+    "def compute_next_run_at(days, times, tz_name):\n"
+    "    tz = ZoneInfo(tz_name)\n"
+    "    for offset in range(8):\n"
+    "        pass\n"
+    "    return None\n"
+)
 
 NEXT_RUN_CALCULATOR = "compute_next_run_at"
 NEXT_RUN_CALCULATOR_SOURCE_DIGEST = "698f47d4e018"
@@ -182,28 +201,34 @@ def test_the_next_run_calculator_source_is_unchanged():
     )
 
 
+@pytest.mark.characterisation
 def test_control_a_body_edit_of_the_calculator_changes_its_digest():
-    source = _tree_source(CALCULATOR_PATH)
-    assert _function_source_digest(source, NEXT_RUN_CALCULATOR) == NEXT_RUN_CALCULATOR_SOURCE_DIGEST
+    """Прибор отпечатка краснеет на перехвате внутри тела и на правке в один знак."""
+    source = _SYNTHETIC_CALCULATOR
+    original = _function_source_digest(source, NEXT_RUN_CALCULATOR)
+    assert original is not None
     edited = _substituted(
         source,
         "    tz = ZoneInfo(tz_name)\n",
         "    try:\n        tz = ZoneInfo(tz_name)\n    except Exception:\n        return None\n",
     )
-    assert _function_source_digest(edited, NEXT_RUN_CALCULATOR) != NEXT_RUN_CALCULATOR_SOURCE_DIGEST
+    assert _function_source_digest(edited, NEXT_RUN_CALCULATOR) != original
     one_character = _substituted(source, "range(8)", "range(9)")
-    assert _function_source_digest(one_character, NEXT_RUN_CALCULATOR) != NEXT_RUN_CALCULATOR_SOURCE_DIGEST
+    assert _function_source_digest(one_character, NEXT_RUN_CALCULATOR) != original
 
 
+@pytest.mark.characterisation
 def test_control_a_helper_next_to_the_calculator_keeps_its_digest():
-    """Формулировка РАЗРЕШАЕТ помощника рядом: он правило не краснит."""
-    source = _tree_source(CALCULATOR_PATH)
+    """Формулировка РАЗРЕШАЕТ помощника рядом: он отпечаток не сдвигает."""
+    source = _SYNTHETIC_CALCULATOR
     with_helper = source.rstrip("\n") + (
         "\n\n\ndef _neighbour(days, times, tz):\n"
         "    try:\n        return compute_next_run_at(days, times, tz)\n"
         "    except ValueError:\n        return None\n"
     )
-    assert _function_source_digest(with_helper, NEXT_RUN_CALCULATOR) == NEXT_RUN_CALCULATOR_SOURCE_DIGEST
+    assert _function_source_digest(with_helper, NEXT_RUN_CALCULATOR) == _function_source_digest(
+        source, NEXT_RUN_CALCULATOR
+    )
 
 
 # =============================================================================

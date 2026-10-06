@@ -1402,6 +1402,9 @@ async def ads_images_upload(
                 "image_keys": image_keys,
                 "refusals": refusals,
                 "max_images": settings.max_images_per_ad,
+                # Посадка фокуса на потолке — только в ответе загрузки
+                # (WR-09 ревью 2026-10-06; основание — `media_strip.html`).
+                "focus_on_ceiling": True,
             },
         )
 
