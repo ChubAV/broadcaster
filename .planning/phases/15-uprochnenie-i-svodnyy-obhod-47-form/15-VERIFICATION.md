@@ -1,8 +1,8 @@
 ---
 phase: 15-uprochnenie-i-svodnyy-obhod-47-form
-verified: 2026-09-27T14:30:00Z
+verified: 2026-10-06T12:59:49Z
 status: human_needed
-score: "7/8 roadmap truths verified (1 human); 233/242 plan truths verified (9 routed to human)"
+score: "8/8 roadmap truths verified (5b — актом владельца в 15-UAT.md; 6b — с подписанным override по букве 15-33 T0); 242/242 plan truths (233 машинно, 7 решением или наблюдением владельца, 2 по override); 1 human item open (остаток H7: 15-21 D4)"
 covered_files:
   - ".planning/REQUIREMENTS.md"
   - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-01-PLAN.md"
@@ -71,9 +71,16 @@ covered_files:
   - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-32-SUMMARY.md"
   - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-33-PLAN.md"
   - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-33-SUMMARY.md"
+  - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-OWNER-DECISIONS-2026-10-06.md"
   - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-PROHIBITIONS-SUBJECT.md"
+  - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-REVIEW-DISPOSITION.md"
+  - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-REVIEW.md"
+  - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-SECURITY.md"
   - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-SUPERSEDED-ROWS.md"
+  - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-UAT.md"
+  - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-VALIDATION.md"
   - ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-prohibitions-registry.yaml"
+  - ".planning/todos/pending/classify-420-prohibitions-outside-phase-10.md"
   - "app/pages/accounts.py"
   - "app/pages/ads.py"
   - "app/pages/common.py"
@@ -83,6 +90,8 @@ covered_files:
   - "app/templates/accounts/list.html"
   - "app/templates/accounts/partial_cards.html"
   - "app/templates/ads/form.html"
+  - "app/templates/ads/includes/media_strip.html"
+  - "app/templates/ads/includes/media_upload_form.html"
   - "app/templates/ads/includes/sched_card.html"
   - "app/templates/ads/list.html"
   - "app/templates/ads/partial_cards.html"
@@ -94,11 +103,13 @@ covered_files:
   - "scripts/prohibitions_census.py"
   - "tests/test_pages/test_account_groups.py"
   - "tests/test_pages/test_ads_editor.py"
+  - "tests/test_pages/test_ads_image_upload.py"
   - "tests/test_pages/test_billing_section.py"
   - "tests/test_pages/test_editor_schedules.py"
   - "tests/test_pages/test_failure_banner_invariants.py"
   - "tests/test_pages/test_htmx_gates.py"
   - "tests/test_pages/test_htmx_post_pairs.py"
+  - "tests/test_pages/test_htmx_preserved.py"
   - "tests/test_pages/test_hx_location_destinations.py"
   - "tests/test_pages/test_responsive_markup.py"
   - "tests/test_pages/test_schedule_invariants.py"
@@ -106,6 +117,7 @@ covered_files:
   - "tests/test_pages/test_write_path_invariants.py"
   - "tests/test_planning/test_executed_plans_kept_their_scope.py"
   - "tests/test_planning/test_plan_prohibitions_census.py"
+  - "tests/test_planning/test_the_walkthrough_cannot_self_certify.py"
   - "tests/test_planning/test_the_walkthrough_stand_is_seedable.py"
   - "tests/test_services/test_schedule_rules_gate.py"
   - "tests/test_templates/test_banner_dismiss.py"
@@ -117,378 +129,338 @@ covered_files:
   - "tests/test_templates/test_htmx_markup_gates.py"
   - "tests/test_templates/test_markup_literal_inventory.py"
   - "tests/test_templates/test_walkthrough_anchors.py"
-# Отпечаток снят официальным помощником `computeCoveredDigest(root, files)` из
-# `.claude/gsd-core/bin/lib/verification.cjs` над ПОЛНЫМ списком из 113 путей выше
-# (не вербом `verification.fingerprint`, который теряет первый путь).
-covered_digest: "v1:sha256:4843d5ee94061cb950504330b13dcc06e74bea1b6902af150d639b5405b0578b"
+# Отпечаток снят вербом `verification.fingerprint` (gsd-core 1.16) и скопирован дословно.
+# Первый переданный путь (`.planning/REQUIREMENTS.md`) в выводе есть: прежний дефект
+# «верб теряет первый путь» на этой версии не воспроизвёлся (125 = 66 PLAN/SUMMARY + 59 переданных).
+covered_digest: "v3:sha256:197e9d79732f53ea3dd9699ed5752c58e5f21c71864a7a27d8b773be328c4a95"
 behavior_unverified: 0
-overrides_applied: 0
+overrides_applied: 1
+overrides:
+  - must_have: "Закрывающее правило критерия 6 стоит в СИЛЬНОЙ форме: … ни одна `partially-enforced` строка не лежит в классе с ветвью `require-enforcement` … (истина 15-33 T0; также 15-22 T3 и запрет 15-22 #0)"
+    reason: "Строка 10-03#6: половина «предикат отказа» принуждена (а′), половина «ответ без слоя письма» разрешена строкой (row_decisions) ответом владельца на чекпойнте 15-32, 2026-09-26, после написания плана 15-33"
+    accepted_by: "chubav"
+    accepted_at: "2026-10-06T10:30:00Z"
 re_verification:
-  previous_status: gaps_found
-  previous_score: "6/8 roadmap truths verified (1 failed, 1 human); 151/157 plan truths verified (6 routed to human)"
-  previous_verified: "2026-09-24T19:40:00Z"
-  gaps_closed:
-    - "Критерий 6 ROADMAP, половина (б): по каждому запрету перечня прибора стоит ЛИБО предъявленное машинное принуждение, ЛИБО явное человеческое разрешение с машинно читаемой областью (`permit_scope`) — закрыт: в области решений D-02 (Фаза 10, 321) `unresolved` 0; enforced 93, partially-enforced 25 (остаток каждой разрешён: 24 классом, 1 записью `row_decisions`), permitted 203 (202 классом, 1 строкой); закрывающее правило в сильной форме зелено и краснеет на копиях с нарушением (замер этого отчёта)"
+  previous_status: human_needed
+  previous_score: "7/8 roadmap truths verified (1 human); 233/242 plan truths verified (9 routed to human)"
+  previous_verified: "2026-09-27T14:30:00Z"
+  previous_commit: d86efba3
+  gaps_closed: []
   gaps_remaining: []
   regressions: []
-  advisory_closed:
-    - "WR-01 (тихая пауза на второй линии) — закрыт планом 15-16: `schedules.py` update/create откатывают и отказывают `SCHEDULE_VALUES_OUT_OF_DOMAIN`; новый дефект текста — WR-05"
-    - "WR-02 (правило запрещало create вторую линию) — закрыт планом 15-16: прямых вызовов вычислителя в обработчиках страниц нет (греп: только комментарии)"
-    - "WR-03 (слабые пары удаления) — закрыт планом 15-17: точный `location` и исчезновение строки; метаправило `test_every_redirecting_degradation_pair_asserts_the_exact_location`"
-    - "WR-04 (литералы Фазы 15 над растущей вселенной) — закрыт планом 15-15: `through_fixed_set`; 19 новых планов не покрасили модуль (208 passed); новый дефект того же механизма — WR-06"
-    - "IN-01, IN-02 — закрыты планом 15-20 (отказ по имени, `ОТКАЗ:`)"
-    - "IN-03 — закрыт планом 15-18 (одно определение `_split_top_level`, греп по `tests/`)"
-    - "IN-04 — закрыт планами 15-16/15-19 (ссылки по заголовку)"
-    - "IN-05 — закрыт планом 15-21 (пять форм литерала с контролями)"
-    - "IN-06 — закрыт планом 15-15, ветвь (б): запись отступления + перечень прямых импортёров `YAML_DIRECT_IMPORTERS`"
-    - "UI-REVIEW пункт 3 (сентинелы `limit={{ page_size }}`) — закрыт для шести (15-21); остаток пяти — advisory IN-07/UI-9"
-    - "UI-REVIEW пункты 4-8 — закрыты (15-23 подсказка зоны; 15-19 непрозрачный обвод ≈6.7:1 оценкой, поправка 322 px, порядок слов имён; 15-21 `Загрузка…` + `role=status` на шести)"
   human_items_discharged:
-    - "prior H5 п.4 «адресат принуждения product-invariant» — снят решением владельца Г-1 и работой планов 15-24…15-32 (`work_addressee` класса переписан планом 15-33)"
-    - "prior H5 п.4 «27 объявленных, но отсутствующих правил» — снят планами 15-30…15-32 (`declared-rule-absent` 0)"
-    - "prior H5 п.5, ролевая половина и потеря фокуса — сняты решением владельца Г-3 (запись принятых следствий в `app.css` + сторож `test_boundary_the_keyboard_focus_and_the_checkbox_role_consequences_are_guarded_not_fixed`); половина «внешность» (UI P2-a) остаётся — human_verification H5"
-    - "prior H4, позиция 15-08 #3 (по нумерации прежнего отчёта; тождество переписи `15-08-PLAN.md#2`) — часть WR-01/WR-02 снята планом 15-16; дух запрета теперь задевает WR-08 (advisory) — позиция остаётся в H4"
+    - "H1 — обход 15-UAT.md: владелец поставил 9 × pass (коммит 188457f4, автор chubav, 2026-10-06); 9 полей `result: pass`, 9 таблиц отметок с одной заполненной строкой каждая; шапка `status: complete`; правило самозаверения зелено (5 passed). Замеры 3.2 и 9.x — машинная улика У-10/У-11, суждение — владельца"
+    - "H2 — пять наблюдений У-8 сняты замером У-12 (Chrome, 1280×800); п.2 «фокус на <body> после пробела» владелец принял как есть (У-13). Звучание имён на слух и Firefox не наблюдены — остаток назван в открытом пункте ниже"
+    - "H3 — шесть backstop-утверждений «порядок не влияет»: владелец принял структурную улику (15-OWNER-DECISIONS-2026-10-06.md, строка H3)"
+    - "H4 (а) — `15-14-PLAN.md#0`: владелец принял (план писал заглушки `[pending]`, результаты поставил владелец)"
+    - "H4 (б) — `15-08-PLAN.md#2`: маркер `characterisation` на `test_the_next_run_calculator_source_is_unchanged` поставлен (560ce871, уточнён 568b8f75); `-m characterisation` → 2 passed; докстринг называет дефект и порядок починки; контроли переведены на синтетический исходник"
+    - "H5 (1) летопись «27 → 29» — не нужна; (2) обход 14-UAT.md — отложен до закрытия вехи, Фазу 15 не держит; (3) четыре `OOB_TARGET_EXCEPTIONS` — оставить; (4) 420 запретов вне D-02 — бэклог следующей вехи (todo-файл на месте); (5) «×» без видимой границы — принять следствием"
+    - "H6 — владелец подтвердил, что ответ 15-32 намеренно замещает букву 15-33 T0 / 15-22 T3 / 15-22 #0 / Г-1; подписанный блок `overrides` записан в эту шапку"
+    - "H7 — 15-16 D5 текст понятен, оставить; 15-23 D4 подсказка понятна, оставить; 15-19 D4 «+ ФАЙЛ» недостижима с клавиатуры — починено (d0a31bd9), правило `test_the_file_field_is_reachable_from_the_keyboard` зелено. Остаток 15-21 D4 — открыт (см. human_verification)"
+  advisory_closed:
+    - "WR-08 — заморозка `compute_next_run_at` теперь под маркером `characterisation` и с названием дефекта в сообщении (решение владельца H4 (б))"
+    - "UI-REVIEW P2-a (у органа снятия нет видимой границы) — принято следствием владельцем (H5 (5), 2026-10-06)"
+    - "WR-10, WR-11 (ревью 2026-10-06) — исправлены 568b8f75; CR-01, IN-14, IN-15, IN-16 — исправлены 9afcd205; WR-12, IN-17 — исправлены c383dcab"
   previous_round:
-    gaps:
-      - truth: "Критерий 6 ROADMAP, половина (б): по каждому запрету перечня прибора стоит ЛИБО предъявленное машинное принуждение, ЛИБО явное человеческое разрешение с машинно читаемой областью (`permit_scope`)"
-        status: failed
-        reason: "В области решений (Фаза 10, 321 запрет; сужение до Фазы 10 — D-02) 85 запретов не несут ни принуждения, ни разрешения: 27 `unresolved`/`declared-rule-absent` и 58 `unresolved`/`enforcement-required` (класс `product-invariant`, ответ владельца `require-enforcement`, адресат работы не назначен). Ещё 9 запретов `product-invariant` принуждены лишь частично. Планы 15-13 закрепили критерий в ОСЛАБЛЕННОЙ форме «решён ИЛИ названа причина». Прибор докладывал `unresolved: 85` в области решений."
-        artifacts:
-          - path: ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-prohibitions-registry.yaml"
-            issue: "85 строк Фазы 10 с `disposition: unresolved` (declared-rule-absent 27, enforcement-required 58); 9 строк `product-invariant` с `partially-enforced`"
-          - path: "tests/test_planning/test_plan_prohibitions_census.py"
-            issue: "закрывающее правило утверждало безусловную (ослабленную) форму; сильной формы не было"
-        missing:
-          - "Решение владельца по каждому из трёх путей закрытия остатка (правила / разрешение с `permit_scope` / `overrides:`)"
-          - "Назначить адресата работы по `product-invariant`"
-          - "Решить судьбу 27 находок D-05"
-          - "WR-04: новые планы закрытия не должны красить перепись"
-        resolution: "Владелец выбрал путь (1) — Г-1 «Правила сейчас» (2026-09-25); вытесненные строки — к чекпойнту 15-32 (2026-09-26); сильная форма — план 15-33. Путь (3) `overrides:` не понадобился и не записан."
-    human_verification_count: 5
-    advisory_count: 14
+    human_verification_count: 7
+    advisory_count: 15
 gaps: []
 deferred: []
 advisory:
-  - finding: "WR-05 (15-REVIEW) = UI-REVIEW находка 11: новые отказы второй линии в `schedules_update` (`schedules.py:1407-1413`) и `schedules_create` (`:1136-1142`) переиспользуют уведомление тумблера `SCHEDULE_VALUES_OUT_OF_DOMAIN`, чей текст велит «откройте расписание в редакторе… сохраните — после этого включение сработает» человеку, который только что сохранил в редакторе (правки откачены, редирект без `?sched=` сворачивает карточку); на create расписания ещё нет"
+  - finding: "WR-05 (15-REVIEW) = UI-REVIEW находка 11: отказы второй линии в `schedules_update`/`schedules_create` переиспользуют текст уведомления тумблера `SCHEDULE_VALUES_OUT_OF_DOMAIN` («…сохраните — после этого включение сработает»)"
     category: other
-    reason: "Подтверждено чтением кода. Путь латентный (только если первая линия пропустит значение), но единственная подсказка ведёт в петлю. Новый код уведомления запрещён планом 15-16 (#0) со ссылкой на запреты Фазы 10 `10-01#3`/`10-24#2`/`10-31#1` (сегодня принуждены историческим прочтением (а′) над коммитами `(10-NN)`, поэтому новый код в Фазе 15+ их правила не краснит). Починка требует решения владельца о коде реестра и покраснит пять правил фазы (`_refusal_landing`). Плановое суждение 15-16 D5 (человеческое) ответом ревизии предрешено отрицательно."
-    evidence_status: "code read (`app/pages/schedules.py`, `app/pages/notices.py:273-279`)"
-  - finding: "WR-06 (15-REVIEW): прибор переписи отказывает `CensusError` на любой дробной фазе (`15.1-01-PLAN.md`): `_phase_number_of` / `plan_number_of` / `through_fixed_set`"
+    reason: "Дефект копии остаётся в дереве; владелец 2026-10-06 прочёл текст (У-12) и решил «понятен, оставить» (H7, 15-16 D5); диспозиция ревью `deferred`. Переоткрыть может только владелец"
+    evidence_status: "code read; owner decision recorded (15-OWNER-DECISIONS-2026-10-06.md, 15-UAT.md У-13)"
+  - finding: "WR-06 (15-REVIEW): прибор переписи отказывает `CensusError` на любой дробной фазе"
     category: architectural
-    reason: "Воспроизведено этим отчётом: `through_fixed_set({'.planning/phases/15.1-x/15.1-01-PLAN.md': ''})` → `CensusError … номер фазы 15.1 — не число`. Первая же `/gsd-phase insert` покрасит модуль переписи отказом прибора; граница нигде не названа. Цели фазы не касается — вставок в веху не планируется"
-    evidence_status: "reproduced"
-  - finding: "WR-07 (15-REVIEW): продуктовый модуль `tests/test_pages/test_schedule_invariants.py:104` ввозит `tests.test_planning.test_the_walkthrough_stand_is_seedable` и через него читает `.planning/phases/10-*/10-UAT.md`; метки `planning` нет — правило `test_no_seed_lifts_check_constraints_without_rolling_back_first` (принуждение строки критерия 6 `10-55#9`) упадёт `FileNotFoundError` при архивации вехи"
+    reason: "Перезамерено этим отчётом: `through_fixed_set({'.planning/phases/15.1-x/15.1-01-PLAN.md': ''})` → `CensusError … номер фазы 15.1 — не число`. Первая `/gsd-phase insert` покрасит модуль переписи. Цели фазы не касается; диспозиция `open`"
+    evidence_status: "reproduced 2026-10-06"
+  - finding: "WR-07 (15-REVIEW): продуктовый модуль `tests/test_pages/test_schedule_invariants.py:104` ввозит `tests.test_planning.test_the_walkthrough_stand_is_seedable` и через него читает `.planning/phases/10-*/10-UAT.md`; метки `planning` нет"
     category: architectural
-    reason: "Подтверждено грепом: единственный модуль `tests/test_pages/`, ввозящий `tests.test_planning`. Архивация вехи — следующий шаг после этой фазы; модуль переписи ту же границу объявляет (`test_plan_prohibitions_census.py:103-106`), этот — нет. ⚠️ Решить ДО `/gsd-complete-milestone`: перенести половину правила в planning-модуль либо пометить `@pytest.mark.planning`; вместе с переездом вселенной прибора (решение закрывающего веху)"
-    evidence_status: "code read + grep"
-  - finding: "WR-08 (15-REVIEW): `NEXT_RUN_CALCULATOR_SOURCE_DIGEST = \"698f47d4e018\"` замораживает исходник `compute_next_run_at` посимвольно (правило `test_the_next_run_calculator_source_is_unchanged`, принуждение `10-55#0`), закрепляя функцию с известным двояким сигналом отказа"
+    reason: "Перезамерено грепом: по-прежнему единственный модуль вне `tests/test_planning/`, ввозящий его; `pytestmark` в модуле нет. Правило `test_no_seed_lifts_check_constraints_without_rolling_back_first` (принуждение `10-55#9`) упадёт `FileNotFoundError` при архивации вехи. ⚠️ Решить ДО `/gsd-complete-milestone`"
+    evidence_status: "grep 2026-10-06"
+  - finding: "WR-09 (15-REVIEW): загрузка клавиатурой, дошедшая до потолка, прячет поле, держащее фокус, и фокус падает на `<body>`"
     category: other
-    reason: "Правило держит БУКВУ `10-55#0` («не правится ни на символ») — принуждение по Г-1 честное. Но будущая починка вычислителя покраснит правило фазы, а маркера `characterisation` нет (греп). Дух запрета 15-08 (#2 по переписи) — см. H4. Решение владельца: оставить заморозку с названием дефекта в сообщении либо заменить свойством (нет `try`, возвращающего `None`)"
-    evidence_status: "code read"
-  - finding: "IN-07 (15-REVIEW) = UI-REVIEW находки 9 и 10: пять сентинелов вне шести (`history/list.html`, `history/partial_cards.html`, `admin/user_history.html`, `admin/history_partial_cards.html`, `account_groups/includes/sentinel.html`) несут `limit={{ page_size }}` (латентный 422 → «Загрузка...» навсегда), подпись `Загрузка...` без `role=status`; два рендера эхом отдают `limit` запроса как `page_size`"
+    reason: "Принятое следствие (владелец 2026-10-06, после отката `autofocus` CR-01); записано в `app.css:2174-2181` и `media_strip.html:100-105`; правило `test_no_upload_response_steals_focus` держит отсутствие `autofocus`. Починка требует обработчика, которого гейты не допускают"
+    evidence_status: "code read; owner decision recorded"
+  - finding: "IN-07 (15-REVIEW) = UI-REVIEW находки 9 и 10: пять сентинелов вне шести (`history/list.html:119`, `history/partial_cards.html:6`, `admin/user_history.html:63`, `admin/history_partial_cards.html:7`, `account_groups/includes/sentinel.html`) несут `limit={{ page_size }}` и `Загрузка...` без `role=status`"
     category: other
-    reason: "Предсуществующее; остаток назван деревом с адресатом «следующая веха» (`test_markup_literal_inventory.py:63-72`, истина 15-21 T5). Отложить в фазу этой вехи некуда (Фаза 15 последняя) — адресат: планирование следующей вехи"
-    evidence_status: "code read (review + UI audit)"
-  - finding: "IN-08 (15-REVIEW): `app/dependencies.py:323` набирает адрес уведомления руками (`/dashboard?notice=impersonation_forbidden`) — остаток WR-03 Фазы 8"
+    reason: "Перезамерено грепом. Адресат — планирование следующей вехи. ⚠️ Следствие для обхода: `admin/user_history.html`, на котором У-11 наблюдал каскад, — один из ЭТИХ пяти, а не из шести сентинелов плана 15-21"
+    evidence_status: "grep 2026-10-06"
+  - finding: "IN-08 (15-REVIEW): `app/dependencies.py:323` набирает адрес уведомления руками — нарушение `10-18#3`, разрешённое владельцем строкой (15-32)"
     category: other
-    reason: "Это ровно нарушение запрета `10-18#3`, которое владелец РАЗРЕШИЛ строкой (15-32, ветвь (б), «известный неисправленный дефект»). Разрешение не есть соблюдение: инвариант продукта нарушен в дереве по решению владельца. Фаза файл не трогала"
-    evidence_status: "code read (review); owner permit recorded in registry `row_decisions`"
-  - finding: "IN-09 (15-REVIEW): правило слоёв `test_no_layer_of_the_table_is_written_into_the_shell_rules` краснеет на любом `60`/`70` в модуле 8 946 строк"
+    reason: "Разрешение не есть соблюдение; инвариант нарушен в дереве по решению владельца"
+    evidence_status: "code read (review); owner permit in registry `row_decisions`"
+  - finding: "IN-09 (15-REVIEW): правило слоёв `test_no_layer_of_the_table_is_written_into_the_shell_rules` краснеет на любом `60`/`70` в модуле ~9 000 строк"
     category: other
-    reason: "Info; хрупкость правила, не дефект продукта"
+    reason: "Хрупкость правила, не дефект продукта"
     evidence_status: "none provided"
-  - finding: "IN-10 (15-REVIEW): один семистрочный комментарий-летопись DEF-09-03 вставлен в шесть обработчиков (`accounts.py`, `ads.py`, `schedules.py`)"
+  - finding: "IN-10 (15-REVIEW): семистрочный комментарий-летопись DEF-09-03 вставлен в шесть обработчиков"
     category: other
-    reason: "Info; риск расхождения копий"
+    reason: "Риск расхождения копий"
     evidence_status: "none provided"
   - finding: "IN-11 (15-REVIEW): сторож `test_boundary_the_keyboard_focus_and_the_checkbox_role_consequences_are_guarded_not_fixed` утверждает два принятых дефекта доступности как требуемое состояние"
     category: other
-    reason: "Громкий и принятый владельцем (Г-3) закреп; будущая замена органа на `<button>` обязана снять правило тем же коммитом"
+    reason: "Громкий закреп, принятый владельцем (Г-3; подтверждено H2/H5 (5) 2026-10-06); будущая замена органа на `<button>` обязана снять правило тем же коммитом"
     evidence_status: "code read (review)"
-  - finding: "UI-REVIEW пункт 2 (открыт): вторая плашка остаётся смещённой на 96px после снятия первой органом (`app.css:1274-1279`)"
+  - finding: "IN-12 (15-REVIEW): `.media-tile--add:focus-visible` мёртв (подпись без `tabindex`) и делит список селекторов с `body:has(...)` — движок без `:has()` выбросит всё правило обвода"
     category: other
-    reason: "Записано и передано вехе решением владельца (Г-3: «UI priority 2 — известное отложенное следствие»); план 15-19 #2 запрещал чинить. Починка — чистый CSS внутри ветви A (UI-REVIEW Top-1); снять отсрочку может только владелец"
-    evidence_status: "recorded in app.css and guard"
-  - finding: "UI-REVIEW пункт 1 и P6-a (закрыты как принятые следствия): снятие пробелом роняет фокус на `<body>` (WCAG 2.4.3), орган объявлен «флажком», Enter не снимает"
+    reason: "Новое (d0a31bd9); `open`; починка — удалить мёртвый селектор"
+    evidence_status: "code read (review)"
+  - finding: "IN-13 (15-REVIEW): блок визуального скрытия `.media-file-input` дублирует `.toggle__input`"
     category: other
-    reason: "Закрыты записью по решению владельца Г-3; влияние на пользователя сохраняется по решению. Переоткрытие — только новым решением владельца (путь `<button>` + один обработчик)"
-    evidence_status: "recorded in app.css:1330-1348 + guard"
-  - finding: "UI-REVIEW P1-a (открыт, minor): словарь доступных имён («Отказ сервера», «Обрыв связи») расходится с видимым текстом плашек"
+    reason: "Новое (d0a31bd9); `open`; риск тихого расхождения копий"
+    evidence_status: "code read (review)"
+  - finding: "UI-REVIEW пункт 2 (открыт): вторая плашка остаётся смещённой после снятия первой органом"
     category: other
-    reason: "Minor; стало заметнее после переноса различающего слова вперёд"
+    reason: "Отсрочка владельца (Г-3); У-12 п.5 подтвердил «не хуже записанного» (`top 108`). Снять отсрочку может только владелец"
+    evidence_status: "observed (У-12) + recorded in app.css"
+  - finding: "UI-REVIEW пункт 1 и P6-a (закрыты как принятые следствия): снятие пробелом роняет фокус на `<body>`, орган объявлен «флажком», Enter не снимает"
+    category: other
+    reason: "Наблюдено У-12 п.2 и п.4; принято владельцем (Г-3, H2 2026-10-06). Переоткрытие — только новым решением владельца"
+    evidence_status: "observed (У-12) + recorded in app.css + guard"
+  - finding: "UI-REVIEW P1-a (minor): словарь доступных имён («Отказ сервера», «Обрыв связи») расходится с видимым текстом плашек"
+    category: other
+    reason: "Minor"
+    evidence_status: "code read (UI audit); имена подтверждены деревом доступности (У-12 п.4)"
+  - finding: "UI-REVIEW P4-a и P5-a (minor/low): крестик 13px в цели 24px; `FAILURE_BANNER_STACK_LINES = 3` константой"
+    category: other
+    reason: "Minor/low"
     evidence_status: "code read (UI audit)"
-  - finding: "UI-REVIEW P4-a и P5-a (открыты, minor/low): крестик 13px в цели 24px; `FAILURE_BANNER_STACK_LINES = 3` константой — длинное сообщение сервера уйдёт на лишнюю строку без красного"
+  - finding: "UI-REVIEW находки 12, 13, 16: поле браузера у `<p>` подсказки зоны; подсказка не называет следствия и рычага; подпись `.sched-card__tz` ≈3.6:1"
     category: other
-    reason: "Minor/low; поправка 322 px — только проза"
-    evidence_status: "code read (UI audit)"
-  - finding: "UI-REVIEW находка 12: подсказка зоны — `<p>` с полем браузера 1em внутри flex-колонки с gap 12px (~26px вместо ритма 12px)"
+    reason: "Minor/copy/предсуществующее; владелец прочёл текст подсказки и оставил (H7, 15-23 D4)"
+    evidence_status: "code read (UI audit); owner read the text (У-13)"
+  - finding: "H7, 15-19 D4: три из 16 потребителей токена `--focus-ring` (`[data-clamp] > summary`, `[data-uprow]`, `.group-pick__box`) на данных наблюдателя не найдены (У-12)"
     category: other
-    reason: "Minor; починка `.sched-card__hint { margin: 0; }`; отрисованное расстояние не наблюдалось"
-    evidence_status: "code read (UI audit)"
-  - finding: "UI-REVIEW находка 13: подсказка называет смену пояса, но не следствие (цифры те же — моменты сдвинутся) и не рычаг (выбора пояса на карточке нет)"
+    reason: "Владелец закрыл пункт 15-19 D4 ответом «починить сейчас» по найденному дефекту; остаток трёх — та же переменная токена, структурно; не наблюдён"
+    evidence_status: "observed 12/16 (У-12)"
+  - finding: "Верификатор: 52 из 191 пар «правило — координата» в реестре (`rule_site`) указывают номер строки дальше ±3 от определения (прошлый круг — 48 другой мерой)"
     category: other
-    reason: "Minor, copy"
-    evidence_status: "code read (UI audit)"
-  - finding: "UI-REVIEW находка 16 (предсуществующее): подпись `.sched-card__tz` `--text-muted` 11px ≈3.6:1 < 4.5:1"
-    category: other
-    reason: "Не вменяется фазе; новая подсказка от неё зависит. Оценка sRGB"
-    evidence_status: "estimate"
-  - finding: "Верификатор (новое): 48 из 191 пар «правило — координата» в реестре (`rule_site`) указывают устаревший номер строки (пример: `10-57#4` → `test_shell.py:8488`, а функция на `:8843`)"
-    category: other
-    reason: "Все 191 правило существуют в своём файле (разбор `ast` этим отчётом; правило `test_every_coverage_rule_exists_at_its_site_by_the_tree` зелено). Координата объявлена «на день замера» — это класс IN-04 (указатели номерами строк), не пропуск принуждения"
+    reason: "Все 191 правило существуют в своём файле (перезамер `ast` 2026-10-06, 0 отсутствующих). Координата объявлена «на день замера» — класс IN-04, не пропуск принуждения"
     evidence_status: "measured by this verifier (ast over all rule_site pairs)"
 behavior_unverified_items: []
 coincidental_reliance_items:
   - truth: "Критерий 6 (б): у запрета `10-55#9` предъявлено машинное принуждение"
     reason: undeclared-precondition
-    harden: "Правило `test_no_seed_lifts_check_constraints_without_rolling_back_first` держится, пока `.planning/phases/10-*/10-UAT.md` лежит на месте; продуктовый модуль этого не объявляет (см. advisory WR-07). Объявить границу или перенести половину правила в planning-модуль"
+    harden: "Правило `test_no_seed_lifts_check_constraints_without_rolling_back_first` держится, пока `.planning/phases/10-*/10-UAT.md` лежит на месте; продуктовый модуль этого не объявляет (advisory WR-07). Объявить границу или перенести половину правила в planning-модуль до `/gsd-complete-milestone`"
 human_verification:
-  - test: "H1 (перенесён). Сводный обход `15-UAT.md`: владелец заполняет девять таблиц «Отметка о закрытии» и поля `result` (D-17). Пункты 1-8 — сверка названных записей Фаз 7-11 (D-15); пункт 3, шаги 3.2-3.4 — приземление фокуса на location-пути глазами; пункт 9 — 12 мест условной сборки `hx-*` и 6 ветвей `form_wrapper`"
-    expected: "Девять отметок заполнены наблюдёнными признаками (дата, браузер/ОС, наблюдатель); шапка переведена в терминальное состояние только после этого"
-    why_human: "`15-UAT.md` партией закрытия не менялся (git log c939cc8c..HEAD пуст): `status: human_needed`, `result: [pending]` ×9, отметки пусты. JS в суите не исполняется; `test_the_walkthrough_cannot_self_certify.py` запрещает самозаверение"
-  - test: "H2 (перенесён, предмет изменился). Пять наблюдений органа снятия плашки (`15-UAT.md` У-8), окно 1280 px, двойная авария — теперь на изменённом состоянии: непрозрачный `--focus-ring: rgb(196, 132, 252)`, имена «Отказ сервера: скрыть сообщение» / «Обрыв связи: скрыть сообщение», куда падает фокус после пробела (Chrome и Firefox)"
-    expected: "Обвод виден; пробел снимает; текст не сталкивается с крестиком; имена различимы на слух; вторая плашка смещена не хуже известного"
-    why_human: "Движка раскладки и дерева доступности в суите нет; контраст ≈6.7:1 — оценка UI-аудита, не наблюдение"
-  - test: "H3 (перенесён + 1 новый). Backstop-утверждения без явного правила (insufficient_spec): независимость от порядка гейта пар (15-03 T10), запрета FETCH-03 (15-04 T8), реестра `hx-push-url` (15-11 T12), предъявления правил по `ast` (15-13 T11), «чтение из одного снимка дерева» (15-06 T8); НОВОЕ — 15-20 T3 «порядок строк реестра на вердикт проверок формы не влияет» (правила перестановки строк реестра нет). 15-15 T5 засчитан: `test_the_fixed_set_is_chosen_by_phase_and_plan_number_not_by_order` зелен"
-    expected: "Человек принимает структурную улику или заказывает правило порядка по образцу `test_the_order_of_sources_does_not_move_the_identities`"
-    why_human: "Утверждения `verification: backstop`; присутствие и связность их не доказывают"
-  - test: "H4 (перенесён, пересчитан). Обзор запретов планов Фазы 15 — теперь 91 (47 + 44 планов 15-15…15-33), все judgment-tier `flagged-unverified`. Флагированы: (а) `15-14-PLAN.md#0` (прежний «15-14 #1»): буква «MUST NOT писать `result`» нарушена — `result: [pending]` ×9 в `15-UAT.md`, вердикта нет; (б) `15-08-PLAN.md#2` (прежний «15-08 #3», правило о непочиненном — только под маркером `characterisation`): часть WR-01/WR-02 снята планом 15-16, но дух теперь задевает WR-08 — заморозка `compute_next_run_at` без маркера (advisory WR-08) — и громкий принятый закреп IN-11"
-    expected: "Владелец принимает или отклоняет две флагированные позиции; прочие 89 — неавторитетный вердикт LLM-судьи: нарушений по существу не найдено (продукт правили только 15-16/19/21/23, каталоги прежних фаз не тронуты, `REQUIREMENTS.md` не менялся)"
-    why_human: "Judgment-tier prohibition требует человеческого разрешения; вердикт LLM неавторитетен"
-  - test: "H5 (перенесён, остаток). Открытые вопросы владельцу: (1) нужна ли запись «27 → 29» по сети «все места формы» (15-02; ROADMAP прямо оставляет вопрос); (2) самопротиворечие `14-UAT.md` (15-06); (3) оставить или снять четыре `OOB_TARGET_EXCEPTIONS` (15-09); (4) адресат 420 запретов вне области решений D-02 (было 376: +44 от планов 15-15…15-33; фазы 07-09, 11-14 — 329, Фаза 15 — 91), все `unclassified`/`unresolved`; (5) половина «внешность» D-18.3 — у органа снятия нет видимой границы (`border: 0; background: transparent`, UI P2-a), Г-3 покрыл только фокус и роль, а D-18 требует нового решения владельца на любую отсрочку"
-    expected: "Решение владельца по каждому или записанная отсрочка с адресатом; по (5) — починка чистым CSS внутри ветви A (UI-REVIEW п.4) либо запись принятым следствием"
-    why_human: "Решения закреплены за владельцем; исполнители их намеренно не принимали"
-  - test: "H6 (новый). Строка `10-03#6` (класс `product-invariant`, ветвь `require-enforcement`) стоит `partially-enforced` с `permit_scope_uncovered` = своё тождество по записи `row_decisions` (ответ владельца 15-32, 2026-09-26, вариант «(а′), plan commits only», разделение (а′)+(б)). Этим не выполнена буква трёх записей, сделанных ДО ответа: истина 15-33 T0 («ни одна `partially-enforced` строка не лежит в классе с ветвью `require-enforcement`»), истина 15-22 T3 и запрет 15-22 #0 («MUST NOT ставить `permit_scope_uncovered` строке класса `product-invariant`»), а также буква Г-1 «9 partially-enforced получают машинное правило». Подтвердите, что ответ 15-32 намеренно замещает эти буквы"
-    expected: "Владелец подтверждает (тогда записать `overrides:` — форма в разделе «Gaps Summary») либо заказывает полное принуждение половины «ответ без слоя письма» (кандидат — поведенческое правило `test_every_pair_case_answers_both_transports`, уже названное в разрешении)"
-    why_human: "Критерий 6 (б) ROADMAP этой строкой выполнен (правило + разрешение с машинно читаемой областью), а буква плана — нет. Ответ владельца информирован (`15-SUPERSEDED-ROWS.md`: «(а′) закрывает только половину… (б): допустима»), но на истину 15-33 не ссылается; принимать отступление за владельца верификатор не вправе"
-  - test: "H7 (новый). Человеческие суждения партии закрытия, которых нет в `15-UAT.md` (файл после 15-14 не правился): 15-16 D5 — читается ли плашка отказа редактора/создания как путь восстановления (ревизия уже судит «нет», advisory WR-05); 15-19 D4 + UI находка 14 — непрозрачный обвод на ВСЕХ 16 потребителях токена (в т.ч. врезные `.media-tile__remove`, `.time-pill__remove`, рядом с `--accent-cta`); 15-21 D4 + UI находка 15 — бесконечная прокрутка трёх разделов в живом браузере и озвучивает ли что-нибудь `role=\"status\"` на узле, вставленном с содержимым и заменяемом `outerHTML`; 15-23 D4 — замечает ли и понимает ли человек подсказку зоны до «СОХРАНИТЬ РАСПИСАНИЕ»"
-    expected: "Каждое наблюдение записано человеком (дата, браузер/ОС); при тишине `role=status` — форма с постоянной живой областью (UI-REVIEW)"
-    why_human: "Суита не исполняет JS, не рисует и не озвучивает; сводки 15-16/19/21/23 передали эти пункты обходу, но в `15-UAT.md` их нет — дописать их туда должен поток UAT, а не этот отчёт"
+  - test: "H7-остаток (15-21 D4, `human_judgment: true`). Бесконечная прокрутка ШЕСТИ сентинелов, изменённых планом 15-21 (без `limit`, `Загрузка…`, `role=\"status\"`): `/ads`, `/accounts`, `/schedules` (каждый — `list.html` и `partial_cards.html`), на данных больше `PAGE_SIZE = 30`; и звучит ли `role=\"status\"` (а также имена органа снятия, H2 п.4) в скринридере. ⚠️ Поправка к записи: в 15-OWNER-DECISIONS и прошлом отчёте разделы названы «/ads, /schedules, /history», но `/history` — не из шести (это IN-07), а `/accounts` — из шести и нигде не упомянут. Каскад, наблюдённый в У-11 на `admin/user_history.html`, идёт по НЕИЗМЕНЁННОЙ форме сентинела (с `limit={{ page_size }}`, без `role=status`) и форму 15-21 не исполняет"
+    expected: "Владелец выбирает одно: (а) наблюдение — на стенде с ≥31 записью в каждом из трёх разделов докрутить до второй порции: запрос уходит ровно один раз, адрес без `limit`, порция подгрузилась, подпись «Загрузка…» заменена; записать дату/браузер; либо (б) явно принять структурную улику: серверную половину держат `test_infinite_scroll_chain[ads|schedules|accounts]` (сентинел без `limit` → 200, курсор растёт) и `test_the_six_sentinels_carry_no_page_size_and_the_server_default_is_the_module_constant` (оба зелены 2026-10-06), а клиентская механика `hx-trigger=\"revealed\"` + `outerHTML` та же, что принята записью Фазы 7 (пункт 2) и наблюдена в У-11. По звучанию — наблюдение скринридером либо запись принятым следствием"
+    why_human: "Суита не исполняет JS и не озвучивает. Владелец 2026-10-06 сам записал этот пункт как «не наблюдено; ответом не закрыто» (15-OWNER-DECISIONS-2026-10-06.md, последняя строка таблицы), а принимать структурную улику за владельца верификатор не вправе"
 ---
 
 # Phase 15: Упрочнение и сводный обход 47 форм — Verification Report (re-verification)
 
 **Phase Goal:** цель вехи закрыта инвентарями, а не ощущением: 47 из 47, `fetch(` == 0, девять пунктов ручного UAT закрыты поимённо
-**Verified:** 2026-09-27T14:30:00Z
+**Verified:** 2026-10-06T12:59:49Z
 **Status:** human_needed
-**Re-verification:** Yes — после партии закрытия гэпа 15-15…15-33 (волны 5-17). Прошлый круг — 2026-09-24, `gaps_found`, 6/8.
+**Re-verification:** Yes — после ответов владельца 2026-10-06 на H1–H7 и правок ревью (коммиты `188457f4`…`7671e926`). Прошлый круг — 2026-09-27, `human_needed`, 7/8.
 
 ## Итог в трёх строках
 
-- **Гэп прошлого круга закрыт уликой, а не записью.** Критерий 6 (б): в области решений `unresolved` — 0. Закрывающее правило стоит в сильной форме. На копиях реестра с нарушением оно краснеет, это замерено этим отчётом. Все 191 правило, названное реестром, существуют в дереве (разбор `ast`).
-- Машинная половина цели держится. Регрессии нет: `fetch(` 0, `hx-push-url` 0, `limit=30` 0, инвентарь 49/27, пары 5+5. Код после замера оркестратора (`b277ff2e`, 4082 passed) не менялся.
-- **Цель не закрыта окончательно по одной причине: девять пунктов ручного UAT — акт человека** (`15-UAT.md` пуст по замыслу). К человеку идут ещё два новых пункта: буква строки `10-03#6` против истины 15-33 T0 (H6) и четыре браузерных суждения партии, которых нет в `15-UAT.md` (H7).
+- **Все восемь истин ROADMAP закрыты.** Машинная половина перезамерена сегодня: `fetch(` 0, `hx-push-url` 0, `limit=30` 0, прибор `--check` exit 0 (741, биекция), в области решений `unresolved` 0. Сильное закрывающее правило на живом реестре даёт `[]`, на мутированных копиях называет нарушителей. Девять пунктов UAT закрыты актом владельца: 9 × `pass`, 9 заполненных отметок, коммит `188457f4` автора `chubav`.
+- **H1–H6 и три из четырёх частей H7 сняты решениями владельца.** H6 закрыт подписанным `overrides` (буква 15-33 T0 / 15-22 T3 / 15-22 #0 по строке `10-03#6`). Блок перенесён в шапку дословно, `accepted_at` = 2026-10-06T10:30:00Z.
+- **Открыт один пункт: остаток H7 (15-21 D4).** Сам владелец записал его как «не наблюдено; ответом не закрыто». Поэтому статус `human_needed`, а не `passed`. При сверке нашлась поправка: наблюдённый в У-11 каскад шёл по сентинелу, который план 15-21 НЕ менял. А раздел `/accounts` из шести изменённых не упомянут нигде.
 
 ## Goal Achievement
 
 ### Observable Truths (контракт ROADMAP)
 
-| # | Truth | Status | Evidence |
+| # | Truth | Status | Evidence (замер 2026-10-06) |
 |---|-------|--------|----------|
-| 1 | Любое действие письма без перезагрузки: все места письма через `hx-post`, инвентарь сведён числом | ✓ VERIFIED (регрессия) | `test_form_inventory.py` в прогоне 113 passed (6 модулей); греп `fetch(`/`hx-push-url`/`limit=30` в шаблонах → 0/0/0. Партия меняла шаблоны сентинелов, плашки и карточки — инвентарь 49/27 зелен |
-| 2 | `fetch(` в `app/templates/` == 0, греп-гейтом | ✓ VERIFIED (регрессия) | греп → 0; группа `fetch_prohibition` в 43 passed |
-| 3 | Решение `hx-push-url` по каждой форме; запрет на «изменяет данные» | ✓ VERIFIED (регрессия) | группа `push_url` в 43 passed; разборщик теперь один (`test_htmx_markup_gates.py:9500`, IN-03) и потребители зелены |
-| 4 | Парные `*_degrades_without_htmx`, без переименований | ✓ VERIFIED (усилено) | 10 passed (`-k degrades_without`); `DEGRADATION_PAIRS_DECLARED = 5` не сдвинут; WR-03 закрыт — пары утверждают точный `location` и исчезновение строки, метаправило `test_every_redirecting_degradation_pair_asserts_the_exact_location` |
-| 5a | Слепая зона условной сборки: запрещена гейтом либо глазами; границы в докстрингах | ✓ VERIFIED (регрессия) | группы `conditional`/`modal_linkage`/`split_top_level` 26 passed; `CONDITIONAL_HX_POST_SITES = {}` с контролем |
-| 5b | Девять именованных пунктов ручного UAT закрыты поимённо | ? HUMAN | `15-UAT.md` с 15-14 не менялся: `status: human_needed`, `checks_declared: 9`, `result: [pending]` ×9, таблицы отметок пусты (D-17). → H1 |
-| 6a | ОДИН исполняемый прибор переписи, число воспроизводимо | ✓ VERIFIED | `scripts/prohibitions_census.py --check` → exit 0; 741 элемент на 175 планах (07:31 08:24 09:153 10:321 11:68 12:22 13:8 14:23 15:91); «реестр: 741 строк, биекция с переписью — согласие». Числа Фазы 15 меряются над фиксированным набором (15-15), 19 новых планов модуль не покрасили |
-| 6b | По каждому запрету перечня — принуждение ЛИБО разрешение с `permit_scope` | ✓ VERIFIED | `--breakdown`, область решений (321): enforced **93**, partially-enforced **25**, permitted **203**, unresolved **0**. Частичные: 24 с `permit_scope_uncovered` = разрешённый класс, 1 (`10-03#6`) = своё тождество по `row_decisions`. Разрешённые: 202 классом, 1 (`10-18#3`) строкой. Ни одна `verification: test` не `permitted`. Замер этого отчёта через `_document_closing_offences` помощника правила: живой реестр → `[]`; копия без `row_decisions` → называет `10-03#6`, `10-18#3`; `10-55#0` → `unresolved` называется; `10-01#0` → частичная без разрешения называется. Все 191 пара «правило — файл» найдены разбором `ast` (0 отсутствующих). `tests/test_planning/` 208 passed |
+| 1 | Любое действие письма без перезагрузки: все места письма через `hx-post`, инвентарь сведён числом | ✓ VERIFIED | `test_form_inventory.py` в прогоне 130 passed (9 целей). Греп `fetch(`/`hx-push-url`/`limit=30` в `app/templates/` → 0/0/0. Летопись 47 → 49 в ROADMAP и REQUIREMENTS на месте. Вопрос «27 → 29» закрыт решением владельца H5 (1): «не нужна» |
+| 2 | `fetch(` в `app/templates/` == 0, греп-гейтом | ✓ VERIFIED | греп → 0; `-k "fetch_prohibition or push_url"` по `test_htmx_inventory.py` + `test_htmx_gates.py` → 30 passed |
+| 3 | Решение `hx-push-url` по каждой форме; запрет на «изменяет данные» | ✓ VERIFIED | тот же прогон 30 passed (группа `push_url`); атрибут в шаблонах 0 |
+| 4 | Парные `*_degrades_without_htmx`, без переименований | ✓ VERIFIED | `-k degrades_without` по всей `tests/` → 15 passed (alpine + htmx). `DEGRADATION_PAIRS_DECLARED = 5` (`test_degradation_pairs.py:373`) не сдвинут |
+| 5a | Слепая зона условной сборки: запрещена гейтом либо глазами; границы в докстрингах | ✓ VERIFIED | `-k "conditional or modal_linkage or split_top_level"` → 26 passed; глазами — пункт 9 обхода (5b) |
+| 5b | Девять именованных пунктов ручного UAT закрыты поимённо | ✓ VERIFIED (акт владельца) | `15-UAT.md`: `status: complete`, `checks_declared: 9`, `result: pass` ×9, 9 таблиц «Отметка о закрытии» с одной строкой каждая (дата 2026-10-06, наблюдатель `chubav`). Коммит `188457f4`, автор `chubav`. `test_the_walkthrough_cannot_self_certify.py` → 5 passed. Отметки и результаты здесь не выставлялись, они сверены как акт владельца. Сам владелец записал, что не наблюдено: 3.3, 3.4, 9.3 на `/ads`, `/schedules`, `/history` (`not_observed` в шапке UAT) |
+| 6a | ОДИН исполняемый прибор переписи, число воспроизводимо | ✓ VERIFIED | `scripts/prohibitions_census.py --check` → exit 0, «реестр: 741 строк, биекция с переписью — согласие», `row_decisions` 2. Перенумерация угроз `d0b3a8c7` тронула только таблицы `<threat_model>` 13 планов (дифф — только строки `T-15-NN`), блоки `must_haves` не менялись |
+| 6b | По каждому запрету перечня — принуждение ЛИБО разрешение с `permit_scope` | ✓ VERIFIED (+ override по букве 15-33 T0) | `--breakdown`, область решений 321: enforced **93**, partially-enforced **25**, permitted **203**, unresolved **0**. Частичные: 25/25 с `permit_scope_uncovered`, из них `product-invariant` — 1 (`10-03#6`). Скрипт над `_document_closing_offences` на копиях реестра: живой → `[]`; без `row_decisions` → `10-03#6`, `10-18#3`; `10-55#0` → `unresolved` назван. `tests/test_planning/` → 208 passed. Разбор `ast` всех 191 пар «правило — файл»: отсутствующих 0. Буква 15-33 T0 для `10-03#6` закрыта подписанным `overrides` (H6) |
 
-**Score:** 7/8 истин ROADMAP (1 за человеком); 233/242 истины планов (9 переданы человеку); 0 present-behavior-unverified.
+**Score:** 8/8 истин ROADMAP. Истин планов 242/242: 233 машинно, 7 решением или наблюдением владельца (6 backstop по H3, 1 отрисовка по H2), 2 по override (15-22 T3, 15-33 T0). Present-behavior-unverified — 0. Открытый пункт ручной проверки — 1.
 
 #### Как прочитан критерий 6 (б) — объявлено, а не оставлено на догадку
 
-- **Область «его перечня» — область решений D-02 (Фаза 10, 321).** Прибор перечисляет 741. Решение владельца D-02 (`15-CONTEXT.md`) сужает решения до Фазы 10: сам критерий происходит из долга Фазы 10. Прежний круг принял это прочтение, и этот его сохраняет. Остальные 420 запретов прибор помечает неразобранными. Их адресат по-прежнему не назначен: H5 (4), в прошлом круге их было 376.
-- **Строка `10-03#6` выполняет критерий 6 (б).** Половина «предикат отказа» принуждена правилом исторического прочтения (а′). Половина «ответ без слоя письма» разрешена явным ответом владельца с машинно читаемой областью (`permit_scope_uncovered` = тождество, запись `row_decisions`). Критерий не требует, чтобы одна форма покрывала весь запрет, и прошлый круг так же принял 23 частичные строки с остатком, разрешённым классом.
-- **Решение Г-1 выполнено по своей же развилке.** Г-1 направил «вытесненные строки Фазы 10 — к точке владельца 15-32». `10-03#6` и `10-18#3` — две из 16 строк этой точки. Владелец выбрал для них (а′)+(б) и (б), ветвь (в) не выбрал ни для одной строки.
-- **Буква истины 15-33 T0 для `10-03#6` не выполнена.** Истина требует, чтобы ни одна частичная строка не лежала в классе `require-enforcement`. План писался до ответа 15-32, правило реализовано формой без исключений по тождествам (запрет 15-33 #1 соблюдён). Это отступление, создал его ответ владельца. Принимать его за владельца верификатор не вправе: → H6, форма `overrides:` дана ниже. Вопрос оркестратора решён так: критерий 6 (б) — да, Г-1 — да (через развилку 15-32), буква 15-33 T0 — нет, решает владелец.
+- **Область «его перечня» — область решений D-02 (Фаза 10, 321).** Прочтение прошлых кругов сохранено. Остальные 420 запретов ушли решением владельца H5 (4) в бэклог следующей вехи. Носитель на месте: `.planning/todos/pending/classify-420-prohibitions-outside-phase-10.md`.
+- **Строка `10-03#6` выполняет критерий 6 (б)**: правило (а′) плюс разрешение строкой с машинно читаемой областью. Букву 15-33 T0 / 15-22 T3 / 15-22 #0 / Г-1 она не выполняет. 2026-10-06 владелец подтвердил, что ответ 15-32 замещает эти буквы намеренно, и отступление записано подписанным `overrides` (`overrides_applied: 1`). Правило сильной формы при этом не ослаблено: в нём нет исключения по тождеству, строку пропускает запись `row_decisions`, что показывает мутация «без `row_decisions`».
 
 ### Истины планов (сводно)
 
 | План | Истин | Статус | Опора |
 |---|---:|---|---|
-| 15-01…15-14 (первая партия) | 157 | ✓ 151, ? 6 | как в прошлом круге (5 backstop + 1 отрисовка → H2/H3); регрессия — прогоны ниже |
-| 15-15 перепись над фиксированным набором | 6 | ✓ 6 | `through_fixed_set`; `test_the_fixed_set_is_chosen_by_phase_and_plan_number_not_by_order` (backstop T5 — явное правило); `YAML_DIRECT_IMPORTERS` |
-| 15-16 одна политика отказа второй линии | 6 | ✓ 6 | код прочитан: `schedules.py:1380-1414`, `:1135-1142` — `rollback` + `SCHEDULE_VALUES_OUT_OF_DOMAIN`; прямых вызовов вычислителя нет (греп: только комментарии); `-k "malformed_stored or second_line or idle_editor or refusal"` 41 passed |
-| 15-17 пары удаления | 4 | ✓ 4 | 10 пар passed; метаправило точного адреса |
-| 15-18 один разборщик | 3 | ✓ 3 | греп `^def _split_top_level` по `tests/` → одно определение |
-| 15-19 орган снятия, Г-3 | 6 | ✓ 6 | `app.css:61` `--focus-ring: rgb(196, 132, 252)`; имена в `htmx_error_banner.html:308-309`; записи Г-3 `app.css:1330-1348`; `test_banner_dismiss.py` зелен |
-| 15-20 отказы прибора по имени | 4 | ✓ 3, ? 1 | IN-01/IN-02 правила зелены; T3 backstop (порядок строк реестра) без явного правила → H3 |
-| 15-21 шесть сентинелов | 6 | ✓ 6 | греп: `limit` на `revealed`-строках шести шаблонов 0, `role="status"` по 1 в каждом |
-| 15-22 форма записи принуждения | 5 | ✓ 4, ? 1 | `--record`, несколько правил на строку; T3 для `10-03#6` замещён ответом 15-32 → H6 |
-| 15-23 подсказка зоны | 4 | ✓ 4 | `sched_card.html:314`; `profile_timezone_or_utc` (`schedule_rules.py:212`) |
-| 15-24…15-29 принуждение `product-invariant` | 23 | ✓ 23 | 68 строк `enforced`; правила существуют (`ast`); замер направления — улики сводок; выборочно прочитаны `test_no_template_carries_hx_confirm` (антивакуум + контроль двух написаний) и `test_a_dismissed_banner_returns_on_the_next_failure` |
-| 15-30, 15-31 объявленные правила D-05 | 8 | ✓ 8 | `declared-rule-absent` 0; `test_executed_plans_kept_their_scope.py` в 208 passed; отказ на мелком клоне — контроль |
-| 15-32 чекпойнт владельца | 5 | ✓ 5 | ответ записан дословно выбранными вариантами (`15-SUPERSEDED-ROWS.md` «Ответ владельца»); (б) не предложен строкам `verification: test`; классы не перекраивались |
-| 15-33 сильная форма | 5 | ✓ 4, ? 1 | правило + три контроля зелены; замер этого отчёта на копиях; T0 — буква не выполнена одной строкой → H6 |
+| 15-01…15-14 (первая партия) | 157 | ✓ 151 машинно, ✓ 6 владельцем | 5 backstop — H3 (структурная улика принята); 1 отрисовка органа снятия — H2 (наблюдена У-12, п.2 принят) |
+| 15-15 перепись над фиксированным набором | 6 | ✓ 6 | регрессия: `tests/test_planning/` 208 passed |
+| 15-16 одна политика отказа второй линии | 6 | ✓ 6 | код с прошлого круга не менялся (`git diff d86efba3..HEAD -- app/pages/` пуст); дефект копии WR-05 владелец оставил (H7) |
+| 15-17 пары удаления | 4 | ✓ 4 | 15 passed `-k degrades_without` |
+| 15-18 один разборщик | 3 | ✓ 3 | 26 passed (`split_top_level`) |
+| 15-19 орган снятия, Г-3 | 6 | ✓ 6 | `test_banner_dismiss.py` в 130 passed; обвод у 12 из 16 потребителей наблюдён (У-12) |
+| 15-20 отказы прибора по имени | 4 | ✓ 3 машинно, ✓ 1 владельцем | T3 backstop — H3 |
+| 15-21 шесть сентинелов | 6 | ✓ 6 | греп: 6 строк `revealed` без `limit` и с `role="status"`; `test_infinite_scroll_chain` для ads, schedules, accounts зелен. Человеческое суждение D4 — открытый пункт |
+| 15-22 форма записи принуждения | 5 | ✓ 4, ✓ 1 по override | T3 — H6 |
+| 15-23 подсказка зоны | 4 | ✓ 4 | `test_schedule_rules_gate.py` в 130 passed; текст владелец прочёл и оставил (H7) |
+| 15-24…15-29 принуждение `product-invariant` | 23 | ✓ 23 | 68 строк `enforced`, правила существуют (`ast`) |
+| 15-30, 15-31 объявленные правила D-05 | 8 | ✓ 8 | `declared-rule-absent` 0 |
+| 15-32 чекпойнт владельца | 5 | ✓ 5 | `row_decisions` 2 (`--check`) |
+| 15-33 сильная форма | 5 | ✓ 4, ✓ 1 по override | T0 — H6; мутации замерены выше |
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |---|---|---|---|
-| `scripts/prohibitions_census.py` | единственный прибор; `--record`; отказ по имени | ✓ VERIFIED | `--check` exit 0; `--breakdown` воспроизводит числа `15-PROHIBITIONS-SUBJECT.md` (93/25/203/0, 741 на 175) |
-| `.../15-prohibitions-registry.yaml` | 741 строка; `class_decisions` 11; `row_decisions` 2 | ✓ VERIFIED | биекция согласна; поля разрешения — только по ответам владельца |
-| `tests/test_planning/test_plan_prohibitions_census.py` | сильная форма, контроли | ✓ VERIFIED | `_closing_offences` без литералов тождеств; контроли `test_control_the_strong_closing_rule_*` |
-| `tests/test_planning/test_executed_plans_kept_their_scope.py` | исторические факты (а′) | ✓ VERIFIED | в 208 passed |
-| `tests/test_templates/test_confirmation_panel_invariants.py`, `tests/test_pages/test_{failure_banner,schedule,write_path}_invariants.py` | новые правила принуждения | ✓ VERIFIED | существуют; `test_confirmation_panel_invariants.py` в прогоне 113 passed; остальные — в замере оркестратора 4082 passed |
-| `.../15-SUPERSEDED-ROWS.md` | 16 строк, ответ владельца | ✓ VERIFIED | `status: subject`, ответ дословно вариантами |
-| `.../15-PROHIBITIONS-SUBJECT.md` | приведён к реестру летописью | ✓ VERIFIED | счётчики сходятся с `--breakdown` |
-| `app/pages/schedules.py`, `notices` | отказ второй линии | ✓ VERIFIED (дефект текста — WR-05) | код прочитан |
-| `.../15-UAT.md` | девять пунктов, пустые отметки | ✓ VERIFIED (как артефакт) | не менялся партией; пунктов H7 в нём нет |
+| `scripts/prohibitions_census.py` | единственный прибор | ✓ VERIFIED | `--check` exit 0; `--breakdown` 93/25/203/0 |
+| `.../15-prohibitions-registry.yaml` | 741 строка, `row_decisions` 2 | ✓ VERIFIED | биекция согласна |
+| `tests/test_planning/test_plan_prohibitions_census.py` | сильная форма + контроли | ✓ VERIFIED | 208 passed; мутации названы |
+| `.../15-UAT.md` | девять пунктов, отметки владельца | ✓ VERIFIED | `complete`, 9/9, отметки заполнены; правило самозаверения зелено |
+| `.../15-OWNER-DECISIONS-2026-10-06.md` | носитель ответов H1–H7 | ✓ VERIFIED | ответы сверены с `15-UAT.md` У-13 и с деревом (маркер, `d0a31bd9`, todo) |
+| `app/templates/ads/includes/media_upload_form.html`, `app/static/css/app.css` | «+ ФАЙЛ» достижима с клавиатуры | ✓ VERIFIED | поле без `hidden`, с классом `.media-file-input`; обвод `body:has(#file-input:focus-visible)`; на потолке `visibility: hidden`; `test_the_file_field_is_reachable_from_the_keyboard` зелен |
+| `app/templates/ads/includes/media_strip.html` | без `autofocus` (CR-01) | ✓ VERIFIED | `autofocus` встречается только в комментарии-основании; `test_no_upload_response_steals_focus` зелен (потолок достигается, страница рендерится) |
+| `tests/test_pages/test_schedule_invariants.py` | заморозка под `characterisation` | ✓ VERIFIED | `-m characterisation` → 2 passed |
+| `.planning/todos/pending/classify-420-prohibitions-outside-phase-10.md` | адресат 420 | ✓ VERIFIED | файл на месте, `addressee: бэклог следующей вехи` |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |---|---|---|---|---|
-| строка реестра `enforced` | правило в суите | `rule_name`/`rule_site`, разбор `ast` | ✓ WIRED | 191/191 правил найдены; 48 координат строк устарели (advisory) |
-| `partially-enforced` | разрешение остатка | `permit_scope_uncovered` ↔ `class_decisions` / `row_decisions` | ✓ WIRED | 25/25 |
-| `permitted` | ответ владельца | `permit_scope` ↔ класс `permit-class` / тождество в `row_decisions` | ✓ WIRED | 203/203 |
-| закрывающее правило | реестр | `_document_closing_offences` | ✓ WIRED | живой → `[]`; мутации → названы |
-| `schedules_update`/`schedules_create` | `next_run_or_none` | вызов + `rollback` | ✓ WIRED | прочитано |
-| шесть сентинелов | умолчание сервера `PAGE_SIZE` | адрес без `limit` | ✓ WIRED | греп |
-| подсказка карточки | `profile_timezone_or_utc` | `fallback_timezone` каждого вызова | ✓ WIRED | правило `test_every_card_call_passes_the_hint_fallback_zone` (по ревизии) |
+| строка реестра `enforced` | правило в суите | `rule_name`/`rule_site`, `ast` | ✓ WIRED | 191/191; 52 координаты устарели (advisory) |
+| `partially-enforced` | разрешение остатка | `permit_scope_uncovered` ↔ `class_decisions`/`row_decisions` | ✓ WIRED | 25/25 |
+| закрывающее правило | реестр | `_document_closing_offences` | ✓ WIRED | живой `[]`; мутации названы |
+| сентинел 15-21 (без `limit`) | обработчик порции | `Query(PAGE_SIZE)` | ✓ WIRED | `test_infinite_scroll_chain[ads/schedules/accounts]` идёт по адресу сентинела → 200, курсор растёт |
+| `#file-input` | плитка «+ ФАЙЛ» | `for="file-input"` + `:has(:focus-visible)` | ✓ WIRED | правило утверждает свойства, а не подстроки (WR-10) |
+| отметки `15-UAT.md` | правило самозаверения | `test_the_walkthrough_cannot_self_certify.py` | ✓ WIRED | 5 passed при `status: complete` |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 |---|---|---|---|---|
-| подсказка зоны `sched_card.html:314` | `fallback_timezone` | `profile_timezone_or_utc(user.timezone)` в трёх рендерах | да — тот же помощник, что при сохранении | ✓ FLOWING |
-| сентинелы шести разделов | размер порции | `limit: int = Query(PAGE_SIZE, …)` обработчика | да — сервер, не шаблон | ✓ FLOWING (пять других сентинелов — IN-07) |
-| плашка отказа сохранения | `notice` | `SCHEDULE_VALUES_OUT_OF_DOMAIN` через `respond` | да, но текст не подходит входу | ⚠️ FLOWING, неверная копия (WR-05) |
+| сентинелы шести разделов | размер порции | `limit: int = Query(PAGE_SIZE, …)` обработчика | да | ✓ FLOWING (пять других сентинелов — IN-07) |
+| подсказка зоны `sched_card.html:314` | `fallback_timezone` | `profile_timezone_or_utc` | да | ✓ FLOWING |
+| плашка отказа сохранения | `notice` | `SCHEDULE_VALUES_OUT_OF_DOMAIN` | да; копию владелец оставил | ✓ FLOWING (WR-05 принят) |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |---|---|---|---|
-| Каталог записи | `uv run pytest -q tests/test_planning/` | 208 passed | ✓ PASS |
-| Прибор переписи | `uv run python scripts/prohibitions_census.py --check` | exit 0, биекция согласна, 741 | ✓ PASS |
-| Сильная форма на живом и мутированных реестрах | скрипт в scratchpad над `_document_closing_offences` | `[]`; 2 / 1 / 1 тождество названы | ✓ PASS |
-| Существование правил реестра | разбор `ast` всех 191 пар | 0 отсутствующих | ✓ PASS |
-| Шесть модулей гейтов фазы | `pytest form_inventory, degradation_pairs, markup_literal_inventory, banner_dismiss, schedule_rules_gate, confirmation_panel_invariants` | 113 passed | ✓ PASS |
-| FETCH-03 + `hx-push-url` | `pytest test_htmx_inventory.py test_htmx_gates.py -k "fetch_prohibition or … push_url …"` | 43 passed | ✓ PASS |
-| Условная сборка, связка, разборщик | `pytest test_htmx_markup_gates.py -k "conditional or modal_linkage or split_top_level"` | 26 passed | ✓ PASS |
-| Пары деградации | `-k degrades_without` в трёх файлах | 10 passed | ✓ PASS |
-| Отказ второй линии | `test_editor_schedules.py -k "malformed_stored or second_line or idle_editor or refusal"` | 41 passed | ✓ PASS |
-| WR-06 воспроизведение | `through_fixed_set({'…/15.1-01-PLAN.md': ''})` | `CensusError` | ✓ подтверждён дефект (advisory) |
+| Каталог записи | `uv run pytest -q -p no:randomly tests/test_planning/` | 208 passed, 15.9 s | ✓ PASS |
+| Прибор переписи | `uv run python scripts/prohibitions_census.py --check` / `--breakdown` | exit 0; 741; 93/25/203/0 | ✓ PASS |
+| Сильная форма на мутациях | скрипт в scratchpad над `_document_closing_offences` | `[]`; 2 тождества; 1 тождество | ✓ PASS |
+| Существование правил реестра | `ast` над 191 парой | 0 отсутствующих | ✓ PASS |
+| Гейты фазы + новые правила | form_inventory, degradation_pairs, markup_literal_inventory, banner_dismiss, schedule_rules_gate, confirmation_panel_invariants, schedule_invariants + 2 новых теста | 130 passed | ✓ PASS |
+| FETCH-03 + `hx-push-url` | `-k "fetch_prohibition or push_url"` | 30 passed | ✓ PASS |
+| Условная сборка | `-k "conditional or modal_linkage or split_top_level"` | 26 passed | ✓ PASS |
+| Пары деградации | `tests/ -k degrades_without` | 15 passed, 4069 deselected (всего 4084) | ✓ PASS |
+| Цепочка прокрутки | `test_htmx_preserved.py -k infinite_scroll` | 9 passed | ✓ PASS |
+| Слепки | `tests/ -m characterisation` | 2 passed | ✓ PASS |
+| Самозаверение обхода | `test_the_walkthrough_cannot_self_certify.py` | 5 passed | ✓ PASS |
+| WR-06 воспроизведение | `through_fixed_set({...15.1-01-PLAN.md})` | `CensusError` | ✓ дефект подтверждён (advisory) |
 
-**Полная суита.** Сам не гонял — повторный полный прогон запрещён. Замер оркестратора: дерево `b277ff2e` — `4082 passed, 0 failed` (40:48). Я проверил: после `b277ff2e` менялись только `15-REVIEW.md`, `15-UI-REVIEW.md`, `15-VALIDATION.md` (`git diff --stat b277ff2e..HEAD`). `tdd.review-checkpoint`: 12/12, 0 нарушений (замер оркестратора).
+**Полная суита.** Повторно не гонялась: её прогоняет оркестратор. Его замер — `4084 passed, 0 failed` на HEAD после `c383dcab`. Сбор этого отчёта даёт те же 4084 (15 + 4069 deselected). После `c383dcab` менялись только записи `15-REVIEW-DISPOSITION.md` (коммиты `e0b0ce60`, `5cd8727c`, `7671e926`).
 
 ### Probe Execution
 
-Step 7c: SKIPPED. `scripts/*/tests/probe-*.sh` нет, ни один план фазы probe не объявляет. Исполняемый прибор фазы прогнан выше.
+Step 7c: SKIPPED. `scripts/*/tests/probe-*.sh` нет, и ни один план не объявляет probe. Исполняемый прибор фазы прогнан выше.
 
 ### Requirements Coverage
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |---|---|---|---|---|
-| FORM-01 | 15-02, 15-10, 15-14 | любое действие письма без перезагрузки | ✓ SATISFIED (машинная часть) | истина 1 |
+| FORM-01 | 15-02, 15-10, 15-14 | любое действие письма без перезагрузки | ✓ SATISFIED | истина 1 |
 | FETCH-03 | 15-04, 15-06 | `fetch(` == 0 | ✓ SATISFIED | истина 2 |
 | QUAL-04 | 15-11, 15-18 | решение `hx-push-url` по каждой форме | ✓ SATISFIED | истина 3 |
-| GATE-09 | 15-05, 15-06, 15-07, 15-09, 15-14, 15-18, 15-19, 15-21 | девять пунктов ручного UAT | ? NEEDS HUMAN | H1 |
-| GATE-10 | 15-03, 15-09, 15-17, 15-21 | парные `*_degrades_without_htmx` | ✓ SATISFIED | истина 4 (WR-03 закрыт) |
-| `критерий-6` (не ID `REQUIREMENTS.md`) | 15-01, 15-12, 15-13, 15-15, 15-20, 15-22, 15-24…15-33 | прибор + решение по каждому запрету | ✓ SATISFIED | истины 6a, 6b; буква 15-33 T0 → H6 |
-| `долг-D-18` (не ID) | 15-07, 15-08, 15-16, 15-19, 15-23 | три находки Фазы 10 | ✓ SATISFIED с оговоркой | D-18.1, D-18.2 закрыты; D-18.3: имя и место закрыты, фокус и роль приняты владельцем (Г-3), внешность (P2-a) ни починена, ни принята → H5 (5) |
+| GATE-09 | 15-05, 15-06, 15-07, 15-09, 15-14, 15-18, 15-19, 15-21 | девять пунктов ручного UAT | ✓ SATISFIED (акт владельца) | истина 5b, `15-UAT.md` 9/9 |
+| GATE-10 | 15-03, 15-09, 15-17, 15-21 | парные `*_degrades_without_htmx` | ✓ SATISFIED | истина 4 |
+| `критерий-6` (не ID) | 15-01, 15-12, 15-13, 15-15, 15-20, 15-22, 15-24…15-33 | прибор + решение по каждому запрету | ✓ SATISFIED | истины 6a, 6b; override H6 |
+| `долг-D-18` (не ID) | 15-07, 15-08, 15-16, 15-19, 15-23 | три находки Фазы 10 | ✓ SATISFIED | D-18.3: внешность принята владельцем (H5 (5)) |
 
-Сирот нет. В таблице состояний `REQUIREMENTS.md` к Фазе 15 отнесены ровно пять ID, и каждый объявлен планом. Все пять стоят `Pending`/`[ ]`. За партию `REQUIREMENTS.md` не менялся: удалённых строк 0 (`git diff c939cc8c..HEAD`). Этот отчёт отметок не ставил.
+Сирот нет: таблица состояний `REQUIREMENTS.md` относит к Фазе 15 ровно пять ID, и каждый объявлен планом. Все пять стоят `Pending` / `[ ]`, а `REQUIREMENTS.md` с прошлого круга не менялся (`git diff d86efba3..HEAD` пуст). Отметки этот отчёт не ставил: их переводит закрытие фазы по вердикту.
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |---|---|---|---|---|
-| — | — | `TBD`/`FIXME`/`XXX`/`TODO`/`HACK` в добавленных строках партии (`app`, `scripts`, `tests`) | — | 0 |
-| — | — | `pytest.skip` / `xfail` в добавленных строках | — | 0 |
-| `app/pages/schedules.py` | 1407-1413, 1136-1142 | переиспользованный текст уведомления не подходит входу (WR-05) | ⚠️ Warning | латентно |
-| `tests/test_pages/test_schedule_invariants.py` | 104, 130-150 | продуктовый модуль ввозит planning (WR-07); sha256-заморозка (WR-08) | ⚠️ Warning | архив вехи; будущая починка |
-| `scripts/prohibitions_census.py` | 358-406 | дробная фаза → отказ прибора (WR-06) | ⚠️ Warning | `/gsd-phase insert` |
+| — | — | `TBD`/`FIXME`/`XXX`/`TODO`/`HACK`/`skip`/`xfail` в добавленных строках `app/`, `tests/`, `scripts/` с `d86efba3` | — | 0 |
+| `app/static/css/app.css` | 2182-2187 | мёртвый селектор в списке с `:has()` (IN-12); дубль блока скрытия (IN-13) | ℹ️ Info | хрупкость |
+| `tests/test_pages/test_schedule_invariants.py` | 104 | продуктовый модуль ввозит planning (WR-07) | ⚠️ Warning | архив вехи |
+| `scripts/prohibitions_census.py` | — | дробная фаза → отказ прибора (WR-06) | ⚠️ Warning | `/gsd-phase insert` |
 
-Блокеров нет. В режиме повторной верификации сработал бы гейт улик, но ни одна находка на блокер не претендует.
+Блокеров нет. Ни одна находка нового объёма на блокер не претендует. Находки, изменившиеся с прошлого круга, — правки владельца и ревью.
 
 ### Prohibitions (must-NOT, ADR-550)
 
-В планах Фазы 15 теперь 91 запрет, все judgment-tier (`flagged-unverified`). Это **unverified-prohibition, human review recommended** → H4. Неавторитетный вердикт LLM-судьи:
+В планах Фазы 15 91 запрет, все judgment-tier. Позиции, отмеченные прошлым кругом, сняты владельцем: `15-14-PLAN.md#0` принят (H4 а), у `15-08-PLAN.md#2` маркер поставлен (H4 б), у 15-22 #0 подписан override (H6). Неавторитетный вердикт LLM-судьи по коммитам после `d86efba3`:
 
-- Продукт правили только коммиты 15-16, 15-19, 15-21 и 15-23 (`git log c939cc8c..HEAD -- app/ main.py`). Запреты «не править `app/`» планов 15-24…15-31 соблюдены.
-- Каталоги планов прежних фаз не тронуты, так что 15-30 #0 соблюдён.
-- Правило «подъём безусловен / обработчиков два» не заводилось (15-27 #0, 15-28 #0).
-- В сильной форме нет исключений по тождествам (15-33 #1): помощник не знает ни одного литерала строки.
-- Ветвь (в) не выбрана, поэтому 15-33 #0 не сработал.
-- **15-22 #0** («MUST NOT ставить `permit_scope_uncovered` строке класса `product-invariant`»): буква в дереве нарушена строкой `10-03#6`. Поле поставил план 15-32 по ответу владельца, а не 15-22. → H6.
-- Прежние флаги: `15-14-PLAN.md#0` стоит. У `15-08-PLAN.md#2` предмет сменился с WR-01/02 на WR-08. → H4.
+- продукт правили только `d0a31bd9`, `568b8f75` и `9afcd205`, все в области «+ ФАЙЛ»: `app.css`, `media_strip.html`, `media_upload_form.html`;
+- новых `x-data` и `hx-on` нет, гейты зелены;
+- плашку и смещение второй плашки не трогали (15-19 #2);
+- каталоги прежних фаз не тронуты;
+- в планах 15-NN менялись только строки таблиц угроз, и каждая строка называет свой прежний номер.
+
+Нарушений по существу не найдено.
 
 ### Human Verification Required
 
-Семь пунктов (H1-H7) расписаны в шапке. Коротко:
+**Один пункт — остаток H7 (15-21 D4).** Полная форма — в шапке (`human_verification`).
 
-1. **H1.** Сводный обход `15-UAT.md`, девять отметок (GATE-09, критерий 5).
-2. **H2.** У-8 на изменённом состоянии органа снятия.
-3. **H3.** Шесть backstop-утверждений без явного правила: пять прежних и 15-20 T3.
-4. **H4.** 91 запрет judgment-tier, две флагированные позиции.
-5. **H5.** Пять открытых вопросов владельцу: 27 → 29, `14-UAT.md`, `OOB_TARGET_EXCEPTIONS`, адресат 420 запретов, внешность органа D-18.3.
-6. **H6.** `10-03#6` против буквы 15-33 T0 и 15-22 T3/#0.
-7. **H7.** Четыре браузерных суждения партии, которых нет в `15-UAT.md`.
+- Что смотреть: шесть сентинелов `/ads`, `/accounts`, `/schedules` на данных больше 30 записей и звучание `role="status"`.
+- Как закрыть: наблюдением, либо явным принятием структурной улики, либо записью следствия.
+- Что важно знать: в записи раздел назван неверно — указан `/history`, хотя изменён `/accounts`. Наблюдение У-11 изменённую форму не исполняло.
+
+### Судьба прежних пунктов H1–H7
+
+| Пункт | Диспозиция после 2026-10-06 |
+|---|---|
+| H1 обход `15-UAT.md` | **снят владельцем** 2026-10-06: 9 × pass, отметки заполнены (`188457f4`); замеры У-10/У-11 — улика, суждение — владельца |
+| H2 пять наблюдений У-8 | **снят владельцем** 2026-10-06: наблюдены У-12; п.2 (фокус на `<body>`) принят как есть (У-13). Звучание имён на слух не наблюдено — перенесено в открытый пункт |
+| H3 шесть backstop | **снят владельцем** 2026-10-06: структурная улика принята |
+| H4 (а) `15-14-PLAN.md#0` | **снят владельцем** 2026-10-06: принят |
+| H4 (б) `15-08-PLAN.md#2` | **снят** 2026-10-06: маркер `characterisation` поставлен (`560ce871`), противоречие шапки модуля исправлено (`568b8f75`, WR-11) |
+| H5 (1) «27 → 29» | **снят владельцем**: не нужна |
+| H5 (2) `14-UAT.md` | **отложен владельцем** до закрытия вехи (`/gsd-verify-work 14`); Фазу 15 не держит — см. «Что ДО» |
+| H5 (3) `OOB_TARGET_EXCEPTIONS` | **снят владельцем**: оставить постоянным перечнем |
+| H5 (4) 420 запретов | **снят владельцем**: бэклог следующей вехи (todo на месте) |
+| H5 (5) «×» без границы | **снят владельцем**: принят следствием |
+| H6 `10-03#6` против буквы | **снят владельцем** 2026-10-06: подписанный `overrides` в шапке |
+| H7 15-16 D5 | **снят владельцем**: текст понятен, оставить (WR-05 → `deferred`) |
+| H7 15-23 D4 | **снят владельцем**: подсказка понятна, оставить |
+| H7 15-19 D4 | **снят**: «+ ФАЙЛ» починена `d0a31bd9` по решению владельца; 3 из 16 потребителей не найдены на данных (advisory) |
+| H7 15-21 D4 | **открыт**: прокрутка шести сентинелов и звучание `role=status` не наблюдены; владелец записал «ответом не закрыто» |
 
 ### Gaps Summary
 
-**Гэпов нет. Прошлый блокер закрыт.**
+**Гэпов нет.** Все истины ROADMAP выполнены. Восемь — машинно и актом владельца в `15-UAT.md`, причём 6b — с подписанным override на букву плана.
 
-Критерий 6 (б) прошлого круга закрыт путём (1), который выбрал владелец (Г-1 «Правила сейчас»):
-- 68 строк `product-invariant` получили правила;
-- 14 + 9 находок D-05 держатся правилами истории и предмета;
-- 16 строк, которые нельзя принудить так, как они написаны, решены ответом владельца на чекпойнте 15-32;
-- закрывающее правило переведено в сильную форму, и этот отчёт проверил, что оно краснеет на копиях с нарушением.
+Статус `human_needed`, а не `passed`, по одной причине: человеческое суждение плана 15-21 (D4) не вынесено. Владелец сам записал его незакрытым, а верификатор не вправе принять структурную улику за владельца. Чтобы закрыть фазу, достаточно одного ответа владельца по этому пункту: наблюдение или «принять структурную улику / следствием».
 
-Отступление через `overrides:` для критерия не понадобилось, записи нет.
+⚠️ Отчёт переписывается целиком при каждой верификации. Подписанный блок `overrides` (H6) нужно сохранять явным указанием в промпте следующей верификации.
 
-Статус `human_needed`, а не `passed`, по трём причинам. Девять пунктов UAT — акт человека. Пять прежних пунктов ручной проверки открыты полностью или частично. Партия добавила два новых (H6, H7).
+**Что ДО `/gsd-complete-milestone`.**
+1. **WR-07.** Продуктовое правило, которое принуждает `10-55#9`, упадёт при переезде `.planning/phases/10-*`. Нужно перенести его половину в planning-модуль или пометить `planning`, вместе с решением о переезде вселенной прибора переписи.
+2. **H5 (2).** `/gsd-verify-work 14` — обход `14-UAT.md`, отложенный владельцем до закрытия вехи v2.1.
+3. **WR-06.** Если перед закрытием понадобится `/gsd-phase insert`, прибор переписи откажет на дробном номере.
 
-**Для H6: если владелец подтверждает ответ 15-32 по строке `10-03#6`,** внести в шапку этого файла:
-
-```yaml
-overrides:
-  - must_have: "Закрывающее правило критерия 6 стоит в СИЛЬНОЙ форме: … ни одна `partially-enforced` строка не лежит в классе с ветвью `require-enforcement` … (истина 15-33 T0; также 15-22 T3 и запрет 15-22 #0)"
-    reason: "Строка 10-03#6: половина «предикат отказа» принуждена (а′), половина «ответ без слоя письма» разрешена строкой (row_decisions) ответом владельца на чекпойнте 15-32, 2026-09-26, после написания плана 15-33"
-    accepted_by: "chubav"
-    accepted_at: "{ISO timestamp}"
-```
-
-⚠️ Отчёт переписывается целиком при каждой верификации. Подписанный блок `overrides` нужно сохранять явным указанием в промпте следующей верификации.
-
-**Что ДО `/gsd-complete-milestone`.** WR-07: продуктовое правило, которое принуждает `10-55#9`, упадёт при переезде `.planning/phases/10-*`. Модуль переписи покраснеет пустой вселенной, и эта граница объявлена. Переезд области прибора решает тот, кто закрывает веху.
-
-### Куда ушёл каждый пункт прошлого круга (сверка с резервной копией)
+### Куда ушёл каждый пункт прошлого круга
 
 | Прошлый пункт | Где теперь |
 |---|---|
-| `gaps[0]` критерий 6 (б) | `re_verification.gaps_closed` + дословно в `re_verification.previous_round.gaps` |
-| advisory WR-01, WR-02, WR-03, WR-04 | `re_verification.advisory_closed` (закрыты 15-16, 15-17, 15-15; наследники — WR-05, WR-06) |
-| advisory IN-01…IN-06 | `re_verification.advisory_closed` |
-| advisory UI п.1 (фокус/роль) | advisory «UI-REVIEW пункт 1 и P6-a» (закрыт как принятое следствие Г-3) |
-| advisory UI п.2 | advisory «UI-REVIEW пункт 2» (открыт, отсрочка владельца) |
-| advisory UI п.3 | `advisory_closed` для шести; остаток — advisory IN-07/UI-9/10 |
-| advisory UI п.4-8 | `advisory_closed` |
-| H1 обход | H1 (без изменений) |
-| H2 У-8 | H2 (предмет изменился) |
-| H3 backstop | H3 (+15-20 T3; 15-15 T5 засчитан) |
-| H4 запреты | H4 (47 → 91; 15-08 #3 → предмет WR-08) |
-| H5 вопросы | H5 (1)-(3) без изменений; (4) product-invariant и 27 D-05 — `human_items_discharged`, 376 → 420 остаётся; (5) роль/фокус — `human_items_discharged`, внешность остаётся |
-| `overrides`, `deferred`, `behavior_unverified_items`, `coincidental_reliance_items` | не было; `deferred` пуст (Фаза 15 последняя), `coincidental_reliance_items` — новый пункт (`10-55#9`) |
+| `human_verification` H1–H7 | таблица «Судьба прежних пунктов» + `re_verification.human_items_discharged`; остаток 15-21 D4 — `human_verification` |
+| форма `overrides` для H6 (Gaps Summary) | записана подписанной в шапке |
+| advisory WR-05 | advisory (теперь `deferred`, решение владельца) |
+| advisory WR-06, WR-07 | advisory (перезамерены, `open`) |
+| advisory WR-08 | `re_verification.advisory_closed` (маркер) |
+| advisory IN-07…IN-10 | advisory (IN-07 с новым следствием для У-11) |
+| advisory IN-11 | advisory (принят владельцем) |
+| advisory UI п.2, п.1/P6-a, P1-a, P4-a/P5-a, 12, 13, 16 | advisory (обновлены уликой У-12 / ответами владельца) |
+| advisory «48 из 191 координат» | advisory «52 из 191» (перезамер) |
+| `coincidental_reliance_items` (`10-55#9`) | сохранён |
+| `re_verification.previous_round` прошлого отчёта (гэп критерия 6 круга 2026-09-24) | закрыт в прошлом круге; в этом круге гэпов не было (`gaps_closed: []`) |
 
-**Новые находки 15-REVIEW:**
-- WR-05, WR-06, WR-07, WR-08 и IN-07…IN-11 — каждая ровно одним пунктом advisory.
-- WR-05 слит с UI-11, IN-07 — с UI-9 и UI-10.
+**Новые находки ревью 2026-10-06:**
+- в advisory: WR-09 (принят владельцем), IN-12, IN-13;
+- в `advisory_closed`: CR-01, WR-10, WR-11, WR-12, IN-14…IN-17 (исправлены).
 
-**Пункты 15-UI-REVIEW:**
-- Открытые 2, P1-a, P4-a и P5-a — в advisory.
-- P2-a — в H5 (5).
-- Новые 12, 13 и 16 — в advisory.
-- Новые 14 и 15 — в H7.
-- 11 — вместе с WR-05.
-- 9 и 10 — вместе с IN-07.
-- Закрытые-принятые 1 и P6-a — в advisory.
-
-Молча не выпало ни одной находки.
+Молча не выпала ни одна находка.
 
 ---
 
-_Verified: 2026-09-27T14:30:00Z_
+_Verified: 2026-10-06T12:59:49Z_
 _Verifier: Claude (gsd-verifier)_
