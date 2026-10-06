@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-05
     severity: warning
-    disposition: open
+    disposition: deferred
     title: "The new create/update refusal reuses the toggle's notice, whose text tells an editor user to repeat the action that was just refused — open, owner-accepted 2026-10-06"
   - id: WR-06
     severity: warning
@@ -17,11 +17,11 @@ findings:
     title: "A product-suite test reads a Phase 10 planning artifact through a `test_planning` import, and will fail on milestone archive — open"
   - id: WR-09
     severity: warning
-    disposition: open
+    disposition: deferred
     title: "A keyboard upload that reaches the ceiling hides the field that holds focus, and focus falls to `<body>` — open, owner-accepted 2026-10-06"
   - id: WR-12
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The replacement rule never proves that its second upload reached the ceiling, so it can go green without exercising the case it exists for (new, `9afcd205`)"
   - id: IN-07
     severity: info
@@ -41,7 +41,7 @@ findings:
     title: "The same seven-line history comment is pasted into six handlers — open"
   - id: IN-11
     severity: info
-    disposition: open
+    disposition: deferred
     title: "A new rule asserts two accepted accessibility defects as the required state — open, owner-accepted"
   - id: IN-12
     severity: info
@@ -53,7 +53,7 @@ findings:
     title: "The visually-hidden declaration block is duplicated — open"
   - id: IN-17
     severity: info
-    disposition: open
+    disposition: fixed
     title: "The page half of the new rule renders an empty `/ads/new` with no status check, so it cannot see the strip's per-tile markup and would pass on a redirect (new, `9afcd205`)"
   - id: CR-01
     severity: critical
@@ -79,28 +79,28 @@ findings:
     severity: warning
     disposition: open
     title: "`560ce871` tells the fixer to rewrite the digest in the same commit, while the module header still forbids exactly that; two unmarked controls pin the same digest (new)"
-open: 19
+open: 14
 total: 19
-recorded: 2026-10-06T12:08:54.453Z
+recorded: 2026-10-06T12:09:10.409Z
 ---
 
 # Phase 15: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-05 | warning | open | - |
+| WR-05 | warning | deferred | owner-accepted 2026-10-06 (H7 15-16 D5) |
 | WR-06 | warning | open | - |
 | WR-07 | warning | open | - |
-| WR-09 | warning | open | - |
-| WR-12 | warning | open | - |
+| WR-09 | warning | deferred | owner-accepted 2026-10-06 (CR-01 revert 9afcd205) |
+| WR-12 | warning | fixed | c383dcab |
 | IN-07 | info | open | - |
 | IN-08 | info | open | - |
 | IN-09 | info | open | - |
 | IN-10 | info | open | - |
-| IN-11 | info | open | - |
+| IN-11 | info | deferred | owner-accepted (Г-3; H5(5) 2026-10-06) |
 | IN-12 | info | open | - |
 | IN-13 | info | open | - |
-| IN-17 | info | open | - |
+| IN-17 | info | fixed | c383dcab |
 | CR-01 | critical | open | - (not in the current review) |
 | IN-14 | info | open | - (not in the current review) |
 | IN-15 | info | open | - (not in the current review) |
