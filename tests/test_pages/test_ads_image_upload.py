@@ -665,6 +665,7 @@ async def test_ceiling_takes_the_free_slots_and_refuses_the_rest(
 @patch("app.services.image_upload.upload_file_to_s3", new_callable=AsyncMock)
 async def test_no_upload_response_steals_focus(
     mock_s3,
+    db_session: AsyncSession,
     authed_client: AsyncClient,
     htmx_client: AsyncClient,
     owner: User,
@@ -691,13 +692,27 @@ async def test_no_upload_response_steals_focus(
             files=[(UPLOAD_FIELD, (f"{name}.png", png, "image/png")) for name in files],
         )
         assert response.status_code == 200
+        reached = len(HIDDEN_KEY_FIELD.findall(response.text))
+        assert reached == len(attached) + len(files), (
+            f"загрузка дала {reached} вложений вместо {len(attached) + len(files)}: "
+            "правило меряло бы не тот случай (WR-12) — потолок не достигнут"
+        )
         assert "autofocus" not in response.text, (
             f"ответ загрузки ({len(attached) + len(files)} из 4) печатает "
             "`autofocus`: фокус уйдёт и у человека, печатающего текст, а пробел "
             "уберёт загруженный файл (CR-01)"
         )
 
-    page = await authed_client.get("/ads/new")
+    full = await _seed_ad(
+        db_session,
+        owner.id,
+        images=[image_key(owner.id, f"full{index}.png") for index in range(4)],
+    )
+    page = await authed_client.get(f"/ads/{full.id}/edit")
+    assert page.status_code == 200 and "media-tile__remove" in page.text, (
+        f"страница редактора на потолке не отрисована ({page.status_code}): "
+        "правило меряло бы пустоту (IN-17)"
+    )
     assert "autofocus" not in page.text, (
         "страница редактора печатает `autofocus`: браузер исполнит его при загрузке"
     )
