@@ -46,13 +46,13 @@
     {
       "number": "15",
       "name": "Упрочнение и сводный обход",
-      "status": "in_progress"
+      "status": "complete"
     }
   ],
   "next": {
-    "command": "/gsd:progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 15 of 9 · 89% · executing"
+    "command": "/gsd:new-milestone",
+    "label": "Start a new milestone",
+    "reason": "All phases complete — start a new milestone"
   },
-  "updated_at": "2026-10-06T09:21:51.923Z"
+  "updated_at": "2026-10-06T14:27:43.842Z"
 }
