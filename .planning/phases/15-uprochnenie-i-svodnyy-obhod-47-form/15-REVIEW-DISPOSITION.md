@@ -57,31 +57,31 @@ findings:
     title: "The page half of the new rule renders an empty `/ads/new` with no status check, so it cannot see the strip's per-tile markup and would pass on a redirect (new, `9afcd205`)"
   - id: CR-01
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "The ceiling autofocus takes focus from wherever the person is when the upload response arrives, and the next Space or Enter removes an attachment (new, `568b8f75`)"
   - id: IN-14
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Nothing pins the claim that the page render never prints `autofocus`, and the template header does not list the new variable (new, `568b8f75`)"
   - id: IN-15
     severity: info
-    disposition: open
+    disposition: fixed
     title: "The ceiling predicate is now spelled twice in one render, and the two copies must agree for the focus landing to be correct (new, `568b8f75`)"
   - id: IN-16
     severity: info
-    disposition: open
+    disposition: fixed
     title: "The two synthetic controls are marked `characterisation`, which the marker's own definition says they are not (new, `568b8f75`)"
   - id: WR-10
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`test_the_file_field_is_reachable_from_the_keyboard` checks text, not reachability, and stays green when the field becomes unreachable again (new, `d0a31bd9`)"
   - id: WR-11
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`560ce871` tells the fixer to rewrite the digest in the same commit, while the module header still forbids exactly that; two unmarked controls pin the same digest (new)"
-open: 14
+open: 8
 total: 19
-recorded: 2026-10-06T12:09:10.409Z
+recorded: 2026-10-06T12:09:26.076Z
 ---
 
 # Phase 15: Code Review Disposition
@@ -101,12 +101,12 @@ recorded: 2026-10-06T12:09:10.409Z
 | IN-12 | info | open | - |
 | IN-13 | info | open | - |
 | IN-17 | info | fixed | c383dcab |
-| CR-01 | critical | open | - (not in the current review) |
-| IN-14 | info | open | - (not in the current review) |
-| IN-15 | info | open | - (not in the current review) |
-| IN-16 | info | open | - (not in the current review) |
-| WR-10 | warning | open | - (not in the current review) |
-| WR-11 | warning | open | - (not in the current review) |
+| CR-01 | critical | fixed | 9afcd205 (not in the current review) |
+| IN-14 | info | fixed | 9afcd205 (not in the current review) |
+| IN-15 | info | fixed | 9afcd205 (not in the current review) |
+| IN-16 | info | fixed | 9afcd205 (not in the current review) |
+| WR-10 | warning | fixed | 568b8f75 (not in the current review) |
+| WR-11 | warning | fixed | 568b8f75 (not in the current review) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
