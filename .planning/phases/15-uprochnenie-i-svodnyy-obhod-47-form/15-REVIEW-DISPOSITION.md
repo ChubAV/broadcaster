@@ -3,6 +3,10 @@ phase: 15
 review: 15-REVIEW.md
 titles: json
 findings:
+  - id: CR-01
+    severity: critical
+    disposition: open
+    title: "The ceiling autofocus takes focus from wherever the person is when the upload response arrives, and the next Space or Enter removes an attachment (new, `568b8f75`)"
   - id: WR-05
     severity: warning
     disposition: open
@@ -15,18 +19,6 @@ findings:
     severity: warning
     disposition: open
     title: "A product-suite test reads a Phase 10 planning artifact through a `test_planning` import, and will fail on milestone archive — open"
-  - id: WR-09
-    severity: warning
-    disposition: open
-    title: "A keyboard upload that reaches the ceiling hides the field that has focus, and the visible focus point disappears (new, `d0a31bd9`)"
-  - id: WR-10
-    severity: warning
-    disposition: open
-    title: "`test_the_file_field_is_reachable_from_the_keyboard` checks text, not reachability, and stays green when the field becomes unreachable again (new, `d0a31bd9`)"
-  - id: WR-11
-    severity: warning
-    disposition: open
-    title: "`560ce871` tells the fixer to rewrite the digest in the same commit, while the module header still forbids exactly that; two unmarked controls pin the same digest (new)"
   - id: IN-07
     severity: info
     disposition: open
@@ -34,7 +26,7 @@ findings:
   - id: IN-08
     severity: info
     disposition: open
-    title: "`app/dependencies.py:323` still hand-spells the notice URL (pre-existing, not a phase regression) — open"
+    title: "`app/dependencies.py:323` still hand-spells the notice URL (pre-existing) — open"
   - id: IN-09
     severity: info
     disposition: open
@@ -50,26 +42,48 @@ findings:
   - id: IN-12
     severity: info
     disposition: open
-    title: "`.media-tile--add:focus-visible` is dead, and sharing a selector list with `:has()` makes the whole ring rule all-or-nothing (new, `d0a31bd9`)"
+    title: "`.media-tile--add:focus-visible` is dead, and sharing a selector list with `:has()` makes the whole ring rule all-or-nothing — open"
   - id: IN-13
     severity: info
     disposition: open
-    title: "The visually-hidden declaration block is now duplicated (new, `d0a31bd9`)"
-open: 13
-total: 13
-recorded: 2026-10-06T09:52:38.503Z
+    title: "The visually-hidden declaration block is duplicated — open"
+  - id: IN-14
+    severity: info
+    disposition: open
+    title: "Nothing pins the claim that the page render never prints `autofocus`, and the template header does not list the new variable (new, `568b8f75`)"
+  - id: IN-15
+    severity: info
+    disposition: open
+    title: "The ceiling predicate is now spelled twice in one render, and the two copies must agree for the focus landing to be correct (new, `568b8f75`)"
+  - id: IN-16
+    severity: info
+    disposition: open
+    title: "The two synthetic controls are marked `characterisation`, which the marker's own definition says they are not (new, `568b8f75`)"
+  - id: WR-09
+    severity: warning
+    disposition: open
+    title: "A keyboard upload that reaches the ceiling hides the field that has focus, and the visible focus point disappears (new, `d0a31bd9`)"
+  - id: WR-10
+    severity: warning
+    disposition: open
+    title: "`test_the_file_field_is_reachable_from_the_keyboard` checks text, not reachability, and stays green when the field becomes unreachable again (new, `d0a31bd9`)"
+  - id: WR-11
+    severity: warning
+    disposition: open
+    title: "`560ce871` tells the fixer to rewrite the digest in the same commit, while the module header still forbids exactly that; two unmarked controls pin the same digest (new)"
+open: 17
+total: 17
+recorded: 2026-10-06T10:12:21.156Z
 ---
 
 # Phase 15: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
+| CR-01 | critical | open | - |
 | WR-05 | warning | open | - |
 | WR-06 | warning | open | - |
 | WR-07 | warning | open | - |
-| WR-09 | warning | open | - |
-| WR-10 | warning | open | - |
-| WR-11 | warning | open | - |
 | IN-07 | info | open | - |
 | IN-08 | info | open | - |
 | IN-09 | info | open | - |
@@ -77,6 +91,12 @@ recorded: 2026-10-06T09:52:38.503Z
 | IN-11 | info | open | - |
 | IN-12 | info | open | - |
 | IN-13 | info | open | - |
+| IN-14 | info | open | - |
+| IN-15 | info | open | - |
+| IN-16 | info | open | - |
+| WR-09 | warning | open | - (not in the current review) |
+| WR-10 | warning | open | - (not in the current review) |
+| WR-11 | warning | open | - (not in the current review) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
