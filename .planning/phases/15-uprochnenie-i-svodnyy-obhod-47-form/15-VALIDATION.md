@@ -189,3 +189,13 @@ Open Questions #4): **шапка `14-UAT.md` возвращается в нет�
 | Escalated | 0 |
 | Rows re-measured | 40 |
 
+## Validation Audit 2026-10-06
+
+| Metric | Count |
+|---|---|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+| Rows re-measured | 59 |
+
+Прогон `/gsd-validate-phase 15` внутри перезапуска верификации `/gsd-execute-phase 15` (2026-10-06, шаг `verify:post`). Новых планов после аудита 2026-09-26 нет; на дереве после `d0a31bd9` (починка «+ ФАЙЛ», правило `test_the_file_field_is_reachable_from_the_keyboard`), `560ce871` (маркер `characterisation`) и `d0b3a8c7` (перенумерация угроз) прогнаны все 48 различных автоматических команд 59 строк карты: 48 × exit 0, 1609 passed, ни одного пустого отбора (exit 5).
