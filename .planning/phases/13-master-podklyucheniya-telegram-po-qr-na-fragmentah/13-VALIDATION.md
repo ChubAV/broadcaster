@@ -56,20 +56,20 @@ created: "2026-09-21"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 13-01-01 | 01 | 1 | FETCH-02 | T-13-04, T-13-06, T-13-07, T-13-09 | опрос останавливается ответом; аккаунт сохраняет только опрос, увидевший `success`; `session_id` не в адресе; тексты — автоэкранированием | tracer (e2e маршрутов на настоящем слое сессий) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ переписывается | ✅ green |
-| 13-01-02 | 01 | 1 | FETCH-02 | T-13-10 | подключение под имперсонацией разрешено поимённо с причиной | gate (перечни слоя ответа) | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_impersonation_gate.py tests/test_pages/test_identifier_bounds.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-01-03 | 01 | 1 | FETCH-02 | T-13-07 | слепота гейта опросов к опросчику из макроса измерена и записана | gate (перечни разметки) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_htmx_inventory.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-02-01 | 02 | 2 | FETCH-02 | T-13-04, T-13-05, T-13-08 | пароль 2FA не эхается; два конкурентных сохранения дают один аккаунт; ошибка Telethon — фрагмент, не 500 | unit + concurrency (`asyncio.gather`, сессия базы на запрос) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-02-02 | 02 | 2 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-03-01 | 03 | 3 | FETCH-02 | T-13-15 | нормальное истечение кода не пишет `logger.error` с `session_id` и трассировкой | unit на настоящем `QRLogin` | `uv run pytest tests/test_messengers/test_telegram_user.py -q -p no:randomly -k "expired"` | ✅ | ✅ green |
-| 13-03-02 | 03 | 3 | FETCH-02 | T-13-12, T-13-07 | устаревшая сессия не оживает; пересоздание только из `qr_expired`; обновление только кнопкой | unit + e2e маршрутов | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-03-03 | 03 | 3 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-04-01 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03, T-13-10 | чужой опрос отвечает как неизвестный побайтно и не трогает сессию владельца; привязка к субъекту имперсонации | unit + маршруты | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-04-02 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03 | чужие `refresh-qr` и `verify-2fa` отвергнуты без `recreate`/`sign_in` | unit + маршруты | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "foreign"` | ✅ | ✅ green |
-| 13-05-01 | 05 | 5 | FETCH-02 | T-13-07 | каждая ветка шага достигнута; у каждого опроса есть терминальная пара; контроли краснят | gate + отрицательные контроли | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "polling or control"` | ✅ | ✅ green |
-| 13-05-02 | 05 | 5 | FETCH-02 | T-13-16 | возврат сценария на экран подключения краснит правило о предмете | gate | `uv run pytest tests/test_pages/test_hx_location_destinations.py tests/test_templates/test_htmx_markup_security.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ✅ green |
-| 13-06-01 | 06 | 5 | FETCH-02 | T-13-17 | критерии не переписаны, летописи стоят | records | `uv run pytest tests/test_planning -q` | ✅ | ✅ green |
-| 13-06-02 | 06 | 5 | FETCH-02 | T-13-18 | FETCH-02 не отмечен выполненным до верификации | records | `uv run pytest tests/test_planning -q -k "requirement or flag_and_the_status"` | ✅ | ✅ green |
+| 13-01-01 | 01 | 1 | FETCH-02 | T-13-04, T-13-06, T-13-07, T-13-09 | опрос останавливается ответом; аккаунт сохраняет только опрос, увидевший `success`; `session_id` не в адресе; тексты — автоэкранированием | tracer (e2e маршрутов на настоящем слое сессий) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ переписывается | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 56, все 56 passed поимённо) |
+| 13-01-02 | 01 | 1 | FETCH-02 | T-13-10 | подключение под имперсонацией разрешено поимённо с причиной | gate (перечни слоя ответа) | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_impersonation_gate.py tests/test_pages/test_identifier_bounds.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 220, все 220 passed поимённо) |
+| 13-01-03 | 01 | 1 | FETCH-02 | T-13-07 | слепота гейта опросов к опросчику из макроса измерена и записана | gate (перечни разметки) | `uv run pytest tests/test_templates/test_htmx_markup_gates.py tests/test_templates/test_htmx_inventory.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 155, все 155 passed поимённо) |
+| 13-02-01 | 02 | 2 | FETCH-02 | T-13-19 (до 2026-10-07: T-13-04), T-13-05, T-13-08 | пароль 2FA не эхается; два конкурентных сохранения дают один аккаунт; ошибка Telethon — фрагмент, не 500 | unit + concurrency (`asyncio.gather`, сессия базы на запрос) | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 56, все 56 passed поимённо) |
+| 13-02-02 | 02 | 2 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 184, все 184 passed поимённо) |
+| 13-03-01 | 03 | 3 | FETCH-02 | T-13-15 | нормальное истечение кода не пишет `logger.error` с `session_id` и трассировкой | unit на настоящем `QRLogin` | `uv run pytest tests/test_messengers/test_telegram_user.py -q -p no:randomly -k "expired"` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 3, все 3 passed поимённо) |
+| 13-03-02 | 03 | 3 | FETCH-02 | T-13-12, T-13-20 (до 2026-10-07: T-13-07) | устаревшая сессия не оживает; пересоздание только из `qr_expired`; обновление только кнопкой | unit + e2e маршрутов | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 90, все 90 passed поимённо) |
+| 13-03-03 | 03 | 3 | FETCH-02 | — | N/A | gate | `uv run pytest tests/test_pages/test_htmx_gates.py tests/test_pages/test_htmx_post_pairs.py tests/test_pages/test_hx_location_destinations.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 184, все 184 passed поимённо) |
+| 13-04-01 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03, T-13-22 (до 2026-10-07: T-13-10) | чужой опрос отвечает как неизвестный побайтно и не трогает сессию владельца; привязка к субъекту имперсонации | unit + маршруты | `uv run pytest tests/test_messengers/test_telegram_user.py tests/test_routes/test_tg_user_auth.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 90, все 90 passed поимённо) |
+| 13-04-02 | 04 | 4 | FETCH-02 | T-13-01, T-13-02, T-13-03 | чужие `refresh-qr` и `verify-2fa` отвергнуты без `recreate`/`sign_in` | unit + маршруты | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "foreign"` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 6, все 6 passed поимённо) |
+| 13-05-01 | 05 | 5 | FETCH-02 | T-13-21 (до 2026-10-07: T-13-07) | каждая ветка шага достигнута; у каждого опроса есть терминальная пара; контроли краснят | gate + отрицательные контроли | `uv run pytest tests/test_routes/test_tg_user_auth.py -q -p no:randomly -k "polling or control"` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 34, все 34 passed поимённо) |
+| 13-05-02 | 05 | 5 | FETCH-02 | T-13-16 | возврат сценария на экран подключения краснит правило о предмете | gate | `uv run pytest tests/test_pages/test_hx_location_destinations.py tests/test_templates/test_htmx_markup_security.py tests/test_templates/test_components.py -q -p no:randomly` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 119, все 119 passed поимённо) |
+| 13-06-01 | 06 | 5 | FETCH-02 | T-13-17 | критерии не переписаны, летописи стоят | records | `uv run pytest tests/test_planning -q` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 208, все 208 passed поимённо) |
+| 13-06-02 | 06 | 5 | FETCH-02 | T-13-18 | FETCH-02 не отмечен выполненным до верификации | records | `uv run pytest tests/test_planning -q -k "requirement or flag_and_the_status"` | ✅ | ✅ green (перепроверено 2026-10-07 на `970ce74f`: выборка 16, все 16 passed поимённо) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -175,3 +175,31 @@ end-of-phase` — чекпоинтов внутри планов нет, обх�
 **Manual-Only не сдвинут:** четыре проверки критерия 4 над живой сессией Telethon остаются за
 человеком — автоматизировать их нельзя (сервер Telegram не подменяем), и аудит их в «покрытые» не
 переводит.
+
+### Перепроверка 2026-10-07 (Gaps found 0 · Resolved 0 · Escalated 0 — таблица не повторена: верб `append-audit` не пишет блок, равный предыдущему)
+
+**Что это был за аудит.** Круг вызван шаговым хуком `verify:post` при перепроверке фазы
+(`/gsd-execute-phase 13`, 2026-10-07): вердикт `13-VERIFICATION.md` читался `stale`, потому что покрытые
+файлы правили Фазы 14–15 (шесть модулей гейтов: `test_htmx_gates.py`, `test_htmx_post_pairs.py`,
+`test_hx_location_destinations.py`, `test_components.py`, `test_htmx_inventory.py`,
+`test_htmx_markup_gates.py`; `REQUIREMENTS.md`; в `app/pages/accounts.py` — только два комментария-летописи
+планов 15-09/15-21 у обработчиков списка аккаунтов, вне мастера). Состояние A, новых разрывов НОЛЬ. Задачи,
+требования и блоки проверки планов с аудита `5e1f425a` не менялись; единственная правка планов —
+перенумерация гейта уникальности #4683 (коммит `970ce74f`), за которой столбец Threat Ref карты уже
+последовал в том же коммите (прежние имена названы рядом).
+
+**Чем замерено.** (1) Каждая из 14 команд карты прогнана с `--collect-only` на дереве `970ce74f`: все
+собирают НЕПУСТУЮ выборку (от 3 до 220 правил); фильтры `-k` не опустели после переименований поздних фаз —
+`expired` 3 из 34, `foreign` 6 из 56, `"polling or control"` 34 из 56, `"requirement or flag_and_the_status"`
+16 из 208 (числа отобранных те же, что 2026-09-21). (2) Объединение модулей карты прогнано ОДИН раз с `-v` на
+том же дереве: **777 passed, 0 failed, 235 s**, код выхода 0; выборка каждой строки PASSED ПОИМЁННО — сверкой
+идентификаторов узлов, а не строки итога; число по строке вписано в столбец `Status`. (3) Правила таблицы
+«Требование → тест» существуют поимённо (`test_tg_user_auth.py:494`, `:639`, `:1743`;
+`test_telegram_user.py:696`), отбор `-k concurrent` модуля мастера — по-прежнему 2 правила.
+
+⚠️ **Граница замера.** `-p no:randomly` здесь — пустой флаг (pytest-randomly не установлен). Объединение
+выросло с 2026-09-21 за счёт правил, которые Фазы 14–15 дописали в те же модули гейтов: команды поднимают
+модули целиком, поэтому чужие правила попадают в выборку, но фазе 13 их зелень не засчитывается.
+
+`gsd-nyquist-auditor` не спавнился — заполнять нечего. `nyquist_compliant: true` остаётся. Четыре ручные
+проверки раздела Manual-Only (критерий 4, живой Telethon) остаются за человеком и закрыты обходом `13-UAT.md`.
