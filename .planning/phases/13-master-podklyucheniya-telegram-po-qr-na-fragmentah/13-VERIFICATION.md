@@ -1,42 +1,62 @@
 ---
 phase: 13-master-podklyucheniya-telegram-po-qr-na-fragmentah
-verified: 2026-09-21T17:40:19Z
+verified: 2026-10-07T11:08:19Z
 status: passed
-score: 31/32 must-haves verified
+score: 32/32 must-haves verified
 covered_files:
-
-  - .planning/REQUIREMENTS.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-PLAN.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-SUMMARY.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-02-PLAN.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-02-SUMMARY.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-03-PLAN.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-03-SUMMARY.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-04-PLAN.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-04-SUMMARY.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-05-PLAN.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-05-SUMMARY.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-06-PLAN.md
-  - .planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-06-SUMMARY.md
-  - app/messengers/telegram_user.py
-  - app/pages/accounts.py
-  - app/templates/accounts/connect_tg_user.html
-  - app/templates/accounts/includes/tg_connect_step.html
-  - tests/test_messengers/test_telegram_user.py
-  - tests/test_pages/test_htmx_gates.py
-  - tests/test_pages/test_htmx_post_pairs.py
-  - tests/test_pages/test_hx_location_destinations.py
-  - tests/test_pages/test_identifier_bounds.py
-  - tests/test_pages/test_impersonation_gate.py
-  - tests/test_routes/test_tg_user_auth.py
-  - tests/test_templates/test_components.py
-  - tests/test_templates/test_htmx_inventory.py
-  - tests/test_templates/test_htmx_markup_gates.py
-  - tests/test_templates/test_htmx_markup_security.py
-
-covered_digest: "v1:sha256:0e9da87d16a12f09ae221a56ad3c6af20dd9c50988419fdc0513d4c1da972390"
+  - ".planning/REQUIREMENTS.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-PLAN.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-01-SUMMARY.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-02-PLAN.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-02-SUMMARY.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-03-PLAN.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-03-SUMMARY.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-04-PLAN.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-04-SUMMARY.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-05-PLAN.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-05-SUMMARY.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-06-PLAN.md"
+  - ".planning/phases/13-master-podklyucheniya-telegram-po-qr-na-fragmentah/13-06-SUMMARY.md"
+  - "app/messengers/telegram_user.py"
+  - "app/pages/accounts.py"
+  - "app/templates/accounts/connect_tg_user.html"
+  - "app/templates/accounts/includes/tg_connect_step.html"
+  - "tests/test_messengers/test_telegram_user.py"
+  - "tests/test_pages/test_htmx_gates.py"
+  - "tests/test_pages/test_htmx_post_pairs.py"
+  - "tests/test_pages/test_hx_location_destinations.py"
+  - "tests/test_pages/test_identifier_bounds.py"
+  - "tests/test_pages/test_impersonation_gate.py"
+  - "tests/test_routes/test_tg_user_auth.py"
+  - "tests/test_templates/test_components.py"
+  - "tests/test_templates/test_htmx_inventory.py"
+  - "tests/test_templates/test_htmx_markup_gates.py"
+  - "tests/test_templates/test_htmx_markup_security.py"
+covered_digest: "v3:sha256:044a69e9568e35710ad4fb6004c4d548c9800c5264a590d1d405768c39fc6e35"
 behavior_unverified: 0
 overrides_applied: 0
+re_verification:
+  previous_status: passed
+  previous_score: 31/32
+  previous_verified: 2026-09-21T17:40:19Z
+  previous_digest: "v1:sha256:0e9da87d16a12f09ae221a56ad3c6af20dd9c50988419fdc0513d4c1da972390"
+  reason: >-
+    `verification.status` читался `stale`: покрытые файлы вердикта 2026-09-21 (последняя запись
+    отчёта — коммит a8152440) позднее правили фазы 14–15 и перенумерация угроз 970ce74f. Сама
+    фаза 13 повторной работы не получала. Раунд меряет СЕГОДНЯШНЕЕ дерево (ветка фазы,
+    перемотанная на origin/master, HEAD ced8f8fa) и отделяет чужие правки от кода фазы. Отдельно
+    и впервые замерен шаблон шага после быстрой задачи 260921-qvt: прошлый раунд держал его
+    вердикт на подтверждении владельца, а не на замере.
+  landed_since:
+    - "a674e8e5 (15-09), 5a95c970 (15-21) — app/pages/accounts.py: +14 строк, ТОЛЬКО комментарии-летописи `page_size` в обработчиках СПИСКА аккаунтов (`accounts_partial` :171-177, `accounts_list` :213-219). Код мастера не тронут; строки мастера сдвинуты на +14 (обработчики теперь :225-629)"
+    - "970ce74f — 13-02/03/04/05-PLAN.md: по одной строке `<threat_model>` перенумерованы (T-13-04→T-13-19, T-13-07→T-13-20, T-13-07→T-13-21, T-13-10→T-13-22). Должные истины, артефакты, ключевые связи и запреты планов не тронуты"
+    - "шесть покрытых гейтовых модулей (фазы 14–15): правил, касающихся мастера, не снято ни одного. `NOT_YET_CONVERTED_COUNT` 10 → 0 (Фаза 14 перевела авторизацию); фаза 15 ВПИСАЛА четыре обработчика мастера в реестр дуальных обработчиков и решений `hx-push-url` (d992926d); `HX_LOCATION_DESTINATION_CALLS_DECLARED` 77 → 81 по записям фаз 14–15; `TOP_LEVEL_BINDING_EXEMPT_TEMPLATES` остался именованным нулём; в test_components.py сведён дубль разборщика `_split_top_level` (15-18), без связи с мастером"
+    - ".planning/REQUIREMENTS.md — записи фаз 14–15; строки FETCH-02 после a8152440 не тронуты (её `[x]` / `Complete` поставило закрытие фазы ab72d228)"
+    - "ВНЕ этого диапазона, но не замеренное прошлым раундом: 260921-qvt (85e84ca3, aaaee309, 2026-09-21 19:50 — ПОСЛЕ обхода 18:05–19:15) правил tg_connect_step.html (+24/−6) и app.css. Замерено в этом раунде, раздел «Прямой замер шаблона шага после 260921-qvt»"
+  gaps_closed: []
+  gaps_remaining: []
+  regressions: []
+  score_change: "31/32 → 32/32: критерий 4 (живой сценарий) закрыт обходом 13-UAT.md 2026-09-21 (status: complete, 5/5 pass) и в этом раунде засчитан как прямое наблюдение. Перенос наблюдения на сегодняшнее дерево ИЗМЕРЕН: обработчики мастера, слой сессий, form_wrapper и вендоренный htmx с дерева обхода не менялись; шаблон шага изменился только выкладкой (сигнатура интерактивных атрибутов семи отрисовок совпадает с деревом обхода)"
 deferred: # owner-named deferrals, not later-phase coverage — neither item is claimed by any later phase
 
   - truth: "IN-03 — abandoned QR sessions keep a connected (possibly authorized) Telethon client"
@@ -131,24 +151,330 @@ advisory:
     category: other
     reason: "Carried verbatim from the pre-phase template; `current-password` would be better."
     evidence_status: "git show 344dc789"
-human_verification:
+previous_round_closed_items:
+  note: "Закрыты обходом 2026-09-21 (13-UAT.md: status complete, 5/5 pass, расхождений 0; пункты 1, 2, 4 — подтверждением владельца, пункты 3 и 5 — дословными словами владельца). Перенесены сюда из ключа `human_verification` верхнего уровня дословно (отступ +2), по форме 12-VERIFICATION.md: при `status: passed` открытых пунктов ручной проверки у отчёта нет. Позднейшие правки путей под пунктами 1–4 измерены в разделе «Прямой замер шаблона шага после 260921-qvt»."
+  human_verification:
 
-  - test: "Criterion 4a — scan without 2FA: open /accounts/connect/tg_user, «Начать подключение», scan in Telegram (Настройки → Устройства → Подключить устройство)"
-    expected: "QR appears without reload; screen switches to «Подключено» by itself; one tg_user account on the list; uvicorn log shows no further POST …/qr-status after «Подключено»"
-    why_human: "Needs a real Telegram account and phone; the Telegram server is not substitutable; live browser requires owner consent (workflow.live_dom_uat: false)"
-  - test: "Criterion 4b — account with 2FA: scan, enter a wrong password, then the right one"
-    expected: "Wrong → stays on the password step, «Неверный пароль 2FA.» at the field, field empty; right → «Подключено», one account"
-    why_human: "Live Telethon session with a 2FA password"
-  - test: "Criterion 4c — expired code: get a QR and do NOT scan for ≥ ~30 s, then press «Обновить QR-код» and scan the new code"
-    expected: "Screen shows «QR-код истёк. Обновите его, чтобы продолжить.» by itself (no «Ошибка авторизации»); refresh shows a new QR and polling resumes; scanning it reaches «Подключено». While on the qr_expired step, note whether the card-height jump (UI-5) is acceptable."
-    why_human: "Token lifetime is set by Telegram (~30 s); host clock must be NTP-synced. UI-5 is a visual judgement only a live look settles."
-  - test: "Criterion 4d — whole-session expiry: reach «код истёк», wait ≥ 270 s more, press «Обновить QR-код»"
-    expected: "Error step «Сессия авторизации истекла. Начните заново.» with the «Начать заново» form"
-    why_human: "Needs ≥ 5 minutes of real session time against a live Telethon client"
-  - test: "Prohibitions (8 items, all `verification: none` in the plans) — confirm or reject the verifier's non-authoritative verdicts listed in the report section «Prohibitions»"
-    expected: "Owner accepts each verdict (all eight judged HOLDING by the verifier) or names the one that does not hold"
-    why_human: "Prohibitions carry no wired test enforcement; the verifier's reading is an LLM judgement and must not silently pass (ADR-550 D4)"
+    - test: "Criterion 4a — scan without 2FA: open /accounts/connect/tg_user, «Начать подключение», scan in Telegram (Настройки → Устройства → Подключить устройство)"
+      expected: "QR appears without reload; screen switches to «Подключено» by itself; one tg_user account on the list; uvicorn log shows no further POST …/qr-status after «Подключено»"
+      why_human: "Needs a real Telegram account and phone; the Telegram server is not substitutable; live browser requires owner consent (workflow.live_dom_uat: false)"
+    - test: "Criterion 4b — account with 2FA: scan, enter a wrong password, then the right one"
+      expected: "Wrong → stays on the password step, «Неверный пароль 2FA.» at the field, field empty; right → «Подключено», one account"
+      why_human: "Live Telethon session with a 2FA password"
+    - test: "Criterion 4c — expired code: get a QR and do NOT scan for ≥ ~30 s, then press «Обновить QR-код» and scan the new code"
+      expected: "Screen shows «QR-код истёк. Обновите его, чтобы продолжить.» by itself (no «Ошибка авторизации»); refresh shows a new QR and polling resumes; scanning it reaches «Подключено». While on the qr_expired step, note whether the card-height jump (UI-5) is acceptable."
+      why_human: "Token lifetime is set by Telegram (~30 s); host clock must be NTP-synced. UI-5 is a visual judgement only a live look settles."
+    - test: "Criterion 4d — whole-session expiry: reach «код истёк», wait ≥ 270 s more, press «Обновить QR-код»"
+      expected: "Error step «Сессия авторизации истекла. Начните заново.» with the «Начать заново» form"
+      why_human: "Needs ≥ 5 minutes of real session time against a live Telethon client"
+    - test: "Prohibitions (8 items, all `verification: none` in the plans) — confirm or reject the verifier's non-authoritative verdicts listed in the report section «Prohibitions»"
+      expected: "Owner accepts each verdict (all eight judged HOLDING by the verifier) or names the one that does not hold"
+      why_human: "Prohibitions carry no wired test enforcement; the verifier's reading is an LLM judgement and must not silently pass (ADR-550 D4)"
 ---
+
+# Phase 13: Мастер подключения Telegram по QR на фрагментах — Verification Report (вторая верификация: ре-верификация закрытой фазы на пост-вехном дереве)
+
+**Phase Goal:** мастер подключения работает на HTML-фрагментах с состоянием на сервере — без `setInterval`, без пяти JSON-контрактов и без ручного переключения `hidden`
+**Verified:** 2026-10-07T11:08:19Z
+**Status:** passed
+**Re-verification:** Да. Вердикт 2026-09-21 (`passed`, 31/32, `v1:sha256:0e9da87d…`) читался `stale`, потому что покрытые файлы позднее правили фазы 14–15 и перенумерация угроз 970ce74f. Дерево: ветка `gsd/phase-13-master-podklyucheniya-telegram-po-qr-na-fragmentah`, перемотанная на `origin/master`, HEAD `ced8f8fa`.
+
+## Итог раунда 2026-10-07
+
+**Цель фазы на сегодняшнем дереве достигнута, и держит её код фазы 13, а не чужие правки.**
+Слой сессий `app/messengers/telegram_user.py` и страница `connect_tg_user.html` не получили ни
+одного коммита после `bff29f7a` (дерево первой верификации). Как и `form_wrapper.html` и
+вендоренный `htmx.min.js`. В `app/pages/accounts.py` после `a8152440` прибавились 14 строк, и все
+они комментарии в обработчиках СПИСКА аккаунтов (`accounts_partial`, `accounts_list`), вне мастера.
+Измерено диффом, а не взято из сводки. Поэтому строки мастера сдвинулись на +14, и ссылки этого
+раунда даны по сегодняшней нумерации.
+
+**Шаблон шага после быстрой задачи 260921-qvt замерен впервые.** Прошлый раунд держал вердикт по
+этому файлу на подтверждении владельца. Замер такой:
+
+- правка касается только выкладки;
+- последовательность интерактивных атрибутов во всех семи отрисовках шага побайтно равна дереву
+  обхода (`hx-*`, `action`, `name`, `type`, `value`, `id`);
+- опросчик остался ровно один и только в ветке ожидания;
+- скрипта и атрибута `hidden` не прибавилось.
+
+**Счёт вырос с 31/32 до 32/32, и это не пересчёт по вкусу.** Единственный незасчитанный пункт
+прошлого раунда, критерий 4 (живой сценарий), закрыт обходом `13-UAT.md` 2026-09-21: `status:
+complete`, пять `pass`, расхождений ноль. Обход шёл ДО быстрой задачи (18:05–19:15 против 19:50).
+Поэтому перенос наблюдения на сегодняшнее дерево здесь измерен, а не допущен (раздел ниже). Форма
+закрытия названа как есть: пункты 1, 2 и 4 обхода закрыты подтверждением владельца, а не дословным
+описанием признака (ключ `unrecorded` шапки обхода).
+
+**Открытым остаётся то же, что было открыто.** Это 18 советующих записей, по которым код не
+менялся (WR-01…WR-04, IN-01, IN-02, UI-4, UI-6…UI-16), и две отсрочки владельца (IN-03, UI-17). Ни
+одна поздняя фаза их не взяла. UI-1, UI-2 и UI-3 закрыты быстрой задачей 260921-qvt, и сегодня это
+подтверждено замером.
+
+## Что легло под фазу 13 после a8152440
+
+| Покрытый файл | Коммиты | Что изменилось | Задевает истину фазы 13? |
+|---|---|---|---|
+| `app/pages/accounts.py` | a674e8e5 (15-09), 5a95c970 (15-21) | +14 строк комментариев-летописей `page_size` (:171-177, :213-219) | **Нет.** Ни одной строки кода; диапазон мастера :225-629 побайтно прежний, только сдвинут |
+| `tests/test_pages/test_htmx_gates.py` | фазы 14–15 | +2124/−20. `NOT_YET_CONVERTED_COUNT` 10 → 0 (из перечня ушли десять обработчиков `auth.py`, ни одного обработчика мастера); четыре обработчика мастера вписаны в `DUAL_BRANCH_HANDLERS` и в реестр решений `hx-push-url` (15-11) | **Нет ослабления.** Предмет мастера стал охвачен ШИРЕ |
+| `tests/test_pages/test_htmx_post_pairs.py` | фазы 14–15 | +751/−14. Снятые строки: обращения к опустевшему `NOT_YET_CONVERTED` и утверждение 302 правила пар, которое 14-02 ПЕРЕНЁС внутрь ветви «не смена экрана» тем же текстом | **Нет.** Правил мастера не снято; 302-утверждение для мастера (не `SCREEN`) действует как прежде |
+| `tests/test_pages/test_hx_location_destinations.py` | 14-06, 15-16 | `HX_LOCATION_DESTINATION_CALLS_DECLARED` 77 → 79 → 81 с летописями; `/admin` в карте | **Нет.** `TOP_LEVEL_BINDING_EXEMPT_TEMPLATES = {}` — именованный ноль 13-05 на месте (:578) |
+| `tests/test_templates/test_components.py` | 15-18 | дубль разборщика `_split_top_level` сведён к общему (с летописью) | **Нет.** Летопись Фазы 13 о строкознающем разборщике не тронута |
+| `tests/test_templates/test_htmx_inventory.py` | фаза 15 | +531/−0: запрет `test_no_manual_fetch_remains` (FETCH-03) | **Усиление.** То, что 13-06 называл «предметом Фазы 15», теперь правило; `MANUAL_FETCH_PLACES = 0`, `POLLING_FRAGMENTS = 10` |
+| `tests/test_templates/test_htmx_markup_gates.py` | фазы 14–15 | +2349/−4. Снятые строки — три объявленных числа, переписанные вверх (`MACRO_DEFINITION_SITES_CALLERS_DECLARED` 24 → 32, `PARAMETRIC_SWAP_TARGETS_CALLERS_DECLARED` 9 → 16, `UNREACHABLE_TARGET_CALL_BLOCKS_MEASURED` 19 → 29), и `DEGRADATION_MARKERS`, переписанный многострочным множеством | **Нет.** Ни одна снятая строка не называет мастер |
+| `13-02/03/04/05-PLAN.md` | 970ce74f | по одной строке `<threat_model>`: T-13-04→19, T-13-07→20, T-13-07→21, T-13-10→22 | **Нет.** Блоки `must_haves` планов не тронуты (замер диффом) |
+| `.planning/REQUIREMENTS.md` | фазы 14–15 | записи фаз 14–15 | **Нет.** Строки FETCH-02 после a8152440 не тронуты |
+
+Вне диапазона a8152440, но мимо прошлого замера: `tg_connect_step.html`, правка 260921-qvt (следующий раздел).
+
+## Прямой замер шаблона шага после 260921-qvt
+
+**Дифф `bff29f7a..HEAD` по `tg_connect_step.html`** (два коммита: `85e84ca3`, `aaaee309`) состоит из
+трёх правок:
+
+- в ветке `password` поле и ряд действий обёрнуты в `<div class="connect-step__form">`;
+- в рядах действий веток `qr_expired` и старт/ошибка добавлена подпись `<span class="connect-step__busy">Загрузка...</span>`;
+- добавлены два абзаца комментария.
+
+Аргументы `form_wrapper(...)` и `field(...)` не изменились. Опросчик ветки ожидания (:59-62) не тронут.
+
+**Сигнатура отрисовок.** Это скретч-скрипт, файлов проекта он не правит. Скрипт отрисовал старый
+шаблон (`git show bff29f7a:…`) и сегодняшний в одном окружении шаблонов приложения. Отрисовок семь:
+`start`, `error`, `waiting`, `qr_expired`, `password`, `password` с ошибкой поля и `connected`.
+Затем он сравнил упорядоченную последовательность атрибутов `hx-*|action|method|name|type|value|id`.
+
+| Шаг | Атрибутов | Совпадает с деревом обхода | `hx-trigger="every` | `<script` | атрибут `hidden` (не input) | подпись `connect-step__busy` |
+|---|---|---|---|---|---|---|
+| start | 8 | ✓ | 0 | 0 | 0 | 1 |
+| error | 8 | ✓ | 0 | 0 | 0 | 1 |
+| waiting | 10 | ✓ | **1** | 0 | 0 | 0 |
+| qr_expired | 11 | ✓ | 0 | 0 | 0 | 1 |
+| password | 15 | ✓ | 0 | 0 | 0 | 0 |
+| password + ошибка | 15 | ✓ | 0 | 0 | 0 | 0 |
+| connected | 0 | ✓ | 0 | 0 | 0 | 0 |
+
+Итог: `TOTAL DIFFS 0`. Подпись `Загрузка...` показывает CSS по атрибуту `disabled` кнопки отправки
+(`app.css:2036-2037`, `display: none` по умолчанию). Это стиль, а не ручное переключение `hidden`,
+поэтому критерий 1 не задет. Правило `tests/test_templates/test_tg_connect_step_layout.py`
+(10 проверок) зелено.
+
+**Что ещё лежит под живым наблюдением критерия 4, и не изменилось ли оно с дерева обхода.**
+
+- `telegram_user.py`: 0 коммитов после `bff29f7a`.
+- `components/`: 0 коммитов.
+- `htmx.min.js`: 0 коммитов.
+- `app/pages/htmx.py` (слой ответа): правили 14-01 и 14-02. Тело `respond_field_error` переехало в
+  общий помощник `_respond_by_transport`, а контракт 422 прежний. Путь неверного пароля 2FA
+  (пункт 4b обхода) идёт через этот выход, и его маршрутные правила зелены сегодня:
+  `test_a_wrong_password_answers_422_at_the_field_without_echo` и `test_verify_2fa_degrades_and_requires_a_session`.
+- `base.html`: правил 14-06, только форма возврата из-под имперсонации. Мастера правка не касается.
+
+Отсюда вывод: наблюдение обхода переносится на сегодняшнее дерево. Перенос опирается на замер, а не
+на подтверждение владельца.
+
+## Goal Achievement
+
+### Roadmap Success Criteria (с летописями 13-06; тексты критериев побайтно равны базе `344dc789`)
+
+| # | Критерий | Статус | Улика на сегодняшнем дереве |
+|---|---|---|---|
+| SC1 | Пять `fetch()` исчезли вместе с `setInterval` и ручным `hidden`; маршруты отдают HTML-фрагменты. **Летопись:** четыре маршрута, `complete` снят D-01, опрос GET → POST | ✓ VERIFIED | `grep -rn 'fetch(' app/templates/ \| wc -l` → `0`. `setInterval` в шаблонах и своём JS нет. Страница — якорь + включение, без `<script>` и `onclick`. `hidden` в шаблоне шага — только три `type="hidden"` поля `session_id`. Живая таблица маршрутов: `GET /accounts/connect/tg_user`, `POST` start-qr / qr-status / refresh-qr / verify-2fa; `complete` нет. В `accounts.py` нет `JSONResponse` и `json`. Правила `test_the_wizard_page_carries_no_client_script` и `test_the_complete_route_and_the_get_poll_are_gone` зелены сегодня |
+| SC2 | Опрос ведётся `hx-trigger` и останавливается ответом без него; у каждого `every`-фрагмента есть пара. **Летопись:** доказан правилом на ответах | ✓ VERIFIED | Опросчик — только в ветке `waiting` (сигнатура выше). `test_polling_stops_by_a_response_without_trigger` × 20. Замыкающие `test_every_wizard_step_is_reached_by_a_polling_case` и `test_every_polling_fragment_has_a_terminal_pair` плюс шесть `test_control_*` зелены. Ветки шаблона разбираются из ТЕКСТА шаблона, поэтому правка 260921-qvt тоже прошла через замыкание |
+| SC3 | Состояние на сервере, `session_id` скрытым полем, проверка владения. **Летопись:** проверка ЗАВЕДЕНА | ✓ VERIFIED | `QRAuthState.user_id: int` без умолчания (`telegram_user.py:36`). `_owned` (:119) стоит первой строкой `get_qr_status` (:134), `refresh_qr` (:156), `submit_2fa` (:189), `complete_auth` (:216). Обработчики передают `user.id` (`accounts.py:409, 492, 568`). Три `test_a_foreign_*_is_answered_as_unknown_and_leaves_no_trace` и четыре модульных правила владения зелены |
+| SC4 | Живой сценарий: сканирование, обновление истёкшего кода, 2FA (ручной UAT) | ✓ VERIFIED (прямое наблюдение) | `13-UAT.md` 2026-09-21: `status: complete`, `checks_declared: 5`, пять `pass`, расхождений 0. Пункты 1, 2 и 4 закрыты подтверждением владельца, без дословного признака; обязательная клетка 1.4 названа в `unrecorded`. Перенос на сегодняшнее дерево измерен (раздел выше). Прошлый раунд: `? HUMAN` |
+| SC5 | Записано прямо: деградации без JS нет и сегодня | ✓ VERIFIED | `git show 344dc789:app/templates/accounts/connect_tg_user.html \| grep -c '<form'` → `0`. Раздел «Критерий 5» в `13-06-SUMMARY.md:126` на месте. `test_the_wizard_degrades_to_its_page_without_js` зелено. ℹ️ О дрейфе команды летописи — в «Anti-Patterns» |
+
+### Plan Must-Have Truths (дедуплицированы против SC)
+
+| # | Истина (план) | Статус | Улика сегодня |
+|---|---|---|---|
+| 1 | start-qr → 200, шаг ожидания: QR data-URI, ровно один опросчик, скрытый `session_id`, якоря во фрагменте нет (13-01) | ✓ VERIFIED | `_waiting` (`accounts.py:366-370`); сигнатура `waiting` = дереву обхода; `test_the_wizard_walks_from_start_to_connected` |
+| 2 | qr-status в `waiting` → 204, пустое тело (13-01) | ✓ VERIFIED | `_unchanged` (:414-416); запись `POLLING_CASES` |
+| 3 | Первый опрос на `success` зовёт `complete_auth`, сохраняет один аккаунт, отвечает «Подключено» без триггера (13-01) | ✓ VERIFIED | :424-428; `test_a_second_poll_after_success_does_not_save_again` в прогоне |
+| 4 | Прочие исходы — фрагмент без триггера с алертом и «Начать заново»; тексты дословно (13-01) | ✓ VERIFIED | константы `TG_*_MESSAGE` (:247-258) не менялись; правила отказов старта зелены |
+| 5 | Без JS — 302 на мастер; без сессии — `/login`; JSON нет (13-01) | ✓ VERIFIED | `respond(…, redirect=…)` на каждом выходе; `test_the_wizard_degrades_to_its_page_without_js`, `test_the_wizard_without_a_session_goes_to_login` |
+| 6 | Перечни гейтов сдвинуты прогоном (13-01) | ✓ VERIFIED | Сегодня `NOT_YET_CONVERTED_COUNT = 0`: Фаза 14 сдвинула его 10 → 0 своими прогонами. `MANUAL_FETCH_PLACES = 0`, `MANUAL_FETCH_CEILING_AT_PHASE_08 = 0`. Гейтовые модули целиком входят в полную суиту 4084 passed (b0e6c0bd, код и тесты побайтно равны HEAD) |
+| 7 | Опрос в `needs_2fa` → шаг пароля без триггера, `required`, без значения (13-02) | ✓ VERIFIED | `test_polling_needs_2fa_answers_the_password_step`; сигнатура `password` = дереву обхода |
+| 8 | Неверный пароль → 422 у поля, без эха (13-02) | ✓ VERIFIED | `test_a_wrong_password_answers_422_at_the_field_without_echo` |
+| 9 | Пустой пароль → 422 «Введите пароль» (13-02) | ✓ VERIFIED | `test_an_empty_password_answers_422_with_the_client_text` |
+| 10 | Верный пароль сохраняет аккаунт из результата `complete_auth` (13-02) | ✓ VERIFIED | :576-591: возврат `submit_2fa` отброшен; `test_a_right_password_saves_one_account_from_complete_auth` |
+| 11 | Два конкурентных verify-2fa / два опроса после success → один аккаунт (13-02, D-01) | ✓ VERIFIED | `complete_auth` (:205-231) без `await` между `_owned` и `pop` — файл не менялся с замера мутанта 2026-09-21. `test_concurrent_completes_yield_one_session_string` зелено. ⚠️ WR-04 переносится: маршрутные тесты гонки свойство не различают (тесты тоже не менялись) |
+| 12 | Иная ошибка Telethon на 2FA → фрагмент, не 500 (13-02) | ✓ VERIFIED | `except Exception` пишет только `error_type` (:582-586); `test_a_telethon_failure_on_the_password_step_is_a_fragment` |
+| 13 | verify-2fa без JS: 302; ошибка поля → страница 422; без сессии → `/login` (13-02) | ✓ VERIFIED | `respond_field_error(page=_page, …)` (:623); `test_verify_2fa_degrades_and_requires_a_session` — зелено ПОСЛЕ рефакторинга 14-02 |
+| 14 | Таймаут `wait()` → `qr_expired` без текста ошибки и трассировки (13-03, D-03) | ✓ VERIFIED | :93-101; `test_an_expired_qr_token_is_a_status_not_an_error` (настоящий `QRLogin`). ⚠️ WR-02 переносится |
+| 15 | Опрос в `qr_expired` → шаг «QR-код истёк…» с формой обновления, без триггера (D-02) | ✓ VERIFIED | Сигнатура `qr_expired`: `every` = 0; `test_polling_an_expired_code_offers_a_refresh` |
+| 16 | refresh-qr в пределах срока → новый QR и опросчик (13-03) | ✓ VERIFIED | :502-505; `test_refreshing_an_expired_code_resumes_polling` |
+| 17 | Устаревшая сессия → «истекла», `recreate` не зовётся (13-03) | ✓ VERIFIED | `test_refreshing_an_outdated_session_says_it_expired`, `test_refresh_qr_does_not_revive_an_outdated_session` |
+| 18 | `refresh_qr` только из `qr_expired` (13-03) | ✓ VERIFIED | :162; `test_refreshing_a_non_expired_code_is_refused`. ⚠️ WR-01 переносится |
+| 19 | D-13: слой сессий изменён только по D-01/D-03/D-04 (13-03/13-04) | ✓ VERIFIED | `git diff --stat bff29f7a..HEAD -- telegram_user.py` пуст; список ханков `344dc789..HEAD` тот же, что 2026-09-21; `QR_SESSION_TTL = 300` (:28) |
+| 20 | refresh-qr без JS 302; без сессии `/login`; JSON нет (13-03) | ✓ VERIFIED | `test_refresh_degrades_and_requires_a_session` |
+| 21 | Сессия привязана к пользователю при старте; `user_id` обязателен (13-04) | ✓ VERIFIED | :348-352 `start_qr_auth(..., user_id=user.id)`; `test_a_session_is_owned_by_the_user_who_started_it` |
+| 22 | Под имперсонацией — к СУБЪЕКТУ (13-04) | ✓ VERIFIED | `test_the_wizard_binds_the_session_to_the_impersonated_subject` |
+| 23 | Чужой запрос ничего не делает с сессией владельца; владелец затем подключается (13-04) | ✓ VERIFIED | три маршрутных `test_a_foreign_*` + `test_a_foreign_{complete,refresh,password}_*` |
+| 24 | Проверка владельца до любой мутации; `complete_auth` только в `success` (13-04) | ✓ VERIFIED | :216-219; `test_complete_auth_takes_only_a_successful_session` |
+| 25 | Позднее сканирование — `success`; «истекла» только владельцу (13-04) | ✓ VERIFIED | `test_a_late_scan_is_still_a_success` |
+| 26 | Гейт критерия 2 замкнут по веткам с контролями; изъятие — именованный ноль (13-05) | ✓ VERIFIED | Правила и шесть контролей зелены; `TOP_LEVEL_BINDING_EXEMPT_TEMPLATES: dict[str, str] = {}` (`test_hx_location_destinations.py:578`) |
+| 27 | Летописи у SC1/2/3/5 и FETCH-02; тексты не переписаны; разведка не тронута; FETCH-02 не отмечен планом (13-06) | ✓ VERIFIED | Пять строк критериев равны базе `344dc789` (`cmp`). Текст FETCH-02 после `[.]` равен базе. `git diff 344dc789 HEAD -- .planning/research/` пуст. FETCH-02 сегодня `[x]` / `Complete`, и поставил это коммит закрытия `ab72d228` ПОСЛЕ вердикта `passed`, как истина и требует («отметка следует за верификацией фазы»). Так же держит `tests/test_planning/test_requirement_completion_follows_verification.py` |
+
+Три истины `verification: backstop` из 13-01/02/03 — это содержание SC4, и закрыты они вместе с ним
+прямым наблюдением обхода. Отдельно в счёт они не входят, как и в прошлом раунде.
+
+**Score:** 32/32 verified (5 SC + 27 plan truths); 0 present-but-behavior-unverified. Каждая
+поведенческая истина (гонка, невмешательство чужого запроса, классификация таймаута) держится
+правилом, которое сегодня зелено. Живой сценарий держится прямым наблюдением, и его перенос на
+сегодняшнее дерево измерен.
+
+### Deferred Items
+
+Владельческие отсрочки, а не покрытие поздней фазой. Перенесены из прошлого раунда без правки. Ни
+Фаза 14, ни Фаза 15 их не взяли. `telegram_user.py` не менялся, текст старта `accounts.py:354` прежний.
+
+| # | Item | Addressed In | Evidence |
+|---|---|---|---|
+| 1 | IN-03 — брошенная QR-сессия держит подключённый клиент Telethon | владелец | 13-CONTEXT §Deferred Ideas; D-13 |
+| 2 | UI-17 — «Ошибка запуска QR авторизации: {e}» показывает сырой текст исключения | владелец | 13-CONTEXT §Landmines; D-09 |
+
+### Advisory (New Scope, Unevidenced)
+
+**Новых находок вне рамки этот раунд не заводит.** Шаг 7 на файлах фазы не нашёл ни `TBD`, ни
+`FIXME`, ни `XXX`, ни `TODO`, ни `HACK`, ни `PLACEHOLDER`. Три замеченных расхождения ссылок
+отнесены к ℹ️ Info (ниже). Это не дефекты кода.
+
+Перенесённые записи ключа `advisory` (21) — состояние на сегодняшнем дереве. Тексты записей в шапке
+не переписаны (история). Номера строк в них относятся к дереву 2026-09-21.
+
+| Запись | Состояние 2026-10-07 | Основание |
+|---|---|---|
+| WR-01, WR-02, WR-03, IN-02 | открыта, без изменений | `telegram_user.py` и диапазон мастера в `accounts.py` побайтно прежние |
+| WR-04 | открыта, без изменений | `test_tg_user_auth.py` и `test_telegram_user.py` — 0 коммитов после `bff29f7a`; мутант заново не гонялся, предмет не менялся |
+| IN-01 | открыта, без изменений | по сегодняшней нумерации `accounts.py:577-581` (было :563-567, сдвиг +14) |
+| UI-1, UI-2, UI-3 | **закрыта** (260921-qvt) | UI-1: ветка `password` несёт `connect-step__form` (`tg_connect_step.html:112`), правило `.connect-step__form { gap: 14px }` (`app.css:2019`). UI-2: `.connect-step--center .connect-step__actions { justify-content: center }` (`app.css:2018`). UI-3: подпись в трёх рядах + `app.css:2036-2037`. Правило `test_tg_connect_step_layout.py` зелено. Живой взгляд (пункт D4 быстрой задачи) — за владельцем, см. ниже |
+| UI-4, UI-6…UI-13, UI-15, UI-16 | открыта, без изменений | ветки шаблона, кроме выкладки, не тронуты |
+| UI-14 | открыта, без изменений | мёртвое правило `.connect-step[hidden]` стоит теперь на `app.css:2009` (было :1925-1929); `hidden` в `app/templates/accounts/` вне `type="hidden"` по-прежнему нет — критерий 1 держится |
+| UI-5 | закрыта обходом 2026-09-21 (пункт 3) | на `qr_expired` прибавилась только подпись с `display: none`, высоты вне запроса она не занимает |
+
+### Required Artifacts
+
+| Artifact | Expected | Status | Details |
+|---|---|---|---|
+| `app/templates/accounts/includes/tg_connect_step.html` | единственный источник разметки шага, шесть веток | ✓ VERIFIED | 155 строк (было 137, прибавка — правка 260921-qvt); ветки start/waiting/qr_expired/password/connected/error; включается страницей и `_tg_step_markup` |
+| `app/templates/accounts/connect_tg_user.html` | постоянный якорь + включение, без скрипта | ✓ VERIFIED | 27 строк, 0 коммитов после `bff29f7a` |
+| `app/pages/accounts.py` | четыре обработчика на `respond()`/`respond_field_error()`, `_tg_step_markup`, `_save_tg_account`, константы | ✓ VERIFIED | :225-629 (сдвиг +14 от комментариев 15-09/15-21) |
+| `app/messengers/telegram_user.py` | `user_id`, `_owned`, ветка таймаута, проверки обновления | ✓ VERIFIED | 0 коммитов после `bff29f7a`; единственный потребитель — `accounts.py` |
+| `tests/test_routes/test_tg_user_auth.py` | сквозной путь, POLLING_CASES, гонка, чужой, контроли | ✓ VERIFIED | 0 коммитов после `bff29f7a`; зелён сегодня |
+| `tests/test_messengers/test_telegram_user.py` | настоящий QRLogin, правила владения, гонка | ✓ VERIFIED | 0 коммитов после `bff29f7a`; зелён сегодня |
+
+### Key Link Verification
+
+| From | To | Via | Status |
+|---|---|---|---|
+| форма старта (`hx-target=#tg-connect-step`) | `accounts_connect_tg_user_start_qr` → `start_qr_auth(user_id=user.id)` | `form_wrapper` | ✓ WIRED (сигнатура `start` = дереву обхода) |
+| опросчик внутри фрагмента ожидания | `accounts_connect_tg_user_qr_status` | `hx-post` every 3s, скрытый `session_id` | ✓ WIRED (не на якоре; сигнатура `waiting` = дереву обхода) |
+| qr-status `success` | `complete_auth` → `_save_tg_account` | прямой вызов (:425-427) | ✓ WIRED |
+| шаг пароля | `verify_2fa` → `submit_2fa` → `complete_auth` → `_save_tg_account` | `form_wrapper` | ✓ WIRED (обёртка `connect-step__form` внутри формы, поле осталось в форме) |
+| `respond_field_error` | 422-подмена шага пароля | `_respond_by_transport` (14-02) | ✓ WIRED (правило 422 зелено после рефакторинга) |
+| `QRLogin.wait()` TimeoutError | `_wait_for_qr` → `qr_expired` → опрос → шаг обновления | поле статуса | ✓ WIRED |
+| «Обновить QR-код» | `refresh_qr` → шаг ожидания с опросчиком | `form_wrapper` | ✓ WIRED |
+| `get_user_from_cookie` → `user.id` | `QRAuthState.user_id` → `_owned` | параметр | ✓ WIRED |
+| `POLLING_CASES` ↔ ветки шаблона | правило замыкания | разбор текста шаблона | ✓ WIRED |
+| летопись SC3 ↔ летопись FETCH-02 | перекрёстная ссылка | обе на месте (ROADMAP §Phase 13, REQUIREMENTS:55) | ✓ WIRED |
+
+### Data-Flow Trace (Level 4)
+
+| Artifact | Data | Source | Real data | Status |
+|---|---|---|---|---|
+| шаг ожидания `qr_code` | адрес входа | `start_qr_auth` / `refresh_qr` → `qr_login.url` → `_generate_qr_base64` | да (Telethon) | ✓ FLOWING |
+| выбор шага | `status` | `_qr_sessions[...]`, пишут `_wait_for_qr` / `submit_2fa` | да | ✓ FLOWING |
+| сохранённый аккаунт | `session_string` | `complete_auth` → `client.session.save()` | да | ✓ FLOWING |
+
+### Behavioral Spot-Checks
+
+| Behavior | Command | Result | Status |
+|---|---|---|---|
+| Маршруты мастера + слой сессий + выкладка шага | `uv run pytest tests/test_routes/test_tg_user_auth.py tests/test_messengers/test_telegram_user.py tests/test_templates/test_tg_connect_step_layout.py -q` | 100 passed (55.8 s) | ✓ PASS |
+| Ключевые правила существуют | тот же набор, `--collect-only` | 20 `POLLING_CASES`, 6 `test_control_*`, 3 маршрутных + 4 модульных `foreign`, 2 правила гонки маршрута + 1 модульное, `test_the_complete_route_and_the_get_poll_are_gone`, `test_the_wizard_page_carries_no_client_script` | ✓ PASS |
+| Живая таблица маршрутов | `app.routes` с фильтром `tg_user` | GET страница; POST start-qr / qr-status / refresh-qr / verify-2fa; `complete` нет | ✓ PASS |
+| Шаблон шага до/после 260921-qvt | скретч-рендер семи шагов, сравнение интерактивных атрибутов | `TOTAL DIFFS 0` | ✓ PASS |
+| SC5, база | `git show 344dc789:…/connect_tg_user.html \| grep -c '<form'` | `0` | ✓ PASS |
+| Полная суита | замер оркестратора `just test` на `b0e6c0bd` (код и тесты побайтно равны HEAD) | 4084 passed, 0 failed | ✓ (цитируется) |
+| `tests/test_planning` | замер оркестратора на `970ce74f` и после коммита валидации | 208 passed | ✓ (цитируется) |
+
+Полную суиту я не перезапускал: дерево кода и тестов побайтно то же, что в замере оркестратора.
+
+### Probe Execution
+
+Проб нет: планы фазы не называют `scripts/*/tests/probe-*.sh`. Step 7c: SKIPPED.
+
+### Requirements Coverage
+
+| Requirement | Source Plans | Description | Status | Evidence |
+|---|---|---|---|---|
+| FETCH-02 | 13-01…13-06 (все шесть объявляют) | QR-мастер на HTML-фрагментах: опрос `hx-trigger`, останов ответом без триггера, состояние на сервере, `session_id` скрытым полем, проверка владения (летопись: заведена) | ✓ SATISFIED | SC1–SC5, истины 1–27. `[x]` / `Complete` (`REQUIREMENTS.md:54`, `:157`) поставлен закрытием `ab72d228` после вердикта `passed`, текст требования равен базе |
+
+REQUIREMENTS.md сопоставляет Фазе 13 только FETCH-02 (`:157`, `:504`), поэтому осиротевших требований нет.
+
+### Anti-Patterns Found
+
+| File | Line | Pattern | Severity | Impact |
+|---|---|---|---|---|
+| файлы фазы в `app/` | — | TBD/FIXME/XXX | не найдено | — |
+| файлы фазы в `app/` | — | TODO/HACK/PLACEHOLDER | не найдено | — |
+| `app/static/css/app.css` | 2009 | мёртвое правило `.connect-step[hidden]` (UI-14) | ℹ️ Info | перенесено; файл не в покрытии фазы |
+| ROADMAP §Phase 13, летопись критерия 5; `13-06-SUMMARY.md` «Критерий 5» | — | дрейф референта команды: `git merge-base HEAD master` сегодня даёт `50beab46` (master после влития фазы), а не базу фазы `344dc789`. Команда по-прежнему печатает `0`, но уже потому, что формы сегодняшней страницы живут во включаемом шаблоне, а не потому, что их не было до фазы | ℹ️ Info | на запись SC5 не влияет: замер по закреплённой базе `344dc789` даёт `0`. Если правка нужна, это решение владельца: назвать в летописи хеш базы рядом с командой |
+| `13-SECURITY.md` строка T-13-01 | — | ссылки `accounts.py:395,478,554` — по сегодняшней нумерации `:409, :492, :568` (сдвиг +14 от 15-09/15-21) | ℹ️ Info | номера строк устарели, а суть верна; файл вне правки этого агента |
+
+### Prohibitions
+
+Восемь запретов (`verification: none`) приняты владельцем обходом 2026-09-21: пункт 5, дословное
+`pass` на явный список P1–P8. Сегодня каждый перепроверен на дереве. Вердикты, как и прежде, суждение
+LLM без машинного принуждения, но с машинной опорой там, где она есть.
+
+| # | Запрет | Вердикт 2026-10-07 |
+|---|---|---|
+| P1 | `session_id` только скрытым полем (D-06) | держится: в семи отрисовках `session_id` — только `type="hidden"` в POST-формах, `<script` 0; GET-опрос → 405 |
+| P2 | Ни сценария, ни таймера, ни автоперехода после «Подключено» (D-07, D-12) | держится: ветка `connected` не менялась, на странице и во фрагментах `<script` 0. Подпись `Загрузка...` — чистый CSS по `disabled`, без сценария |
+| P3 | Инвентарные числа ставятся прогоном | держится по летописям: прочитанные мною движения чисел фаз 14–15 (`HX_LOCATION_DESTINATION_CALLS_DECLARED` 77 → 79 → 81) несут запись «ПОСТАВЛЕНО ПРОГОНОМ» с текстом покрасневшего правила; остальные движения поштучно не перечитывались. Это процессное утверждение, и код его показать не может |
+| P4 | Пароль 2FA не эхается | держится: у поля нет `value` в обеих отрисовках `password`; обработчик кладёт в контекст только `password_error`; журнал несёт только `error_type` |
+| P5 | Истёкший код не обновляется сам (D-02) | держится: в `qr_expired` `hx-trigger="every` = 0 |
+| P6 | Чужой ответ неотличим от неизвестного | держится: три правила `_same_answer` зелены |
+| P7 | Правило гейта не удаляется ради зелени | держится: `TOP_LEVEL_BINDING_EXEMPT_TEMPLATES` — именованный ноль; правил мастера в гейтах фаз 14–15 не снято |
+| P8 | Тексты критериев и требования не переписываются | держится: пять строк критериев и текст FETCH-02 побайтно равны базе `344dc789` |
+
+### Human Verification Required
+
+Новых пунктов раунд не заводит. Пять пунктов первого раунда закрыты обходом 2026-09-21: `13-UAT.md`,
+`status: complete`, 5/5 `pass`. Тексты пунктов перенесены дословно в ключ шапки
+`previous_round_closed_items.human_verification`. Первоначальный раздел сохранён в предыдущей
+редакции ниже. Позднейшие правки тех путей, что лежат под пунктами 1–4, измерены выше и наблюдения
+не задевают.
+
+**Владельцу, без влияния на вердикт.** У быстрой задачи 260921-qvt открыт собственный пункт D4: живой
+взгляд на выкладку, `human_judgment: true`, отметки ставит владелец. Он относится к советующим
+записям UI-1/2/3, а не к должным истинам фазы 13, поэтому в `human_verification` этого отчёта не
+поднимается. Снять ли его отдельно, решает владелец.
+
+### Gaps Summary
+
+**Гапов нет.** Цель фазы держится кодом фазы 13, который после закрытия не менялся. Исключение —
+правка выкладки 260921-qvt, и она измерена как не задевающая ни одной истины. Позднейшие фазы
+сдвинули строки `accounts.py` комментариями. Ещё они довели `NOT_YET_CONVERTED_COUNT` до нуля и
+вписали обработчики мастера в новые реестры фазы 15. Ни одного правила мастера они не ослабили, и
+это проверено построчным диффом каждого покрытого файла и зелёным прогоном собственных правил фазы
+(100 passed).
+
+---
+
+_Verified: 2026-10-07T11:08:19Z_
+_Verifier: Claude (gsd-verifier)_
+
+---
+
+# ПРЕДЫДУЩАЯ РЕДАКЦИЯ (первичная верификация 2026-09-21T17:40:19Z + канонизация и два пересчёта отпечатка 2026-09-21) — сохранена без правок
+
+_Ниже прошлая редакция дословно, со всеми разделами, включая написанные оркестратором («Канонизация
+вердикта 2026-09-21: `human_needed` → `passed`», «Пересчёт отпечатка покрытых входов после закрытия
+фазы», «Пересчёт отпечатка после быстрой задачи 260921-qvt — по явному разрешению владельца»). Номера
+строк в ней относятся к дереву 2026-09-21. По сегодняшнему дереву строки `app/pages/accounts.py`
+мастера сдвинуты на +14._
 
 # Phase 13: Мастер подключения Telegram по QR на фрагментах — Verification Report
 
