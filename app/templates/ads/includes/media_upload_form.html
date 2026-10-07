@@ -75,6 +75,13 @@
       комментарии над `_IMAGE_SIGNATURES` в app/services/image_upload.py.
       Значение задано MIME-типами, а не расширениями: `image/jpeg` покрывает
       .jpg, .jpeg и .jfif одним пунктом, и диалог не расходится с тем, что
-      распознаёт сервер. -#}
-  <input class="field__input" type="file" id="file-input" name="{{ upload_field }}" accept="image/jpeg,image/png" multiple hidden>
+      распознаёт сервер.
+
+      ⚠️ ПОЛЕ СКРЫТО ВИЗУАЛЬНО, А НЕ АТРИБУТОМ `hidden`, И ЭТО ПОЧИНКА НАХОДКИ
+      ОБХОДА (`15-UAT.md` У-12, 2026-10-06). Плитка «+ ФАЙЛ» — подпись, а
+      подпись не фокусируема; с `hidden` поле выпадало из обхода Tab, и
+      вложение было не добавить без мыши. Теперь Tab встаёт на само поле
+      (форма лежит сразу за полосой), Enter и пробел открывают диалог силами
+      браузера, обвод рисуется на плитке (`app.css`, `.media-tile--add`). -#}
+  <input class="field__input media-file-input" type="file" id="file-input" name="{{ upload_field }}" accept="image/jpeg,image/png" multiple>
 {% endcall %}

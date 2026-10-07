@@ -647,3 +647,152 @@ async def test_control_a_seed_program_without_the_next_run_reddens(db_session):
         "поведенческая половина ПРИНЯЛА строку с пустым моментом следующего "
         f"запуска — починка, роняющая обход, прошла бы гейт; отказ базы: {refusal!r}"
     )
+
+
+# --- годность посева показывается ТОЛЬКО на схеме тестовой базы (запрет `10-48#3`) -------
+#
+# ИСТОЧНИК ЗАПРЕТА — план 10-48, `must_haves.prohibitions[3]`: «КОМАНДА ПОСЕВА НЕ ЗАПУСКАЕТСЯ
+# ИСПОЛНИТЕЛЕМ НА ЖИВОЙ БАЗЕ: рабочее дерево и прод смотрят в ОДНУ базу … Годность правки
+# показывается ПРАВИЛОМ СУИТЫ на схеме тестовой базы». Правило заведено планом 15-31 (решение
+# владельца Г-1 «Правила сейчас»).
+#
+# ⚠️ ЧТО ПОКРЫТО И ЧТО НЕТ — НАЗВАНО, А НЕ ПОДРАЗУМЕВАЕТСЯ. Правило держит половину «годность
+# показывается правилом суиты на схеме тестовой базы»: поведенческое правило модуля исполняет
+# программу посева над сессией `db_session` суиты, фикстура этой сессии строит движок на базе
+# в памяти, и модуль не читает адреса боевой базы ни одной формой, видимой разбору. ДЕЙСТВИЕ
+# исполнителя «посев не запускался на живой базе» следа в дереве не оставляет и правилом не
+# покрыто: эта часть закрыта построчным разрешением класса `live-environment-safety` (поле
+# `permit_scope_uncovered` строки реестра, план 15-22).
+#
+# ⚠️ ГРАНИЦА РАЗБОРА: чтение адреса, собранное вычислением строки (`getattr(x, "database" +
+# "_url")`), разбору невидимо.
+SCHEMA_RULE_NAME = "test_the_seeded_row_satisfies_todays_schema"
+SUITE_SESSION_FIXTURE = "db_session"
+SEED_LOOP_RUNNER = "rows_built_by_the_seed_loop"
+CONFTEST_PATH = TREE_ROOT / "tests" / "conftest.py"
+TEST_DATABASE_URL_PREFIX = "sqlite+aiosqlite:///:memory:"
+
+LIVE_SETTINGS_MODULE = "app.config"
+LIVE_DATABASE_IMPORTS = frozenset(
+    {"get_settings", "Settings", "settings", "get_engine", "get_session_factory",
+     "load_dotenv", "dotenv_values"}
+)
+LIVE_DATABASE_ATTRIBUTE = "database_url"
+LIVE_DATABASE_VARIABLE = "DATABASE_URL"
+ENGINE_BUILDERS = frozenset({"create_engine", "create_async_engine"})
+ENVIRONMENT_READERS = frozenset({"environ", "getenv"})
+
+
+def live_database_reads(source: str) -> list[str]:
+    """Каждая видимая разбору форма чтения адреса боевой базы: ввоз настроек или сборщиков
+    движка, атрибут и ключ `database_url`, чтение окружения, литерал `DATABASE_URL` в
+    подписке или вызове, постройка собственного движка — с номером строки."""
+    findings: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        line = getattr(node, "lineno", "?")
+        if isinstance(node, ast.Import):
+            findings.extend(
+                f"строка {line}: `import {alias.name}`"
+                for alias in node.names
+                if alias.name == LIVE_SETTINGS_MODULE or alias.name.startswith(LIVE_SETTINGS_MODULE + ".")
+            )
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == LIVE_SETTINGS_MODULE or (
+                module == "app" and any(alias.name == "config" for alias in node.names)
+            ):
+                findings.append(f"строка {line}: ввоз из `{module}`")
+            findings.extend(
+                f"строка {line}: ввоз `{alias.name}`"
+                for alias in node.names
+                if alias.name in LIVE_DATABASE_IMPORTS
+            )
+        elif isinstance(node, ast.Attribute) and node.attr in (LIVE_DATABASE_ATTRIBUTE, *ENVIRONMENT_READERS):
+            findings.append(f"строка {line}: атрибут `.{node.attr}`")
+        elif isinstance(node, ast.Name) and node.id in ENVIRONMENT_READERS | {LIVE_DATABASE_VARIABLE}:
+            findings.append(f"строка {line}: имя `{node.id}`")
+        elif isinstance(node, ast.keyword) and node.arg == LIVE_DATABASE_ATTRIBUTE:
+            findings.append(f"ключ `{node.arg}=`")
+        elif isinstance(node, ast.Subscript):
+            key = node.slice
+            if isinstance(key, ast.Constant) and key.value == LIVE_DATABASE_VARIABLE:
+                findings.append(f"строка {line}: подписка `[{key.value!r}]`")
+        elif isinstance(node, ast.Call):
+            callee = node.func
+            name = callee.attr if isinstance(callee, ast.Attribute) else getattr(callee, "id", "")
+            if name in ENGINE_BUILDERS:
+                findings.append(f"строка {line}: постройка движка `{name}(…)`")
+            findings.extend(
+                f"строка {line}: литерал {argument.value!r} в вызове"
+                for argument in node.args
+                if isinstance(argument, ast.Constant) and argument.value == LIVE_DATABASE_VARIABLE
+            )
+    return findings
+
+
+def _module_function(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    raise AssertionError(f"функции `{name}` в модуле нет — показывать годность нечем")
+
+
+def test_the_seed_validity_is_shown_on_the_test_schema_only():
+    """ГОДНОСТЬ ПОСЕВА ПОКАЗЫВАЕТСЯ ПРАВИЛОМ СУИТЫ НА СХЕМЕ ТЕСТОВОЙ БАЗЫ (запрет `10-48#3`).
+
+    Три половины: (1) поведенческое правило модуля берёт сессию суиты `db_session` и исполняет
+    тело цикла посева; (2) фикстура `db_session` суиты строит движок на базе в памяти, а не по
+    адресу из настроек; (3) модуль не читает адреса боевой базы ни одной формой, видимой разбору.
+    """
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    rule = _module_function(tree, SCHEMA_RULE_NAME)
+    parameters = [argument.arg for argument in rule.args.args]
+    assert SUITE_SESSION_FIXTURE in parameters, (
+        f"`{SCHEMA_RULE_NAME}` не берёт сессию суиты `{SUITE_SESSION_FIXTURE}`: {parameters}"
+    )
+    runs_the_loop = any(
+        isinstance(node, ast.Call) and getattr(node.func, "id", "") == SEED_LOOP_RUNNER
+        for node in ast.walk(rule)
+    )
+    assert runs_the_loop, f"`{SCHEMA_RULE_NAME}` не исполняет тело цикла посева `{SEED_LOOP_RUNNER}`"
+
+    fixture = _module_function(ast.parse(CONFTEST_PATH.read_text(encoding="utf-8")), SUITE_SESSION_FIXTURE)
+    engine_urls = [
+        node.args[0].value
+        for node in ast.walk(fixture)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", "") in ENGINE_BUILDERS
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    ]
+    assert engine_urls and all(
+        str(url).startswith(TEST_DATABASE_URL_PREFIX) for url in engine_urls
+    ), f"фикстура `{SUITE_SESSION_FIXTURE}` строит движок не на базе в памяти: {engine_urls}"
+
+    findings = live_database_reads(Path(__file__).read_text(encoding="utf-8"))
+    assert not findings, (
+        "модуль правила посева читает адрес боевой базы:\n" + "\n".join(findings)
+    )
+
+
+def test_control_every_live_database_read_form_is_named():
+    """Зубы на синтетике: каждая форма чтения адреса боевой базы названа; модуль, работающий с
+    моделями и сессией суиты, — нет."""
+    offending = (
+        "from app.config import settings",
+        "from app import config",
+        "import app.config",
+        "from app.database import get_engine",
+        "url = get_settings().database_url",
+        "import os\nurl = os.environ['DATABASE_URL']",
+        "url = getenv('DATABASE_URL')",
+        "engine = create_async_engine(url)",
+    )
+    for source in offending:
+        assert live_database_reads(source), source
+    clean = (
+        "from app.models.schedule import Schedule\n"
+        "async def test_x(db_session):\n"
+        "    db_session.add(Schedule())\n"
+    )
+    assert live_database_reads(clean) == []

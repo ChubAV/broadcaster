@@ -33,7 +33,8 @@ from httpx import AsyncClient
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import AD_STATUS_PUBLISHED
+from app.constants import AD_STATUS_PUBLISHED, VALID_TIMEZONES
+from app.pages import notices
 from app.pages.common import format_datetime_for_user, templates
 from app.pages.schedules import ID_MAX
 from app.models.ad import Ad
@@ -42,6 +43,12 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
 from tests.conftest import a_future_run_moment
+from tests.test_schedules_out_of_domain_resume import (
+    LEGAL_STORED_FORM,
+    MALFORMED_STORED_FORMS,
+    MALFORMED_STORED_FORMS_BY_LABEL,
+    MalformedStoredForm,
+)
 
 FORM_HEADERS = {"Content-Type": "application/x-www-form-urlencoded"}
 
@@ -3869,4 +3876,1433 @@ async def test_the_transition_branch_sends_no_summary_node(
     )
     assert _oob_node(response.text, AD_SUMMARY_NODE_ID) is None, (
         "узел сводки приехал на ПЕРЕХОДНОЙ ветке, где тела нет вовсе"
+    )
+
+
+# --- Фаза 15, план 15-08: CR-01 на ЧЕТВЁРТОМ входе — правка из редактора -------
+#
+# ПРЕДМЕТ. Три обработчика (страничный тумблер, тумблер JSON-API, частичное
+# обновление JSON-API) починены 2026-09-12: их отказ на испорченной сохранённой
+# строке предписывает человеку «откройте расписание в редакторе объявления и
+# сохраните дни и время заново». Четвёртый вход — ТА САМАЯ правка из редактора,
+# `schedules_update` — на форме `tz-mars-phobos` отвечал пятисоткой (зонд
+# 13-го круга: 5 passed / 1 failed). Предписание вело человека ровно туда, где
+# пути восстановления не было.
+#
+# ⚠️ У ДЕФЕКТА ДВА КОРНЯ, И ЭТА ЧАСТЬ ФАЙЛА ЗАКРЫВАЕТ ПЕРВЫЙ. Откат невалидной
+# зоны шёл на СОХРАНЁННОЕ значение: проверка `tz not in VALID_TIMEZONES`
+# не отсекала невалидную зону строки, а ПОДТВЕРЖДАЛА её, и запись зоны в
+# строку её же и перезаписывала. Починка одним лишь помощником расчёта сняла бы
+# пятисотку и оставила бы строку испорченной МОЛЧА — поэтому правило ниже
+# читает зону ИЗ СУБД после правки, а не довольствуется кодом ответа.
+#
+# ⚠️ ПЕРЕЧЕНЬ ФОРМ ВВЕЗЁН, А НЕ ЗАВЕДЁН. `MALFORMED_STORED_FORMS` живёт в
+# КОРНЕ `tests/` (`tests/test_schedules_out_of_domain_resume.py`), и его поле
+# `measured` есть ЗАМЕРЕННЫЙ текст отказа вычислителя, а не предсказанный.
+# Второй перечень разошёлся бы с первым немедленно. Форма берётся по МЕТКЕ: по
+# индексу правило молча переехало бы на соседнюю форму при любой перестановке.
+#
+# ⚠️ МАРКЕР СЛЕПКА НЕПОЧИНЕННОГО ЗДЕСЬ НЕ СТАВИТСЯ, И ЭТО РЕШЕНИЕ, А НЕ
+# УПУЩЕНИЕ. Маркер, зарегистрированный в `tests/conftest.py::pytest_configure`,
+# объявлен для правил, ОПИСЫВАЮЩИХ непочиненное: «красный при починке предмета
+# означает „перепиши слепок“, а не „откати починку“». Правила ниже утверждают
+# ПОЧИНЕННОЕ поведение и обязаны краснеть при ОТКАТЕ починки — маркер обратил
+# бы их смысл. Имя маркера здесь не набирается нарочно: приёмка плана 15-08
+# считает его вхождения в этом файле и ждёт нуля.
+#
+# ⚠️ ПОРЧА СТРОКИ ИДЁТ ЧЕРЕЗ `db_session`, А НЕ ЗАПРОСОМ: отсечка входов
+# создания и обновления не даёт РОДИТЬ такую строку через API — образец
+# `tests/test_pages/test_schedules_poisoned_row.py`. Миграции данных нет
+# (решение владельца `chubav` 2026-09-23 «только код»): уже испорченную строку
+# человек перезаписывает сам через редактор — и эти правила проверяют, что
+# теперь это работает.
+
+ZONE_FORM_LABEL = "tz-mars-phobos"
+ALL_WEEK = [0, 1, 2, 3, 4, 5, 6]
+# Зона профиля, ЗАВЕДОМО отличная от умолчания `UTC`: при равенстве двух
+# значений правило «откат идёт на профиль» было бы неотличимо от правила
+# «откат идёт на литерал».
+PROFILE_ZONE = "Europe/Moscow"
+
+
+def _malformed_stored_form(label: str) -> MalformedStoredForm:
+    """Форма перечня по МЕТКЕ — с отказом, называющим метку и весь перечень."""
+    assert label in MALFORMED_STORED_FORMS_BY_LABEL, (
+        f"в перечне MALFORMED_STORED_FORMS нет формы {label!r}; метки перечня: "
+        f"{[form.label for form in MALFORMED_STORED_FORMS]}"
+    )
+    return MALFORMED_STORED_FORMS_BY_LABEL[label]
+
+
+class _SeededRow(NamedTuple):
+    schedule_id: int
+    ad_id: int
+    account_id: int
+    group_id: int
+
+
+async def _seed_malformed_stored_row(
+    db: AsyncSession, owner: User, form: MalformedStoredForm, *, is_active: bool = True
+) -> _SeededRow:
+    """Полная ЗАКОННАЯ строка, затем испорченная значениями формы через СУБД.
+
+    ⚠️ АНТИВАКУУМНЫЙ ЗУБ ПОСЕВА: строка перечитывается, и утверждается, что
+    порча ПРИЗЕМЛИЛАСЬ, — иначе правила ниже зеленели бы на неиспорченной строке.
+    """
+    ad = await _seed_ad(db, owner.id, f"Объявление формы {form.label}")
+    account = await _seed_account(db, owner.id)
+    group = await _seed_group(db, owner.id, account.id, name=f"Группа {form.label}")
+    schedule = await _seed_schedule(
+        db,
+        ad.id,
+        account.id,
+        group_ids=[group.id],
+        days=list(ALL_WEEK),
+        times=["10:00"],
+        is_active=is_active,
+    )
+    schedule.days_of_week = list(form.days_of_week)
+    schedule.times_of_day = list(form.times_of_day)
+    schedule.timezone = form.timezone
+    await db.commit()
+
+    landed = await _reload(db, schedule.id)
+    assert (landed.days_of_week, landed.times_of_day, landed.timezone) == (
+        list(form.days_of_week),
+        list(form.times_of_day),
+        form.timezone,
+    ), f"порча формы {form.label} не приземлилась — правило измеряло бы чистую строку"
+    return _SeededRow(schedule.id, ad.id, account.id, group.id)
+
+
+def _editor_save_pairs(
+    row: _SeededRow,
+    *,
+    days: list,
+    times: list,
+    timezone_field: str | None,
+) -> list[tuple[str, str]]:
+    """Поля ровно той формы, что шлёт карточка редактора (`sched_card.html`).
+
+    Скрытое поле зоны карточка печатает ИЗ СОХРАНЁННОЙ строки
+    (`value="{{ s.timezone }}"`), поэтому на испорченной строке человек,
+    исполнивший предписание трёх починенных обработчиков, шлёт ЕЁ ЖЕ
+    невалидную зону. `timezone_field=None` — форма без поля зоны вовсе.
+    """
+    pairs = [
+        ("ad_id", str(row.ad_id)),
+        ("account_id", str(row.account_id)),
+        ("group_ids", str(row.group_id)),
+        *[("days_of_week", str(day)) for day in days],
+        *[("times_of_day", str(moment)) for moment in times],
+        ("return_to", "editor"),
+    ]
+    if timezone_field is not None:
+        pairs.append(("timezone", timezone_field))
+    return pairs
+
+
+async def _save_from_editor_response(client: AsyncClient, row: _SeededRow, pairs):
+    """Ответ правки целиком; исключение, дошедшее до клиента, есть та же пятисотка.
+
+    Общий обработчик `app/main.py` отвечает человеку 500, а транспорт теста
+    вдобавок пробрасывает исключение наружу. Оно переводится в отказ здесь, чтобы
+    отказ правила был УТВЕРЖДЕНИЕМ о коде ответа с названным исключением, а не
+    обрывом теста посреди запроса.
+
+    Ответ целиком (а не один код) нужен с плана 15-16: отказ второй линии
+    утверждается кодом уведомления в адресе перехода.
+    """
+    try:
+        return await client.post(
+            f"/schedules/{row.schedule_id}/edit",
+            content=_form(pairs),
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — перевод обрыва в код ответа
+        pytest.fail(
+            f"правка из редактора ответила пятисоткой: {type(exc).__name__}: {exc}"
+        )
+
+
+async def _save_from_editor(client: AsyncClient, row: _SeededRow, pairs) -> int:
+    """Код ответа правки — см. `_save_from_editor_response`."""
+    return (await _save_from_editor_response(client, row, pairs)).status_code
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_edit_from_the_editor_does_not_answer_500(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 1: правка строки с зоной `Mars/Phobos` из редактора — не пятисотка."""
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    status = await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field=form.timezone
+        ),
+    )
+
+    assert status == 302, (
+        f"форма {form.label}: правка ответила {status}, а не прежним переходом "
+        f"в редактор (замер вычислителя: {form.measured})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_edit_writes_a_valid_zone_back(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 2: после правки зона, ПРОЧИТАННАЯ ИЗ СУБД, принадлежит перечню.
+
+    ⚠️ ЭТО УТВЕРЖДЕНИЕ ОТЛИЧАЕТ ПОЧИНКУ ОТ СНЯТИЯ СИМПТОМА. Без него правило
+    зеленело бы и на починке одним лишь помощником расчёта: пятисотки нет, а
+    строка испорчена по-прежнему — только теперь МОЛЧА.
+    """
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field=form.timezone
+        ),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone in VALID_TIMEZONES, (
+        f"после правки из редактора в строке лежит зона {stored.timezone!r} — "
+        f"путь восстановления не возвращён: невалидная зона записана обратно"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile_zone", "expected"),
+    [(PROFILE_ZONE, PROFILE_ZONE), ("Mars/Phobos", "UTC")],
+    ids=["valid-profile-zone", "invalid-profile-zone"],
+)
+async def test_malformed_stored_zone_without_the_field_falls_back_to_the_checked_zone(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    profile_zone: str,
+    expected: str,
+):
+    """Тест 3: форма без поля зоны — откат на ПРОВЕРЕННОЕ, а не на сохранённое.
+
+    Проверенное значение — зона профиля, если она сама принадлежит перечню, и
+    литерал `UTC` последним рубежом (образец `schedules_create`). Утверждаются
+    ОБА случая: без второго правило не отличило бы проверку профиля от слепого
+    копирования его значения.
+    """
+    owner.timezone = profile_zone
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(row, days=[1], times=["10:00"], timezone_field=None),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == expected, (
+        f"профиль {profile_zone!r}: в строку записана зона {stored.timezone!r}, "
+        f"ожидалась {expected!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_valid_form_zone_is_written_as_is(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 4: валидная зона из формы записывается как есть, профилем не подменяется."""
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field="Asia/Vladivostok"
+        ),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == "Asia/Vladivostok", (
+        f"валидная зона формы подменена на {stored.timezone!r} — починка отняла "
+        f"у поля формы его смысл"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_zone_invalid_form_zone_never_lands(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Тест 5: невалидная зона из формы откатывается на проверенную и в строку не попадает."""
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field="Venus/Maxwell"
+        ),
+    )
+
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == PROFILE_ZONE, (
+        f"невалидная зона формы откатилась на {stored.timezone!r}, а не на "
+        f"проверенную зону профиля {PROFILE_ZONE!r}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("denial", ["foreign-schedule", "foreign-account"])
+async def test_malformed_stored_zone_access_predicate_is_unchanged(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, denial: str
+):
+    """Тест 6: предикат доступа не сдвинут — отказы прежние, зона не тронута.
+
+    Утверждения ответов взяты из действующих правил
+    `tests/test_pages/test_schedule_ownership.py`
+    (`test_update_of_a_foreign_schedule_with_a_foreign_ad_stays_silent`,
+    `test_page_update_rejects_swapping_in_foreign_account`). Сверх них
+    утверждается, что испорченная зона ОСТАЛАСЬ в строке: откат зоны стои́т
+    ПОСЛЕ проверок владения, и отказ по доступу не имеет права писать в строку.
+    """
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    if denial == "foreign-schedule":
+        stranger = await _stranger(db_session)
+        row = await _seed_malformed_stored_row(db_session, stranger, form)
+        pairs = _editor_save_pairs(
+            row, days=[1], times=["10:00"], timezone_field="UTC"
+        )
+    else:
+        row = await _seed_malformed_stored_row(db_session, owner, form)
+        stranger = await _stranger(db_session)
+        foreign_account = await _seed_account(db_session, stranger.id)
+        pairs = _editor_save_pairs(
+            row._replace(account_id=foreign_account.id),
+            days=[1],
+            times=["10:00"],
+            timezone_field="UTC",
+        )
+
+    response = await authed_client.post(
+        f"/schedules/{row.schedule_id}/edit",
+        content=_form(pairs),
+        headers=FORM_HEADERS,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    location = response.headers["location"]
+    if denial == "foreign-schedule":
+        assert location == "/schedules", location
+    else:
+        assert location.startswith(f"/ads/{row.ad_id}/edit"), location
+        assert "notice=schedule_account_gone" in location, location
+    stored = await _reload(db_session, row.schedule_id)
+    assert stored.timezone == form.timezone, (
+        f"{denial}: отказ по доступу записал в строку зону {stored.timezone!r} — "
+        f"откат зоны встал ДО проверок владения"
+    )
+    assert stored.account_id == row.account_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [True, False], ids=["complete", "incomplete"])
+async def test_malformed_stored_zone_next_run_agrees_with_completeness(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, complete: bool
+):
+    """Тест 7: при валидной зоне полное расписание получает момент, неполное — нет.
+
+    Правило прежнее (D-08) и не переписывается: здесь оно лишь повторено на
+    строке, чья сохранённая зона была испорчена.
+    """
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+    pairs = _editor_save_pairs(
+        row, days=[1], times=["10:00"], timezone_field="Europe/Samara"
+    )
+    if not complete:
+        pairs = [pair for pair in pairs if pair[0] != "group_ids"]
+
+    status = await _save_from_editor(authed_client, row, pairs)
+
+    assert status == 302
+    stored = await _reload(db_session, row.schedule_id)
+    if complete:
+        assert stored.is_active is True
+        assert stored.next_run_at is not None, (
+            "полное расписание с валидной зоной сохранено без момента запуска"
+        )
+    else:
+        assert stored.is_active is False
+        assert stored.next_run_at is None
+
+
+# --- Фаза 15, план 15-08, задача 2: ВТОРОЙ корень — вопрос к помощнику ---------
+#
+# ⚠️ ПОСЫЛКА ПЛАНА ПЕРЕЗАМЕРЕНА, И ЗАМЕР РАСХОДИТСЯ С НЕЙ. План называл прочие
+# пять форм перечня неисполнимыми на этом входе «исключением, которое уходит
+# мимо обработчика». Прогон по ВСЕМУ перечню путём карточки редактора
+# (`test_malformed_stored_form_saved_from_the_editor_never_answers_500` ниже)
+# ЗЕЛЁН уже после задачи 1, до всякой правки расчёта: правка ПЕРЕПИСЫВАЕТ дни
+# и времена значениями ФОРМЫ, а страничные санитайзеры (`_clean_ints`,
+# `_clean_times`) отбрасывают негодное ДО расчёта. Пять форм зонда 13-го круга
+# проходили ровно поэтому; шестая, зона, — единственное поле, которое
+# санитайзером не было, — и её закрыла задача 1.
+#
+# ЗНАЧИТ ПОМОЩНИК НА ЭТОМ ВХОДЕ — ВТОРАЯ ЛИНИЯ, И ИЗМЕРЯТЬ ЕГО НАДО, ОТКРЫВ
+# ПЕРВУЮ. Правила «второй линии» ниже подменяют оба санитайзера пропуском
+# СОХРАНЁННЫХ значений формы как есть — ровно та форма отказа первой линии, от
+# которой помощник и защищает (регрессия санитайзера, новое поле формы, новый
+# вход в обход разбора). Решение владельца `chubav` 2026-09-23 «четвёртый вход
+# спрашивает `next_run_or_none`, как три починенных» исполняется, а его
+# необходимость доказывается прогоном, а не пересказом: без помощника пять форм
+# из шести дают на второй линии пятисотку.
+#
+# ⚠️ ИСХОД ОДИН И НА ДВУХ СПОСОБАХ СКАЗАТЬ «НЕТ». Вычислитель сообщает о
+# неисполнимости исключением (четыре формы времени) и значением `None`
+# (`days-str-1`); обработчик получает от помощника ОДИН ответ, и полное
+# включённое расписание без момента ОТКАЗЫВАЕТ: ничего не записано, переход в
+# редактор с кодом `SCHEDULE_VALUES_OUT_OF_DOMAIN` — тем же исходом, что у
+# тумблера и JSON-API (план 15-16, ревью WR-01).
+#
+# ⚠️ ЛЕТОПИСЬ АБЗАЦА (идиома D-30/D-32; прежняя редакция названа, а не стёрта).
+# До плана 15-16 абзац кончался словами «полное включённое расписание без
+# момента сохраняется ВЫКЛЮЧЕННЫМ — пару „включено + нет момента“ схема не
+# примет (`ck_schedules_active_requires_next_run`)». Это описывало дерево плана
+# 15-08 верно, но закрепляло ПРЕДСУЩЕСТВУЮЩУЮ политику второй линии, которая
+# противоречила тумблеру и JSON-API: работающее расписание гасло молча, без
+# единого слова человеку (ревью WR-01). Владелец `chubav` 2026-09-25 (Г-2)
+# выбрал ОТКАЗ, а не «сохранить паузой с уведомлением».
+
+# ⚠️ ЧИСЛО ФОРМ ПЕРЕЧНЯ ОБЪЯВЛЕНО ЛИТЕРАЛОМ, А НЕ ВЫВЕДЕНО (идиома SP-1).
+# Параметризованное правило над ОПУСТЕВШИМ перечнем собрало бы ноль случаев, и
+# его зелень совпала бы посимвольно с зеленью соблюдённого правила.
+MALFORMED_STORED_FORMS_DECLARED = 6
+
+# Форма, которую закрывает ПЕРВЫЙ корень: после задачи 1 записываемая зона
+# валидна на любом пути, и значения этой формы становятся ИСПОЛНИМЫМИ. На
+# второй линии она обязана получить момент, а не `None`.
+REPAIRED_BY_THE_ZONE_ROLLBACK = frozenset({"tz-mars-phobos"})
+
+FORM_IDS = [form.label for form in MALFORMED_STORED_FORMS]
+
+
+def _open_the_first_line(monkeypatch, form: MalformedStoredForm) -> None:
+    """Санитайзеры страницы пропускают СОХРАНЁННЫЕ значения формы как есть.
+
+    Подменяются только дни и времена; группы (`_clean_ints` без границ) идут
+    прежним разбором — их форма перечня не портит.
+    """
+    import app.pages.schedules as page
+
+    original_clean_ints = page._clean_ints
+
+    def _days_verbatim(values, low=None, high=None):
+        if low is None and high is None:
+            return original_clean_ints(values)
+        return list(form.days_of_week)
+
+    monkeypatch.setattr(page, "_clean_ints", _days_verbatim)
+    monkeypatch.setattr(page, "_clean_times", lambda values: list(form.times_of_day))
+
+
+class _RowSnapshot(NamedTuple):
+    """Значения строки, СНЯТЫЕ копией: объект карты идентичности сессии теста —
+    тот же, что у обработчика, и сравнивать его с самим собой было бы вакуумом."""
+
+    ad_id: int
+    account_id: int | None
+    group_ids: list
+    days_of_week: list
+    times_of_day: list
+    timezone: str
+    is_active: bool
+    next_run_at: datetime | None
+
+
+def _snapshot(schedule: Schedule) -> _RowSnapshot:
+    return _RowSnapshot(
+        schedule.ad_id,
+        schedule.account_id,
+        list(schedule.group_ids or []),
+        list(schedule.days_of_week or []),
+        list(schedule.times_of_day or []),
+        schedule.timezone,
+        schedule.is_active,
+        schedule.next_run_at,
+    )
+
+
+class _SecondLineSave(NamedTuple):
+    """Исход правки на второй линии.
+
+    Первые два поля — прежние значения помощника (код ответа и строка из СУБД);
+    ответ целиком и снимок посева добавлены планом 15-16: отказ утверждается
+    кодом уведомления в адресе и НЕТРОНУТОЙ строкой.
+    """
+
+    status: int
+    stored: Schedule
+    response: object
+    seeded: _RowSnapshot
+
+
+# Адрес отказа второй линии — ТОТ ЖЕ, что у тумблера (`schedules_toggle`) и у
+# пары реестра `tests/test_pages/test_htmx_post_pairs.py`: редактор объявления с
+# кодом закрытого реестра, и больше ничего.
+def _refusal_landing(ad_id: int) -> str:
+    return f"/ads/{ad_id}/edit?notice={notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}"
+
+
+async def _save_on_the_second_line(
+    client: AsyncClient,
+    db: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+) -> _SecondLineSave:
+    row = await _seed_malformed_stored_row(db, owner, form)
+    seeded = _snapshot(await _reload(db, row.schedule_id))
+    _open_the_first_line(monkeypatch, form)
+    response = await _save_from_editor_response(
+        client,
+        row,
+        _editor_save_pairs(
+            row,
+            days=list(form.days_of_week),
+            times=list(form.times_of_day),
+            timezone_field=form.timezone,
+        ),
+    )
+    return _SecondLineSave(
+        response.status_code, await _reload(db, row.schedule_id), response, seeded
+    )
+
+
+def test_malformed_stored_forms_list_is_declared_and_not_empty():
+    """Тест 5: перечень не опустел и не разошёлся с объявленным числом."""
+    assert MALFORMED_STORED_FORMS_DECLARED > 0
+    assert len(MALFORMED_STORED_FORMS) == MALFORMED_STORED_FORMS_DECLARED, (
+        f"в перечне {len(MALFORMED_STORED_FORMS)} форм, объявлено "
+        f"{MALFORMED_STORED_FORMS_DECLARED}: {FORM_IDS}"
+    )
+    assert REPAIRED_BY_THE_ZONE_ROLLBACK <= set(FORM_IDS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_malformed_stored_form_saved_from_the_editor_never_answers_500(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    form: MalformedStoredForm,
+):
+    """ЗАМЕР посылки: путь карточки редактора, санитайзеры на месте.
+
+    Карточка шлёт значения сохранённой строки строками формы; правка их
+    переписывает. Сравнение с зондом 13-го круга (5 passed / 1 failed на
+    `tz-mars-phobos`): после задачи 1 — 6 из 6.
+    """
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    status = await _save_from_editor(
+        authed_client,
+        row,
+        _editor_save_pairs(
+            row,
+            days=list(form.days_of_week),
+            times=list(form.times_of_day),
+            timezone_field=form.timezone,
+        ),
+    )
+
+    assert status == 302, f"форма {form.label}: правка ответила {status}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_malformed_stored_form_on_the_second_line_never_answers_500(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+):
+    """Тест 1: сохранённые значения дошли до расчёта — пятисотки нет ни на одной форме."""
+    save = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+    status = save.status
+
+    assert status == 302, (
+        f"форма {form.label} ({form.description}): правка ответила {status}; "
+        f"замер вычислителя: {form.measured}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_malformed_stored_form_on_the_second_line_lands_one_outcome(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+):
+    """Тест 2: неисполнимая форма — ОТКАЗ: код уведомления в адресе, строка нетронута.
+
+    Оба способа сказать «нет» (значение и исключение) пришли обработчику ОДНИМ
+    исходом. Форма, исправленная откатом зоны, обязана получить момент — и
+    никакого кода отказа в адресе.
+
+    ⚠️ ЛЕТОПИСЬ ПРАВИЛА (идиома D-30/D-32; прежние утверждения названы, а не
+    стёрты молча). До плана 15-16 докстринг гласил «неисполнимая форма —
+    `next_run_at` пуст и строка выключена», а ветка неисполнимых форм утверждала
+    `assert stored.next_run_at is None` и `assert stored.is_active is False` и в
+    адрес ответа не смотрела вовсе. Правило закрепляло ПРЕДСУЩЕСТВУЮЩУЮ политику
+    второй линии — молчаливое выключение работающего расписания, — которая
+    противоречила тумблеру и JSON-API (ревью WR-01; память проекта «тесты фазы
+    закрепляют старые дефекты»). Владелец `chubav` выбрал ОТКАЗ 2026-09-25 (Г-2).
+    """
+    save = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+    stored = save.stored
+    location = save.response.headers.get("location", "")
+
+    if form.label in REPAIRED_BY_THE_ZONE_ROLLBACK:
+        assert stored.next_run_at is not None, (
+            f"форма {form.label}: зона исправлена откатом, значения исполнимы, "
+            f"а момента нет — защита проглотила исправный случай"
+        )
+        assert stored.is_active is True
+        assert notices.SCHEDULE_VALUES_OUT_OF_DOMAIN not in location, (
+            f"форма {form.label}: исправный случай получил отказ — {location}"
+        )
+    else:
+        assert save.status == 302, f"форма {form.label}: правка ответила {save.status}"
+        assert f"notice={notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}" in location, (
+            f"форма {form.label}: переход {location!r} не несёт кода отказа — "
+            f"неисполнимое сохранение прошло молча"
+        )
+        assert location == _refusal_landing(save.seeded.ad_id), location
+        assert _snapshot(stored) == save.seeded, (
+            f"форма {form.label}: отказ тронул строку — было {save.seeded}, "
+            f"стало {_snapshot(stored)}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_legal_form_on_the_second_line_gets_a_moment(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Тест 3: обратное направление — ИСПРАВНАЯ строка получает момент.
+
+    Без этого правила тесты 1–2 зеленели бы и у обработчика, выключающего
+    расписание ВСЕГДА, то есть у защиты, проглотившей исправный случай.
+    """
+    save = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, LEGAL_STORED_FORM
+    )
+    status, stored = save.status, save.stored
+
+    assert status == 302
+    assert stored.is_active is True
+    assert stored.next_run_at is not None, (
+        "исправная полная строка сохранена без момента запуска"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_days_str_form_goes_the_same_way(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Тест 4: `days-str-1` — ЕДИНСТВЕННАЯ форма, где вычислитель отвечает `None`.
+
+    Утверждается отдельно, потому что она и до починки шла через значение, а не
+    через исключение: без помощника `None` на полной включённой строке уходил в
+    СУБД парой «включено + нет момента» и ронял фиксацию ограничением.
+
+    Исход — ОТКАЗ (план 15-16, WR-01, решение владельца Г-2): переход в
+    редактор с кодом `SCHEDULE_VALUES_OUT_OF_DOMAIN`, строка в СУБД ровно та,
+    что посеяна, — ВКЛЮЧЁННАЯ и целая.
+
+    ⚠️ ЛЕТОПИСЬ ПРАВИЛА (идиома D-30/D-32; прежние утверждения названы, а не
+    стёрты молча). До плана 15-16 правило после кода ответа утверждало
+    `assert stored.next_run_at is None` и `assert stored.is_active is False` —
+    молчаливое выключение. Оно закрепляло ПРЕДСУЩЕСТВУЮЩУЮ политику второй
+    линии, противоречившую тумблеру и JSON-API (ревью WR-01); владелец выбрал
+    отказ 2026-09-25 (Г-2).
+    """
+    form = _malformed_stored_form("days-str-1")
+    assert form.measured.startswith("None"), form.measured
+
+    save = await _save_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+    location = save.response.headers.get("location", "")
+
+    assert save.status == 302, f"форма {form.label}: правка ответила {save.status}"
+    assert f"notice={notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}" in location, (
+        f"форма {form.label}: переход {location!r} не несёт кода отказа — "
+        f"работающее расписание погашено молча"
+    )
+    assert location == _refusal_landing(save.seeded.ad_id), location
+    assert save.stored.is_active is True, "отказ выключил работающее расписание"
+    assert _snapshot(save.stored) == save.seeded, (
+        f"отказ тронул строку — было {save.seeded}, стало {_snapshot(save.stored)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_days_str_refusal_over_htmx_is_a_location_with_the_notice(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Тест 4а: тот же отказ на транспорте htmx — заголовок перехода с кодом, тела нет.
+
+    Исход уводит с экрана (D-06): слой ответа кладёт тот же адрес, что уезжает
+    перенаправлением без htmx, в `HX-Location`, и фрагмента карточки в теле нет —
+    карточка с выключенным тумблером была бы тем самым молчаливым исходом.
+    """
+    form = _malformed_stored_form("days-str-1")
+
+    save = await _save_on_the_second_line(
+        htmx_client, db_session, owner, monkeypatch, form
+    )
+
+    assert save.status == 204, f"отказ на htmx ответил {save.status}"
+    assert save.response.headers.get("HX-Location") == _refusal_landing(
+        save.seeded.ad_id
+    ), save.response.headers.get("HX-Location")
+    assert save.response.content == b"", "у отказа приехало тело (фрагмент карточки?)"
+    assert _snapshot(save.stored) == save.seeded
+
+
+# --- Фаза 15, план 15-16, задача 2: СОЗДАНИЕ НА ВТОРОЙ ЛИНИИ (WR-02) -----------
+#
+# Основание то же, что у правки в плане 15-08, и применимо к созданию дословно:
+# `_clean_ints` / `_clean_times` отбрасывают негодное ДО расчёта, и помощник
+# `next_run_or_none` держит исход, если первая линия пропустит значение, —
+# регрессией санитайзера или новым полем. До плана 15-16 создание звало
+# вычислитель напрямую: на полной строке без момента пара «включено + нет
+# момента» роняла фиксацию ограничением `ck_schedules_active_requires_next_run`,
+# а исключение вычислителя уходило в общую пятисотку. Исход теперь тот же, что
+# у правки и тумблера: отказ с кодом `SCHEDULE_VALUES_OUT_OF_DOMAIN`, и ни одной
+# новой строки.
+
+
+class _SecondLineCreate(NamedTuple):
+    status: int
+    response: object
+    error: str | None
+    ad_id: int
+    rows_before: int
+    rows_after: list
+
+
+async def _ad_schedules(db: AsyncSession, ad_id: int) -> list[Schedule]:
+    return list(
+        (
+            await db.execute(
+                select(Schedule)
+                .where(Schedule.ad_id == ad_id)
+                .order_by(Schedule.id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def _create_on_the_second_line(
+    client: AsyncClient,
+    db: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+) -> _SecondLineCreate:
+    """Создание ПОЛНОГО расписания со значениями формы, прошедшими мимо санитайзеров.
+
+    Приём тот же, что у `_save_on_the_second_line`: `_open_the_first_line`.
+    Исключение, дошедшее до клиента, переводится в код 500 с названной причиной —
+    отказ правила остаётся УТВЕРЖДЕНИЕМ о коде ответа, а не обрывом теста; сессия
+    теста та же, что у обработчика, и после обрыва её надо откатить, чтобы
+    сосчитать строки.
+    """
+    ad = await _seed_ad(db, owner.id, f"Объявление создания {form.label}")
+    account = await _seed_account(db, owner.id)
+    group = await _seed_group(db, owner.id, account.id, name=f"Группа {form.label}")
+    # Идентификаторы снимаются ДО запроса: после пятисотки сессия теста (та же,
+    # что у обработчика) стоит в упавшей транзакции, и чтение атрибута модели
+    # ушло бы в ленивую загрузку на ней.
+    ad_id, account_id, group_id = ad.id, account.id, group.id
+    rows_before = len(await _ad_schedules(db, ad_id))
+    _open_the_first_line(monkeypatch, form)
+    pairs = [
+        ("ad_id", str(ad_id)),
+        ("account_id", str(account_id)),
+        ("group_ids", str(group_id)),
+        *[("days_of_week", str(day)) for day in form.days_of_week],
+        *[("times_of_day", str(moment)) for moment in form.times_of_day],
+        ("timezone", form.timezone),
+        ("return_to", "editor"),
+    ]
+    response, error = None, None
+    try:
+        response = await client.post(
+            "/schedules/new",
+            content=_form(pairs),
+            headers=FORM_HEADERS,
+            follow_redirects=False,
+        )
+    except Exception as exc:  # noqa: BLE001 — перевод обрыва в код ответа
+        error = f"{type(exc).__name__}: {exc}"
+    status = 500 if response is None else response.status_code
+    if status >= 500:
+        # Общий обработчик `app/main.py` мог превратить исключение в ответ 500,
+        # и тогда причины у клиента нет. Упавшая фиксация оставляет её в сессии:
+        # первый же запрос на ней называет исходное исключение дословно.
+        if error is None:
+            try:
+                await db.execute(select(func.count()).select_from(Schedule))
+            except Exception as exc:  # noqa: BLE001 — снятие причины пятисотки
+                error = f"{type(exc).__name__}: {exc}"
+            else:
+                error = f"ответ 500: {response.text[:300]}"
+        await db.rollback()
+    return _SecondLineCreate(
+        status, response, error, ad_id, rows_before, await _ad_schedules(db, ad_id)
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_on_the_second_line_refuses_the_days_str_form_with_the_notice(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+):
+    """Создание полного расписания формы `days-str-1` — отказ с кодом, строк не прибавилось.
+
+    `days-str-1` — форма, где вычислитель отвечает `None`, а не исключением:
+    до плана 15-16 создание писало пару «включено + нет момента», и фиксация
+    падала ограничением `ck_schedules_active_requires_next_run`.
+    """
+    form = _malformed_stored_form("days-str-1")
+
+    made = await _create_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+
+    assert made.status == 302, (
+        f"форма {form.label}: создание ответило {made.status}: {made.error}"
+    )
+    location = made.response.headers.get("location", "")
+    assert location == _refusal_landing(made.ad_id), (
+        f"форма {form.label}: переход {location!r} — не отказ с кодом "
+        f"{notices.SCHEDULE_VALUES_OUT_OF_DOMAIN}"
+    )
+    assert len(made.rows_after) == made.rows_before, (
+        f"форма {form.label}: неисполнимое расписание создано "
+        f"(было {made.rows_before} строк, стало {len(made.rows_after)})"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", MALFORMED_STORED_FORMS, ids=FORM_IDS)
+async def test_create_on_the_second_line_never_answers_500(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+    form: MalformedStoredForm,
+):
+    """Создание на второй линии: 302 на каждой форме; неисполнимые — отказ и ноль строк.
+
+    Форма, исправленная откатом зоны (зона профиля вместо невалидной зоны
+    поля), создаётся ВКЛЮЧЁННОЙ с моментом и без кода отказа — защита не имеет
+    права проглотить исправный случай.
+    """
+    made = await _create_on_the_second_line(
+        authed_client, db_session, owner, monkeypatch, form
+    )
+
+    assert made.status == 302, (
+        f"форма {form.label} ({form.description}): создание ответило "
+        f"{made.status}: {made.error}; замер вычислителя: {form.measured}"
+    )
+    location = made.response.headers.get("location", "")
+    if form.label in REPAIRED_BY_THE_ZONE_ROLLBACK:
+        assert len(made.rows_after) == made.rows_before + 1, made.rows_after
+        created = made.rows_after[-1]
+        assert created.is_active is True
+        assert created.next_run_at is not None, (
+            f"форма {form.label}: исправимая форма создана без момента"
+        )
+        assert notices.SCHEDULE_VALUES_OUT_OF_DOMAIN not in location, location
+    else:
+        assert location == _refusal_landing(made.ad_id), (
+            f"форма {form.label}: переход {location!r} — не отказ с кодом"
+        )
+        assert len(made.rows_after) == made.rows_before, (
+            f"форма {form.label}: неисполнимое расписание создано"
+        )
+
+
+def test_malformed_stored_values_are_asked_through_the_helper_in_the_editor_save():
+    """Ни один обработчик страниц расписаний не зовёт вычислитель напрямую.
+
+    Правка (`schedules_update`) и создание (`schedules_create`) спрашивают
+    `next_run_or_none`; прямых вызовов `compute_next_run_at` в модуле
+    `app/pages/schedules.py` НОЛЬ. По ДЕРЕВУ, а не по строке: комментарии с
+    именем вычислителя в модуле остаются, и счёт вхождений текста различал бы их
+    с вызовом не лучше грепа. Вызов учитывается и по голому имени, и по
+    атрибуту (`schedule_service.compute_next_run_at(...)`): иначе ввоз модуля
+    вместо имени обходил бы правило.
+
+    ⚠️ ЛЕТОПИСЬ ПРАВИЛА (идиома D-30/D-32; прежняя формулировка процитирована,
+    а не стёрта). До плана 15-16 докстринг гласил: «`schedules_update`
+    спрашивает `next_run_or_none` и не зовёт вычислитель сам. … Прямой вызов
+    вычислителя в модуле обязан остаться РОВНО ОДИН — в `schedules_create`, где
+    входы отсекаются на создании», — а последнее утверждение требовало
+    `len(module_direct) == 1 and create_direct == ["compute_next_run_at"]`.
+    Правило тем самым ЗАКРЕПЛЯЛО предсуществующую асимметрию: прямой вызов в
+    создании старше фазы, а основание второй линии, данное правке планом 15-08,
+    применимо к созданию дословно (ревью WR-02; память проекта «тесты фазы
+    закрепляют старые дефекты»). Правило ослаблено до «ни один обработчик не
+    зовёт вычислитель напрямую» по решению владельца `chubav` 2026-09-25 (Г-2).
+    """
+    import ast
+
+    source = Path(__file__).resolve().parents[2].joinpath(
+        "app", "pages", "schedules.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    def calls_in(node: ast.AST) -> list[tuple[str, int]]:
+        found = []
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            if isinstance(sub.func, ast.Name):
+                found.append((sub.func.id, sub.lineno))
+            elif isinstance(sub.func, ast.Attribute):
+                found.append((sub.func.attr, sub.lineno))
+        return found
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    module_direct = [
+        (name, line) for name, line in calls_in(tree) if name == "compute_next_run_at"
+    ]
+
+    for handler in ("schedules_update", "schedules_create"):
+        handler_calls = [name for name, _ in calls_in(functions[handler])]
+        assert "next_run_or_none" in handler_calls, (
+            f"{handler} не спрашивает next_run_or_none"
+        )
+    assert module_direct == [], (
+        f"прямые вызовы вычислителя в app/pages/schedules.py: {module_direct} — "
+        f"обработчик страниц обязан спрашивать next_run_or_none"
+    )
+
+
+# --- Фаза 15, план 15-23, задача 1: ЗОНА ПРОФИЛЯ — ОДНИМ ПОМОЩНИКОМ ----------
+#
+# ПРЕДМЕТ (UI-ревью Фазы 15, пункт 4; решение владельца `chubav` Г-2 2026-09-25).
+# После плана 15-08 правка строки с нераспознанной сохранённой зоной переводит
+# её на «зону профиля или UTC» — молча. Задача 2 плана говорит человеку об этом
+# ДО сохранения строкой на карточке, и строка обязана назвать ТУ ЖЕ зону, в
+# которую сохранение строку переведёт. Два вычисления одного решения — одно в
+# обработчике, другое в карточке — разошлись бы молча: подсказка обещала бы
+# одно, сохранение делало бы другое. Поэтому решение вынесено в ОДИН помощник
+# `app/services/schedule_rules.py::profile_timezone_or_utc`, и правила ниже
+# утверждают его поведение и то, что создание и правка спрашивают именно его.
+#
+# ⚠️ ЧЕТЫРЕ ВЫРАЖЕНИЯ `tz_name = … else "UTC"` СПИСКОВ ЗДЕСЬ НЕ СЧИТАЮТСЯ, И
+# ЭТО ГРАНИЦА ПЛАНА, А НЕ УПУЩЕНИЕ. Они выбирают зону ПОКАЗА времени в сводном
+# списке и в строке списка после тумблера, а не зону, в которую уходит
+# СОХРАНЯЕМОЕ расписание; план 15-23 выносит ровно два выражения сохранения.
+
+PROFILE_TIMEZONE_HELPER = "profile_timezone_or_utc"
+
+
+@pytest.mark.parametrize(
+    ("profile_zone", "expected"),
+    [(PROFILE_ZONE, PROFILE_ZONE), ("Mars/Phobos", "UTC"), (None, "UTC")],
+    ids=["valid-profile-zone", "unrecognised-profile-zone", "no-profile-zone"],
+)
+def test_profile_timezone_or_utc_answers_the_profile_zone_or_utc(profile_zone, expected):
+    """Помощник: зона профиля, если она в перечне, иначе литерал `UTC`.
+
+    Помощник берётся атрибутом модуля, а не ввозом в шапке: отсутствие имени
+    обязано быть УТВЕРЖДЕНИЕМ правила, а не обрывом сборки всего модуля тестов.
+    """
+    from app.services import schedule_rules
+
+    helper = getattr(schedule_rules, PROFILE_TIMEZONE_HELPER, None)
+    assert helper is not None, (
+        f"в app/services/schedule_rules.py нет помощника {PROFILE_TIMEZONE_HELPER}"
+    )
+    assert helper(profile_zone) == expected
+
+
+def _profile_zone_literal_expressions(node) -> list[int]:
+    """Строки выражений вида `X if X in VALID_TIMEZONES else "UTC"` внутри узла."""
+    import ast
+
+    found = []
+    for sub in ast.walk(node):
+        if not isinstance(sub, ast.IfExp):
+            continue
+        test = sub.test
+        if not (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.In)
+            and isinstance(test.comparators[0], ast.Name)
+            and test.comparators[0].id == "VALID_TIMEZONES"
+        ):
+            continue
+        if isinstance(sub.orelse, ast.Constant) and sub.orelse.value == "UTC":
+            found.append(sub.lineno)
+    return found
+
+
+def _called_names(node) -> list[str]:
+    import ast
+
+    names = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            if isinstance(sub.func, ast.Name):
+                names.append(sub.func.id)
+            elif isinstance(sub.func, ast.Attribute):
+                names.append(sub.func.attr)
+    return names
+
+
+def test_profile_timezone_is_decided_by_one_helper_in_create_and_update():
+    """Создание и правка берут зону профиля у помощника, а не своим выражением.
+
+    По ДЕРЕВУ, а не по строке: комментарии над обоими местами цитируют прежнее
+    выражение, и греп различал бы цитату с кодом не лучше, чем никак.
+    """
+    import ast
+
+    source = Path(__file__).resolve().parents[2].joinpath(
+        "app", "pages", "schedules.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    for handler in ("schedules_create", "schedules_update"):
+        assert handler in functions, f"в app/pages/schedules.py нет {handler}"
+        literal = _profile_zone_literal_expressions(functions[handler])
+        assert literal == [], (
+            f"{handler} решает зону профиля своим выражением на строках {literal} — "
+            f"решение обязано жить в {PROFILE_TIMEZONE_HELPER}"
+        )
+        assert PROFILE_TIMEZONE_HELPER in _called_names(functions[handler]), (
+            f"{handler} не спрашивает {PROFILE_TIMEZONE_HELPER}"
+        )
+
+
+def test_control_profile_timezone_literal_expression_is_found_in_a_synthetic_source():
+    """Контроль от вакуума: сыщик выражения видит его и не видит соседнюю форму.
+
+    `stored_tz = … else profile_tz` правки — откат на ПРОВЕРЕННУЮ зону, а не
+    решение о зоне профиля, и сыщик обязан её пропускать: иначе правило выше
+    требовало бы снести откат плана 15-08.
+    """
+    import ast
+
+    synthetic = ast.parse(
+        "def f(user, schedule, profile_tz):\n"
+        "    a = user.timezone if user.timezone in VALID_TIMEZONES else \"UTC\"\n"
+        "    b = schedule.timezone if schedule.timezone in VALID_TIMEZONES else profile_tz\n"
+    )
+    assert _profile_zone_literal_expressions(synthetic) == [2]
+
+
+# --- Фаза 15, план 15-23, задача 2: ПОДСКАЗКА О НЕРАСПОЗНАННОЙ ЗОНЕ -----------
+#
+# ПРЕДМЕТ (UI-ревью Фазы 15, пункт 4). Сохранение из редактора переводит строку
+# с нераспознанной зоной на зону профиля (или UTC) — цифры времени остаются те
+# же, но значат другой пояс. Человек узнаёт об этом ДО сохранения строкой на
+# карточке. Плашки успеха НЕТ и нового кода уведомления НЕТ: D-03 Фазы 10
+# запрещает плашку на успешном сохранении (запреты `10-01#3`, `10-24#2`,
+# `10-31#1`), поэтому слова стоят на карточке до действия, а не после него.
+#
+# ⚠️ ДВА ПУТИ ОТРИСОВКИ, И ПРОВЕРЯЮТСЯ ОБА: страница редактора
+# (`ads/form.html`) и фрагмент карточки (`ads/partials/sched_card_response.html`,
+# здесь — ответ htmx тумблера паузы, который зону строки НЕ переписывает).
+# Подсказка живёт в развёрнутом теле рядом с подписью «Время по …» — там же,
+# где кнопка сохранения, поэтому карточка в правилах развёрнута.
+
+HINT_PREFIX = "не распознан — при сохранении расписание перейдёт на"
+
+
+def _zone_hint(stored_zone_markup: str, fallback: str) -> str:
+    """Строка подсказки так, как её печатает разметка (зона уже экранирована)."""
+    return f"Часовой пояс «{stored_zone_markup}» {HINT_PREFIX} {fallback}"
+
+
+async def _expanded_editor_page(client: AsyncClient, ad_id: int, schedule_id: int) -> str:
+    page = await client.get(f"/ads/{ad_id}/edit?sched={schedule_id}")
+    assert page.status_code == 200, f"редактор ответил {page.status_code}"
+    assert f'id="sched-{schedule_id}"' in page.text, "карточки расписания на странице нет"
+    assert "СОХРАНИТЬ РАСПИСАНИЕ" in page.text, (
+        "карточка не развёрнута — подсказка живёт в развёрнутом теле, правило "
+        "измеряло бы свёрнутую карточку"
+    )
+    return page.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("profile_zone", "fallback"),
+    [(PROFILE_ZONE, PROFILE_ZONE), ("Mars/Phobos", "UTC")],
+    ids=["valid-profile-zone", "unrecognised-profile-zone"],
+)
+async def test_unrecognised_zone_hint_on_the_editor_page_names_the_fallback_zone(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    profile_zone: str,
+    fallback: str,
+):
+    """Страница редактора: карточка с зоной `Mars/Phobos` называет зону перехода.
+
+    Оба случая профиля: без второго правило не отличило бы проверенную зону
+    профиля от слепо напечатанного значения профиля.
+    """
+    owner.timezone = profile_zone
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    html = await _expanded_editor_page(authed_client, row.ad_id, row.schedule_id)
+
+    assert _zone_hint(form.timezone, fallback) in html, (
+        f"профиль {profile_zone!r}: на карточке нет подсказки о переходе на {fallback}"
+    )
+    assert f"Время по {form.timezone}" in html, "подпись «Время по …» пропала"
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_zone_hint_on_the_card_fragment(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Фрагмент карточки (ответ htmx тумблера паузы) несёт ту же подсказку.
+
+    Пауза зону строки не переписывает, поэтому фрагмент отрисован по ТОЙ ЖЕ
+    нераспознанной зоне, что и страница, — а вот путь отрисовки другой.
+    """
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    response = await htmx_client.post(
+        f"/schedules/{row.schedule_id}/toggle",
+        content=_form([("return_to", "editor"), ("keep_sched", str(row.schedule_id))]),
+        headers=FORM_HEADERS,
+    )
+
+    assert response.status_code == 200, f"тумблер ответил {response.status_code}"
+    assert "<!DOCTYPE" not in response.text, "приехал документ, а не фрагмент карточки"
+    assert f'id="sched-{row.schedule_id}"' in response.text
+    assert (await _reload(db_session, row.schedule_id)).timezone == form.timezone, (
+        "тумблер переписал зону — фрагмент измерял бы исправленную строку"
+    )
+    assert _zone_hint(form.timezone, PROFILE_ZONE) in response.text, (
+        "во фрагменте карточки нет подсказки о нераспознанной зоне"
+    )
+    assert f"Время по {form.timezone}" in response.text
+
+
+@pytest.mark.asyncio
+async def test_recognised_zone_card_carries_no_hint_on_either_path(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Карточка с верной зоной подсказки не несёт; подпись «Время по …» на месте."""
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, group_ids=[group.id])
+    schedule_id, ad_id = schedule.id, ad.id
+
+    # Страница — запросом БЕЗ признака htmx: заголовок сбрасывается на время
+    # запроса, потому что `htmx_client` — тот же объект клиента.
+    page = await authed_client.get(
+        f"/ads/{ad_id}/edit?sched={schedule_id}", headers={"HX-Request": "false"}
+    )
+    fragment = await htmx_client.post(
+        f"/schedules/{schedule_id}/toggle",
+        content=_form([("return_to", "editor"), ("keep_sched", str(schedule_id))]),
+        headers=FORM_HEADERS,
+    )
+
+    for label, body in (("страница", page.text), ("фрагмент", fragment.text)):
+        assert "СОХРАНИТЬ РАСПИСАНИЕ" in body, f"{label}: карточка не развёрнута"
+        assert HINT_PREFIX not in body, f"{label}: подсказка на карточке с верной зоной"
+        assert "Время по UTC" in body, f"{label}: подпись «Время по …» пропала"
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_zone_hint_is_gone_after_the_save_and_no_notice_is_shown(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """После сохранения зона переписана, подсказки нет, уведомления нет.
+
+    Исход сохранения не тронут (план 15-08): 302 в редактор без кода
+    уведомления, в строке — зона профиля. Плашки успеха нет — D-03 Фазы 10.
+    """
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    form = _malformed_stored_form(ZONE_FORM_LABEL)
+    row = await _seed_malformed_stored_row(db_session, owner, form)
+
+    save = await _save_from_editor_response(
+        authed_client,
+        row,
+        _editor_save_pairs(row, days=[1], times=["10:00"], timezone_field=form.timezone),
+    )
+
+    assert save.status_code == 302, f"сохранение ответило {save.status_code}"
+    location = save.headers.get("location", "")
+    assert "notice" not in location, f"у сохранения появилось уведомление: {location}"
+    assert (await _reload(db_session, row.schedule_id)).timezone == PROFILE_ZONE
+
+    html = await _expanded_editor_page(authed_client, row.ad_id, row.schedule_id)
+    assert HINT_PREFIX not in html, "подсказка осталась на карточке после сохранения"
+    assert f"Время по {PROFILE_ZONE}" in html
+
+
+@pytest.mark.asyncio
+async def test_unrecognised_zone_hint_escapes_the_stored_zone(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """T-15-87: зона из СУБД печатается в подсказку только автоэкранированием."""
+    owner.timezone = PROFILE_ZONE
+    await db_session.commit()
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    group = await _seed_group(db_session, owner.id, account.id)
+    schedule = await _seed_schedule(db_session, ad.id, account.id, group_ids=[group.id])
+    schedule.timezone = "<script>alert(1)</script>"
+    await db_session.commit()
+
+    html = await _expanded_editor_page(authed_client, ad.id, schedule.id)
+
+    assert "<script>alert(1)</script>" not in html, "зона строки вышла разметкой"
+    assert _zone_hint("&lt;script&gt;alert(1)&lt;/script&gt;", PROFILE_ZONE) in html, (
+        "подсказки с экранированной зоной на карточке нет"
+    )
+
+
+# Вызов макроса карточки: имя макроса и открывающая скобка. Определение макроса
+# (`{% macro sched_card(`) сюда не попадает — перед именем там стоит `macro `.
+_CARD_CALL_RE = re.compile(r"(?<!macro )\bsched_card(?:_article)?\(")
+
+
+def _card_calls(source: str) -> list[str]:
+    """Тексты аргументов каждого вызова макроса карточки — до парной скобки."""
+    calls = []
+    for match in _CARD_CALL_RE.finditer(source):
+        depth, index = 1, match.end()
+        while depth and index < len(source):
+            depth += {"(": 1, ")": -1}.get(source[index], 0)
+            index += 1
+        calls.append(source[match.end() : index - 1])
+    return calls
+
+
+def test_every_card_call_passes_the_hint_fallback_zone():
+    """Каждый вызов макроса карточки передаёт `fallback_timezone` явно.
+
+    Jinja не отказывает на пропущенном параметре макроса — она подставляет
+    пустое значение, и подсказка молча назвала бы «перейдёт на » без зоны.
+    Поэтому передача утверждается по исходникам ВСЕХ шаблонов, а не одного
+    отрисованного пути. Антивакуум: вызовов больше нуля, и среди них оба пути
+    отрисовки, названных планом.
+    """
+    templates_root = Path(__file__).resolve().parents[2] / "app" / "templates"
+    calls_by_file = {}
+    for path in sorted(templates_root.rglob("*.html")):
+        calls = _card_calls(path.read_text(encoding="utf-8"))
+        if calls:
+            calls_by_file[path.relative_to(templates_root).as_posix()] = calls
+
+    assert {"ads/form.html", "ads/partials/sched_card_response.html"} <= set(
+        calls_by_file
+    ), f"вызовы макроса карточки найдены не на обоих путях: {sorted(calls_by_file)}"
+    missing = [
+        (name, call.strip()[:80])
+        for name, calls in calls_by_file.items()
+        for call in calls
+        if "fallback_timezone=" not in call
+    ]
+    assert missing == [], f"вызовы карточки без fallback_timezone: {missing}"
+
+
+def test_hint_fallback_zone_comes_from_the_same_helper_as_the_save():
+    """Контекст редактора берёт зону подсказки у `profile_timezone_or_utc`.
+
+    Тот же помощник спрашивают создание и правка (задача 1 плана), поэтому
+    подсказка и сохранение называют одну зону по построению (T-15-88).
+    """
+    import ast
+
+    source = Path(__file__).resolve().parents[2].joinpath(
+        "app", "pages", "ads.py"
+    ).read_text(encoding="utf-8")
+    functions = {
+        node.name: node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "_editor_context" in functions, "в app/pages/ads.py нет _editor_context"
+    assert PROFILE_TIMEZONE_HELPER in _called_names(functions["_editor_context"]), (
+        f"_editor_context не спрашивает {PROFILE_TIMEZONE_HELPER} — зона подсказки "
+        f"вычислена не тем, чем зона сохранения"
+    )
+
+
+# =============================================================================
+# План 15-09, задача 2: ОСТАТОК ХОЛОСТОГО ПУТИ РЕДАКТОРА ВВЕДЁН В ПЕРЕЧЕНЬ.
+# =============================================================================
+#
+# Докстринг `test_repeated_editor_delete_is_harmless` выше говорит, что остаток
+# «наследуется перечнем `OOB_TARGET_EXCEPTIONS` с назначенной Фазой 15». До
+# плана 15-09 записей узлов этого экрана в перечне не было ни одной: остаток был
+# объявлен только прозой. Записи заведены (`sched-{schedule_id}`,
+# `sched-del-{schedule_id}` в tests/test_pages/test_account_groups.py), и правило
+# ниже есть ТРЕТЬЕ, поведенческое утверждение идиомы SP-1 для них: образец —
+# `test_the_idle_delete_path_really_ships_the_recorded_nodes` экрана групп.
+#
+# Импорт перечня и помощников — внутри правила, а не в шапке модуля: строка в
+# шапке сдвинула бы номера строк, которые цитируют записи о других планах.
+#
+# ⚠️ ОСНОВАНИЕ ПРЕДЫДУЩЕЙ ФРАЗЫ УСТАРЕЛО (отметка плана 15-16, 2026-09-25,
+# ревью IN-04; идиома D-30/D-32 — фраза названа, а не стёрта). Оно перестало
+# быть верным с планом 15-08: тот уже поставил в шапку модуля шестистрочный
+# ввоз перечня форм (`from tests.test_schedules_out_of_domain_resume import …`),
+# и номера строк ниже шапки сдвинулись тогда же. Настоящее основание — ввоз
+# обслуживает ОДНО правило и потому живёт рядом с ним, а не в шапке всего
+# модуля.
+
+
+@pytest.mark.asyncio
+async def test_the_idle_editor_delete_path_really_ships_the_recorded_oob_nodes(
+    authed_client: AsyncClient,
+    htmx_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+):
+    """Холостой путь удаления из редактора шлёт РОВНО записанные узлы без цели.
+
+    Правило краснеет в обе стороны: записанный узел перестал приезжать (запись
+    устарела) и приехал незаписанный (отступление завелось без решения).
+
+    ⚠️ ПЕРВЫЕ УТВЕРЖДЕНИЯ — О ДОСТИГНУТОЙ ФРАГМЕНТНОЙ ВЕТКЕ И О ДОКУМЕНТЕ. Ветка
+    перехода отвечает пустым телом, а разность пустого множества с любым пуста:
+    без этих проверок сверка ниже была бы зелена по построению.
+    """
+    from tests.test_pages.test_account_groups import (
+        OOB_TARGET_EXCEPTIONS,
+        SCHEDULE_DELETE_RESPONSE,
+        _document_ids,
+        _oob_targets,
+    )
+
+    ad = await _seed_ad(db_session, owner.id)
+    account = await _seed_account(db_session, owner.id)
+    gone = await _seed_schedule(db_session, ad.id, account.id)
+    survivor = await _seed_schedule(db_session, ad.id, account.id)
+    body = _editor_delete_body(ad)
+
+    first = await htmx_client.post(
+        f"/schedules/{gone.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    assert first.status_code == 200, f"первое удаление ответило {first.status_code}"
+
+    # Документ ПОСЛЕ первого удаления: карточки удалённой строки в нём уже нет,
+    # а карточка выжившей есть — значит, редактор печатает идентификаторы
+    # карточек и разность ниже меряет не пустоту.
+    page = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    on_screen = _document_ids(page)
+    assert f"sched-{survivor.id}" in on_screen, (
+        "редактор не напечатал карточку выжившего расписания — документ не тот"
+    )
+    assert f"sched-{gone.id}" not in on_screen
+
+    idle = await htmx_client.post(
+        f"/schedules/{gone.id}/delete", content=body, headers=FORM_HEADERS
+    )
+    assert idle.status_code == 200, (
+        f"фрагментная ветка не достигнута: ответ {idle.status_code} вместо 200"
+    )
+    assert "<!DOCTYPE" not in idle.text, "в теле приехал целый документ"
+
+    targets, seen = _oob_targets(idle.text)
+    assert seen > 0, "холостой ответ не несёт ни одного внеполосного узла"
+    assert len(targets) == seen, "у части внеполосных узлов цель определить не удалось"
+
+    unresolved = targets - on_screen
+    recorded = {
+        key.format(schedule_id=gone.id)
+        for key, record in OOB_TARGET_EXCEPTIONS.items()
+        if record.where_printed == SCHEDULE_DELETE_RESPONSE
+    }
+
+    stale = recorded - unresolved
+    assert not stale, f"ЗАПИСАННЫЙ УЗЕЛ ПЕРЕСТАЛ ПРИЕЗЖАТЬ — ЗАПИСЬ УСТАРЕЛА: {sorted(stale)}"
+    unrecorded = unresolved - recorded
+    assert not unrecorded, (
+        f"ПРИЕХАЛ УЗЕЛ БЕЗ ЦЕЛИ, КОТОРОГО В ПЕРЕЧНЕ НЕТ: {sorted(unrecorded)}. Каждый "
+        f"такой узел есть строка `htmx:oobErrorNoTarget` в консоли на запрос."
     )

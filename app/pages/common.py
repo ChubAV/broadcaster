@@ -18,6 +18,7 @@ from app.constants import (
     AD_STATUS_DRAFT,
     AD_STATUS_PUBLISHED,
     MESSENGER_LABELS,
+    VALID_TIMEZONES,
 )
 from app.models.ad import Ad
 from app.models.messenger_account import MessengerAccount
@@ -270,6 +271,15 @@ templates.env.globals["asset_version"] = _compute_asset_version()
 # Конструирования Settings здесь не происходит: значения — модульные константы.
 templates.env.globals["AD_STATUS_DRAFT"] = AD_STATUS_DRAFT
 templates.env.globals["AD_STATUS_PUBLISHED"] = AD_STATUS_PUBLISHED
+
+# Перечень допустимых зон доезжает до шаблонов тем же способом и по той же
+# причине (план 15-23): карточка расписания — импортированный макрос, контекста
+# вызывающего она не видит, а вопрос «распознана ли сохранённая зона» она
+# обязана задать ТОМУ ЖЕ перечню, что и обработчик сохранения. Литерал зон в
+# шаблоне был бы вторым источником, и подсказка «часовой пояс не распознан»
+# расходилась бы с проверкой сохранения молча. Значение — замороженная копия
+# модульной константы: шаблон не имеет права её менять.
+templates.env.globals["VALID_TIMEZONES"] = frozenset(VALID_TIMEZONES)
 
 # Приставка ключа миниатюр доезжает до шаблона тем же способом и по той же
 # причине, что и константы выше: значение — модульная константа, конструирования

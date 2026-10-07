@@ -105,6 +105,27 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+# Инвентарь мест письма (план 15-02) и помощники разбора тега (гейты разметки) —
+# для реестра решений `hx-push-url` (план 15-11, группа в конце файла). Ввоз
+# ациклический: ни один из двух модулей не ввозит этот файл в своей шапке.
+from tests.test_templates.test_form_inventory import (
+    ALPINE_TRIGGER_PLACES,
+    FORM_WRAPPER_MACRO,
+    WRITE_FORM_PLACES,
+    PlaceKind,
+    _write_form_places,
+)
+from tests.test_templates.test_form_inventory import (
+    _template_sources as _inventory_template_sources,
+)
+from tests.test_templates.test_htmx_markup_gates import (
+    ACTION_VALUE,
+    HX_POST_VALUE,
+    _attr_value,
+    _split_top_level,
+    _strip_comments,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Каталог, в котором живут страничные обработчики, и каталог всего приложения.
@@ -414,6 +435,10 @@ NOT_YET_CONVERTED: frozenset[str] = frozenset(
 #   GET-входы (порции, статусы, блоки опроса), поэтому расширение области обхода
 #   есть решение, которое веха обязана ПРИНЯТЬ, а не унаследовать молча. Здесь
 #   оно не принимается: план 09-15 гейт не расширяет — он его границу НАЗЫВАЕТ.
+#   ⚠️ Фаза 15, план 15-11 (`DEF-09-04`): граница по-прежнему НЕ расширена —
+#   расширение принадлежит вехе, — и у неё появился СТОРОЖ:
+#   `test_push_url_g2_universe_holds_only_changing_methods` краснеет, если во
+#   вселенную G-2 придёт GET-маршрут (группа запрета D-13 в конце файла).
 #
 #   34 → 33, Фаза 10, план 10-01. ИСТОЧНИК ДВИЖЕНИЯ: УДАЛЕНИЕ РАСПИСАНИЯ ИЗ
 #   РЕДАКТОРА ОБЪЯВЛЕНИЯ переведено на слой ответа — единственный ФРАГМЕНТНЫЙ
@@ -6487,4 +6512,1331 @@ def test_control_a_computed_full_load_address_reddens_the_literal_rule(tmp_path)
     )
     assert any("login_submit" in complaint for complaint in complaints), (
         f"жалоба не называет МЕСТА расхождения: {complaints}"
+    )
+
+
+# =============================================================================
+# РЕЕСТР РЕШЕНИЙ `hx-push-url`: КОНВЕНЦИЯ ТРЁХ СЛУЧАЕВ ПО КАЖДОМУ МЕСТУ ПИСЬМА
+# (Фаза 15, план 15-11, QUAL-04, D-11…D-13)
+#
+# ⚠️ ДОМ ОПРЕДЕЛЁН ОСНОВАНИЕМ, А НЕ УДОБСТВОМ. Основание записано в этом же
+# файле у перечня изъятий смещённого курсора и цитируется дословно: «Предмет
+# изъятия — ФОРМА ОТВЕТА обработчика (в какую ветку слоя ответа он уходит), а
+# это ровно предмет этого файла. Разметка здесь — УЛИКА, по которой изъятие
+# доказывается». У решения о `hx-push-url` предмет тот же: может ли разметка
+# формы нести атрибут, решает ветка, которой уходит её обработчик. Разметка —
+# улика, поэтому реестр живёт здесь, а не в пакете разметочных гейтов, и
+# нового файла под него не заведено.
+#
+# ПРАВИЛО КЛАССИФИКАЦИИ. Оно объявлено здесь, выше первого числа группы, и
+# каждое число ниже снято счётом именно по нему:
+#
+#   • обработчик, имеющий ПЕРЕХОДНУЮ ВЕТКУ, → СЛУЧАЙ ТРЕТИЙ: решение об адресе
+#     принадлежит ветке, то есть СЕРВЕРУ, и адрес приходит заголовком ответа;
+#   • обработчик в `FRAGMENT_RESPONSE_HANDLERS` БЕЗ переходной ветки →
+#     СЛУЧАЙ ВТОРОЙ: меняются только данные, атрибута нет, и это ЗАПИСАННОЕ
+#     решение, а не пробел;
+#   • обработчик, меняющий ЧТО показано и не дуальный (ни фрагмента, ни
+#     перехода — адрес самого запроса и есть адрес нового экрана), → СЛУЧАЙ
+#     ПЕРВЫЙ: `hx-push-url="true"`.
+#
+#   ⚠️ ДУАЛЬНОСТЬ ПОБЕЖДАЕТ НАЛИЧИЕ ФРАГМЕНТА. `hx-push-url` — СТАТИЧЕСКИЙ
+#   атрибут разметки и по ветке ответа не меняется. ДУАЛЬНЫЙ обработчик стои́т
+#   в `FRAGMENT_RESPONSE_HANDLERS` И имеет переходную ветку. Его форма с
+#   `hx-push-url="true"` сменила бы адрес и во фрагментной ветке, где
+#   показанное не менялось. Обоснования перечня фрагментных называют
+#   дуальность прямо у четырёх обработчиков: `schedules_delete` («на
+#   ПОСЛЕДНЕМ расписании тот же обработчик уходит в ветку перехода»),
+#   `schedules_update` («Исходы вне экрана … тот же обработчик отдаёт
+#   переходом»), `schedules_create` («„БЫЛО НОЛЬ“ ТОТ ЖЕ ОБРАБОТЧИК ОТДАЁТ
+#   ПЕРЕХОДОМ») и `ads_update` («„Объявления нет“ тот же обработчик отдаёт
+#   переходом на список»). Классификация по признаку «есть ли у обработчика
+#   фрагмент хоть в какой-то ветке» отнесла бы все четыре ко второму случаю.
+#
+# ПЕРЕХОДНАЯ ВЕТКА — ЭТО ВЫЗОВ, А НЕ ИМЯ. Признак снимается разбором `ast` по
+# вызовам выходов слоя ответа в теле обработчика (`TRANSITION_BRANCH_CALLS`):
+#   • главный выход `respond(...)` БЕЗ именованного аргумента фрагмента: 204 и
+#     заголовок `HX-Location` (слой собирает его в `location_response`);
+#   • `redirect_internal(...)`: полная загрузка локального адреса
+#     (`HX-Redirect`);
+#   • `redirect_external(...)`: уход на внешний адрес оплаты (`HX-Redirect`).
+# Греп посчитал бы имя и в комментарии, и в докстринге, и в закомментированном
+# коде (свойство 2 шапки модуля).
+#
+#   ⚠️ ПОПРАВКА К ПЛАНУ, НАЗВАННАЯ, А НЕ СГЛАЖЕННАЯ (идиома D-30/D-32). План
+#   15-11 назвал признаком переходной ветки вызовы `respond_screen` и
+#   `location_response`. Замер 2026-09-24 опроверг оба имени. `location_response`
+#   не зовёт НИ ОДИН POST-обработчик — его зовёт сам главный выход, когда
+#   фрагмента нет. `respond_screen` этот же файл засчитывает ПЕРЕДАЧЕЙ
+#   ФРАГМЕНТА (`_hands_a_fragment`, план 14-02: «обработчик, отвечающий им,
+#   числился бы ветвью перехода, которой он не является»). Признак по букве
+#   плана дал бы восемь дуальных, все из модуля авторизации, и ни одного из
+#   четырёх названных выше. Признак по вызову даёт девятнадцать, и все четыре
+#   среди них.
+#
+# У ТРЕТЬЕГО СЛУЧАЯ В ДЕРЕВЕ ТРИ ЗАГОЛОВКА, А НЕ ОДИН. Адрес, известный только
+# серверу, приезжает одним из них (замер вендоренного htmx 2.0.10):
+#   • `HX-Location`: htmx сам ставит `push` в `"true"`, делает GET и
+#     ВОЗВРАЩАЕТСЯ до обработки истории исходного запроса. Адрес нового экрана
+#     уходит в историю из заголовка, а атрибут формы до этой ветки не доходит;
+#   • `HX-Redirect`: полная загрузка, адрес меняет сам браузер;
+#   • `HX-Push-Url`: адрес без перехода. Отправитель в `app/` один (ниже).
+#
+# КЛЮЧ РЕЕСТРА — `путь/файл.py::имя_функции`, та же форма, что у
+# `POST_HANDLERS` и `FRAGMENT_RESPONSE_HANDLERS`. Основание записано у перечня
+# фрагментных и цитируется: «два счёта считают подмножества ОДНОГО множества
+# POST-обработчиков, и разная форма ключа сделала бы правило согласованности
+# ниже неисполнимым». Реестр — третий счёт того же множества.
+#
+# МЕСТО ПИСЬМА ПОЛУЧАЕТ РЕШЕНИЕ СВОЕГО ОБРАБОТЧИКА. 49 мест письма взяты из
+# инвентаря плана 15-02 (`tests/test_templates/test_form_inventory.py`, ключ
+# `путь#порядковый_номер`). Адрес места (`action`, у сырой формы вдобавок
+# `hx-post`) разрешается в POST-обработчик по СКЕЛЕТУ маршрута: каждое
+# выражение шаблонизатора и каждый параметр пути заменяются на `{}`. Форма
+# панели подтверждения (`components/modal.html#0`) получает адрес ПАРАМЕТРОМ,
+# поэтому её обработчики — это обработчики 18 форм-триггеров, которые её
+# открывают (связку доказал план 15-10). Порядок строк реестра не несущий:
+# ключи сравниваются МНОЖЕСТВАМИ. Два места с посимвольно одинаковым тегом
+# различаются порядковым номером и никогда не схлопываются в один ключ.
+#
+# ⚠️ НОЛЬ АТРИБУТА ЕСТЬ РЕШЕНИЕ, А НЕ ПРОБЕЛ (D-12). `hx-push-url` в
+# `app/templates/` — ноль. Порознь это утверждение не отличает «решение
+# принято: атрибута нет» от «решение не принималось». Поэтому ноль
+# утверждается В ПАРЕ с полнотой реестра, одним правилом
+# (`test_push_url_zero_in_markup_is_a_decision_not_a_gap`).
+#
+# ЛЕТОПИСЬ ЧИСЛА ОТПРАВИТЕЛЕЙ `HX-Push-Url`: 2 → 1 (Фаза 15, план 15-11).
+# `15-CONTEXT.md` D-12 говорит: «`HX-Push-Url` в `app/` — 2». ⚠️ ПРОГНОЗ НЕ
+# БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи он был верным, и правится
+# не он, а числа, которые он пережил. Сеть «вхождения имени заголовка»
+# посчитала вместе с отправителем прозу. Новое число снято РАЗБОРОМ `ast` ПО
+# ПРИСВАИВАНИЯМ, а не грепом по имени заголовка: это обход `_header_writes`
+# гейта G-13 с отбором по имени. Реальный отправитель ОДИН —
+# `app/pages/ads.py:783`, присваивание
+# `response.headers["HX-Push-Url"] = f"/ads/{saved.id}/edit"` в сборщике
+# `_fragment`. Упоминаний в ПРОЗЕ два: докстринг `app/pages/htmx.py:694` и
+# комментарий шаблона `app/templates/ads/includes/autosave_response.html:146`.
+# Запись контекста НЕ ПРАВИТСЯ. Третий случай заголовком `HX-Push-Url`
+# применён в дереве ОДИН раз, и от этой базы считается работа фазы.
+# Формула оговорки та же, что у летописи 47 → 49 плана 15-02, одной строкой:
+# «ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ».
+#
+# ⚠️ ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ (D-16). Зелёный цвет означает: по каждому
+# POST-обработчику и каждому месту письма решение ЗАПИСАНО, принадлежит
+# объявленному перечню случаев и совпадает с выведенным из формы ответа. Он НЕ
+# означает, что решение ВЕРНО: верность конвенции есть человеческое суждение,
+# и спорные формы (формы дуальных обработчиков) вынесены владельцу
+# (`15-FORM-DECISIONS.md`, задача 3 плана). Он НЕ означает, что адрес
+# действительно меняется в браузере и что Back и F5 работают на переведённых
+# экранах: это пункт 7 ручного обхода, закрытый Фазой 11 и по D-15
+# принимаемый её записью. Чего группа НЕ ВИДИТ:
+#   1. переход за псевдонимом импорта выхода (`respond as reply`) — граница
+#      унаследована у `_calls_response_layer`;
+#   2. фрагмент, поданный распаковкой `**kwargs`: такой вызов засчитан
+#      переходом. Ошибка уходит в третий случай, а не в «атрибута нет»;
+#   3. ветку ошибки поля (`respond_field_error`, 422 той же формой): в
+#      дуальность она не засчитывается, потому что перечень фрагментных её не
+#      несёт (решение плана 14-02).
+# =============================================================================
+
+PUSH_URL_CASE_ONE = "первый"
+PUSH_URL_CASE_TWO = "второй"
+PUSH_URL_CASE_THREE = "третий"
+
+# Перечень случаев конвенции — закрытый, с текстом каждого случая.
+PUSH_URL_CASES: dict[str, str] = {
+    PUSH_URL_CASE_ONE: 'действие меняет ЧТО показано — `hx-push-url="true"` на форме',
+    PUSH_URL_CASE_TWO: "действие меняет только данные — атрибута нет, и это записанное решение",
+    PUSH_URL_CASE_THREE: "адрес известен только серверу — приезжает заголовком ответа",
+}
+
+# ЛЕТОПИСЬ: 3, Фаза 15, план 15-11 — число случаев конвенции QUAL-04.
+PUSH_URL_CASES_DECLARED = 3
+
+# Выходы слоя ответа, вызов которых есть ПЕРЕХОДНАЯ ВЕТКА. Главный выход
+# засчитывается только БЕЗ аргумента фрагмента (`FRAGMENT_ARGUMENT`).
+TRANSITION_BRANCH_CALLS = frozenset({RESPONSE_CALL, "redirect_internal", "redirect_external"})
+
+# Обработчиков с переходной веткой. ЛЕТОПИСЬ: 31, Фаза 15, план 15-11 — снято
+# замером: 19 дуальных плюс 12 обработчиков, отвечающих только переходом.
+TRANSITION_BRANCH_HANDLERS_DECLARED = 31
+
+# ДУАЛЬНЫЕ обработчики: стоят в `FRAGMENT_RESPONSE_HANDLERS` и имеют переходную
+# ветку. Перечень снят замером и сверяется с обходом (`_dual_branch_handlers`).
+DUAL_BRANCH_HANDLERS: frozenset[str] = frozenset(
+    {
+        "app/pages/account_groups.py::account_groups_delete",
+        "app/pages/account_groups.py::account_groups_toggle",
+        "app/pages/accounts.py::accounts_connect_max_start",
+        "app/pages/accounts.py::accounts_connect_tg_user_qr_status",
+        "app/pages/accounts.py::accounts_connect_tg_user_refresh_qr",
+        "app/pages/accounts.py::accounts_connect_tg_user_start_qr",
+        "app/pages/accounts.py::accounts_connect_tg_user_verify_2fa",
+        "app/pages/admin.py::admin_toggle_block",
+        "app/pages/admin.py::admin_toggle_free_access",
+        "app/pages/ads.py::ads_create",
+        "app/pages/ads.py::ads_images_upload",
+        "app/pages/ads.py::ads_update",
+        "app/pages/auth.py::forgot_password_reset",
+        "app/pages/auth.py::register_complete",
+        "app/pages/profile.py::profile_post",
+        "app/pages/schedules.py::schedules_create",
+        "app/pages/schedules.py::schedules_delete",
+        "app/pages/schedules.py::schedules_toggle",
+        "app/pages/schedules.py::schedules_update",
+    }
+)
+
+# ЛЕТОПИСЬ: 19, Фаза 15, план 15-11 — снято замером по признаку вызова.
+DUAL_BRANCH_HANDLERS_DECLARED = 19
+
+# Четыре обработчика, чью дуальность обоснования перечня фрагментных называют
+# прямо. Они обязаны быть среди дуальных: без этого признак переходной ветки
+# снова мог бы ослепнуть на главном выходе без фрагмента.
+DUAL_BRANCH_NAMED_BY_THE_FRAGMENT_RATIONALES: frozenset[str] = frozenset(
+    {
+        "app/pages/ads.py::ads_update",
+        "app/pages/schedules.py::schedules_create",
+        "app/pages/schedules.py::schedules_delete",
+        "app/pages/schedules.py::schedules_update",
+    }
+)
+
+# Мест письма, чей обработчик (хотя бы один) дуален, — спорных мест.
+# ЛЕТОПИСЬ: 20, Фаза 15, план 15-11 — снято замером; панель подтверждения
+# входит сюда, потому что два её обработчика (удаление группы и удаление
+# расписания) дуальны.
+DUAL_BRANCH_PLACES_DECLARED = 20
+
+# Решение владельца по спорным формам (задача 3 плана 15-11). Пока владелец не
+# ответил, КАЖДАЯ дуальная форма помечена ожидающей, а реестр ниже несёт
+# случай, выведенный машинно, НЕПОДТВЕРЖДЁННЫМ. Подписывать спорные формы за
+# владельца ЗАПРЕЩЕНО (D-11, `15-CONTEXT.md` §Specifics).
+DUAL_BRANCH_AWAITS_THE_OWNER = "ожидает решения владельца"
+DUAL_BRANCH_OWNER_OPTIONS = frozenset({"case-three-server-header", "case-two-no-attribute"})
+DUAL_BRANCH_OWNER_DECISIONS: dict[str, str] = {
+    key: DUAL_BRANCH_AWAITS_THE_OWNER for key in DUAL_BRANCH_HANDLERS
+}
+
+# ЛЕТОПИСЬ: ответ владельца, Фаза 15, план 15-11, задача 3. Привязка выше —
+# состояние ДО ответа, она не стёрта и не переписана: переопределение ниже
+# встаёт рядом, как и всякая летопись этого файла.
+# - кто решил: владелец (`chubav`);
+# - когда: 2026-09-24;
+# - канал: AskUserQuestion в `/gsd-execute-phase 15`;
+# - ветвь: ОДНА на все 19 дуальных обработчиков (все 20 спорных мест) —
+#   `case-three-server-header`;
+# - основание: выбран вариант, предъявленный как «Сервер решает — адрес
+#   меняется только когда сервер уводит человека на другой экран. Так это
+#   работает сегодня, и нового кода не нужно»; своих слов обоснования
+#   владелец не дал. Формулировка варианта — оркестратора, не владельца.
+# Шесть экранов кода авторизации (случай второй, у шага нет своего адреса)
+# владельцу НЕ выносились и этим ответом НЕ решены: они не дуальны и в этот
+# перечень не входят.
+DUAL_BRANCH_OWNER_DECIDED_BY = "владелец (`chubav`)"
+DUAL_BRANCH_OWNER_DECIDED_ON = "2026-09-24"
+DUAL_BRANCH_OWNER_CHANNEL = "AskUserQuestion в /gsd-execute-phase 15"
+DUAL_BRANCH_OWNER_DECISIONS = {key: "case-three-server-header" for key in DUAL_BRANCH_HANDLERS}
+
+# Ветвь владельца → случай реестра, который она означает. Правило ниже
+# сверяет их: ответ владельца, расходящийся со случаем в `PUSH_URL_DECISIONS`,
+# означал бы, что реестр записывает не то, что решено.
+DUAL_BRANCH_OWNER_OPTION_CASE: dict[str, str] = {
+    "case-three-server-header": PUSH_URL_CASE_THREE,
+    "case-two-no-attribute": PUSH_URL_CASE_TWO,
+}
+
+_DUAL = "ДУАЛЕН: "
+_ONLY_TRANSITION = "только переходом: "
+_NO_OWN_ADDRESS = (
+    "фрагмент без переходной ветки: экран шага меняется в постоянном якоре, но "
+    "собственного адреса у шага нет — подписанный токен живёт только скрытым "
+    "полем (D-08 Фазы 14), а адрес POST-действия GET-страницей не является"
+)
+
+# РЕЕСТР: ключ обработчика → (случай, причина). Причина выведена из формы
+# ответа и называет ветки поимённо.
+PUSH_URL_DECISIONS: dict[str, tuple[str, str]] = {
+    "app/pages/account_groups.py::account_groups_delete": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "строка уходит с остающегося экрана фрагментом; «нет сессии» — "
+        "переход на /login, исходы вне экрана — переход на экран групп",
+    ),
+    "app/pages/account_groups.py::account_groups_toggle": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "строка подменяется на остающемся экране; «нет сессии» — переход "
+        "на /login, исходы вне экрана — переход на экран групп",
+    ),
+    "app/pages/accounts.py::accounts_connect_max_start": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "шаг мастера MAX подменяется в якоре; «нет сессии» — переход на /login",
+    ),
+    "app/pages/accounts.py::accounts_connect_tg_user_qr_status": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "шаг мастера Telegram подменяется в якоре; «нет сессии» — переход на /login",
+    ),
+    "app/pages/accounts.py::accounts_connect_tg_user_refresh_qr": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "шаг мастера Telegram подменяется в якоре; «нет сессии» — переход на /login",
+    ),
+    "app/pages/accounts.py::accounts_connect_tg_user_start_qr": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "шаг мастера Telegram подменяется в якоре; «нет сессии» — переход на /login",
+    ),
+    "app/pages/accounts.py::accounts_connect_tg_user_verify_2fa": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "шаг мастера Telegram подменяется в якоре; «нет сессии» — переход на /login",
+    ),
+    "app/pages/accounts.py::accounts_delete": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на список аккаунтов",
+    ),
+    "app/pages/accounts.py::accounts_retry_sync": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на экран групп аккаунта",
+    ),
+    "app/pages/accounts.py::accounts_sync_groups": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на экран групп аккаунта",
+    ),
+    "app/pages/admin.py::admin_delete_user": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на список пользователей",
+    ),
+    "app/pages/admin.py::admin_drop_task": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на очередь с кодом исхода",
+    ),
+    "app/pages/admin.py::admin_impersonate": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` в кабинет под чужой личностью",
+    ),
+    "app/pages/admin.py::admin_restart_worker": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на экран воркеров с кодом исхода",
+    ),
+    "app/pages/admin.py::admin_toggle_block": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "блок действий подменяется в карточке пользователя; «пользователя "
+        "нет» и «себя» — переход на список или карточку",
+    ),
+    "app/pages/admin.py::admin_toggle_free_access": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "блок действий подменяется в карточке пользователя; «пользователя "
+        "нет» и «строки подписки нет» — переход",
+    ),
+    "app/pages/ads.py::ads_create": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "ответ автосохранения — внеполосные узлы, и адрес созданного "
+        "объявления приезжает заголовком `HX-Push-Url` (единственный отправитель); "
+        "«нет сессии» — переход на /login",
+    ),
+    "app/pages/ads.py::ads_delete": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на список объявлений",
+    ),
+    "app/pages/ads.py::ads_images_upload": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "полоса вложений подменяется на всех исходах работы; «нет сессии» "
+        "— переход на /login",
+    ),
+    "app/pages/ads.py::ads_update": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "ответ автосохранения тем же сборщиком; «нет сессии» и «объявления "
+        "нет» — переход",
+    ),
+    "app/pages/auth.py::forgot_password_resend_code": (PUSH_URL_CASE_TWO, _NO_OWN_ADDRESS),
+    "app/pages/auth.py::forgot_password_reset": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "возврат к началу — смена экрана в якоре; успех — полная загрузка "
+        "экрана входа (`HX-Redirect`)",
+    ),
+    "app/pages/auth.py::forgot_password_send_code": (PUSH_URL_CASE_TWO, _NO_OWN_ADDRESS),
+    "app/pages/auth.py::forgot_password_verify": (PUSH_URL_CASE_TWO, _NO_OWN_ADDRESS),
+    "app/pages/auth.py::login_submit": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "успех — полная загрузка кабинета (`HX-Redirect`); "
+        "ошибка — 422 той же формой у поля",
+    ),
+    "app/pages/auth.py::register_complete": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "возврат к началу — смена экрана в якоре; успех — полная загрузка "
+        "кабинета (`HX-Redirect`)",
+    ),
+    "app/pages/auth.py::register_resend_code": (PUSH_URL_CASE_TWO, _NO_OWN_ADDRESS),
+    "app/pages/auth.py::register_send_code": (PUSH_URL_CASE_TWO, _NO_OWN_ADDRESS),
+    "app/pages/auth.py::register_verify": (PUSH_URL_CASE_TWO, _NO_OWN_ADDRESS),
+    "app/pages/auth.py::stop_impersonation": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "`HX-Location` в админку или кабинет, полная загрузка "
+        "экрана входа (`HX-Redirect`)",
+    ),
+    "app/pages/billing.py::subscribe_to_plan": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "отказы — `HX-Location` на тарифы, успех — уход на "
+        "страницу оплаты (`HX-Redirect`)",
+    ),
+    "app/pages/history.py::history_retry": (
+        PUSH_URL_CASE_THREE,
+        _ONLY_TRANSITION + "204 и `HX-Location` на историю с кодом исхода",
+    ),
+    "app/pages/profile.py::profile_post": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "карточка настроек подменяется; «нет сессии» — переход на /login",
+    ),
+    "app/pages/schedules.py::schedules_create": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "карточка вставляется в `#sched-list`; «было ноль» и исходы вне "
+        "экрана — переход",
+    ),
+    "app/pages/schedules.py::schedules_delete": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "карточка уходит из редактора; последнее расписание — переход",
+    ),
+    "app/pages/schedules.py::schedules_toggle": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "карточка подменяет саму себя; «расписания нет» и сводный список — переход",
+    ),
+    "app/pages/schedules.py::schedules_update": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "карточка подменяет саму себя; исходы вне экрана — переход",
+    ),
+}
+
+# ЛЕТОПИСЬ: 37, Фаза 15, план 15-11 — по строке на каждый POST-обработчик.
+PUSH_URL_DECISIONS_DECLARED = 37
+
+# Имя заголовка третьего случая и атрибут первого.
+HX_PUSH_URL_HEADER = "HX-Push-Url"
+HX_PUSH_URL_ATTR = re.compile(r"(?<![-\w])(?:data-)?hx-push-url(?![-\w])", re.IGNORECASE)
+
+# Реальных отправителей заголовка — по разбору присваиваний (летопись 2 → 1 выше).
+HX_PUSH_URL_SENDERS = 1
+HX_PUSH_URL_SENDER_SITES: frozenset[str] = frozenset({"app/pages/ads.py::_fragment"})
+
+# Упоминаний имени заголовка в ПРОЗЕ: докстринг слоя ответа и комментарий шаблона.
+HX_PUSH_URL_PROSE_MENTIONS = 2
+
+# Мест атрибута в разметке — ноль, и это решение (утверждается в паре с реестром).
+HX_PUSH_URL_MARKUP_PLACES = 0
+
+# Форма панели подтверждения: адрес приходит параметром от 18 форм-триггеров.
+PANEL_FORM_PLACE = "components/modal.html#0"
+
+# Слот скелета адреса: выражение шаблонизатора и параметр пути.
+SKELETON_SLOT = "{}"
+_ROUTE_PARAMETER = re.compile(r"\{[^{}]*\}")
+_JINJA_OUTPUT = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+
+
+def _is_transition_call(node: ast.AST) -> bool:
+    """Есть ли этот узел вызов выхода слоя ответа, уходящий ВЕТКОЙ ПЕРЕХОДА.
+
+    Главный выход — только без аргумента фрагмента; два выхода полной загрузки —
+    всегда. Узнаются голая форма вызова и вызов через модуль.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        name = func.id
+    elif isinstance(func, ast.Attribute):
+        name = func.attr
+    else:
+        return False
+    if name not in TRANSITION_BRANCH_CALLS:
+        return False
+    if name == RESPONSE_CALL:
+        return not any(keyword.arg == FRAGMENT_ARGUMENT for keyword in node.keywords)
+    return True
+
+
+def _post_function_nodes(sources: dict[str, str]):
+    """Пары «ключ обработчика — узел функции» по каждому POST-объявлению."""
+    for module, text in sources.items():
+        tree = _parse(module, text)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if any(_declares_post(decorator) for decorator in node.decorator_list):
+                yield f"{module}::{node.name}", node
+
+
+def _transition_branch_handlers(sources: dict[str, str]) -> set[str]:
+    """POST-обработчики, в теле которых есть ВЫЗОВ ветки перехода — по дереву."""
+    found: set[str] = set()
+    for key, function in _post_function_nodes(sources):
+        if any(_is_transition_call(node) for node in ast.walk(function)):
+            found.add(key)
+    return found
+
+
+def _dual_branch_handlers(
+    sources: dict[str, str], *, fragment: frozenset[str] = FRAGMENT_RESPONSE_HANDLERS
+) -> set[str]:
+    """ДУАЛЬНЫЕ: стоят в перечне фрагментных И имеют переходную ветку.
+
+    Перечень фрагментных ЧИТАЕТСЯ, а не выводится заново: он уже машинный и
+    стоит под своим правилом согласованности.
+    """
+    return _transition_branch_handlers(sources) & set(fragment)
+
+
+def _push_url_case_for(key: str, *, transition: set[str], fragment: frozenset[str]) -> str:
+    """Случай конвенции, выведенный из ФОРМЫ ОТВЕТА обработчика.
+
+    Порядок проверок и есть правило классификации из шапки группы: переходная
+    ветка решает первой, поэтому дуальный обработчик уходит в третий случай и
+    наличием фрагмента во второй не переводится.
+    """
+    if key in transition:
+        return PUSH_URL_CASE_THREE
+    if key in fragment:
+        return PUSH_URL_CASE_TWO
+    return PUSH_URL_CASE_ONE
+
+
+def _misfiled_dual_handlers(
+    decisions: dict[str, tuple[str, str]], dual: set[str]
+) -> dict[str, str]:
+    """Дуальные обработчики, чья строка реестра несёт НЕ третий случай."""
+    return {
+        key: decisions[key][0]
+        for key in sorted(dual)
+        if key in decisions and decisions[key][0] != PUSH_URL_CASE_THREE
+    }
+
+
+# ⚠️ ЛЕТОПИСЬ: до плана 15-18 здесь жил второй разборщик `_split_top_level` с
+# тем же именем и иным поведением — он делил по многосимвольному разделителю, но
+# не знал вложенности `{}`; одноимённый разборщик гейта разметки знал `{}`, но
+# на многосимвольном разделителе не делил ничего (ревью IN-03). Сведён к одному
+# в `tests/test_templates/test_htmx_markup_gates.py` и ввозится оттуда (блок
+# ввоза в шапке): два разборщика одного предмета расходятся молча.
+
+
+def _jinja_expression_skeletons(expression: str) -> tuple[str, ...]:
+    """Скелеты адреса, которые даёт выражение шаблонизатора.
+
+    Конкатенация `~`: строковые литералы — как есть, прочее — слот. Условное
+    выражение `X if C else Y` даёт ДВА скелета: форма уходит на один из двух
+    адресов, и оба обработчика её принимают.
+    """
+    expression = expression.strip()
+    branches = _split_top_level(expression, " else ")
+    if len(branches) == 2:
+        head = _split_top_level(branches[0], " if ")
+        if len(head) == 2:
+            return _jinja_expression_skeletons(head[0]) + _jinja_expression_skeletons(
+                branches[1]
+            )
+    pieces: list[str] = []
+    for piece in _split_top_level(expression, "~"):
+        piece = piece.strip()
+        if len(piece) >= 2 and piece[0] == piece[-1] and piece[0] in "'\"":
+            pieces.append(piece[1:-1])
+        else:
+            pieces.append(SKELETON_SLOT)
+    return ("".join(pieces),)
+
+
+def _call_argument(text: str, name: str) -> str | None:
+    """Текст именованного аргумента вызова макроса — до запятой или скобки верхнего уровня."""
+    match = re.search(rf"(?<![\w-]){name}\s*=", text)
+    if match is None:
+        return None
+    depth = 0
+    quote: str | None = None
+    for index in range(match.end(), len(text)):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = None
+            continue
+        if char in "'\"":
+            quote = char
+        elif char in "([":
+            depth += 1
+        elif char in ")]":
+            if depth == 0:
+                return text[match.end() : index]
+            depth -= 1
+        elif char == "," and depth == 0:
+            return text[match.end() : index]
+    return text[match.end() :]
+
+
+def _place_address_skeletons(place) -> tuple[str, ...]:
+    """Скелеты адресов места письма: `action=` вызова обёртки либо атрибуты тега."""
+    if place.kind is PlaceKind.FORM_WRAPPER_CALL:
+        expression = _call_argument(place.text, "action")
+        return () if expression is None else _jinja_expression_skeletons(expression)
+    skeletons: tuple[str, ...] = ()
+    for pattern in (ACTION_VALUE, HX_POST_VALUE):
+        value = _attr_value(place.text, pattern)
+        if value is None:
+            continue
+        whole = _JINJA_OUTPUT.fullmatch(value.strip())
+        if whole:
+            skeletons += _jinja_expression_skeletons(whole.group(1))
+        else:
+            skeletons += (_JINJA_OUTPUT.sub(SKELETON_SLOT, value),)
+    return skeletons
+
+
+def _router_prefixes(tree: ast.Module) -> dict[str, str]:
+    """Приставки роутеров модуля: имя переменной → `prefix=` её `APIRouter(...)`."""
+    prefixes: dict[str, str] = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not isinstance(node.value, ast.Call):
+            continue
+        for keyword in node.value.keywords:
+            if (
+                keyword.arg == "prefix"
+                and isinstance(keyword.value, ast.Constant)
+                and isinstance(keyword.value.value, str)
+            ):
+                prefixes[target.id] = keyword.value.value
+    return prefixes
+
+
+def _post_route_skeletons(sources: dict[str, str]) -> dict[str, set[str]]:
+    """Скелет полного пути POST-маршрута → ключи обработчиков, его объявивших."""
+    routes: dict[str, set[str]] = {}
+    for module, text in sources.items():
+        tree = _parse(module, text)
+        prefixes = _router_prefixes(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if not _declares_post(decorator):
+                    continue
+                path = decorator.args[0] if decorator.args else None
+                if not (isinstance(path, ast.Constant) and isinstance(path.value, str)):
+                    continue
+                router = _dotted(decorator.func.value) or ""
+                prefix = prefixes.get(router.rsplit(".", 1)[-1], "")
+                skeleton = _ROUTE_PARAMETER.sub(SKELETON_SLOT, prefix + path.value)
+                routes.setdefault(skeleton, set()).add(f"{module}::{node.name}")
+                break
+    return routes
+
+
+def _place_handlers(
+    template_sources: dict[str, str], page_sources: dict[str, str]
+) -> dict[str, frozenset[str]]:
+    """Место письма → POST-обработчики, которые принимают его адрес.
+
+    Форма панели подтверждения адрес получает параметром: её обработчики —
+    обработчики форм-триггеров, которые её открывают.
+    """
+    resolved: dict[str, frozenset[str]] = {}
+    routes = _post_route_skeletons(page_sources)
+    for place in _write_form_places(template_sources):
+        handlers: set[str] = set()
+        for skeleton in _place_address_skeletons(place):
+            handlers |= routes.get(skeleton, set())
+        resolved[place.key] = frozenset(handlers)
+    if PANEL_FORM_PLACE in resolved and not resolved[PANEL_FORM_PLACE]:
+        resolved[PANEL_FORM_PLACE] = frozenset().union(
+            *(resolved.get(trigger, frozenset()) for trigger in ALPINE_TRIGGER_PLACES)
+        )
+    return resolved
+
+
+def _push_url_sender_sites(sources: dict[str, str]) -> list[str]:
+    """Реальные отправители `HX-Push-Url` — ключ `модуль::функция` на присваивание."""
+    sites: list[str] = []
+    for write in _header_writes(sources):
+        if write.header.lower() == HX_PUSH_URL_HEADER.lower():
+            sites.append(write.key)
+    return sites
+
+
+def _push_url_prose_mentions(
+    app_sources: dict[str, str], template_sources: dict[str, str]
+) -> list[str]:
+    """Упоминания имени заголовка, которые НЕ являются его отправкой.
+
+    В исходниках — строки с именем заголовка, кроме строк присваиваний, найденных
+    разбором. В разметке — вхождения, которые убирает вырезание комментариев:
+    имя в комментарии есть проза, а атрибут вне комментария считает правило нуля.
+    """
+    mentions: list[str] = []
+    name = HX_PUSH_URL_HEADER.lower()
+    written = {(write.module, write.lineno) for write in _header_writes(app_sources)}
+    for module, text in sorted(app_sources.items()):
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            if name in line.lower() and (module, lineno) not in written:
+                mentions.append(f"{module}:{lineno}")
+    for template, source in sorted(template_sources.items()):
+        in_prose = source.lower().count(name) - _strip_comments(source).lower().count(name)
+        mentions.extend(f"{template} (комментарий)" for _ in range(in_prose))
+    return mentions
+
+
+def _push_url_markup_places(template_sources: dict[str, str]) -> list[str]:
+    """Вхождения атрибута `hx-push-url` в разметке без комментариев — `файл: число`."""
+    places: list[str] = []
+    for template, source in sorted(template_sources.items()):
+        count = len(HX_PUSH_URL_ATTR.findall(_strip_comments(source)))
+        if count:
+            places.append(f"{template}: {count}")
+    return places
+
+
+def test_push_url_decisions_cover_every_post_handler():
+    """ТЕСТ 1. У каждого POST-обработчика есть строка реестра; лишних строк нет.
+
+    Обработчик без строки означает, что решение о `hx-push-url` по нему не
+    принималось, и отказ называет его поимённо. Число строк утверждается
+    отдельно и сверяется с `POST_HANDLERS`: реестр — третий счёт того же
+    множества.
+    """
+    handlers = set(_post_handlers(_pages_sources()))
+    decided = set(PUSH_URL_DECISIONS)
+
+    assert not handlers - decided, (
+        "POST-обработчики БЕЗ решения о `hx-push-url`: "
+        f"{sorted(handlers - decided)} — решение по ним не принималось"
+    )
+    assert not decided - handlers, (
+        f"строки реестра без обработчика: {sorted(decided - handlers)} — запись "
+        "устарела или ключ набран с опечаткой"
+    )
+    assert len(PUSH_URL_DECISIONS) == PUSH_URL_DECISIONS_DECLARED == POST_HANDLERS, (
+        f"строк реестра {len(PUSH_URL_DECISIONS)}, объявлено "
+        f"{PUSH_URL_DECISIONS_DECLARED}, POST-обработчиков {POST_HANDLERS}"
+    )
+
+
+def test_push_url_every_decision_belongs_to_the_declared_cases():
+    """ТЕСТ 2. Случай каждой строки принадлежит объявленному перечню из трёх.
+
+    Строка вне перечня — это решение, которого конвенция не знает. Строка без
+    причины — это решение, которое нельзя проверить.
+    """
+    assert len(PUSH_URL_CASES) == PUSH_URL_CASES_DECLARED == 3, (
+        f"случаев конвенции {len(PUSH_URL_CASES)}, объявлено {PUSH_URL_CASES_DECLARED}"
+    )
+    outside = {
+        key: case for key, (case, _) in PUSH_URL_DECISIONS.items() if case not in PUSH_URL_CASES
+    }
+    assert not outside, f"строки со случаем вне перечня конвенции: {outside}"
+    unexplained = sorted(
+        key for key, (_, reason) in PUSH_URL_DECISIONS.items() if not reason.strip()
+    )
+    assert not unexplained, f"строки реестра без причины: {unexplained}"
+
+
+def test_push_url_dual_branch_handlers_are_case_three():
+    """ТЕСТ 3. Дуальность читается: каждый дуальный обработчик — третий случай.
+
+    Множество дуальных снимается обходом и обязано быть непустым, совпасть с
+    объявленным и содержать четыре обработчика, чью дуальность обоснования
+    перечня фрагментных называют прямо. Дуальный обработчик, отнесённый к
+    первому или второму случаю, называется поимённо. Каждая дуальная форма
+    несёт решение владельца либо пометку, что решение ожидается.
+    """
+    dual = _dual_branch_handlers(_pages_sources())
+
+    assert dual, (
+        "дуальных обработчиков НЕ НАЙДЕНО — признак переходной ветки ослеп, и "
+        "классификация свелась к «есть ли у обработчика фрагмент»"
+    )
+    assert len(dual) == DUAL_BRANCH_HANDLERS_DECLARED, (
+        f"дуальных найдено {len(dual)}, объявлено {DUAL_BRANCH_HANDLERS_DECLARED}: {sorted(dual)}"
+    )
+    assert dual == set(DUAL_BRANCH_HANDLERS), (
+        f"найдено, но не объявлено: {sorted(dual - DUAL_BRANCH_HANDLERS)}; "
+        f"объявлено, но не найдено: {sorted(DUAL_BRANCH_HANDLERS - dual)}"
+    )
+    assert DUAL_BRANCH_NAMED_BY_THE_FRAGMENT_RATIONALES <= dual, (
+        "обработчики, чью дуальность называют обоснования перечня фрагментных, "
+        f"не признаны дуальными: {sorted(DUAL_BRANCH_NAMED_BY_THE_FRAGMENT_RATIONALES - dual)}"
+    )
+
+    misfiled = _misfiled_dual_handlers(PUSH_URL_DECISIONS, dual)
+    assert not misfiled, (
+        f"дуальные обработчики отнесены НЕ к третьему случаю: {misfiled} — "
+        "статический атрибут сменил бы адрес и во фрагментной ветке"
+    )
+
+    assert set(DUAL_BRANCH_OWNER_DECISIONS) == set(DUAL_BRANCH_HANDLERS), (
+        "решения владельца расходятся с перечнем дуальных"
+    )
+    allowed = DUAL_BRANCH_OWNER_OPTIONS | {DUAL_BRANCH_AWAITS_THE_OWNER}
+    unknown = {
+        key: value
+        for key, value in DUAL_BRANCH_OWNER_DECISIONS.items()
+        if value not in allowed
+    }
+    assert not unknown, f"решение по спорной форме вне вариантов чекпойнта: {unknown}"
+
+
+def test_push_url_owner_branch_agrees_with_the_registry_case():
+    """Ответ владельца по спорным формам и случай реестра говорят одно.
+
+    Владелец выбрал ветвь по каждой дуальной форме (задача 3 плана 15-11).
+    Ветвь означает случай конвенции (`DUAL_BRANCH_OWNER_OPTION_CASE`), и этот
+    случай обязан совпасть со случаем строки `PUSH_URL_DECISIONS`: иначе реестр
+    записывал бы не то, что решено. Ожидающая форма в сверку не входит — её
+    случай машинный и честно неподтверждён.
+
+    ЧЕГО ЭТО ПРАВИЛО НЕ УТВЕРЖДАЕТ: оно не утверждает, что ответ владельца
+    верен (это его суждение), и не касается шести экранов кода авторизации,
+    которые владельцу не выносились.
+    """
+    assert set(DUAL_BRANCH_OWNER_OPTION_CASE) == set(DUAL_BRANCH_OWNER_OPTIONS), (
+        "перевод ветвей владельца в случаи расходится с вариантами чекпойнта"
+    )
+    disagreeing = _owner_branch_disagreements(DUAL_BRANCH_OWNER_DECISIONS, PUSH_URL_DECISIONS)
+    assert not disagreeing, (
+        f"ветвь владельца расходится со случаем реестра (ветвь, случай): {disagreeing}"
+    )
+
+
+def _owner_branch_disagreements(
+    owner: dict[str, str], registry: dict[str, tuple[str, str]]
+) -> dict[str, tuple[str, str]]:
+    """Спорные формы, где ветвь владельца означает не тот случай, что в реестре."""
+    return {
+        key: (value, registry[key][0])
+        for key, value in owner.items()
+        if value != DUAL_BRANCH_AWAITS_THE_OWNER
+        and DUAL_BRANCH_OWNER_OPTION_CASE[value] != registry[key][0]
+    }
+
+
+def test_control_push_url_owner_branch_contradicting_the_registry_is_named():
+    """Контроль от вакуума: ответ владельца «второй» на строке третьего случая назван.
+
+    Без этого контроля сверка ответа с реестром могла бы молчать на пустоте —
+    например, если бы все формы снова стали ожидающими.
+    """
+    key = "app/pages/schedules.py::schedules_delete"
+    owner = dict(DUAL_BRANCH_OWNER_DECISIONS)
+    owner[key] = "case-two-no-attribute"
+    found = _owner_branch_disagreements(owner, PUSH_URL_DECISIONS)
+    assert found == {key: ("case-two-no-attribute", PUSH_URL_CASE_THREE)}, found
+
+    awaiting = {k: DUAL_BRANCH_AWAITS_THE_OWNER for k in DUAL_BRANCH_OWNER_DECISIONS}
+    assert _owner_branch_disagreements(awaiting, PUSH_URL_DECISIONS) == {}
+
+
+def test_push_url_decisions_agree_with_the_response_form():
+    """Классификация выведена, а не назначена: записанный случай = выведенному.
+
+    Случай каждой строки реестра сверяется со случаем, который правило шапки
+    выводит из формы ответа обработчика. Расхождение называет обработчика, оба
+    случая и что их различает.
+    """
+    sources = _pages_sources()
+    transition = _transition_branch_handlers(sources)
+    derived = {
+        key: _push_url_case_for(key, transition=transition, fragment=FRAGMENT_RESPONSE_HANDLERS)
+        for key in PUSH_URL_DECISIONS
+    }
+    disagree = {
+        key: (case, derived[key])
+        for key, (case, _) in PUSH_URL_DECISIONS.items()
+        if case != derived[key]
+    }
+    assert not disagree, (
+        "записанный случай разошёлся с выведенным из формы ответа "
+        f"(записано, выведено): {disagree}"
+    )
+
+
+def test_push_url_transition_branch_is_read_by_call_not_by_name():
+    """ТЕСТ 4. Переходная ветка опознаётся по ВЫЗОВУ, и число таких обработчиков объявлено."""
+    found = _transition_branch_handlers(_pages_sources())
+
+    assert len(found) == TRANSITION_BRANCH_HANDLERS_DECLARED, (
+        f"обработчиков с переходной веткой найдено {len(found)}, объявлено "
+        f"{TRANSITION_BRANCH_HANDLERS_DECLARED}: {sorted(found)}"
+    )
+    assert set(DUAL_BRANCH_HANDLERS) <= found, (
+        f"дуальные без переходной ветки: {sorted(set(DUAL_BRANCH_HANDLERS) - found)}"
+    )
+
+
+def test_push_url_every_write_place_resolves_to_a_decided_handler():
+    """ТЕСТ 5. Биекция реестр ↔ инвентарь 49 мест письма.
+
+    Каждое место письма разрешается хотя бы в один POST-обработчик со строкой
+    реестра; место, чей адрес не разрешается, называется. Обработчики одного
+    места согласны в случае, иначе у места нет одного решения. Каждая строка
+    реестра достигается хотя бы одним местом: строка без формы названа.
+    """
+    resolved = _place_handlers(_inventory_template_sources(), _pages_sources())
+
+    assert len(resolved) == WRITE_FORM_PLACES, (
+        f"мест письма разобрано {len(resolved)}, в инвентаре {WRITE_FORM_PLACES}"
+    )
+    unresolved = sorted(key for key, handlers in resolved.items() if not handlers)
+    assert not unresolved, (
+        f"места письма, чей адрес не разрешается ни в один POST-обработчик: {unresolved}"
+    )
+    undecided = {
+        key: sorted(handlers - set(PUSH_URL_DECISIONS))
+        for key, handlers in resolved.items()
+        if handlers - set(PUSH_URL_DECISIONS)
+    }
+    assert not undecided, f"места, чей обработчик не несёт строки реестра: {undecided}"
+    split = {
+        key: sorted({PUSH_URL_DECISIONS[handler][0] for handler in handlers})
+        for key, handlers in resolved.items()
+        if len({PUSH_URL_DECISIONS[handler][0] for handler in handlers}) > 1
+    }
+    assert not split, f"места, чьи обработчики расходятся в случае: {split}"
+    reached = set().union(*resolved.values())
+    assert not set(PUSH_URL_DECISIONS) - reached, (
+        f"строки реестра, до которых не доходит ни одно место письма: "
+        f"{sorted(set(PUSH_URL_DECISIONS) - reached)}"
+    )
+    disputed = sorted(key for key, handlers in resolved.items() if handlers & DUAL_BRANCH_HANDLERS)
+    assert len(disputed) == DUAL_BRANCH_PLACES_DECLARED, (
+        f"спорных мест {len(disputed)}, объявлено {DUAL_BRANCH_PLACES_DECLARED}: {disputed}"
+    )
+
+
+def test_push_url_zero_in_markup_is_a_decision_not_a_gap():
+    """ТЕСТ 6. Ноль атрибута — РЕШЕНИЕ: утверждается в паре с полнотой реестра.
+
+    ⚠️ ДВА УТВЕРЖДЕНИЯ В ОДНОМ ПРАВИЛЕ, И ЭТО НЕСУЩЕЕ РЕШЕНИЕ (D-12). Порознь
+    первое не отличает «решение принято: атрибута нет» от «решение не
+    принималось»: нулевой счёт одинаков у обоих. Второе делает различие: у
+    каждого места письма есть строка реестра, то есть решение принято.
+    """
+    places = _push_url_markup_places(_inventory_template_sources())
+    assert len(places) == HX_PUSH_URL_MARKUP_PLACES, (
+        f"атрибут `hx-push-url` в разметке найден: {places}, объявлено "
+        f"{HX_PUSH_URL_MARKUP_PLACES}"
+    )
+
+    resolved = _place_handlers(_inventory_template_sources(), _pages_sources())
+    undecided = sorted(
+        key
+        for key, handlers in resolved.items()
+        if not handlers or handlers - set(PUSH_URL_DECISIONS)
+    )
+    assert resolved and not undecided, (
+        "ноль атрибута не подкреплён реестром: места письма без решения "
+        f"{undecided or '(инвентарь не разобран)'} — «решения нет» неотличимо от "
+        "«атрибута нет»"
+    )
+
+
+def test_push_url_header_has_exactly_one_sender_and_two_prose_mentions():
+    """ТЕСТ 7. Отправитель `HX-Push-Url` один, упоминаний в прозе два.
+
+    Отправитель ищется разбором присваиваний (`_header_writes`), а не грепом по
+    имени: докстринг и комментарий шаблона — проза, и их число утверждается
+    отдельно. Если фаза заведёт второго отправителя, его значение уже принуждено
+    GATE-07 (литерал либо f-строка с инертными подстановками), и нового правила
+    здесь не нужно.
+    """
+    senders = _push_url_sender_sites(_app_sources())
+    assert len(senders) == HX_PUSH_URL_SENDERS, (
+        f"отправителей `{HX_PUSH_URL_HEADER}` найдено {len(senders)}, объявлено "
+        f"{HX_PUSH_URL_SENDERS}: {senders}"
+    )
+    assert set(senders) == set(HX_PUSH_URL_SENDER_SITES), (
+        f"отправитель не тот, что объявлен: {senders}"
+    )
+
+    mentions = _push_url_prose_mentions(_app_sources(), _template_sources())
+    assert len(mentions) == HX_PUSH_URL_PROSE_MENTIONS, (
+        f"упоминаний `{HX_PUSH_URL_HEADER}` в прозе {len(mentions)}, объявлено "
+        f"{HX_PUSH_URL_PROSE_MENTIONS}: {mentions}"
+    )
+
+
+def test_control_push_url_a_second_sender_is_counted_and_named(tmp_path):
+    """ТЕСТ 8. КОНТРОЛЬ: синтетическое присваивание заголовка растит счёт на один и называется."""
+    baseline = _push_url_sender_sites(_pages_sources())
+    assert len(baseline) == HX_PUSH_URL_SENDERS, f"неизменённое дерево: {baseline}"
+
+    sources, key = _scratch_handler(
+        tmp_path,
+        "a_second_push_url_sender",
+        'response = HTMLResponse("")\n'
+        '    response.headers["HX-Push-Url"] = "/profile"\n'
+        "    return response",
+    )
+    senders = _push_url_sender_sites(sources)
+
+    assert len(senders) == HX_PUSH_URL_SENDERS + 1, (
+        f"второй отправитель не посчитан: {senders}"
+    )
+    assert key in senders, f"второй отправитель не назван: {senders}"
+
+
+def test_control_push_url_a_transition_named_only_in_prose_is_not_a_branch(tmp_path):
+    """КОНТРОЛЬ: вызов выхода в ДОКСТРИНГЕ переходной веткой не считается, а в теле — считается."""
+    prose, prose_key = _scratch_handler(
+        tmp_path,
+        "a_fragment_only_route",
+        '"""Когда-то отвечал respond(request, redirect="/login")."""\n'
+        '    return await respond(request, redirect="/profile", fragment=build)',
+    )
+    assert prose_key in _post_handlers(prose), "синтетический обработчик не увиден"
+    assert prose_key not in _transition_branch_handlers(prose), (
+        "вызов, названный в докстринге, засчитан переходной веткой — признак читает текст"
+    )
+
+    body, body_key = _scratch_handler(
+        tmp_path,
+        "a_route_with_a_transition",
+        'return await respond(request, redirect="/profile")',
+    )
+    assert body_key in _transition_branch_handlers(body), (
+        "главный выход без фрагмента не засчитан переходной веткой"
+    )
+
+
+def test_control_push_url_a_dual_handler_filed_as_case_two_is_named():
+    """КОНТРОЛЬ: дуальный обработчик, записанный во второй случай, называется поимённо."""
+    key = "app/pages/schedules.py::schedules_delete"
+    decisions = dict(PUSH_URL_DECISIONS)
+    decisions[key] = (PUSH_URL_CASE_TWO, "фрагмент есть — значит атрибута нет")
+
+    assert _misfiled_dual_handlers(decisions, set(DUAL_BRANCH_HANDLERS)) == {key: PUSH_URL_CASE_TWO}
+    assert not _misfiled_dual_handlers(PUSH_URL_DECISIONS, set(DUAL_BRANCH_HANDLERS))
+
+
+def test_control_push_url_attribute_in_markup_is_seen_and_named():
+    """КОНТРОЛЬ: атрибут в разметке находится и называется; в комментарии — нет."""
+    templates = _inventory_template_sources()
+    assert _push_url_markup_places(templates) == []
+
+    probe = "zz_probe/push_url.html"
+    templates[probe] = (
+        '{# hx-push-url="true" в комментарии #}\n'
+        '<form method="post" action="/profile" hx-push-url="true"></form>\n'
+    )
+
+    assert _push_url_markup_places(templates) == [f"{probe}: 1"], (
+        "атрибут в разметке не найден либо комментарий посчитан атрибутом"
+    )
+
+
+def test_control_push_url_a_place_without_a_handler_is_named():
+    """КОНТРОЛЬ: место письма, чей адрес не ведёт ни к одному обработчику, называется."""
+    templates = _inventory_template_sources()
+    probe = "zz_probe/nowhere.html"
+    templates[probe] = '<form method="post" action="/nowhere/{{ x.id }}/act"></form>\n'
+
+    resolved = _place_handlers(templates, _pages_sources())
+
+    assert f"{probe}#0" in resolved, "синтетическое место не попало в разбор"
+    assert resolved[f"{probe}#0"] == frozenset(), (
+        "адрес, которого нет ни у одного маршрута, разрешился в обработчика"
+    )
+    assert all(handlers for key, handlers in resolved.items() if not key.startswith("zz_probe/")), (
+        "места боевого дерева потеряли обработчиков на изменённом словаре"
+    )
+
+
+def test_control_positive_push_url_universe_is_not_empty():
+    """ТЕСТ 9. КОНТРОЛЬ: вселенная обхода непуста — правила молчат не на пустоте.
+
+    POST-обработчиков больше 30 (замер: 37), переходных веток и дуальных
+    обработчиков найдено больше нуля, места письма разобраны.
+    """
+    sources = _pages_sources()
+    assert len(_post_handlers(sources)) > 30, "вселенная POST-обработчиков пуста или выродилась"
+    assert _transition_branch_handlers(sources), "переходных веток не найдено — признак ослеп"
+    assert _dual_branch_handlers(sources), "дуальных не найдено — признак ослеп"
+    assert len(_write_form_places(_inventory_template_sources())) > 40, (
+        "инвентарь мест письма пуст — ноль атрибута стал бы неотличим от слепоты обхода"
+    )
+
+
+# =============================================================================
+# ЗАПРЕТ `hx-push-url` НА МАРШРУТАХ «ИЗМЕНЯЕТ ДАННЫЕ» (D-13) И ГРАНИЦА DEF-09-04
+# (Фаза 15, план 15-11, критерий 3 ROADMAP Фазы 15)
+#
+# ПЕРЕЧЕНЬ «ИЗМЕНЯЕТ ДАННЫЕ» НЕ ВЫВОДИТСЯ ЗАНОВО. Он уже машинный: это
+# `FRAGMENT_RESPONSE_HANDLERS` (25 из 37). Он уже несёт обоснование на каждую
+# запись и уже стоит под правилом согласованности
+# (`FRAGMENT_RESPONSE_HANDLERS_DECLARED`). Собственный разбор стал бы вторым
+# носителем того же множества и разошёлся бы с первым. Правило ЧИТАЕТ чужой
+# перечень (`CHANGES_DATA_HANDLERS` — это он же, а не копия) и утверждает его
+# длину, поэтому расхождение становится видимым, а не наследуемым.
+#
+# Запрет сформулирован как ОТСУТСТВИЕ предмета (`assert not offenders`), а не
+# как равенство счётчика нулю: предмет здесь — запрет, а не счёт. Отказ
+# называет место ключом `путь#порядковый_номер` и его обработчика. Атрибут
+# ищется на НЕСУЩЕМ теге места: на сыром теге формы, а у вызова обёртки — в
+# тексте вызова и в теле макроса `form_wrapper` (провайдер раздал бы атрибут
+# всем вызывающим разом).
+#
+# ⚠️ ГРАНИЦА `DEF-09-04` НАЗВАНА И РАБОТОЙ НЕ ЗАКРЫТА:
+#   1. Вселенная гейта G-2 видит только POST-обработчики. GET-маршрут порции
+#      невидим ей В ОБЕ СТОРОНЫ: и когда он ушёл из множества
+#      неконвертированных, и когда GET-вход вернул бы себе собственное
+#      перенаправление.
+#   2. Граница НАЗВАНА записью летописи у самой константы (летопись
+#      `NOT_YET_CONVERTED_COUNT`, план 09-15) и НЕ РАСШИРЕНА. Ни одно правило
+#      этого плана вселенную G-2 на GET не расширяет.
+#   3. ⚠️ Расширение области обхода есть решение ВЕХИ, а не плана. Так записано
+#      в самом долге (`.planning/REQUIREMENTS.md`, запись `DEF-09-04`). План,
+#      расширивший вселенную G-2 на GET, НАРУШИЛ БЫ ЗАПИСЬ САМОГО ДОЛГА.
+#   4. Адресат передан ВЕХЕ по имени, а не растворён: решение о GET-входах
+#      принимает закрытие вехи v2.1 (её аудит), а не очередной план.
+#   Форма довода взята у образца, где та же граница уже принята
+#   (`tests/test_pages/test_impersonation_gate.py`, вторая названная граница
+#   разборщика изменяющих маршрутов): «расширение множества на `GET` втянуло бы
+#   в перечни все читающие маршруты продукта».
+#
+# ⚠️ СТОРОЖ ГРАНИЦЫ, А НЕ ЕЁ РАСШИРЕНИЕ.
+# `test_push_url_g2_universe_holds_only_changing_methods` утверждает, что
+# вселенная гейта состоит только из изменяющих методов, и краснеет на
+# пришедшем GET-маршруте, называя его. Это приём второго уровня: гейт, который
+# чего-то не видит, обязан требовать, чтобы этого и не было. Без сторожа
+# расширение могло бы произойти молча, руками того, кто «помог».
+#
+# ⚠️ ЧЕГО ЗАПРЕТ НЕ УТВЕРЖДАЕТ. Зелёный цвет означает: атрибута нет ни на одном
+# месте письма, чей обработчик меняет данные. Он НЕ означает, что атрибут
+# ПРАВИЛЬНО стоит там, где стоит: мест с атрибутом сегодня ноль, и это
+# отдельное утверждение реестра выше. Он НЕ означает ничего о GET-маршрутах:
+# они вне вселенной по НАЗВАННОЙ границе, и её расширение принадлежит вехе.
+# Он НЕ видит атрибут на вложенном элементе формы или на её предке (атрибут
+# наследуется); такой случай ловит правило нуля по всей разметке
+# (`test_push_url_zero_in_markup_is_a_decision_not_a_gap`).
+# =============================================================================
+
+# Перечень «изменяет данные» — ТОТ ЖЕ объект, что перечень фрагментных, а не копия.
+CHANGES_DATA_HANDLERS = FRAGMENT_RESPONSE_HANDLERS
+
+# Изменяющие методы HTTP — единственные, которым место во вселенной гейта G-2.
+CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# Декораторы-методы маршрута (`@router.get(...)` и т. д.) — для чтения методов.
+_ROUTE_METHOD_DECORATORS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
+
+# Метод, чьё значение разборщику не видно (перечень методов собран выражением).
+_UNSEEN_METHOD = "<выражение>"
+
+
+def _push_url_offenders(
+    template_sources: dict[str, str],
+    page_sources: dict[str, str],
+    *,
+    forbidden: frozenset[str] = FRAGMENT_RESPONSE_HANDLERS,
+) -> list[str]:
+    """Места письма обработчиков «изменяет данные», несущие `hx-push-url`.
+
+    Каждое нарушение — строка `ключ места → обработчики`.
+    """
+    offenders: list[str] = []
+    provider_carries = any(
+        HX_PUSH_URL_ATTR.search(body.group(0))
+        for source in template_sources.values()
+        for body in FORM_WRAPPER_MACRO.finditer(_strip_comments(source))
+    )
+    resolved = _place_handlers(template_sources, page_sources)
+    for place in _write_form_places(template_sources):
+        hit = sorted(resolved.get(place.key, frozenset()) & set(forbidden))
+        if not hit:
+            continue
+        carries = bool(HX_PUSH_URL_ATTR.search(place.text)) or (
+            place.kind is PlaceKind.FORM_WRAPPER_CALL and provider_carries
+        )
+        if carries:
+            offenders.append(f"{place.key} → {', '.join(hit)}")
+    return offenders
+
+
+def _route_methods(decorator: ast.AST) -> frozenset[str] | None:
+    """Методы HTTP, которые объявляет декоратор маршрута; `None` — не маршрут."""
+    if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
+        return None
+    attr = decorator.func.attr
+    if attr in _ROUTE_METHOD_DECORATORS:
+        return frozenset({attr.upper()})
+    if attr != "api_route":
+        return None
+    for keyword in decorator.keywords:
+        if keyword.arg != "methods":
+            continue
+        if not isinstance(keyword.value, (ast.List, ast.Tuple, ast.Set)):
+            return frozenset({_UNSEEN_METHOD})
+        return frozenset(
+            element.value.upper()
+            if isinstance(element, ast.Constant) and isinstance(element.value, str)
+            else _UNSEEN_METHOD
+            for element in keyword.value.elts
+        )
+    return frozenset({"GET"})
+
+
+def _g2_universe_methods(sources: dict[str, str]) -> dict[str, frozenset[str]]:
+    """Вселенная гейта G-2 (`_post_handlers`) → методы HTTP каждого её обработчика.
+
+    Методы читаются со ВСЕХ декораторов маршрута функции: обработчик, вошедший
+    во вселенную своим POST, приносит с собой и соседние объявления.
+    """
+    methods: dict[str, frozenset[str]] = {}
+    universe = set(_post_handlers(sources))
+    for key, function in _post_function_nodes(sources):
+        if key not in universe:
+            continue
+        declared: set[str] = set()
+        for decorator in function.decorator_list:
+            declared |= _route_methods(decorator) or frozenset()
+        methods[key] = frozenset(declared)
+    return methods
+
+
+def _g2_universe_intruders(sources: dict[str, str]) -> dict[str, list[str]]:
+    """Обработчики вселенной G-2, принёсшие НЕизменяющий метод, — с этими методами."""
+    return {
+        key: sorted(declared - CHANGING_METHODS)
+        for key, declared in sorted(_g2_universe_methods(sources).items())
+        if declared - CHANGING_METHODS
+    }
+
+
+def test_push_url_forbidden_on_places_of_changes_data_handlers():
+    """ЗАПРЕТ (D-13): ни одно место письма обработчика «изменяет данные» не несёт атрибута."""
+    offenders = _push_url_offenders(_inventory_template_sources(), _pages_sources())
+
+    assert not offenders, (
+        "`hx-push-url` стоит на месте письма обработчика, меняющего только "
+        f"данные: {offenders}. Адрес сменился бы там, где показанное не менялось"
+    )
+
+
+def test_push_url_forbidden_reads_the_changes_data_list_it_does_not_copy():
+    """Запрет опирается на ЧУЖОЙ поддерживаемый перечень и утверждает его длину."""
+    import inspect
+
+    assert CHANGES_DATA_HANDLERS is FRAGMENT_RESPONSE_HANDLERS, (
+        "перечень «изменяет данные» стал копией — у множества два носителя"
+    )
+    assert len(CHANGES_DATA_HANDLERS) == FRAGMENT_RESPONSE_HANDLERS_DECLARED, (
+        f"перечень «изменяет данные» — {len(CHANGES_DATA_HANDLERS)} записей, "
+        f"объявлено {FRAGMENT_RESPONSE_HANDLERS_DECLARED}"
+    )
+    default = inspect.signature(_push_url_offenders).parameters["forbidden"].default
+    assert default is FRAGMENT_RESPONSE_HANDLERS, (
+        "запрет по умолчанию читает не перечень фрагментных"
+    )
+
+
+def test_control_push_url_forbidden_names_a_changes_data_place_carrying_the_attribute():
+    """КОНТРОЛЬ: атрибут на месте обработчика ИЗ перечня краснит запрет и называется."""
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    assert not _push_url_offenders(templates, pages), "запрет красен на неизменённом дереве"
+
+    probe = "zz_probe/changes_data.html"
+    templates[probe] = (
+        '<form method="post" action="/profile" hx-post="/profile" hx-push-url="true"></form>\n'
+    )
+
+    offenders = _push_url_offenders(templates, pages)
+
+    assert offenders == [f"{probe}#0 → app/pages/profile.py::profile_post"], (
+        f"запрет не нашёл либо не назвал место с атрибутом: {offenders}"
+    )
+
+
+def test_control_push_url_forbidden_stays_silent_outside_the_changes_data_list():
+    """КОНТРОЛЬ: атрибут на месте обработчика ВНЕ перечня запрет НЕ краснит.
+
+    Без этого контроля запрет мог бы краснеть на любом атрибуте и предмета не
+    различал бы. Атрибут при этом виден правилу нуля: место приземлилось.
+    """
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    probe = "zz_probe/outside.html"
+    templates[probe] = (
+        '<form method="post" action="/ads/{{ ad.id }}/delete" '
+        'hx-post="/ads/{{ ad.id }}/delete" hx-push-url="true"></form>\n'
+    )
+
+    resolved = _place_handlers(templates, pages)
+    assert resolved.get(f"{probe}#0") == frozenset({"app/pages/ads.py::ads_delete"}), (
+        "синтетическое место не приземлилось на обработчика вне перечня"
+    )
+    assert _push_url_markup_places(templates) == [f"{probe}: 1"], "атрибут на месте не виден"
+    assert "app/pages/ads.py::ads_delete" not in CHANGES_DATA_HANDLERS
+
+    assert _push_url_offenders(templates, pages) == [], (
+        "запрет покраснел на месте обработчика ВНЕ перечня «изменяет данные»"
+    )
+
+
+def test_control_push_url_forbidden_sees_the_attribute_in_the_wrapper_body():
+    """КОНТРОЛЬ: атрибут в теле макроса обёртки достаётся всем её вызывающим."""
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    wrapper = next(
+        (name for name, text in templates.items() if FORM_WRAPPER_MACRO.search(text)), None
+    )
+    assert wrapper is not None, "тело макроса `form_wrapper` не найдено"
+    templates[wrapper] = templates[wrapper].replace("<form ", '<form hx-push-url="true" ', 1)
+
+    offenders = _push_url_offenders(templates, pages)
+
+    assert any("includes/profile_settings.html#0" in line for line in offenders), (
+        f"атрибут провайдера не достался вызывающим: {offenders}"
+    )
+
+
+def test_control_positive_push_url_forbidden_universe_is_not_empty():
+    """КОНТРОЛЬ: вселенная запрета непуста — мест письма больше 40, обработчиков больше 30."""
+    pages = _pages_sources()
+    templates = _inventory_template_sources()
+    assert len(_write_form_places(templates)) > 40, "мест письма не найдено"
+    assert len(_post_handlers(pages)) > 30, "POST-обработчиков не найдено"
+    resolved = _place_handlers(templates, pages)
+    assert any(handlers & CHANGES_DATA_HANDLERS for handlers in resolved.values()), (
+        "ни одно место не ведёт к обработчику «изменяет данные» — запрет молчал бы на пустоте"
+    )
+
+
+def test_push_url_g2_universe_holds_only_changing_methods():
+    """СТОРОЖ ГРАНИЦЫ `DEF-09-04`: во вселенной G-2 — только изменяющие методы.
+
+    ⚠️ Это правило утверждает, что граница НА МЕСТЕ, а не расширяет её. Отказ
+    называет обработчика, принёсшего GET, и его методы. Сторож обязан видеть
+    ВСЮ вселенную: иначе он молчал бы на пустоте.
+    """
+    sources = _pages_sources()
+    methods = _g2_universe_methods(sources)
+
+    assert set(methods) == set(_post_handlers(sources)), (
+        "сторож видит не всю вселенную G-2: "
+        f"{sorted(set(_post_handlers(sources)) - set(methods))}"
+    )
+    intruders = _g2_universe_intruders(sources)
+    assert not intruders, (
+        f"во вселенную гейта G-2 пришли НЕизменяющие методы: {intruders}. Граница "
+        "DEF-09-04 расширяется только решением вехи, а не плана"
+    )
+
+
+def test_control_push_url_g2_universe_guard_names_an_incoming_get_route(tmp_path):
+    """КОНТРОЛЬ: обработчик с GET и POST на одном объявлении краснит сторожа и называется."""
+    original = _pages_sources()[SCRATCH_MODULE]
+    addition = (
+        '\n\n@router.api_route("/profile/both", methods=["GET", "POST"])\n'
+        "async def a_route_reading_and_writing(request: Request):\n"
+        '    return await respond(request, redirect="/profile")\n'
+    )
+    sources = _sources_with(tmp_path, _pages_sources(), SCRATCH_MODULE, original + addition)
+    key = f"{SCRATCH_MODULE}::a_route_reading_and_writing"
+
+    assert key in _post_handlers(sources), "синтетический обработчик не вошёл во вселенную G-2"
+    assert _g2_universe_intruders(sources) == {key: ["GET"]}, (
+        f"сторож не назвал пришедший GET-маршрут: {_g2_universe_intruders(sources)}"
     )

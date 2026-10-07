@@ -33,6 +33,7 @@
 ручного обхода, машине недоступный.
 """
 
+import ast
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -477,6 +478,158 @@ def test_control_a_missing_anchor_is_named_by_the_rule():
     absent_file = missing_anchors((nowhere,))
     assert len(absent_file) == 1, _report(absent_file)
     assert absent_file[0].reason == NO_SOURCE_FILE, str(absent_file[0])
+
+
+# --- жертва контроля на индексе 0 объявлена (запрет `10-36#1`) ----------------------------
+#
+# ЗАЧЕМ. `test_control_a_missing_anchor_is_named_by_the_rule` подменяет запись
+# `WALKTHROUGH_ANCHORS[0]` своими руками и берёт у неё `source` и `step`. Какая запись стои́т на
+# индексе 0 — ЕГО ПРЕДМЕТ: перестановка реестра сменила бы файл, в котором контроль ищет
+# подменённый якорь, и шаг, которым он его называет, НЕ СКАЗАВ ОБ ЭТОМ. Замер седьмого круга
+# ревизии (`WR-02`, приписка у третьей записи реестра) показал, что контроль ЗЕЛЕН при любой
+# записи на индексе 0, — то есть краснотой перестановку не выдаст никто, кроме правила ниже.
+# ИСТОЧНИК ЗАПРЕТА — план 10-36, `must_haves.prohibitions[1]`: «ПОРЯДОК ЗАПИСЕЙ НА ИНДЕКСЕ 0 НЕ
+# ТРОГАЕТСЯ». Правило заведено планом 15-31 (решение владельца Г-1 «Правила сейчас»).
+#
+# ⚠️ ОБЪЯВЛЕНИЕ СНЯТО С ДЕРЕВА, А НЕ ПРИДУМАНО: запись на индексе 0 одна и та же на коммитах
+# плана 10-36 (`88035acb^`, `d37716b4`) и сегодня (замер плана 15-31, 2026-09-26). Осознанная
+# перестановка правит ЭТО объявление вместе с летописью — и тем самым говорит о смене предмета
+# контроля вслух.
+#
+# ⚠️ ЧЕГО ПРАВИЛО НЕ УТВЕРЖДАЕТ: порядка прочих записей (он не монотонен и правилом не
+# принуждается — замер у третьей записи) и того, что контроль сам по себе чувствителен к жертве.
+FIRST_ANCHOR_DECLARED = ('[role="dialog"]', "components/modal.html", "1.1")
+
+
+def index_zero_findings(anchors: tuple[Anchor, ...]) -> list[str]:
+    """Расхождение записи на индексе 0 с объявленной жертвой контроля: селектор, файл, шаг."""
+    if not anchors:
+        return ["реестр пуст — записи на индексе 0 нет, и жертвы у контроля нет"]
+    first = anchors[0]
+    if (first.selector, first.source, first.step) != FIRST_ANCHOR_DECLARED:
+        return [
+            f"на индексе 0 стои́т {first}, а жертвой контроля объявлена "
+            f"`{FIRST_ANCHOR_DECLARED[0]}` → {FIRST_ANCHOR_DECLARED[1]} "
+            f"(шаг {FIRST_ANCHOR_DECLARED[2]}) — перестановка сменила бы предмет "
+            f"`test_control_a_missing_anchor_is_named_by_the_rule` молча"
+        ]
+    return []
+
+
+def test_the_record_at_index_zero_is_the_declared_victim_of_the_control():
+    """ЗАПИСЬ НА ИНДЕКСЕ 0 ЕСТЬ ОБЪЯВЛЕННАЯ ЖЕРТВА КОНТРОЛЯ (запрет `10-36#1`)."""
+    assert index_zero_findings(WALKTHROUGH_ANCHORS) == [], _report(
+        index_zero_findings(WALKTHROUGH_ANCHORS)
+    )
+
+
+def test_control_a_registry_with_its_first_records_swapped_is_named():
+    """Зубы: копия реестра с переставленными первыми записями названа, и названа новая
+    запись на индексе 0; пустой реестр — тоже расхождение, а не зелень."""
+    swapped = (WALKTHROUGH_ANCHORS[1], WALKTHROUGH_ANCHORS[0]) + WALKTHROUGH_ANCHORS[2:]
+    assert len(swapped) == len(WALKTHROUGH_ANCHORS), "копия реестра потеряла запись"
+    findings = index_zero_findings(swapped)
+    assert len(findings) == 1, _report(findings)
+    assert WALKTHROUGH_ANCHORS[1].selector in findings[0], findings[0]
+    assert len(index_zero_findings(())) == 1
+
+
+# --- модуль не ввозит ничего из каталогов правил записи и страниц (запрет `10-36#3`) -----
+#
+# ЗАЧЕМ. Разрыв связи каталога правил разметки с каталогом правил записи есть ОСНОВАНИЕ
+# переезда этого модуля (`WR-07` пятого круга, план 10-26 — шапка модуля). Запрет плана 10-36
+# (`must_haves.prohibitions[3]`): «ПРАВИЛА ЭТОГО МОДУЛЯ НЕ ИМПОРТИРУЮТ НИЧЕГО ИЗ
+# `tests/test_planning/` И `tests/test_pages/` … и общий помощник вырезания комментариев сюда
+# НЕ импортируется». Правило заведено планом 15-31.
+#
+# ⚠️ ПРАВИЛО НИЧЕГО НЕ ВВОЗИТ РАДИ СЕБЯ: оно читает ТЕКСТ этого модуля и разбирает его `ast`
+# стандартной библиотеки. Ввезённый помощник из запрещённого каталога сделал бы само правило
+# нарушением своего предмета.
+#
+# ⚠️ ГРАНИЦА: разбор видит операторы ввоза и вызовы `import_module` / `__import__` с литералом
+# имени; ввоз, собранный вычислением строки, разбору невидим.
+FORBIDDEN_IMPORT_PACKAGES = ("tests.test_planning", "tests.test_pages")
+SHARED_COMMENT_STRIPPER = "_strip_comments"
+_DYNAMIC_IMPORTERS = ("import_module", "__import__")
+
+
+def _forbidden_package(module: str) -> bool:
+    """Абсолютное имя модуля лежит в запрещённом пакете (сам пакет или его потомок)."""
+    return any(
+        module == package or module.startswith(package + ".")
+        for package in FORBIDDEN_IMPORT_PACKAGES
+    )
+
+
+def cross_suite_imports(source: str) -> list[str]:
+    """Каждый ввоз исходника из запрещённых каталогов и каждый ввоз помощника вырезания
+    комментариев — с номером строки. Относительный ввоз читается от `tests.test_templates`."""
+    findings: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _forbidden_package(alias.name):
+                    findings.append(f"строка {node.lineno}: `import {alias.name}`")
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level:
+                base = "tests.test_templates".split(".")[: max(0, 2 - (node.level - 1))]
+                module = ".".join(base + ([module] if module else []))
+            candidates = [module] + [f"{module}.{alias.name}" for alias in node.names]
+            if any(_forbidden_package(candidate) for candidate in candidates):
+                findings.append(f"строка {node.lineno}: ввоз из `{module}`")
+            for alias in node.names:
+                if alias.name == SHARED_COMMENT_STRIPPER:
+                    findings.append(
+                        f"строка {node.lineno}: ввоз помощника `{SHARED_COMMENT_STRIPPER}`"
+                    )
+        elif isinstance(node, ast.Call):
+            callee = node.func
+            name = callee.attr if isinstance(callee, ast.Attribute) else getattr(callee, "id", "")
+            argument = node.args[0] if node.args else None
+            if (
+                name in _DYNAMIC_IMPORTERS
+                and isinstance(argument, ast.Constant)
+                and isinstance(argument.value, str)
+                and _forbidden_package(argument.value)
+            ):
+                findings.append(f"строка {node.lineno}: `{name}({argument.value!r})`")
+    return findings
+
+
+def test_this_module_imports_nothing_from_the_records_and_pages_suites():
+    """МОДУЛЬ ПРАВИЛ РАЗМЕТКИ НЕ ВВОЗИТ НИЧЕГО ИЗ `tests/test_planning/` И `tests/test_pages/`
+    И НЕ ВВОЗИТ ОБЩЕГО ПОМОЩНИКА ВЫРЕЗАНИЯ КОММЕНТАРИЕВ (запрет `10-36#3`)."""
+    source = Path(__file__).read_text(encoding="utf-8")
+    imports = [
+        node for node in ast.walk(ast.parse(source)) if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    assert imports, "разбор не увидел ни одного ввоза — читается не тот текст, правило судило бы пустоту"
+    findings = cross_suite_imports(source)
+    assert not findings, (
+        "модуль правил разметки ввозит из каталогов правил записи или страниц:\n"
+        + _report(findings)
+    )
+
+
+def test_control_every_cross_suite_import_form_is_named():
+    """Зубы на синтетике: каждая форма ввоза из запрещённых каталогов и ввоз помощника
+    называются; ввоз стандартной библиотеки и соседа по каталогу — нет."""
+    offending = (
+        "from tests.test_planning.test_x import helper",
+        "import tests.test_pages.test_shell",
+        "from tests import test_pages",
+        "from ..test_planning import records",
+        "from .test_htmx_markup_gates import _strip_comments",
+        "importlib.import_module('tests.test_pages.test_shell')",
+    )
+    for line in offending:
+        assert len(cross_suite_imports(line)) == 1, (line, cross_suite_imports(line))
+    clean = (
+        "from dataclasses import dataclass\nimport ast\nimport pytest\n"
+        "from .test_components import render\nimport tests.test_templates.helpers\n"
+    )
+    assert cross_suite_imports(clean) == []
 
 
 # --- набираемость: поле, которое человек НАБИРАЕТ, содержит выражение, а не прозу ---

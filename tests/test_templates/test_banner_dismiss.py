@@ -1,0 +1,1146 @@
+"""Гейт ОРГАНА СНЯТИЯ плашек отказа: два различимых доступных имени (план 15-07).
+
+ПОВОД — находка 3 долга Фазы 10 (запись D-18.3,
+``.planning/phases/10-rychag-components-modal-html/deferred-items.md``
+§«Приёмка Фазы 10 — решение владельца 2026-09-14»). Дерево доступности
+объявляет орган снятия как ``checkbox "Скрыть сообщение"``, и это имя
+встречается ДВАЖДЫ — при двойной аварии в порядке обхода стоя́т два
+неразличимых доступных имени (WCAG 4.1.2). Это та половина находки, которую
+машина может закрыть и обязана закрыть; остальное названо ниже поимённо и
+оставлено человеку.
+
+ЛЕТОПИСЬ ЗАМЕРА ДОСТУПНЫХ ИМЁН (идиома D-30/D-32: прежнее состояние названо, а
+не вычеркнуто). ``aria-label="Скрыть сообщение"`` встречался ДВАЖДЫ —
+``app/templates/includes/htmx_error_banner.html:300`` (узел
+``htmx-failure-server``) и ``:301`` (узел ``htmx-failure-network``); замер
+2026-09-23, перезамер планирования Фазы 15 подтвердил обе координаты (Ф-19
+``15-RESEARCH.md``). Запись долга D-18.3 называет это «при двойной аварии
+стоя́т два неразличимых доступных имени». Снято правкой плана ``15-07``,
+задача 1: два значения атрибута разведены ПО ПРЕДМЕТУ своей заготовки —
+«Скрыть сообщение об отказе сервера» и «Скрыть сообщение об обрыве связи».
+План ``15-19``, задача 2, переставил признак аварии в начало имени —
+«Отказ сервера: скрыть сообщение» и «Обрыв связи: скрыть сообщение»
+(летопись — у ``BANNER_DISMISS_ACCESSIBLE_NAMES``).
+Прежнее значение ошибкой не было — оно было одним на две заготовки, и
+неразличимость возникала только при ДВОЙНОЙ аварии; поэтому оно названо здесь,
+а не вычеркнуто.
+
+ПОЧЕМУ ПО ПРЕДМЕТУ, А НЕ ПО НОМЕРУ. Нумерация («Скрыть сообщение 1» / «2»)
+неравенство строк прошла бы, а человеку на слух не сказала бы ничего. Поэтому
+правило ниже утверждает не только НЕРАВЕНСТВО двух строк, но и СООТВЕТСТВИЕ
+имени предмету своего узла: два разных, но перепутанных имени неравенство
+прошли бы, а соответствие — нет.
+
+ГРАНИЦА СРАВНЕНИЯ (кодировка). Шаблон читается как UTF-8, и имена сличаются
+ТОЧНЫМ равенством строк кодовых точек — без нормализации Юникода и без
+приведения регистра. Различие узкого неразрывного пробела и обычного здесь
+считается РАЗЛИЧИЕМ: нормализация молча склеивала бы строки, которые в
+разметке разные, и правило стало бы утверждать о другом тексте, чем тот, что
+приходит в браузер. ⚠️ Цена этой границы названа: два имени, различающиеся
+ТОЛЬКО видом пробела, прошли бы правило различимости, хотя скринридер прочтёт
+их одинаково. От этого стережёт не правило различимости, а правило
+соответствия предмету: признаки аварий («Отказ сервера», «Обрыв связи»; до
+плана 15-19 — «отказе сервера», «обрыве связи») суть разные СЛОВА, и совпасть
+на слух два имени, каждое из которых несёт свой признак и не несёт чужого, не
+могут. С плана 15-19 правило порядка
+(``test_each_accessible_name_leads_with_its_own_failure``) требует ещё, чтобы
+признак стоял ПЕРВЫМ словом имени.
+
+ЛЕТОПИСЬ ЧИСЛА ПРАВИЛ ``.failure-stack``: 6 → 4 → 5 (идиома D-30/D-32). Носитель
+числа ОДИН — этот файл: план 15-05 своего литерала не заводит и адресата
+называет (``tests/test_templates/test_htmx_markup_gates.py``, граница
+FAILURE_STACK_SELECTOR_BOUNDARY_NOTE), чтобы двух носителей одного числа не
+возникло.
+
+- «6» — запись долга D-18.3 и ``15-CONTEXT.md``: «компенсации ``padding-right``
+  нет ни в одном из шести правил ``failure-stack``».
+- «4» — перезамер планирования Фазы 15 (Ф-19 ``15-RESEARCH.md``), снят ЧТЕНИЕМ
+  ФАЙЛА, а не вычитанием: селекторы ``app.css:1259, 1263, 1266, 1330``.
+- «5» — правка плана ``15-07``, задача 2: добавлен ПЯТЫЙ селектор — блок
+  компенсации перекрытия ``.failure-stack > .alert``.
+
+ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи он был верным, и
+правится не он, а числа, которые он пережил. Записи разведки
+(``.planning/research/*``) НЕ ПРАВЯТСЯ. ⚠️ Утверждение записи долга
+«компенсации нет ни в одном из шести» верно ПО СУЩЕСТВУ — её не было ни в
+одном из ЧЕТЫРЁХ; расходится число, не вывод.
+
+ПОЧЕМУ ОЖИДАНИЯ ВЫПИСАНЫ ЗДЕСЬ, А НЕ ВЫВЕДЕНЫ ИЗ ПРОВЕРЯЕМОГО ШАБЛОНА — дословно
+по ``tests/test_templates/test_htmx_inventory.py:63-67``: тест, считающий
+ожидание по коду в момент прогона, согласится с любой правкой и молча переживёт
+исчезновение органа.
+
+ЧЕГО ЭТОТ ФАЙЛ НЕ УТВЕРЖДАЕТ. Зелёный цвет здесь означает ровно одно: органов
+снятия два, у каждого своё доступное имя, и имя соответствует предмету своего
+узла. Он НЕ означает, что скринридер действительно прочтёт их различимо: дерева
+доступности в суите нет, браузерного привода нет ни одного. Он НЕ означает, что
+орган виден, щёлкается мышью или отвечает на пробел. И он НЕ означает, что
+заготовка скрывается: скрытие выражено объявлением таблицы стилей, и его
+отрисовка есть предмет глаз. Сам файл стилей запрещает подмену дословно
+(``app/static/css/app.css``, абзац стопки «⚠️ ГРАНИЦА ДОКАЗАННОГО НАЗВАНА
+ЗДЕСЬ, А НЕ ОСТАВЛЕНА ЧИТАТЕЛЮ: правила утверждают ОБЪЯВЛЕНИЯ этой таблицы»):
+«объявлять их пройденными по зелени правил НЕЛЬЗЯ — окно 77 журнала
+записывает, чем такая подмена уже обошлась фазе». Летопись указателя: прежде
+здесь стояли номера строк ``:1255-1258`` — их сдвигает первая же правка выше
+(ревью IN-04, план 15-19).
+
+ГРАНИЦЫ ГЕЙТА — их ПЯТЬ (летопись: ЧЕТЫРЕ до плана 15-19, пятую добавило
+решение владельца Г-3), и каждая названа с основанием (форма
+``tests/test_pages/test_impersonation_gate.py:456-476``: граница НАЗВАНА, а
+невидимая гейту форма, где это возможно, отдельным правилом ЗАПРЕЩЕНА).
+
+1. Гейт читает ТЕКСТ шаблона и ТЕКСТ таблицы стилей. Он не строит дерева
+   доступности, не раскладывает страницу и не нажимает клавиш — движка
+   раскладки в суите нет, браузерного привода нет ни одного.
+2. Доступное имя утверждается по ``aria-label``. Орган, получивший имя ИНАЧЕ —
+   через ``aria-labelledby``, ``title`` или текстовый узел, — этому разборщику
+   не виден. Поэтому такие формы ЗАПРЕЩЕНЫ отдельным правилом
+   (``test_boundary_no_control_gets_its_name_from_a_form_the_gate_cannot_see``):
+   гейт, который чего-то не видит, обязан требовать, чтобы этого и не было.
+3. Компенсация перекрытия утверждается как ОБЪЯВЛЕНИЕ и его величина. Что
+   нарисованное перекрытие ушло, гейт не утверждает и утверждать не может.
+4. Смещение второй заготовки после снятия первой ОРГАНОМ остаётся ОТКРЫТЫМ и
+   этой фазой НЕ ЧИНИТСЯ. Основание передачи — дословно из ``app/static/css/app.css``
+   (абзац «НАЗВАННОЕ СЛЕДСТВИЕ, КОТОРОЕ ЭТА ПРАВКА НЕ ЧИНИТ И НЕ ПРЯЧЕТ»):
+   «Починка требует четвёртого блока, объявляющего ``--failure-banner-top``, а
+   разбор ``_stack_blocks`` относит его к роли смещения — и правила стопки плана
+   10-56 покраснели бы за ФОРМУ правки». Адресат — решение ВЕХИ, а не плана, как
+   и ``DEF-09-04``. Попытка починить следствие будет ВИДНА: правило-сторож
+   ``test_boundary_the_open_banner_top_consequence_is_guarded_not_fixed``
+   держит число блоков, объявляющих эту величину, и запись следствия в CSS.
+5. Потеря фокуса при снятии клавишей (WCAG 2.4.3) и роль «флажок» — ПРИНЯТЫЕ
+   следствия ветви `A` (решение владельца `chubav` 2026-09-25, Г-3): записаны в
+   ``app/static/css/app.css`` и стерегутся правилом
+   ``test_boundary_the_keyboard_focus_and_the_checkbox_role_consequences_are_guarded_not_fixed``.
+   Куда фокус падает НА ДЕЛЕ, гейт не утверждает — это шаг У-8 обхода.
+
+ЧТО ОСТАЁТСЯ ГЛАЗАМ — пять наблюдений, перечисленных поимённо, чтобы план
+``15-14`` внёс их в ``15-UAT.md`` РАЗДЕЛОМ УЛИКИ (окно 1280 px, обе заготовки
+видимы — двойная авария: отказ 500 и обрыв сети):
+
+1. виден ли обвод фокуса на органе снятия при переходе табуляцией
+   (``outline: 2px solid var(--focus-ring)``, объявлен в ``app.css`` правилом
+   ``.banner-dismiss:focus-visible`` — прежде указатель ``:1329``, летопись;
+   существование утверждено планом 15-05);
+2. срабатывает ли ПРОБЕЛ на ``<input type="checkbox">`` (заготовка скрывается);
+3. есть ли нарисованное столкновение текста с крестиком после добавления
+   компенсации (замер 2026-09-14: столкновения НЕТ и до неё — подтвердить или
+   опровергнуть заново);
+4. различимы ли два доступных имени НА СЛУХ скринридера при двойной аварии;
+5. остаётся ли вторая заготовка на смещённом месте после снятия первой органом
+   (известное открытое следствие — подтвердить, что оно именно такое, а не хуже).
+
+⚠️ ``result`` и отметку о закрытии по этим наблюдениям заполняет ЧЕЛОВЕК (D-17).
+Машинный замер идёт РАЗДЕЛОМ УЛИКИ, а не приёмкой; раздел улики появляется в
+``15-UAT.md`` планом ``15-14``.
+"""
+
+from __future__ import annotations
+
+import re
+from collections import Counter
+from pathlib import Path
+from typing import NamedTuple
+
+from tests.test_templates.test_htmx_markup_gates import (
+    APP_CSS,
+    TEMPLATES_DIR,
+    _all_templates,
+    _app_css,
+    _css_rules,
+    _declaration,
+    _strip_comments,
+)
+
+# --- ОБЪЯВЛЕННЫЕ ОЖИДАНИЯ ------------------------------------------------------
+
+# Шаблон заготовок относительно каталога шаблонов.
+BANNER_TEMPLATE = "includes/htmx_error_banner.html"
+
+# Класс органа снятия. Совпадает с тем, что ищет гейт шелла
+# (`FAILURE_BANNER_DISMISS_CLASS`, tests/test_pages/test_shell.py); выписан
+# здесь, а не импортирован, потому что предмет этого файла — ДОСТУПНОЕ ИМЯ, и
+# импорт связал бы два гейта за пределами их общего предмета.
+BANNER_DISMISS_CLASS = "banner-dismiss"
+
+# Класс узла заготовки: орган снятия принадлежит ближайшему открытому до него
+# узлу этого класса.
+BANNER_NODE_CLASS = "failure-stack"
+
+# Органов снятия в дереве — ровно два, по одному на заготовку. Антивакуумное
+# `> 0` утверждается отдельно: орган, исчезнувший молча, оставил бы правило
+# различимости зелёным ровно тогда, когда органов не стало.
+BANNER_DISMISS_CONTROLS = 2
+
+# Узел заготовки → доступное имя его органа снятия (план 15-07, задача 1;
+# порядок слов — план 15-19, задача 2).
+#
+# ЛЕТОПИСЬ ИМЁН (идиома D-30/D-32). План 15-07 назвал органы «Скрыть сообщение
+# об отказе сервера» / «Скрыть сообщение об обрыве связи». Имена были
+# различимы, но различающее слово стояло ПОСЛЕДНИМ после общего префикса
+# «Скрыть сообщение об о» — 21 знак, замер 2026-09-25 (UI-ревью фазы, пункт 7,
+# называет 22 — номер знака, на котором имена расходятся). В списке элементов
+# управления и при быстрой речи различие приходило последним. С плана 15-19
+# признак аварии стоит первым словом.
+BANNER_DISMISS_ACCESSIBLE_NAMES: dict[str, str] = {
+    "htmx-failure-server": "Отказ сервера: скрыть сообщение",
+    "htmx-failure-network": "Обрыв связи: скрыть сообщение",
+}
+
+# Узел заготовки → признак СВОЕЙ аварии, который обязан стоять в имени его
+# органа. Текст первой заготовки говорит «Действие не выполнено…» (сервер
+# ответил отказом), второй — «Запрос не дошёл до сервера…» (связь оборвалась).
+# Летопись: до плана 15-19 признаки стояли в предложном падеже («отказе
+# сервера», «обрыве связи») — так их несли прежние имена.
+BANNER_DISMISS_SUBJECT_MARKS: dict[str, str] = {
+    "htmx-failure-server": "Отказ сервера",
+    "htmx-failure-network": "Обрыв связи",
+}
+
+# Узел заготовки → ПЕРВОЕ слово имени его органа (план 15-19, UI-ревью пункт 7):
+# различающее слово стоит первым, а не последним после общего префикса.
+BANNER_DISMISS_LEADING_WORDS: dict[str, str] = {
+    "htmx-failure-server": "Отказ",
+    "htmx-failure-network": "Обрыв",
+}
+
+# Регистраций обработчика в файле заготовок — снято ДО правки плана 15-07
+# (`grep -o 'addEventListener(' … | wc -l` → 3, 2026-09-24). Рост этого числа
+# отменил бы ветвь `A` решения владельца 2026-09-13 («снятие без регистрации»)
+# и потребовал бы НОВОГО решения владельца.
+BANNER_SCRIPT_HANDLER_REGISTRATIONS = 3
+
+# Порог непустоты вселенной обхода: шаблонов в дереве больше пятидесяти.
+TEMPLATE_UNIVERSE_FLOOR = 50
+
+_TAG_RE = re.compile(r"<(div|input)\b[^>]*>", re.IGNORECASE)
+_ID_RE = re.compile(r'\bid="([^"]*)"')
+_CLASS_RE = re.compile(r'\bclass="([^"]*)"')
+_ARIA_LABEL_RE = re.compile(r'\baria-label="([^"]*)"')
+_HANDLER_REGISTRATION = "addEventListener("
+
+
+class DismissControl(NamedTuple):
+    """Орган снятия: узел заготовки, которому он принадлежит, и текст его тега."""
+
+    owner: str
+    tag: str
+
+
+# --- РАЗБОРЩИКИ (принимают ИСХОДНИК ТЕКСТОМ, а не путь) ------------------------
+
+
+def _banner_source(directory: Path | None = None) -> str:
+    """Исходник шаблона заготовок из обхода дерева (UTF-8, как читает обход).
+
+    Обход — ОБЩИЙ `_all_templates` гейтов разметки; своего обхода каталога не
+    заводится.
+    """
+    for rel, source in _all_templates(directory):
+        if rel == BANNER_TEMPLATE:
+            return source
+    return ""
+
+
+def _classes(tag: str) -> list[str]:
+    match = _CLASS_RE.search(tag)
+    return match.group(1).split() if match else []
+
+
+def _banner_dismiss_controls(source: str) -> list[DismissControl]:
+    """Органы снятия в исходнике, каждый — с узлом заготовки, которому принадлежит.
+
+    Принимает ИСХОДНИК ТЕКСТОМ: иначе контроли на синтетическом исходнике
+    невыразимы. Комментарии вырезаются общим `_strip_comments` — докстринг
+    шаблона называет доступное имя словами, и правило, читающее прозу,
+    краснело бы на объяснении, а не на разметке.
+    """
+    controls: list[DismissControl] = []
+    owner = ""
+    for match in _TAG_RE.finditer(_strip_comments(source)):
+        tag = match.group(0)
+        classes = _classes(tag)
+        if match.group(1).lower() == "div" and BANNER_NODE_CLASS in classes:
+            id_match = _ID_RE.search(tag)
+            owner = id_match.group(1) if id_match else ""
+        elif match.group(1).lower() == "input" and BANNER_DISMISS_CLASS in classes:
+            controls.append(DismissControl(owner, tag))
+    return controls
+
+
+def _accessible_names(controls: list[DismissControl]) -> dict[str, str | None]:
+    """Узел заготовки → доступное имя его органа (None — имени нет вовсе)."""
+    names: dict[str, str | None] = {}
+    for control in controls:
+        match = _ARIA_LABEL_RE.search(control.tag)
+        names[control.owner] = match.group(1) if match else None
+    return names
+
+
+def _distinctness_findings(source: str) -> tuple[str, ...]:
+    """Расхождения различимости. Пусто — у каждого органа своё непустое имя.
+
+    Сравнение — ТОЧНОЕ, по кодовым точкам (`Counter` над строками как есть):
+    без нормализации и без приведения регистра — граница названа в докстринге
+    модуля.
+    """
+    findings: list[str] = []
+    controls = _banner_dismiss_controls(source)
+    labelled: list[tuple[str, str]] = []
+    for control in controls:
+        match = _ARIA_LABEL_RE.search(control.tag)
+        if match is None or match.group(1) == "":
+            findings.append(
+                f"#{control.owner or '<узел без id>'}: у органа снятия НЕТ "
+                "доступного имени (`aria-label` отсутствует или пуст)\n"
+                f"      получено: {control.tag}\n"
+                "      следствие: вспомогательная технология назовёт его "
+                "«флажок» и ничем больше — пустое имя не есть «различимое»"
+            )
+            continue
+        labelled.append((control.owner, match.group(1)))
+    for name, count in sorted(Counter(label for _owner, label in labelled).items()):
+        if count > 1:
+            owners = [owner for owner, label in labelled if label == name]
+            findings.append(
+                f"доступное имя «{name}» ПОВТОРЯЕТСЯ {count} раз(а) — у узлов "
+                f"{', '.join('#' + o for o in owners)}\n"
+                "      следствие: при двойной аварии в порядке обхода стоя́т два "
+                "неразличимых доступных имени (WCAG 4.1.2)"
+            )
+    return tuple(findings)
+
+
+def _subject_findings(source: str) -> tuple[str, ...]:
+    """Расхождения ПРЕДМЕТА: имя каждого органа несёт признак СВОЕЙ аварии и не чужой."""
+    findings: list[str] = []
+    names = _accessible_names(_banner_dismiss_controls(source))
+    for owner, mark in BANNER_DISMISS_SUBJECT_MARKS.items():
+        name = names.get(owner)
+        if name is None:
+            findings.append(f"#{owner}: органа снятия с доступным именем нет — сличать не с чем")
+            continue
+        if mark not in name:
+            findings.append(
+                f"#{owner}: доступное имя «{name}» НЕ несёт признака своей аварии "
+                f"«{mark}»"
+            )
+        for other, other_mark in BANNER_DISMISS_SUBJECT_MARKS.items():
+            if other != owner and other_mark in name:
+                findings.append(
+                    f"#{owner}: доступное имя «{name}» стои́т НЕ НА СВОЁМ узле — оно "
+                    f"несёт признак «{other_mark}» аварии узла #{other}"
+                )
+    return tuple(findings)
+
+
+def _handler_registrations(source: str) -> int:
+    """Число регистраций обработчика в исходнике без комментариев."""
+    return _strip_comments(source).count(_HANDLER_REGISTRATION)
+
+
+# --- ПРАВИЛА -------------------------------------------------------------------
+
+
+def test_the_two_dismiss_controls_have_distinct_accessible_names() -> None:
+    """Доступные имена органов снятия попарно различны (WCAG 4.1.2).
+
+    Множество имён имеет длину, равную числу органов; совпадение двух имён
+    краснит правило и называет повторившееся значение.
+    """
+    source = _banner_source()
+    findings = _distinctness_findings(source)
+
+    assert findings == (), f"{BANNER_TEMPLATE}:\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+    names = [name for name in _accessible_names(_banner_dismiss_controls(source)).values()]
+    assert len(set(names)) == len(names), f"имена органов не различны: {names}"
+
+
+def test_the_dismiss_control_count_and_names_are_declared() -> None:
+    """Органов снятия ровно `BANNER_DISMISS_CONTROLS`, и перечень равен объявленному."""
+    assert BANNER_DISMISS_CONTROLS > 0, "объявлено ноль органов — правило различимости вакуумно"
+    controls = _banner_dismiss_controls(_banner_source())
+
+    assert len(controls) > 0, (
+        f"в {BANNER_TEMPLATE} не найдено НИ ОДНОГО органа снятия — правило "
+        "различимости зеленело бы на пустом перечне"
+    )
+    assert len(controls) == BANNER_DISMISS_CONTROLS, (
+        f"органов снятия {len(controls)}, объявлено {BANNER_DISMISS_CONTROLS}: "
+        f"{[c.owner for c in controls]}"
+    )
+    assert _accessible_names(controls) == BANNER_DISMISS_ACCESSIBLE_NAMES, (
+        "перечень «узел заготовки → доступное имя» разошёлся с объявленным\n"
+        f"      получено:  {_accessible_names(controls)}\n"
+        f"      ожидалось: {BANNER_DISMISS_ACCESSIBLE_NAMES}"
+    )
+
+
+def test_each_dismiss_control_is_a_checkbox_without_a_text_node() -> None:
+    """Каждый орган — `<input type="checkbox">` класса `banner-dismiss` без текстового узла.
+
+    Элемент `<input>` пустой по построению: доступное имя приходит ТОЛЬКО из
+    `aria-label`, поэтому его повтор и есть повтор ДОСТУПНОГО ИМЕНИ, а не
+    совпадение служебного атрибута.
+    """
+    source = _strip_comments(_banner_source())
+    controls = _banner_dismiss_controls(_banner_source())
+    assert controls, "органов снятия нет — разбирать форму не у чего"
+    for control in controls:
+        assert control.tag.lower().startswith("<input"), control.tag
+        assert 'type="checkbox"' in control.tag, (
+            f"#{control.owner}: орган не есть флажок — получено {control.tag}"
+        )
+        assert BANNER_DISMISS_CLASS in _classes(control.tag), control.tag
+    assert "</input" not in source.lower(), (
+        "в исходнике заготовок есть закрывающий тег `</input>` — у органа "
+        "появился текстовый узел, и доступное имя могло прийти не из `aria-label`"
+    )
+
+
+def test_each_accessible_name_names_its_own_failure() -> None:
+    """Имя каждого органа несёт признак СВОЕЙ аварии, и ни одно не стоит на чужом узле.
+
+    Неравенство двух строк прошли бы и два перепутанных имени; соответствие
+    «узел ↔ признак в имени» — нет. Отказ называет, какое имя стои́т не на
+    своём узле.
+    """
+    findings = _subject_findings(_banner_source())
+
+    assert findings == (), f"{BANNER_TEMPLATE}:\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+def _leading_word(name: str) -> str:
+    """Первое слово имени — до первого пробела, без знаков препинания по краям."""
+    words = name.split()
+    return words[0].strip(".,:;—-«»") if words else ""
+
+
+def _leading_word_findings(source: str) -> tuple[str, ...]:
+    """Расхождения порядка слов. Пусто — имя каждого органа НАЧИНАЕТСЯ признаком своей аварии.
+
+    Первые слова двух органов обязаны быть различны: при быстрой речи и в списке
+    элементов управления различие, пришедшее последним, человек слышит последним.
+    """
+    findings: list[str] = []
+    names = _accessible_names(_banner_dismiss_controls(source))
+    for owner, word in BANNER_DISMISS_LEADING_WORDS.items():
+        name = names.get(owner)
+        if name is None:
+            findings.append(f"#{owner}: органа снятия с доступным именем нет — сличать не с чем")
+            continue
+        if _leading_word(name) != word:
+            findings.append(
+                f"#{owner}: доступное имя «{name}» начинается словом «{_leading_word(name)}», а не "
+                f"признаком своей аварии «{word}» — различающее слово стои́т не первым"
+            )
+    leading = [_leading_word(name) for name in names.values() if name]
+    if len(set(leading)) != len(leading):
+        findings.append(
+            f"первые слова имён органов совпадают: {leading} — при двойной аварии имена "
+            "различаются не с первого слова"
+        )
+    return tuple(findings)
+
+
+def test_each_accessible_name_leads_with_its_own_failure() -> None:
+    """Имя каждого органа НАЧИНАЕТСЯ признаком своей аварии, и первые слова двух органов различны.
+
+    Прежние имена плана 15-07 были различимы, но различающее слово стояло
+    последним после общего префикса (UI-ревью, пункт 7); правило требует его
+    первым.
+    """
+    assert len(set(BANNER_DISMISS_LEADING_WORDS.values())) == len(BANNER_DISMISS_LEADING_WORDS), (
+        "объявленные первые слова совпадают — правило различимости порядка вакуумно"
+    )
+    findings = _leading_word_findings(_banner_source())
+
+    assert findings == (), f"{BANNER_TEMPLATE}:\n" + "\n".join(f"  — {line}" for line in findings)
+
+
+def test_no_handler_registration_is_added_to_the_banner_file() -> None:
+    """Регистраций обработчика в файле заготовок — ровно объявленное число.
+
+    Ветвь `A` решения владельца 2026-09-13 («снятие без регистрации») остаётся
+    в силе: правка плана 15-07 касается только двух значений `aria-label`.
+    """
+    found = _handler_registrations(_banner_source())
+
+    assert found == BANNER_SCRIPT_HANDLER_REGISTRATIONS, (
+        f"регистраций обработчика в {BANNER_TEMPLATE}: {found}, объявлено "
+        f"{BANNER_SCRIPT_HANDLER_REGISTRATIONS} (снято ДО правки плана 15-07)\n"
+        "      следствие: новая регистрация отменяет ветвь `A` решения владельца "
+        "2026-09-13 и требует НОВОГО решения владельца"
+    )
+
+
+# --- КОНТРОЛИ ОТ ВАКУУМА -------------------------------------------------------
+
+
+_SYNTHETIC_NODE = (
+    '<div id="{owner}" class="failure-stack" hidden>'
+    '<input type="checkbox" id="{owner}-close" class="banner-dismiss"{label}>'
+    "текст</div>\n"
+)
+
+
+def _synthetic(*nodes: tuple[str, str | None]) -> str:
+    return "".join(
+        _SYNTHETIC_NODE.format(
+            owner=owner, label="" if label is None else f' aria-label="{label}"'
+        )
+        for owner, label in nodes
+    )
+
+
+def test_control_repeated_accessible_names_redden() -> None:
+    """Два органа с ОДИНАКОВЫМИ именами — правило краснеет и называет повтор."""
+    source = _synthetic(
+        ("htmx-failure-server", "Скрыть сообщение"),
+        ("htmx-failure-network", "Скрыть сообщение"),
+    )
+
+    findings = _distinctness_findings(source)
+
+    assert findings, "правило различимости зелено на двух одинаковых именах — гейт слеп"
+    assert any("«Скрыть сообщение» ПОВТОРЯЕТСЯ 2" in line for line in findings), (
+        f"отказ не назвал повторившееся значение: {findings}"
+    )
+
+
+def test_control_a_control_without_an_accessible_name_reddens() -> None:
+    """Орган БЕЗ `aria-label` — правило краснеет и называет узел без имени."""
+    source = _synthetic(
+        ("htmx-failure-server", "Скрыть сообщение об отказе сервера"),
+        ("htmx-failure-network", None),
+    )
+
+    findings = _distinctness_findings(source)
+
+    assert findings, "правило различимости зелено на органе без имени — пустое читается «различимым»"
+    assert any("#htmx-failure-network" in line and "НЕТ доступного имени" in line
+               for line in findings), f"отказ не назвал узел без имени: {findings}"
+
+
+def test_control_names_that_differ_only_at_the_end_redden() -> None:
+    """Имена плана 15-07 (различие в последнем слове) — правило порядка краснеет на обоих узлах."""
+    source = _synthetic(
+        ("htmx-failure-server", "Скрыть сообщение об отказе сервера"),
+        ("htmx-failure-network", "Скрыть сообщение об обрыве связи"),
+    )
+
+    findings = _leading_word_findings(source)
+
+    assert any("#htmx-failure-server" in line and "«Скрыть»" in line for line in findings), findings
+    assert any("#htmx-failure-network" in line and "«Скрыть»" in line for line in findings), findings
+    assert any("первые слова имён органов совпадают" in line for line in findings), findings
+
+
+def test_control_the_untouched_tree_is_a_nonempty_universe() -> None:
+    """На необойдённом дереве вселенная непуста, и оба правила молчат НЕ на пустоте."""
+    templates = _all_templates(TEMPLATES_DIR)
+    assert len(templates) > TEMPLATE_UNIVERSE_FLOOR, (
+        f"шаблонов в обходе {len(templates)}, не больше {TEMPLATE_UNIVERSE_FLOOR}"
+    )
+    source = _banner_source()
+    assert source, f"шаблона {BANNER_TEMPLATE} в обходе нет"
+    assert len(_banner_dismiss_controls(source)) == BANNER_DISMISS_CONTROLS
+    assert _distinctness_findings(source) == ()
+    assert _subject_findings(source) == ()
+
+
+def test_control_exact_code_point_comparison_is_not_normalised() -> None:
+    """Сличение по кодовым точкам: узкий неразрывный пробел ≠ обычный.
+
+    Граница кодировки из докстринга модуля, показанная, а не заявленная:
+    разборщик не нормализует строки, поэтому два имени, различающиеся только
+    видом пробела, для него РАЗНЫЕ.
+    """
+    source = _synthetic(
+        ("htmx-failure-server", "Скрыть сообщение"),
+        ("htmx-failure-network", "Скрыть сообщение"),
+    )
+
+    assert _distinctness_findings(source) == (), (
+        "имена с узким и обычным пробелом приравнены — сравнение нормализует строки"
+    )
+
+
+# =============================================================================
+# Задача 2 плана 15-07: КОМПЕНСАЦИЯ ПЕРЕКРЫТИЯ ОБЪЯВЛЕНА ВЕЛИЧИНОЙ ИЗ ЗАМЕРА
+# =============================================================================
+#
+# ПОВОД (запись долга D-18.3). Коробка органа снятия занимает 885→909 при
+# содержимом `.alert`, кончающемся на 900: перекрытие 15 px, и компенсации
+# `padding-right` не было ни в одном правиле `failure-stack`. ⚠️ Нарисованная
+# половина замерена четвёртым обходом и оказалась у́же объявленной: видимого
+# столкновения текста с крестиком НЕТ (снимок 2026-09-14, окно 1280 px). Блок
+# компенсации поэтому объявляется ПО ЗАМЕРУ КОРОБКИ, а не по наблюдённому
+# столкновению, — и утверждается ОБЪЯВЛЕНИЕ, а не отрисовка.
+#
+# ЛЕТОПИСЬ ЧИСЛА ПРАВИЛ `.failure-stack` (6 → 4 → 5) — в докстринге модуля.
+#
+# ⚠️ ПЕРЕСБОРКА `asset_version` — ОЖИДАЕМОЕ СЛЕДСТВИЕ, А НЕ ПОЛОМКА (FOUND-03):
+# правка `app.css` сдвигает `?v=` на теге стилей, потому что версия выводится из
+# байтов охвата (`app/pages/common.py`, `_compute_asset_version`).
+
+STACK_CLASS_SELECTOR = f".{BANNER_NODE_CLASS}"
+
+# Правил, чей селектор несёт класс стопки, — ровно пять; перечень выписан, а не
+# выведен (основание — докстринг модуля).
+FAILURE_STACK_RULES = 5
+FAILURE_STACK_SELECTORS: tuple[str, ...] = (
+    ".failure-stack",
+    ".failure-stack + .failure-stack",
+    ".failure-stack[hidden] + .failure-stack",
+    ".failure-stack:has(> .banner-dismiss:checked)",
+    ".failure-stack > .alert",
+)
+
+# Селектор блока компенсации: содержимое заготовки ПО КЛАССУ стопки, без адреса
+# заготовки (`_selector_lifts_banner` требует ровно одного блока подъёма).
+CLEARANCE_SELECTOR = ".failure-stack > .alert"
+CLEARANCE_PROPERTY = "padding-right"
+
+# Селектор коробки органа, из которой читаются слагаемые величины.
+DISMISS_BOX_SELECTOR = f".{BANNER_DISMISS_CLASS}"
+
+# Зазор между правым краем текста и коробкой органа. ⚠️ Рамка `.alert` (1px)
+# в сумму НЕ входит нарочно: она лишь прибавляет пиксель к видимому зазору, и
+# сумма остаётся наименьшей величиной, которая точно не перекрывается.
+BANNER_DISMISS_CLEARANCE_GAP_PX = 8
+
+# Объявленная компенсация: ширина органа (24px) + его отступ справа (6px) + зазор
+# (8px) = 38px. Равенство этой сумме ЧИТАЕТСЯ из `.banner-dismiss` той же
+# таблицы правилом ниже: правка коробки органа немедленно его краснит.
+BANNER_DISMISS_CLEARANCE_PX = 38
+
+# Блоков, ОБЪЯВЛЯЮЩИХ `--failure-banner-top`, — снято ДО правки плана 15-07
+# (`app.css:1259, 1263, 1266` — роли base / offset / reset `_stack_blocks`).
+BANNER_TOP_VARIABLE = "--failure-banner-top"
+BANNER_TOP_VARIABLE_BLOCKS = 3
+
+# Порог длины исходника для положительного контроля: правила молчат не на пустоте.
+APP_CSS_LINE_FLOOR = 1000
+
+_PX_RE = re.compile(r"^(-?\d+(?:\.\d+)?)px$")
+
+
+def _px(value: str | None) -> float | None:
+    match = _PX_RE.match(value.strip()) if value else None
+    return float(match.group(1)) if match else None
+
+
+def _failure_stack_selectors(css: str) -> tuple[str, ...]:
+    """Селекторы правил, несущие класс стопки, в порядке файла (CSS без комментариев)."""
+    return tuple(selector for selector, _body in _css_rules(css) if STACK_CLASS_SELECTOR in selector)
+
+
+def _clearance_declaration(css: str) -> str | None:
+    """Значение отступа справа у содержимого заготовки, объявленное по классу стопки."""
+    for selector, body in _css_rules(css):
+        if selector == CLEARANCE_SELECTOR:
+            return _declaration(body, CLEARANCE_PROPERTY)
+    return None
+
+
+def _dismiss_box_metrics(css: str) -> dict[str, float | None]:
+    """Ширина и отступ справа коробки органа, ПРОЧИТАННЫЕ из блока `.banner-dismiss`."""
+    for selector, body in _css_rules(css):
+        if selector == DISMISS_BOX_SELECTOR:
+            return {"width": _px(_declaration(body, "width")), "right": _px(_declaration(body, "right"))}
+    return {"width": None, "right": None}
+
+
+def _banner_top_blocks(css: str) -> tuple[str, ...]:
+    """Селекторы блоков, ОБЪЯВЛЯЮЩИХ величину `--failure-banner-top` (не читающих её)."""
+    return tuple(
+        selector for selector, body in _css_rules(css) if _declaration(body, BANNER_TOP_VARIABLE) is not None
+    )
+
+
+def _clearance_findings(css: str) -> tuple[str, ...]:
+    """Расхождения компенсации. Пусто — объявлена и равна выведенной из замера величине."""
+    declared = _clearance_declaration(css)
+    if declared is None:
+        return (
+            f"объявления `{CLEARANCE_SELECTOR} {{ {CLEARANCE_PROPERTY}: … }}` в таблице НЕТ — "
+            "компенсации перекрытия органом снятия не объявлено",
+        )
+    metrics = _dismiss_box_metrics(css)
+    if metrics["width"] is None or metrics["right"] is None:
+        return (
+            f"коробка органа `{DISMISS_BOX_SELECTOR}` не читается: получено {metrics} — "
+            "вывести величину компенсации не из чего",
+        )
+    derived = metrics["width"] + metrics["right"] + BANNER_DISMISS_CLEARANCE_GAP_PX
+    findings: list[str] = []
+    if derived != BANNER_DISMISS_CLEARANCE_PX:
+        findings.append(
+            f"объявленная `BANNER_DISMISS_CLEARANCE_PX = {BANNER_DISMISS_CLEARANCE_PX}` разошлась с "
+            f"выводом из коробки органа: width {metrics['width']:g} + right {metrics['right']:g} + "
+            f"зазор {BANNER_DISMISS_CLEARANCE_GAP_PX} = {derived:g}"
+        )
+    if _px(declared) != derived:
+        findings.append(
+            f"`{CLEARANCE_SELECTOR}`: объявлено `{CLEARANCE_PROPERTY}: {declared}`, а выведенная из "
+            f"замера коробки величина — {derived:g}px (width {metrics['width']:g} + right "
+            f"{metrics['right']:g} + зазор {BANNER_DISMISS_CLEARANCE_GAP_PX})"
+        )
+    return tuple(findings)
+
+
+def test_failure_stack_rule_count_is_declared() -> None:
+    """Правил класса стопки ровно `FAILURE_STACK_RULES`, перечень — объявленный (летопись 6 → 4 → 5)."""
+    assert FAILURE_STACK_RULES > 0, "объявлено ноль правил стопки — утверждение вакуумно"
+    assert len(FAILURE_STACK_SELECTORS) == FAILURE_STACK_RULES
+    found = _failure_stack_selectors(_app_css())
+
+    assert len(found) > 0, "правил класса стопки в таблице НЕТ — разбор ослеп"
+    assert found == FAILURE_STACK_SELECTORS, (
+        "перечень правил `.failure-stack` разошёлся с объявленным\n"
+        f"      получено ({len(found)}):  {found}\n"
+        f"      ожидалось ({FAILURE_STACK_RULES}): {FAILURE_STACK_SELECTORS}"
+    )
+
+
+def test_the_overlap_clearance_is_declared() -> None:
+    """Содержимое заготовки объявляет отступ справа, равный `BANNER_DISMISS_CLEARANCE_PX`."""
+    declared = _clearance_declaration(_app_css())
+
+    assert declared is not None, (
+        f"объявления `{CLEARANCE_SELECTOR} {{ {CLEARANCE_PROPERTY}: … }}` нет — компенсация "
+        "перекрытия органом снятия не объявлена"
+    )
+    assert _px(declared) == BANNER_DISMISS_CLEARANCE_PX, (
+        f"`{CLEARANCE_SELECTOR}`: `{CLEARANCE_PROPERTY}: {declared}`, объявлено "
+        f"{BANNER_DISMISS_CLEARANCE_PX}px"
+    )
+
+
+def test_the_clearance_is_derived_from_the_dismiss_box() -> None:
+    """Величина ВЫВЕДЕНА: равна ширине органа + его отступу справа + зазору, прочитанным из CSS."""
+    findings = _clearance_findings(_app_css())
+
+    assert findings == (), "app.css:\n" + "\n".join(f"  — {line}" for line in findings)
+
+
+def test_no_block_declaring_the_banner_top_is_added() -> None:
+    """Блоков, объявляющих `--failure-banner-top`, — ровно снятое ДО правки число."""
+    found = _banner_top_blocks(_app_css())
+
+    assert len(found) == BANNER_TOP_VARIABLE_BLOCKS, (
+        f"блоков, объявляющих `{BANNER_TOP_VARIABLE}`, {len(found)}, объявлено "
+        f"{BANNER_TOP_VARIABLE_BLOCKS}: {found}\n"
+        "      следствие: `_stack_blocks` отнёс бы новый блок к роли смещения, и правила "
+        "стопки плана 10-56 покраснели бы за ФОРМУ правки"
+    )
+
+
+def test_the_clearance_block_declares_no_display_mode_and_no_banner_address() -> None:
+    """Блок компенсации не объявляет способа отображения и не несёт адреса заготовки."""
+    bodies = [body for selector, body in _css_rules(_app_css()) if selector == CLEARANCE_SELECTOR]
+
+    assert len(bodies) == 1, f"блоков `{CLEARANCE_SELECTOR}` {len(bodies)}, а не один"
+    assert _declaration(bodies[0], "display") is None, (
+        f"`{CLEARANCE_SELECTOR}` объявляет способ отображения — блок попал бы во вселенную "
+        "`test_no_banner_rule_declares_a_display_mode_that_shows`"
+    )
+    assert _declaration(bodies[0], BANNER_TOP_VARIABLE) is None
+    assert "htmx-failure" not in CLEARANCE_SELECTOR
+
+
+def test_control_a_stylesheet_without_the_clearance_block_reddens() -> None:
+    """Синтетический CSS без блока компенсации — правило называет отсутствующее объявление."""
+    css = _app_css()
+    block = f"{CLEARANCE_SELECTOR} {{ {CLEARANCE_PROPERTY}: {BANNER_DISMISS_CLEARANCE_PX}px; }}"
+    assert css.count(block) == 1, (
+        f"блок {block!r} встречается {css.count(block)} раз(а), а не один — подмена меняет не то место"
+    )
+    changed = css.replace(block, "")
+    assert changed != css
+
+    findings = _clearance_findings(changed)
+
+    assert findings, "правило компенсации зелено на таблице без блока — гейт слеп"
+    assert any("НЕТ" in line and CLEARANCE_PROPERTY in line for line in findings), (
+        f"отказ не назвал отсутствующее объявление: {findings}"
+    )
+
+
+def test_control_an_understated_clearance_by_one_pixel_reddens() -> None:
+    """Компенсация, заниженная на 1 px, — правило называет расхождение с выведенной величиной."""
+    css = _app_css()
+    exact = f"{CLEARANCE_PROPERTY}: {BANNER_DISMISS_CLEARANCE_PX}px;"
+    assert css.count(exact) == 1, f"{exact!r} встречается {css.count(exact)} раз(а), а не один"
+    changed = css.replace(exact, f"{CLEARANCE_PROPERTY}: {BANNER_DISMISS_CLEARANCE_PX - 1}px;")
+
+    findings = _clearance_findings(changed)
+
+    assert findings, "правило вывода зелено на величине, заниженной на 1 px — подобранное число прошло"
+    assert any(f"{BANNER_DISMISS_CLEARANCE_PX - 1}px" in line and f"{BANNER_DISMISS_CLEARANCE_PX}px" in line
+               for line in findings), f"отказ не назвал расхождение: {findings}"
+
+
+def test_control_the_real_stylesheet_is_not_empty_and_the_rules_are_silent() -> None:
+    """На необойдённом файле оба правила молчат, и молчат НЕ на пустоте."""
+    lines = APP_CSS.read_text(encoding="utf-8").count("\n")
+    assert lines > APP_CSS_LINE_FLOOR, f"в таблице стилей {lines} строк, не больше {APP_CSS_LINE_FLOOR}"
+    css = _app_css()
+    assert _clearance_findings(css) == ()
+    assert len(_banner_top_blocks(css)) == BANNER_TOP_VARIABLE_BLOCKS
+
+
+# =============================================================================
+# Задача 3 плана 15-07: ГРАНИЦЫ ГЕЙТА — ЗАПРЕТ НЕВИДИМЫХ ФОРМ ИМЕНИ И СТОРОЖ
+# ОТКРЫТОГО СЛЕДСТВИЯ
+# =============================================================================
+
+# Формы доступного имени, которых разборщик не видит (граница 2 докстринга).
+_INVISIBLE_NAME_ATTRIBUTES = ("aria-labelledby", "title")
+
+# Абзац CSS, записывающий открытое следствие (граница 4 докстринга): запись
+# следствия обязана остаться — молчаливое удаление записи было бы вторым
+# способом «починить» его, не починив.
+OPEN_CONSEQUENCE_MARK = "НАЗВАННОЕ СЛЕДСТВИЕ, КОТОРОЕ ЭТА ПРАВКА НЕ ЧИНИТ И НЕ ПРЯЧЕТ"
+OPEN_CONSEQUENCE_BASIS = (
+    "Починка требует четвёртого блока, объявляющего `--failure-banner-top`, а "
+    "разбор `_stack_blocks` относит его к роли смещения — и правила стопки плана "
+    "10-56 покраснели бы за ФОРМУ правки"
+)
+
+
+def _invisible_name_form_findings(source: str) -> tuple[str, ...]:
+    """Органы, чьё имя могло бы прийти ИНАЧЕ, чем через `aria-label`. Пусто — таких нет."""
+    findings: list[str] = []
+    for control in _banner_dismiss_controls(source):
+        for attribute in _INVISIBLE_NAME_ATTRIBUTES:
+            if re.search(rf"\b{attribute}=", control.tag):
+                findings.append(
+                    f"#{control.owner}: орган снятия несёт `{attribute}` — имя, пришедшее этой "
+                    f"формой, разборщику не видно\n      получено: {control.tag}"
+                )
+    if "</input" in _strip_comments(source).lower():
+        findings.append(
+            "в исходнике есть закрывающий тег `</input>` — у органа мог появиться текстовый "
+            "узел, и имя пришло бы не из `aria-label`"
+        )
+    return tuple(findings)
+
+
+def test_boundary_no_control_gets_its_name_from_a_form_the_gate_cannot_see() -> None:
+    """ЗАПРЕТ (граница 2): ни один орган не несёт `aria-labelledby`, `title` или текстового узла."""
+    source = _banner_source()
+    assert _banner_dismiss_controls(source), "органов снятия нет — запрет вакуумен"
+    findings = _invisible_name_form_findings(source)
+
+    assert findings == (), f"{BANNER_TEMPLATE}:\n" + "\n".join(f"  — {line}" for line in findings)
+
+
+def test_control_a_control_named_by_a_form_the_gate_cannot_see_reddens() -> None:
+    """Контроль запрета: `aria-labelledby` и `title` на синтетическом органе называются поимённо."""
+    source = _synthetic(("htmx-failure-server", "Скрыть сообщение об отказе сервера")).replace(
+        'class="banner-dismiss"', 'class="banner-dismiss" aria-labelledby="x" title="Скрыть"', 1
+    )
+
+    findings = _invisible_name_form_findings(source)
+
+    assert any("aria-labelledby" in line for line in findings), f"не назван `aria-labelledby`: {findings}"
+    assert any("`title`" in line for line in findings), f"не назван `title`: {findings}"
+
+
+def test_boundary_the_open_banner_top_consequence_is_guarded_not_fixed() -> None:
+    """СТОРОЖ (граница 4): следствие остаётся ЗАПИСАННЫМ и НЕЧИНЕНЫМ — число блоков то же.
+
+    Смещение второй заготовки после снятия первой органом этой фазой не
+    чинится; адресат — решение ВЕХИ. Попытка починить его четвёртым блоком
+    покраснит это правило, а не пройдёт молча и не покраснит правила стопки
+    плана 10-56.
+    """
+    raw = APP_CSS.read_text(encoding="utf-8")
+    found = _banner_top_blocks(_app_css())
+
+    assert OPEN_CONSEQUENCE_MARK in raw and OPEN_CONSEQUENCE_BASIS in raw.replace("\n   ", " "), (
+        "запись открытого следствия в `app.css` исчезла или переписана — следствие «починено» "
+        "молчанием, а не работой"
+    )
+    assert len(found) == BANNER_TOP_VARIABLE_BLOCKS, (
+        f"блоков, объявляющих `{BANNER_TOP_VARIABLE}`, {len(found)}, объявлено "
+        f"{BANNER_TOP_VARIABLE_BLOCKS}: {found}\n"
+        f"      основание передачи (app.css, дословно): «{OPEN_CONSEQUENCE_BASIS}»\n"
+        "      адресат: решение ВЕХИ, а не плана (как `DEF-09-04`) — починка требует "
+        "НОВОГО решения владельца"
+    )
+
+
+# =============================================================================
+# План 15-19, задача 1: ДВА ПРИНЯТЫХ СЛЕДСТВИЯ ВЕТВИ A — ЗАПИСАНЫ И СТЕРЕЖЕНЫ
+# =============================================================================
+#
+# ПОВОД — приоритет 1 UI-ревью фазы (`15-UI-REVIEW.md`, §Top 3): снятие плашки
+# КЛАВИШЕЙ теряет фокус (WCAG 2.4.3), и орган объявляется ролью «флажок» — ролевая
+# половина записи D-18.3 не была ни починена, ни записана принятой. Решение
+# владельца `chubav` 2026-09-25 (Г-3, «записать следствием»): ветвь `A` остаётся —
+# без нового обработчика и без замены органа на `<button>`; оба следствия
+# записываются в `app.css` ПРИНЯТЫМИ рядом со следствием смещения второй заготовки
+# и стерегутся в той же форме, что
+# `test_boundary_the_open_banner_top_consequence_is_guarded_not_fixed`.
+#
+# ⚠️ ГРАНИЦА ЭТОГО СТОРОЖА. Он читает ТЕКСТ таблицы стилей и ТЕКСТ шаблона и
+# утверждает ровно четыре вещи: обе записи на месте и называют основание; орган
+# остаётся флажком; скрытие снятой стопки остаётся объявлением `display: none` по
+# `:has(> .banner-dismiss:checked)`; регистраций обработчика в файле плашки столько
+# же, сколько было. Куда фокус падает НА ДЕЛЕ (в Chrome и в Firefox по-разному) и
+# что именно произносит скринридер, он НЕ утверждает и утверждать не может: движка
+# раскладки и дерева доступности в суите нет. Это шаг У-8 ручного обхода
+# `15-UAT.md`, и отметки его ставит человек.
+
+# Подстроки двух записей в `app.css`. Молчаливое удаление записи — второй способ
+# «починить» следствие, не починив его.
+KEYBOARD_FOCUS_CONSEQUENCE_MARK = "ПРИНЯТОЕ СЛЕДСТВИЕ ВЕТВИ A: СНЯТИЕ КЛАВИШЕЙ ТЕРЯЕТ ФОКУС"
+CHECKBOX_ROLE_CONSEQUENCE_MARK = "ПРИНЯТОЕ СЛЕДСТВИЕ ВЕТВИ A: ОРГАН ОБЪЯВЛЯЕТСЯ ФЛАЖКОМ"
+ACCEPTED_CONSEQUENCE_MARKS: tuple[str, ...] = (
+    KEYBOARD_FOCUS_CONSEQUENCE_MARK,
+    CHECKBOX_ROLE_CONSEQUENCE_MARK,
+)
+
+# Основание, которое каждая запись обязана назвать дословно (сличение — после
+# сведения пробелов и переводов строк к одному пробелу).
+ACCEPTED_CONSEQUENCE_BASIS = "решение владельца `chubav` 2026-09-25 (Г-3, «записать следствием»)"
+
+# Правило скрытия снятой стопки — механизм ветви `A`.
+DISMISSED_STACK_SELECTOR = f"{STACK_CLASS_SELECTOR}:has(> .{BANNER_DISMISS_CLASS}:checked)"
+
+# Любой элемент, несущий класс органа, — чтобы замена `<input>` на `<button>` была
+# НАЗВАНА, а не только посчитана недостачей.
+_ANY_DISMISS_TAG_RE = re.compile(
+    rf'<(\w+)\b[^>]*\bclass="[^"]*\b{BANNER_DISMISS_CLASS}\b[^"]*"[^>]*>', re.IGNORECASE
+)
+
+_CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+_FIX_ADDRESSEE = (
+    "      адресат: починка — НОВОЕ решение владельца, а не плана (Г-3 2026-09-25: ветвь `A` "
+    "остаётся, следствие записано принятым)"
+)
+
+
+def _record_paragraph(raw_css: str, mark: str) -> str | None:
+    """Абзац записи от её подстроки до пустой строки или конца комментария; пробелы сведены."""
+    start = raw_css.find(mark)
+    if start < 0:
+        return None
+    ends = [end for end in (raw_css.find("\n\n", start), raw_css.find("*/", start)) if end >= 0]
+    paragraph = raw_css[start : min(ends) if ends else len(raw_css)]
+    return " ".join(paragraph.split())
+
+
+def _accepted_consequence_findings(raw_css: str, banner_source: str) -> tuple[str, ...]:
+    """Расхождения сторожа двух принятых следствий. Пусто — записаны и не починены молча.
+
+    Принимает ТЕКСТЫ, а не пути: иначе контроль на синтетических копиях невыразим.
+    """
+    findings: list[str] = []
+    basis = " ".join(ACCEPTED_CONSEQUENCE_BASIS.split())
+    for mark in ACCEPTED_CONSEQUENCE_MARKS:
+        paragraph = _record_paragraph(raw_css, mark)
+        if paragraph is None:
+            findings.append(
+                f"записи «{mark}» в `app.css` НЕТ — принятое следствие снято молча, а не "
+                "починено работой\n" + _FIX_ADDRESSEE
+            )
+        elif basis not in paragraph:
+            findings.append(
+                f"запись «{mark}» не называет основания «{ACCEPTED_CONSEQUENCE_BASIS}»\n"
+                f"      получено: {paragraph[:200]}…"
+            )
+
+    stripped = _strip_comments(banner_source)
+    for match in _ANY_DISMISS_TAG_RE.finditer(stripped):
+        tag = match.group(0)
+        if match.group(1).lower() != "input" or 'type="checkbox"' not in tag:
+            findings.append(
+                "орган снятия ПЕРЕСТАЛ БЫТЬ ФЛАЖКОМ — следствие ветви `A` починено без "
+                f"решения владельца\n      получено: {tag}\n" + _FIX_ADDRESSEE
+            )
+    controls = _banner_dismiss_controls(banner_source)
+    if len(controls) != BANNER_DISMISS_CONTROLS:
+        findings.append(
+            f"органов снятия `<input type=\"checkbox\">` {len(controls)}, объявлено "
+            f"{BANNER_DISMISS_CONTROLS}: {[c.owner for c in controls]}"
+        )
+
+    hide_bodies = [
+        body
+        for selector, body in _css_rules(_CSS_COMMENT_RE.sub("", raw_css))
+        if selector == DISMISSED_STACK_SELECTOR
+    ]
+    if [_declaration(body, "display") for body in hide_bodies] != ["none"]:
+        findings.append(
+            f"скрытие снятой стопки ушло с `{DISMISSED_STACK_SELECTOR} {{ display: none; }}` — "
+            f"получено {len(hide_bodies)} блок(ов): {hide_bodies}\n" + _FIX_ADDRESSEE
+        )
+
+    registrations = _handler_registrations(banner_source)
+    if registrations != BANNER_SCRIPT_HANDLER_REGISTRATIONS:
+        findings.append(
+            f"регистраций обработчика в {BANNER_TEMPLATE}: {registrations}, объявлено "
+            f"{BANNER_SCRIPT_HANDLER_REGISTRATIONS} — в файл плашки пришёл обработчик\n"
+            + _FIX_ADDRESSEE
+        )
+    return tuple(findings)
+
+
+def test_boundary_the_keyboard_focus_and_the_checkbox_role_consequences_are_guarded_not_fixed() -> None:
+    """СТОРОЖ (Г-3): потеря фокуса и роль «флажок» ЗАПИСАНЫ принятыми и НЕ починены молча.
+
+    Краснеет и при молчаливой починке (орган перестал быть флажком, скрытие ушло
+    со `:has(> .banner-dismiss:checked)`, в файл плашки пришла регистрация
+    обработчика), и при молчаливом снятии любой из двух записей.
+    """
+    raw = APP_CSS.read_text(encoding="utf-8")
+    source = _banner_source()
+    assert _banner_dismiss_controls(source), "органов снятия нет — сторож вакуумен"
+
+    findings = _accepted_consequence_findings(raw, source)
+
+    assert findings == (), "app.css / " + BANNER_TEMPLATE + ":\n" + "\n".join(
+        f"  — {line}" for line in findings
+    )
+
+
+def test_control_a_silently_fixed_or_dropped_consequence_reddens() -> None:
+    """Контроль сторожа на синтетических копиях: `<button>`, вырезанная запись, ушедшее скрытие."""
+    raw = APP_CSS.read_text(encoding="utf-8")
+    source = _banner_source()
+
+    server_input = re.search(r'<input type="checkbox" id="htmx-failure-server-close"[^>]*>', source)
+    assert server_input is not None, "органа #htmx-failure-server-close в шаблоне нет — подменять нечего"
+    as_button = source.replace(
+        server_input.group(0),
+        server_input.group(0).replace('<input type="checkbox"', '<button type="button"', 1) + "</button>",
+        1,
+    )
+    assert as_button != source
+    button_findings = _accepted_consequence_findings(raw, as_button)
+    assert any("ПЕРЕСТАЛ БЫТЬ ФЛАЖКОМ" in line and "<button" in line for line in button_findings), (
+        f"сторож зелен на органе `<button>` — молчаливая починка прошла: {button_findings}"
+    )
+
+    for mark in ACCEPTED_CONSEQUENCE_MARKS:
+        assert raw.count(mark) == 1, f"запись «{mark}» встречается {raw.count(mark)} раз(а), а не один"
+        dropped = raw.replace(mark, "")
+        dropped_findings = _accepted_consequence_findings(dropped, source)
+        assert any(mark in line and "НЕТ" in line for line in dropped_findings), (
+            f"сторож зелен без записи «{mark}» — молчаливое снятие прошло: {dropped_findings}"
+        )
+
+    hide_rule = f"{DISMISSED_STACK_SELECTOR} {{ display: none; }}"
+    assert raw.count(hide_rule) == 1, f"{hide_rule!r} встречается {raw.count(hide_rule)} раз(а)"
+    moved = raw.replace(hide_rule, "")
+    assert any("скрытие снятой стопки ушло" in line for line in _accepted_consequence_findings(moved, source))
+
+
+# =============================================================================
+# План 15-19, задача 3: ОБВОД ФОКУСА НЕПРОЗРАЧЕН — МАШИННАЯ ПОЛОВИНА КОНТРАСТА
+# =============================================================================
+#
+# ПОВОД — UI-ревью фазы, пункт 5: токен `--focus-ring` был фиолетовым с альфой .5,
+# оценка ≈2.6:1 на фоне плашки отказа и ≈2.7:1 на `--surface` — ниже 3:1 WCAG
+# 1.4.11 для нетекстовых элементов. Решение Г-2: непрозрачный обвод.
+#
+# ⚠️ ГРАНИЦА ЭТОГО ПРАВИЛА. Оно утверждает НЕПРОЗРАЧНОСТЬ объявленного токена, а не
+# контраст: контраст есть отношение обвода к фону, на котором он нарисован, а фон
+# плашки смешан `color-mix` и зависит от отрисовки. Видимость обвода на настоящем
+# экране остаётся шагу У-8 обхода `15-UAT.md`.
+
+FOCUS_RING_TOKEN = "--focus-ring"
+FOCUS_RING_MIN_ALPHA = 0.7
+
+_HEX_COLOUR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+_RGB_RE = re.compile(r"^rgba?\((?P<args>[^()]*)\)$")
+
+
+def _focus_ring_declaration(css: str) -> str | None:
+    """Значение токена в блоке `:root` (CSS без комментариев)."""
+    for selector, body in _css_rules(css):
+        if selector == ":root":
+            return _declaration(body, FOCUS_RING_TOKEN)
+    return None
+
+
+def _colour_alpha(value: str) -> float | None:
+    """Альфа цвета: `#rgb`/`#rrggbb` и `rgb(r, g, b)` — 1; `rgba(…, a)` / `rgb(r g b / a)` — a."""
+    value = value.strip()
+    if _HEX_COLOUR_RE.match(value):
+        return 1.0
+    match = _RGB_RE.match(value)
+    if match is None:
+        return None
+    args = match.group("args")
+    alpha_part: str | None
+    if "/" in args:
+        channels_text, _slash, alpha_text = args.partition("/")
+        channels, alpha_part = channels_text.split(), alpha_text.strip()
+    else:
+        parts = [part.strip() for part in args.split(",")]
+        if len(parts) not in (3, 4):
+            return None
+        channels, alpha_part = parts[:3], (parts[3] if len(parts) == 4 else None)
+    if len(channels) != 3:
+        return None
+    if alpha_part is None:
+        return 1.0
+    try:
+        return float(alpha_part[:-1]) / 100 if alpha_part.endswith("%") else float(alpha_part)
+    except ValueError:
+        return None
+
+
+def _focus_ring_opacity_offence(css: str) -> str:
+    """Пустая строка, если токен обвода непрозрачен не ниже порога; иначе — что не сошлось."""
+    declared = _focus_ring_declaration(css)
+    if declared is None:
+        return f"объявления `{FOCUS_RING_TOKEN}` в `:root` НЕТ — обвод фокуса без цвета"
+    alpha = _colour_alpha(declared)
+    if alpha is None:
+        return (
+            f"`{FOCUS_RING_TOKEN}: {declared}` — форма не разобрана: допустимы `#rrggbb`, "
+            "`rgb(r, g, b)` либо `rgba(r, g, b, a)` с альфой не ниже "
+            f"{FOCUS_RING_MIN_ALPHA}"
+        )
+    if alpha < FOCUS_RING_MIN_ALPHA:
+        return (
+            f"`{FOCUS_RING_TOKEN}: {declared}` — альфа {alpha:g} ниже {FOCUS_RING_MIN_ALPHA}: "
+            "полупрозрачный обвод на фоне плашки отказа оценён ≈2.6:1, ниже 3:1 WCAG 1.4.11"
+        )
+    return ""
+
+
+def test_the_focus_ring_token_is_opaque_enough_for_non_text_contrast() -> None:
+    """Токен `--focus-ring` непрозрачен (альфа не ниже 0.7) — машинная половина WCAG 1.4.11."""
+    offence = _focus_ring_opacity_offence(_app_css())
+
+    assert offence == "", offence
+
+
+def test_control_a_half_transparent_focus_ring_reddens() -> None:
+    """Контроль: альфа .5 — краснеет с текстом объявления; альфа .7 и `#rrggbb` проходят."""
+    css = _app_css()
+    declared = _focus_ring_declaration(css)
+    assert declared is not None, "токена обвода в `:root` нет — подменять нечего"
+    line = f"{FOCUS_RING_TOKEN}: {declared};"
+    assert css.count(line) == 1, f"{line!r} встречается {css.count(line)} раз(а), а не один"
+
+    half = css.replace(line, f"{FOCUS_RING_TOKEN}: rgba(196, 132, 252, .5);")
+    offence = _focus_ring_opacity_offence(half)
+    assert "rgba(196, 132, 252, .5)" in offence and "0.5" in offence, (
+        f"правило зелено на альфе .5 — полупрозрачный обвод прошёл: {offence!r}"
+    )
+
+    for passing in ("rgba(196, 132, 252, .7)", "#c484fc", "rgb(196 132 252 / 100%)"):
+        assert _focus_ring_opacity_offence(css.replace(line, f"{FOCUS_RING_TOKEN}: {passing};")) == "", passing

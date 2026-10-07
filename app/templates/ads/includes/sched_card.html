@@ -88,7 +88,7 @@
     статьи, и ответ, принёсший её вторично, задвоил бы её в документе.
     `sched_card` ниже собирается из этого макроса и панели, поэтому разметка
     редактора не сдвигается. -#}
-{% macro sched_card_article(s, ad, accounts, groups, user, expanded_id=none, inactive_group_ids=none) -%}
+{% macro sched_card_article(s, ad, accounts, groups, user, fallback_timezone, expanded_id=none, inactive_group_ids=none) -%}
 {%- set account = (accounts | selectattr('id', 'equalto', s.account_id) | list | first) if s.account_id else none -%}
 {#- Разворот ВЫВОДИТСЯ из идентификатора развёрнутой карточки, а не приходит
     вторым параметром рядом с ним: два параметра об одном факте способны
@@ -297,6 +297,22 @@
           {{ button('+ ВРЕМЯ', variant='ghost', name='add_time', value='1', icon='plus') }}
         </div>
         <span class="sched-card__tz">Время по {{ s.timezone }}</span>
+        {#- ПОДСКАЗКА О НЕРАСПОЗНАННОЙ ЗОНЕ (UI-ревью Фазы 15, пункт 4; план 15-23).
+            Скрытое поле выше отправляет сохранённую зону как есть, и если её нет
+            в перечне, сохранение переводит строку на зону профиля или UTC
+            (CR-01, план 15-08): цифры времени те же, а пояс другой. Человек
+            узнаёт об этом ЗДЕСЬ, до сохранения, — плашки на успешном сохранении
+            нет и быть не может (D-03 Фазы 10). Строка ДОБАВЛЕНА под подписью
+            «Время по …», подпись не тронута (запрет `10-01#6`).
+            Зона перехода — параметр `fallback_timezone`, который обе точки
+            отрисовки берут из контекста редактора (`profile_timezone_or_utc`, тот
+            же помощник, что у сохранения); перечень — глобал `VALID_TIMEZONES`
+            (app/pages/common.py). Класс — предупреждающая подпись карточки
+            `sched-card__hint`, новых правил CSS нет. Обе зоны печатаются только
+            автоэкранированием (T-15-87). -#}
+        {%- if s.timezone not in VALID_TIMEZONES %}
+        <p class="sched-card__hint">Часовой пояс «{{ s.timezone }}» не распознан — при сохранении расписание перейдёт на {{ fallback_timezone }}</p>
+        {%- endif %}
       </div>
 
       <div class="sched-card__actions">
@@ -323,8 +339,8 @@
 </article>
 {%- endmacro %}
 
-{% macro sched_card(s, ad, accounts, groups, user, expanded_id=none, inactive_group_ids=none) -%}
-{{- sched_card_article(s, ad, accounts, groups, user, expanded_id=expanded_id, inactive_group_ids=inactive_group_ids) -}}
+{% macro sched_card(s, ad, accounts, groups, user, fallback_timezone, expanded_id=none, inactive_group_ids=none) -%}
+{{- sched_card_article(s, ad, accounts, groups, user, fallback_timezone=fallback_timezone, expanded_id=expanded_id, inactive_group_ids=inactive_group_ids) -}}
 {#- Панель подтверждения стоит РЯДОМ с карточкой, а не внутри неё: панель
     позиционируется фиксированно, а внутри карточки она стала бы её блоком.
     Тело перечисляет только ЗАПОЛНЕННЫЕ части и экранируется Jinja — разметка в

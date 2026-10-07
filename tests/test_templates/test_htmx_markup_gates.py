@@ -8098,3 +8098,2239 @@ def test_the_autosave_response_never_reprints_the_whole_media_tray() -> None:
         "внеполосная подмена заявит власть над всем его содержимым, включая "
         "ключи, которых этот запрос не видел (зонд WR-07, ПОРЯДОК II)"
     )
+
+
+# =============================================================================
+# Фаза 15, план 15-05: УСЛОВНАЯ СБОРКА `hx-post` — ЗАПРЕТ С ЯВНО ПУСТЫМ ПЕРЕЧНЕМ
+# =============================================================================
+#
+# ⚠️ ПРЕДИКАТ ОБЪЯВЛЯЕТСЯ ЗДЕСЬ, ВЫШЕ ПЕРВОГО ЧИСЛА ГРУППЫ, И ВСЕ ЧИСЛА НИЖЕ
+# (этой группы и группы инвентаря слепой зоны) СНЯТЫ ИМЕННО ПО НЕМУ.
+#
+#   МЕСТО УСЛОВНОЙ СБОРКИ — атрибут `hx-*`, чьё ПРИСУТСТВИЕ в теге зависит от
+#   Jinja-ветвления (`{% if %}` / `{%- if %}` внутри открывающего тега), либо
+#   чья строка запроса собрана `{% for %}`-циклом. Атрибут, присутствующий
+#   БЕЗУСЛОВНО, но получающий условное ЗНАЧЕНИЕ (тернарник Jinja внутри строки),
+#   местом условной сборки НЕ ЯВЛЯЕТСЯ: гейт разметки его видит, и слепой зоны
+#   он не создаёт.
+#
+# ИЗЪЯТИЕ НАЗВАНО ПОИМЁННО: `app/templates/ads/form.html:152` несёт `hx-post`,
+# чьё значение — тернарник Jinja (`{{ '/ads/' ~ ad.id ~ '/edit' if ad else
+# '/ads/new' }}`), а сам атрибут безусловен. Без объявленного предиката этот
+# файл попал бы в слепую зону ошибочно, и число 12 группы ниже выросло бы до 13
+# без всякого изменения дерева. Изъятие утверждается ИМЕННО на этом файле —
+# `test_conditional_hx_post_predicate_excludes_the_ternary_value_of_the_editor_form`.
+#
+# Два следствия предиката, названные затем, чтобы их не открывать заново:
+#   • тег, ЦЕЛИКОМ стоящий под `{% if %}` (ветвление СНАРУЖИ тега, например
+#     `{% if has_next %}<div hx-get=…>{% endif %}`), местом условной сборки не
+#     является: тег печатается либо целиком, либо не печатается вовсе, и гейт
+#     разметки видит его целиком;
+#   • разборщик считает атрибут условным, если тот напечатан ВНУТРИ блока
+#     `{% if %}…{% endif %}` открывающего тега, — в том числе когда тот же
+#     атрибут печатают обе ветви `if`/`else`. Это СТРОЖЕ предиката (сеть видит
+#     больше, а не меньше); вне макроса `form_wrapper` таких мест ноль, внутри —
+#     одно (`hx-swap` ветви `target`, см. группу инвентаря слепой зоны).
+#
+# ЗАМЕР БУКВАЛЬНОГО ПРЕДМЕТА ПУНКТА 9 РУЧНОГО UAT. Вхождений `hx-post` внутри
+# `{% if %}` в дереве НОЛЬ (замер 2026-09-23, воспроизведён планированием и
+# исполнением плана 15-05 2026-09-24). `hx-post` встречается в `app/templates/`
+# на ТРЁХ местах разметки — `ads/form.html:152`,
+# `components/form_wrapper.html:188`, `components/modal.html:807`, — и ни одно
+# не собрано условием; ещё 4 вхождения лежат в комментариях и докстрингах
+# (`base.html:77`, `ads/includes/autosave_response.html:142`,
+# `components/form_wrapper.html:38`, `components/modal.html:465`). Значит первая
+# ветвь критерия 5 ROADMAP («либо такая форма запрещена гейтом») доступна и
+# истинна сегодня: правило ниже есть гейт УДЕРЖАНИЯ нуля, того же рода, что
+# запрет FETCH-03 (`test_fetch_prohibition_forbids_manual_request_assembly_in_templates`).
+#
+# ⚠️ ГРАНИЦА (D-16): ЗЕЛЕНЬ ЭТОГО ПРАВИЛА ПУНКТ 9 НЕ ЗАКРЫВАЕТ. Его предмет
+# пуст, и зелень пустого правила есть ровно «зелено вакуумом» — прецедент
+# записан в дереве словами «G-2 ПРОХОДИЛ ВАКУУМНО ДО ФАЗЫ 9»
+# (`tests/test_pages/test_htmx_gates.py:64`). Человеку подаются 12 измеренных
+# мест группы инвентаря слепой зоны ниже, и отметку о закрытии пункта 9 ставит
+# ОН (D-17). Раздел улики пункта 9 в `15-UAT.md` пишет план 15-14.
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ. Зелёный цвет означает, что `hx-post` нигде не
+# собран условием и что мест разметки с ним ровно три. Он НЕ означает, что эти
+# три места СРАБОТАЛИ на рантайме htmx 2.0.10 — суита не исполняет ни строчки
+# JS. Он НЕ означает, что условной сборки нет у ПРОЧИХ `hx-*` — их 12 мест
+# объявлены отдельной группой ниже, и именно они суть настоящая слепая зона.
+#
+# ГРАНИЦА РАЗБОРЩИКА. Атрибут, собранный не Jinja-ветвлением, а Python-кодом
+# обработчика (строка атрибута приходит в контекст готовой), сети по тексту
+# шаблона НЕ ВИДЕН НИ В КАКОМ СЛУЧАЕ. ПЕРЕЗАМЕРЕНО планом 15-05 2026-09-24:
+# `grep -rn 'hx-' app/pages/` даёт 6 строк, и все 6 — проза: 3 в докстрингах
+# (`ads.py:733`, `:830`, `:833`) и 3 в комментариях (`ads.py:1073`,
+# `account_groups.py:543`, `schedules.py:1635`); сеть плана
+# `grep -rn 'hx-' app/pages/ | grep -v '^.*#'` оставляет из них 3 докстринговые.
+# Атрибутов `hx-*`, приходящих в контекст шаблона готовой строкой из
+# `app/pages/`, — НОЛЬ; в прочем Python-коде `app/` строк `hx-` нет ни одной.
+# Изъятия с числом нет, потому что мест нет; но появление первого такого места
+# эта сеть НЕ заметит, и это граница, а не покрытие.
+
+# Порог непустоты вселенной обеих групп плана 15-05. Тот же, что у запрета
+# FETCH-03 (`FETCH_PROHIBITION_UNIVERSE_FLOOR`, `test_htmx_inventory.py`): на
+# дереве плана 15-05 шаблонов 113 (замер 2026-09-24), и обход, нашедший
+# пятьдесят или меньше, почти наверняка сломан, а не «почищен».
+CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR = 50
+
+# Места условной сборки `hx-post` — ИМЕНОВАННЫЙ НОЛЬ.
+#
+# ⚠️ ПЕРЕЧЕНЬ ПУСТ — ИМЕНОВАННЫЙ НОЛЬ, А НЕ ЗАБЫТОЕ ОБЪЯВЛЕНИЕ. Пустой словарь
+# стережёт появление первого места: оно покраснеет расхождением перечня с
+# найденным обходом, а не пройдёт молча. Утверждается РАВЕНСТВО множества
+# найденных ключей множеству ключей этого перечня, а не `== 0`: равенство
+# перечню краснеет и когда место появилось, и когда объявление перечня тихо
+# стёрли (форма — `MANUAL_FETCH_SITES`, `test_htmx_inventory.py`).
+CONDITIONAL_HX_POST_SITES: dict[str, str] = {}
+
+# Места РАЗМЕТКИ с `hx-post`: ключ `путь#порядковый_номер`, обход тот же, что у
+# `HX_POST_PLACES` (`_post_sites`). ⚠️ ДВА НОСИТЕЛЯ ОДНОГО ЧИСЛА — ОСОЗНАННО:
+# `HX_POST_PLACES` есть инвентарное число Фазы 8, а это — слагаемое разбиения
+# «сырые вхождения = разметка + проза» этой группы. Разойтись молча им не дано:
+# их равенство утверждает тот же тест, что утверждает перечень.
+HX_POST_MARKUP_PLACES = 3
+HX_POST_MARKUP_SITES: dict[str, str] = {
+    "ads/form.html#0": (
+        ":152 — форма редактора; атрибут БЕЗУСЛОВЕН, условно только его ЗНАЧЕНИЕ "
+        "(тернарник Jinja) — изъятие предиката"
+    ),
+    "components/form_wrapper.html#0": ':188 — макрос-обёртка, `hx-post="{{ action }}"` безусловен',
+    "components/modal.html#0": ':807 — панель подтверждения, `hx-post="{{ action }}"` безусловен',
+}
+
+# Упоминания `hx-post` в ПРОЗЕ — комментариях Jinja и HTML. ⚠️ Это число и есть
+# машинное доказательство того, что вырезалка комментариев работает: сеть по
+# сырому тексту даёт 7, сеть по исходнику без комментариев — 3, и разность 4
+# утверждается ОТДЕЛЬНО. Правило того же рода уже стои́т в дереве под именем
+# `test_inventory_gate_ignores_prose` (`test_htmx_inventory.py`) — прецедент.
+# Номера строк в значениях — на момент замера 2026-09-24; сравниваются ключи.
+HX_POST_PROSE_MENTIONS = 4
+HX_POST_PROSE_SITES: dict[str, str] = {
+    "ads/includes/autosave_response.html#0": (
+        ":142 — шапка ответа автосохранения объясняет неизменяемость адреса запроса"
+    ),
+    "base.html#0": ":77 — комментарий шелла о форме, печатаемой макросом",
+    "components/form_wrapper.html#0": ":38 — шапка макроса о правиле G-4",
+    "components/modal.html#0": ":465 — шапка компонента панели подтверждения",
+}
+
+HX_POST_NAME = "hx-post"
+HX_ANY_ATTR = re.compile(r"(?<![-\w])(hx-[-\w:]+)\s*=")
+HX_ANY_TAG = re.compile(r"<[^<>]*?(?<![-\w])hx-[-\w:]+\s*=[^<>]*>")
+
+SYNTHETIC_CONDITIONAL_POST_TEMPLATE = "synthetic/conditional_post.html"
+SYNTHETIC_CONDITIONAL_POST = '<form method="post" action="/y" {% if x %}hx-post="/y"{% endif %}></form>'
+
+
+def _ordinal_keys(sites: list[Site]) -> list[str]:
+    """Ключи `путь#порядковый_номер` для мест в порядке обхода.
+
+    Номер — порядковый В ПРЕДЕЛАХ ШАБЛОНА: два места одного файла остаются
+    двумя записями, и сравнение идёт МНОЖЕСТВАМИ ключей, поэтому текстовый
+    порядок объявления перечня не несущий.
+    """
+    seen: dict[str, int] = {}
+    keys: list[str] = []
+    for site in sites:
+        ordinal = seen.get(site.template, 0)
+        keys.append(f"{site.template}#{ordinal}")
+        seen[site.template] = ordinal + 1
+    return keys
+
+
+def _conditional_universe_offence(sources: dict[str, str]) -> str:
+    """Пустая строка, если вселенная непуста; иначе — отказ словами.
+
+    Чистая функция от поданного отображения. Первая половина доказательства
+    нуля: «мест нет» на пустом словаре формально истинно, и без этой половины
+    запрет был бы зелен на сломанном обходе посимвольно так же, как на дереве.
+    """
+    if len(sources) > CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR:
+        return ""
+    return (
+        f"вселенная правил условной сборки — {len(sources)} шаблонов при пороге "
+        f"> {CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR}: ноль мест на ней неотличим от "
+        f"слепоты обхода"
+    )
+
+
+# Оператор ветвления Jinja: открывающий `if` и закрывающий `endif`. `elif` и
+# `else` блок не открывают и не закрывают — они делят его на ветви, и все ветви
+# блока входят в его текст. Условие берётся из группы 2.
+IF_STATEMENT = re.compile(r"\{%-?\s*(if|endif)\b(.*?)-?%\}", re.DOTALL)
+
+
+def _if_blocks(source: str) -> list[tuple[int, str, str]]:
+    """Блоки `{% if %}…{% endif %}`: (позиция `if`, условие, текст блока со всеми ветвями).
+
+    Вложенность учитывается стеком: внутренний блок входит в текст внешнего.
+    Блок, чей `endif` в поданном тексте не нашёлся, тянется до конца текста —
+    незакрытое ветвление сеть считает ветвлением, а не пропускает.
+    """
+    blocks: list[tuple[int, str, str]] = []
+    stack: list[tuple[int, int, str]] = []
+    for match in IF_STATEMENT.finditer(source):
+        if match.group(1) == "if":
+            stack.append((match.start(), match.end(), match.group(2).strip()))
+        elif stack:
+            start, body_start, condition = stack.pop()
+            blocks.append((start, condition, source[body_start : match.start()]))
+    for start, body_start, condition in stack:
+        blocks.append((start, condition, source[body_start:]))
+    return sorted(blocks)
+
+
+def _conditional_attributes(tag: str) -> tuple[str, ...]:
+    """Атрибуты `hx-*`, напечатанные ВНУТРИ блока `{% if %}` тега, в порядке появления.
+
+    Тег приходит УЖЕ без комментариев (его отдаёт `_sites`). Значение атрибута,
+    собранное тернарником `{{ … if … else … }}`, сюда не попадает: тернарник —
+    выражение, а не оператор ветвления, и атрибут остаётся безусловным.
+    """
+    names: list[str] = []
+    for _, _, body in _if_blocks(tag):
+        for name in HX_ANY_ATTR.findall(body):
+            if name not in names:
+                names.append(name)
+    return tuple(names)
+
+
+def _conditional_hx_post_sites(sources: dict[str, str]) -> dict[str, str]:
+    """Места условной сборки `hx-post`: ключ `путь#индекс` → текст тега.
+
+    Чистая функция от поданного отображения «путь → исходник»: вселенная
+    приходит ПАРАМЕТРОМ, иначе контроль на синтетическом шаблоне невыразим.
+    Обход и вырезание комментариев — общие с файлом (`_sites`,
+    `_strip_comments`); своего обхода каталога и своего вырезания здесь нет.
+    Индекс — порядковый среди мест условного `hx-post` своего шаблона.
+    """
+    found: dict[str, str] = {}
+    for rel, source in sorted(sources.items()):
+        conditional = [
+            site
+            for site in _sites([(rel, source)], HX_ANY_TAG)
+            if HX_POST_NAME in _conditional_attributes(site.tag)
+        ]
+        for key, site in zip(_ordinal_keys(conditional), conditional):
+            found[key] = " ".join(site.tag.split())
+    return found
+
+
+def _conditional_hx_post_offence(found: dict[str, str], declared: dict[str, str]) -> str:
+    """Пустая строка, если множества ключей совпали; иначе — отказ с именами мест."""
+    if set(found) == set(declared):
+        return ""
+    return (
+        f"мест условной сборки `hx-post` найдено {sorted(found)}, объявлено "
+        f"{sorted(declared)} — лишние: {sorted(set(found) - set(declared))}, "
+        f"пропавшие: {sorted(set(declared) - set(found))}. Условная сборка "
+        f"`hx-post` ЗАПРЕЩЕНА (первая ветвь критерия 5 ROADMAP Фазы 15): "
+        f"атрибут, которого может не быть в отрисованной странице, гейт разметки "
+        f"видит всегда"
+    )
+
+
+def _hx_post_prose_sites(sources: dict[str, str]) -> dict[str, str]:
+    """Упоминания `hx-post` внутри комментариев: ключ `путь#индекс` → номер строки.
+
+    Позиция считается прозой, если лежит внутри комментария Jinja или HTML
+    СЫРОГО исходника (те же выражения `JINJA_COMMENT` / `HTML_COMMENT`, что у
+    `_strip_comments`). Это второй, независимый путь к числу прозы: первый —
+    разность «сырые вхождения минус места разметки».
+    """
+    found: dict[str, str] = {}
+    for rel, source in sorted(sources.items()):
+        spans = [match.span() for match in JINJA_COMMENT.finditer(source)]
+        spans += [match.span() for match in HTML_COMMENT.finditer(source)]
+        ordinal = 0
+        for match in re.finditer(re.escape(HX_POST_NAME), source):
+            if any(start <= match.start() < end for start, end in spans):
+                line = source.count("\n", 0, match.start()) + 1
+                found[f"{rel}#{ordinal}"] = f"строка {line}"
+                ordinal += 1
+    return found
+
+
+def test_control_negative_a_synthetic_conditional_hx_post_is_found_and_named() -> None:
+    """Контроль от вакуума: синтетический `{% if x %}hx-post="/y"{% endif %}` НАЙДЕН И НАЗВАН.
+
+    ⚠️ ЭТО RED-ФАЗА ГРУППЫ, А НЕ ЗАПРЕТ. Запрет зелен с рождения — его предмет в
+    дереве пуст, и правило, зелёное с первой секунды, не может доказать себя
+    своим же зелёным цветом. Доказательство — здесь: в поданный словарь
+    исходников добавляется шаблон, несущий ровно буквальный предмет пункта 9, и
+    то же выражение, которым стережётся дерево, обязано найти место, назвать его
+    ключом `путь#индекс` и сделать утверждение пустоты перечня ЛОЖНЫМ.
+    """
+    sources = dict(_all_templates())
+    key = SYNTHETIC_CONDITIONAL_POST_TEMPLATE
+    assert key not in sources, (
+        f"синтетический шаблон {key} совпал с настоящим: контроль подменил бы "
+        f"настоящий исходник, а не добавил предмет"
+    )
+    changed = {**sources, key: SYNTHETIC_CONDITIONAL_POST}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    found = _conditional_hx_post_sites(changed)
+
+    assert f"{key}#0" in found, (
+        f"синтетическое место условной сборки `hx-post` не найдено: найдено "
+        f"{sorted(found)} — разборщик слеп к буквальному предмету пункта 9, и "
+        f"пустой перечень CONDITIONAL_HX_POST_SITES неотличим от этой слепоты"
+    )
+    assert not (set(found) == set(CONDITIONAL_HX_POST_SITES)), (
+        "утверждение пустоты перечня осталось истинным при добавленном месте"
+    )
+    assert f"{key}#0" in _conditional_hx_post_offence(found, CONDITIONAL_HX_POST_SITES), (
+        "отказ запрета не называет найденное место по ключу `путь#индекс`"
+    )
+
+
+def test_conditional_hx_post_assembly_is_forbidden_with_the_site_list_declared_empty() -> None:
+    """ЗАПРЕТ: мест условной сборки `hx-post` в `app/templates/` не остаётся ни одного.
+
+    Утверждается РАВЕНСТВО множества найденных ключей объявленному перечню
+    `CONDITIONAL_HX_POST_SITES`, а не `== 0`. Вселенная утверждается непустой в
+    этом же прогоне. ⚠️ Зелень этого правила пункт 9 ручного UAT НЕ закрывает:
+    его предмет пуст; человеку подаются 12 мест группы инвентаря слепой зоны,
+    отметку ставит он (D-17), раздел улики пишет план 15-14.
+    """
+    sources = dict(_all_templates())
+    assert _conditional_universe_offence(sources) == "", _conditional_universe_offence(sources)
+
+    found = _conditional_hx_post_sites(sources)
+
+    assert set(found) == set(CONDITIONAL_HX_POST_SITES), _conditional_hx_post_offence(
+        found, CONDITIONAL_HX_POST_SITES
+    )
+
+
+def test_conditional_hx_post_predicate_excludes_the_ternary_value_of_the_editor_form() -> None:
+    """Изъятие предиката утверждается ИМЕННО на `ads/form.html`.
+
+    Файл несёт `hx-post`, чьё ЗНАЧЕНИЕ — тернарник Jinja, а сам атрибут
+    безусловен. Сперва утверждается, что изъятие НЕ ПОТЕРЯЛО ПРЕДМЕТА (тернарник
+    на месте), и лишь затем — что мест условной сборки файл даёт НОЛЬ.
+    """
+    source = dict(_all_templates())[FORM]
+    sites = _post_sites([(FORM, source)])
+    assert len(sites) == 1, f"мест `hx-post` в {FORM} {len(sites)}, ожидалось одно"
+    value = _attr_value(sites[0].tag, HX_POST_VALUE)
+    assert value is not None and value.startswith("{{") and " if " in value and " else " in value, (
+        f"значение `hx-post` в {FORM} больше не тернарник Jinja ({value!r}) — изъятие "
+        f"потеряло предмет, и абзац о нём в шапке группы устарел"
+    )
+    assert "ads/form.html#0" in HX_POST_MARKUP_SITES
+
+    assert _conditional_hx_post_sites({FORM: source}) == {}, (
+        f"{FORM} посчитан местом условной сборки `hx-post`: предикат спутал "
+        f"условное ЗНАЧЕНИЕ безусловного атрибута с условным ПРИСУТСТВИЕМ"
+    )
+
+
+def test_conditional_hx_post_gate_sees_exactly_the_declared_three_markup_places() -> None:
+    """Мест разметки с `hx-post` ровно `HX_POST_MARKUP_PLACES`, и это объявленные три ключа."""
+    sites = _post_sites(_all_templates())
+    keys = _ordinal_keys(sites)
+
+    assert len(sites) == HX_POST_MARKUP_PLACES, (
+        f"мест разметки с `hx-post` {len(sites)}, объявлено {HX_POST_MARKUP_PLACES}: {keys}"
+    )
+    assert set(keys) == set(HX_POST_MARKUP_SITES), (
+        f"перечень мест разметки разошёлся с объявленным: найдено {sorted(keys)}, "
+        f"объявлено {sorted(HX_POST_MARKUP_SITES)}"
+    )
+    assert len(HX_POST_MARKUP_SITES) == HX_POST_MARKUP_PLACES
+    assert HX_POST_MARKUP_PLACES == HX_POST_PLACES, (
+        f"два носителя числа мест `hx-post` разошлись: HX_POST_MARKUP_PLACES "
+        f"{HX_POST_MARKUP_PLACES}, HX_POST_PLACES {HX_POST_PLACES} — двигать их "
+        f"обязана одна правка"
+    )
+
+
+def test_conditional_hx_post_gate_ignores_the_declared_four_prose_mentions() -> None:
+    """Проза не считается: сырых вхождений 7, мест разметки 3, разность 4 — отдельно."""
+    sources = dict(_all_templates())
+    raw = sum(source.count(HX_POST_NAME) for source in sources.values())
+    stripped = sum(_strip_comments(source).count(HX_POST_NAME) for source in sources.values())
+    markup = len(_post_sites(list(sources.items())))
+
+    assert markup == HX_POST_MARKUP_PLACES, f"мест разметки {markup}"
+    assert stripped == markup, (
+        f"вне комментариев подстрока `hx-post` встречается {stripped} раз, а мест "
+        f"разметки {markup}: разность сырых и разметки перестала быть прозой"
+    )
+    assert raw == HX_POST_MARKUP_PLACES + HX_POST_PROSE_MENTIONS, (
+        f"сырых вхождений {raw}, объявлено {HX_POST_MARKUP_PLACES} + "
+        f"{HX_POST_PROSE_MENTIONS}"
+    )
+    assert raw > markup, "вырезание комментариев ничего не вырезает — утверждение потеряло предмет"
+    assert raw - markup == HX_POST_PROSE_MENTIONS, (
+        f"разность сырых вхождений и мест разметки {raw - markup}, объявлено "
+        f"{HX_POST_PROSE_MENTIONS}"
+    )
+
+    prose = _hx_post_prose_sites(sources)
+    assert set(prose) == set(HX_POST_PROSE_SITES), (
+        f"упоминания в прозе разошлись с перечнем: найдено {prose}, объявлено "
+        f"{sorted(HX_POST_PROSE_SITES)}"
+    )
+    assert len(HX_POST_PROSE_SITES) == HX_POST_PROSE_MENTIONS
+
+
+def test_control_positive_conditional_hx_post_prohibition_is_silent_on_a_nonempty_universe() -> None:
+    """Положительный контроль: на необойдённом дереве `len(sources) > 50`, и ЗАПРЕТ молчит."""
+    sources = dict(_all_templates())
+    assert len(sources) > CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR, (
+        f"вселенная {len(sources)} шаблонов — обход сломан"
+    )
+    assert _sites(list(sources.items()), HX_ANY_TAG), "ни одного тега с `hx-*` — сеть слепа"
+    assert (
+        _conditional_hx_post_offence(_conditional_hx_post_sites(sources), CONDITIONAL_HX_POST_SITES)
+        == ""
+    )
+
+
+def test_control_negative_conditional_hx_post_prohibition_on_an_empty_universe_is_caught() -> None:
+    """Контроль пустоты: на пустом словаре ЗАПРЕТ формально истинен — и это ЗАСЕКАЕТСЯ."""
+    empty: dict[str, str] = {}
+    found = _conditional_hx_post_sites(empty)
+
+    assert _conditional_hx_post_offence(found, CONDITIONAL_HX_POST_SITES) == "", (
+        "на пустой вселенной запрет не истинен — контроль пустоты потерял предмет"
+    )
+    offence = _conditional_universe_offence(empty)
+    assert offence != "", "пустая вселенная не засечена: зелень запрета на ней неотличима от слепоты"
+    assert "0 шаблонов" in offence
+
+
+# =============================================================================
+# Фаза 15, план 15-05: ИНВЕНТАРЬ НАСТОЯЩЕЙ СЛЕПОЙ ЗОНЫ — УСЛОВНЫЕ ПРОЧИЕ `hx-*`
+# =============================================================================
+#
+# Предикат «место условной сборки» объявлен шапкой группы выше (условный
+# `hx-post`) и действует здесь без изменений. Эта группа считает ПРОЧИЕ `hx-*`:
+# место, несущее и условный `hx-post`, и условный `hx-swap`, посчитали бы ОБЕ
+# группы — два РАЗДЕЛЬНЫХ утверждения над одним исходником без комментариев, без
+# дедупликации (`test_blind_zone_adjacency_counts_a_doubly_conditional_site_in_both_gates`).
+#
+# СОСТАВ, СНЯТЫЙ СЧЁТОМ ПО ПРЕДИКАТУ (замер разведки Ф-08 `15-RESEARCH.md`,
+# перезамеренный планированием и исполнением плана 15-05 2026-09-24).
+# Вне макроса — 12 мест в ТРЁХ классах:
+#   • класс 1, ВООРУЖЕНИЕ ОПРОСА — 2 места: `account_groups/partials/sync_result.html:50`,
+#     `accounts/partials/sync_status_card.html:48`. `hx-get` + `hx-trigger="every 5s"`
+#     + `hx-swap` появляются ТОЛЬКО при `{% if status == 'syncing' %}`;
+#   • класс 2, ВНЕПОЛОСНАЯ ОБЛАСТЬ — 2 места: `ads/includes/autosave.html:28`,
+#     `ads/includes/media_add_tile.html:55`. `hx-swap-oob="true"` под
+#     `{% if oob is defined and oob %}`;
+#   • класс 3, КАСКАДНАЯ СТРОКА ЗАПРОСА — 8 мест: `ads/partial_cards.html:7`,
+#     `ads/list.html:61`, `schedules/list.html:66`, `schedules/partial_cards.html:12`,
+#     `history/list.html:119`, `history/partial_cards.html:6`,
+#     `admin/history_partial_cards.html:7`, `admin/user_history.html:63`. `hx-get`,
+#     чья строка запроса собрана `{% for %}`-циклом по `filter_params`.
+# Внутри макроса — класс 4, ТЕЛО `form_wrapper`, 6 ветвей `{%- if %}`, раздающих
+# `hx-*` (`components/form_wrapper.html`): `:189` (`hx-target` + `hx-swap`), `:191`
+# (`hx-trigger`), `:192` (`hx-sync`), `:193` (`hx-encoding` + `enctype`), `:194`
+# (`hx-include`), `:195` (`hx-disabled-elt`). Ветвь `:189` печатает `hx-swap` ОБЕИМИ
+# сторонами `if`/`else`: присутствие `hx-swap` безусловно, условно лишь значение,
+# и в перечне раздаваемых он стоит потому, что ветвь печатает его текстом (сеть
+# строже предиката — см. шапку группы выше). Номера строк — на 2026-09-24.
+#
+# ⚠️ ДОВОД, СВЯЗЫВАЮЩИЙ ДВЕ ГРУППЫ В ОДНО ОБЪЯСНЕНИЕ. `hx-post` и `hx-indicator`
+# в `form_wrapper` БЕЗУСЛОВНЫ — они стоят в теге вне всякой ветви, — и именно это
+# делает правило группы выше («условный `hx-post` == 0») законно пустым: макрос,
+# через который рождаются формы вехи, условием собирает ШЕСТЬ прочих свойств
+# запроса, но не адрес отправки. Утверждается машинно в
+# `test_form_wrapper_branches_dispensing_htmx_are_the_declared_six`.
+#
+# ЛЕТОПИСЬ ПЕРВАЯ: «12 мест в ЧЕТЫРЁХ классах» → «12 мест в ТРЁХ классах вне
+# макроса + 6 ветвей внутри макроса, всего 18» (Фаза 15, план 15-05, 2026-09-24).
+# Замер Ф-08 верен по числу 12 и по составу трёх классов; ярлык «четыре класса»
+# относил к двенадцати четвёртый класс, который в двенадцать НЕ ВХОДИЛ (макрос
+# считался отдельной строкой «плюс 8 ветвей»).
+# ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи он был верным, и
+# правится не он, а числа, которые он пережил. Новое число снято СЧЁТОМ ПО ОБЪЯВЛЕННОМУ ПРЕДИКАТУ
+# (`_conditional_hx_sites` + `_form_wrapper_branches`), а не переписано.
+#
+# ЛЕТОПИСЬ ВТОРАЯ: «8 ветвей `{%- if %}` в `form_wrapper`» → «6 раздающих `hx-*`»
+# (Фаза 15, план 15-05, 2026-09-24). Наивный `grep -c '{%- if'` даёт 8, и это
+# ВЕРНЫЙ замер своей сети; но две ветви `hx-*` не раздают — `:182` лежит ВНУТРИ
+# докстринга макроса (проза `{%- if caller is defined %}`, приём компонента
+# модального окна), `:196` есть `{%- if caller is defined %}{{ caller() }}` (ветвь
+# без единого `hx-*`). ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи
+# он был верным, и правится не он, а числа, которые он пережил. Разность 8 − 6 = 2
+# ДОКАЗАНА МАШИННО, а не объявлена: обе исключённые строки находятся и называются
+# `test_form_wrapper_branches_naive_count_exceeds_the_dispensing_by_the_two_named_lines`.
+# Это ровно тот приём, которым эта фаза отличает «число совпало» от «сеть верна».
+#
+# ⚠️ ПРИОРИТЕТ НАБЛЮДЕНИЯ ОБЪЯВЛЕН ПОЛЕМ И УТВЕРЖДАЕТСЯ, А НЕ ОСТАЁТСЯ В ПРОЗЕ:
+# сперва 2 места вооружения опроса, потом 2 внеполосных, потом 8 каскадных.
+# ОСНОВАНИЕ ИЗМЕРЕНО: класс 1 несёт `hx-trigger="every 5s"`, появляющийся только в
+# одной ветке, то есть исправность контракта останова опроса GATE-08 («каждый
+# фрагмент с `hx-trigger="every "` имеет парный без него») зависит от ветвления,
+# которого гейт разметки по определению не видит. Если условие сломается, опрос
+# либо НЕ НАЧНЁТСЯ (человек смотрит на застывший экран), либо НЕ КОНЧИТСЯ
+# (бесконечный опрос — нагрузка на сервер от каждого открытого клиента). Ни того
+# ни другого суита увидеть не может: JS не исполняется. Этот абзац — основание
+# того, что человек в пункте 9 ручного UAT смотрит ИМЕННО эти места и ИМЕННО в
+# этом порядке; раздел улики `15-UAT.md` пишет план 15-14.
+#
+# ГРАНИЦА КОДИРОВКИ. Шаблоны читаются как UTF-8 (`_all_templates`), значения
+# атрибутов и имена классов сравниваются ТОЧНЫМ равенством кодовых точек, без
+# нормализации: имена классов и значения условий здесь русскоязычны, и
+# нормализация молча склеила бы различные строки. Различие узкого пробела и
+# обычного считается различием
+# (`test_blind_zone_compares_attribute_values_by_exact_code_points`).
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ. Зелёный цвет означает, что мест условной сборки
+# прочих `hx-*` ровно 12 вне макроса и 6 ветвей внутри, и что каждое отнесено к
+# классу. Он НЕ означает, что хоть одно условие ВЕРНО ВЫЧИСЛЯЕТСЯ на рантайме —
+# суита Jinja рендерит, но JS не исполняет и состояния `syncing` в браузере не
+# наблюдает; НЕ означает, что опрос стартует и останавливается (это контракт
+# GATE-08 и пункт ручного обхода); и НЕ означает, что 12 мест ИСЧЕРПЫВАЮТ слепую
+# зону — сеть видит только Jinja-ветвление в тексте шаблона, а атрибут, пришедший
+# готовой строкой из `app/pages/`, ей не виден ни в каком случае (граница названа
+# шапкой группы выше и перезамерена там же: таких атрибутов сегодня НОЛЬ). ⚠️
+# Зелень этой группы пункт 9 тоже НЕ закрывает: она объявляет, ЧТО смотреть, а
+# отметку о закрытии ставит человек (D-17).
+
+BLIND_ZONE_POLLING = "вооружение опроса"
+BLIND_ZONE_OOB = "внеполосная область"
+BLIND_ZONE_CASCADE = "каскадная строка запроса"
+# Порядок классов есть порядок приоритета наблюдения.
+BLIND_ZONE_CLASS_ORDER = (BLIND_ZONE_POLLING, BLIND_ZONE_OOB, BLIND_ZONE_CASCADE)
+
+POLLING_TRIGGER_PREFIX = "every "
+HX_TRIGGER_VALUE = _value_pattern("hx-trigger")
+HX_ANY_VALUE = re.compile(r"(?<![-\w])(hx-[-\w:]+)\s*=\s*(\"([^\"]*)\"|'([^']*)')")
+FOR_STATEMENT = re.compile(r"\{%-?\s*for\b")
+MACRO_BODY = re.compile(r"\{%-?\s*macro\b.*?\{%-?\s*endmacro\s*-?%\}", re.DOTALL)
+
+
+class ConditionalHxSite(NamedTuple):
+    """Объявленное место слепой зоны.
+
+    kind — класс (`BLIND_ZONE_CLASS_ORDER`); attributes — атрибуты `hx-*`, чьё
+    присутствие или строка запроса зависят от ветвления; priority — место в
+    порядке наблюдения пункта 9 (1 — смотреть первым); reason — чем поломка
+    условия видна ЧЕЛОВЕКУ, раз суита её не видит.
+    """
+
+    kind: str
+    attributes: tuple[str, ...]
+    priority: int
+    reason: str
+
+
+# Разбивка по классам — ОТДЕЛЬНЫМИ константами: сумма утверждается равной
+# общему числу, то есть одно множество считается дважды разными путями.
+CONDITIONAL_HX_CLASS_POLLING = 2
+CONDITIONAL_HX_CLASS_OOB = 2
+CONDITIONAL_HX_CLASS_CASCADE = 8
+CONDITIONAL_HX_SITES_OUTSIDE_MACRO = 12
+
+_POLLING_ATTRIBUTES = ("hx-get", "hx-trigger", "hx-swap")
+_CASCADE_REASON = (
+    "вторая и следующие порции бесконечной подгрузки теряют фильтр — в ленте "
+    "появляются записи вне выбранного фильтра, или подгрузка уходит с пустой строкой"
+)
+
+# Ключ `путь#порядковый_номер`; гейт сравнивает МНОЖЕСТВА ключей, поэтому
+# текстовый порядок записей ниже не несущий — несущий порядок задаёт поле
+# `priority`.
+CONDITIONAL_HX_SITES: dict[str, ConditionalHxSite] = {
+    "account_groups/partials/sync_result.html#0": ConditionalHxSite(
+        BLIND_ZONE_POLLING,
+        _POLLING_ATTRIBUTES,
+        1,
+        ":50 — статус синхронизации групп аккаунта. Опрос вооружается только при "
+        "`status == 'syncing'`: сломанное условие даёт застывший «Синхронизация...» "
+        "(опрос не начался) либо бесконечный опрос после завершения",
+    ),
+    "accounts/partials/sync_status_card.html#0": ConditionalHxSite(
+        BLIND_ZONE_POLLING,
+        _POLLING_ATTRIBUTES,
+        2,
+        ":48 — карточка аккаунта в списке. Опрос вооружается только при "
+        "`status == 'syncing'`: застывшая карточка либо бесконечный опрос",
+    ),
+    "ads/includes/autosave.html#0": ConditionalHxSite(
+        BLIND_ZONE_OOB,
+        ("hx-swap-oob",),
+        3,
+        ":28 — индикатор автосохранения. Без признака ответ на форму с "
+        "`hx-swap=\"none\"` узел не обновит: человек видит устаревший статус сохранения",
+    ),
+    "ads/includes/media_add_tile.html#0": ConditionalHxSite(
+        BLIND_ZONE_OOB,
+        ("hx-swap-oob",),
+        4,
+        ":55 — плитка «+ ДОБАВИТЬ» полосы вложений. Без признака плитка не "
+        "переиздаётся: видна при достигнутом потолке вложений или скрыта ниже него",
+    ),
+    "ads/list.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 5, ":61 — лента объявлений; " + _CASCADE_REASON
+    ),
+    "ads/partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 6, ":7 — порция ленты объявлений; " + _CASCADE_REASON
+    ),
+    "schedules/list.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 7, ":66 — лента расписаний; " + _CASCADE_REASON
+    ),
+    "schedules/partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 8, ":12 — порция ленты расписаний; " + _CASCADE_REASON
+    ),
+    "history/list.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 9, ":119 — история рассылок; " + _CASCADE_REASON
+    ),
+    "history/partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE, ("hx-get",), 10, ":6 — порция истории рассылок; " + _CASCADE_REASON
+    ),
+    "admin/user_history.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE,
+        ("hx-get",),
+        11,
+        ":63 — история пользователя в админке; " + _CASCADE_REASON,
+    ),
+    "admin/history_partial_cards.html#0": ConditionalHxSite(
+        BLIND_ZONE_CASCADE,
+        ("hx-get",),
+        12,
+        ":7 — порция истории пользователя в админке; " + _CASCADE_REASON,
+    ),
+}
+
+# Класс 4 — ветви тела `form_wrapper`: условие ветви → раздаваемые `hx-*`.
+FORM_WRAPPER_CONDITIONAL_BRANCHES = 6
+FORM_WRAPPER_CONDITIONAL_ATTRIBUTES: dict[str, tuple[str, ...]] = {
+    "target": ("hx-target", "hx-swap"),
+    "trigger": ("hx-trigger",),
+    "sync": ("hx-sync",),
+    "encoding": ("hx-encoding",),
+    "include": ("hx-include",),
+    "disabled_elt": ("hx-disabled-elt",),
+}
+# Безусловные атрибуты тега макроса, на которых держится довод «условный
+# `hx-post` законно пуст».
+FORM_WRAPPER_UNCONDITIONAL_ATTRIBUTES = ("hx-post", "hx-indicator")
+
+# Наивная сеть второй летописи и её число — ВЕРНЫЙ замер своей сети.
+FORM_WRAPPER_NAIVE_BRANCH_NET = "{%- if"
+FORM_WRAPPER_NAIVE_BRANCHES = 8
+# Исключённые наивной сетью ветви: причина → условие. Номера строк (`:182`,
+# `:196` на 2026-09-24) называет отказ, но не утверждение: правка шапки макроса
+# двигала бы их, не меняя предмета.
+FORM_WRAPPER_EXCLUDED_BRANCHES: dict[str, str] = {
+    "внутри докстринга макроса": "caller is defined",
+    "ветвь без единого `hx-*`": "caller is defined",
+}
+
+SYNTHETIC_CONDITIONAL_OOB_TEMPLATE = "synthetic/conditional_oob.html"
+SYNTHETIC_CONDITIONAL_OOB = '<div id="z" {% if q %}hx-swap-oob="true"{% endif %}></div>'
+SYNC_RESULT_TEMPLATE = "account_groups/partials/sync_result.html"
+SYNC_RESULT_POLLING_BRANCH = (
+    "{% if status == 'syncing' %} hx-get=\"/accounts/{{ account_id }}/groups/sync-status\""
+    ' hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}'
+)
+SYNC_RESULT_POLLING_UNCONDITIONAL = (
+    ' hx-get="/accounts/{{ account_id }}/groups/sync-status"'
+    ' hx-trigger="every 5s" hx-swap="outerHTML"'
+)
+
+
+def _cascade_attributes(tag: str) -> tuple[str, ...]:
+    """Атрибуты `hx-*`, чьё значение (строка запроса) собрано оператором `{% for %}`."""
+    names: list[str] = []
+    for match in HX_ANY_VALUE.finditer(tag):
+        value = match.group(3) if match.group(3) is not None else match.group(4)
+        if FOR_STATEMENT.search(value) and match.group(1) not in names:
+            names.append(match.group(1))
+    return tuple(names)
+
+
+def _blind_zone_attributes(tag: str) -> tuple[str, ...]:
+    """Раздаваемые ветвлением ПРОЧИЕ `hx-*` места: условные без `hx-post`, затем каскадные.
+
+    `hx-post` отсюда исключён: его стережёт группа выше, и два утверждения над
+    одним исходником остаются РАЗДЕЛЬНЫМИ — место с условными `hx-post` и
+    `hx-swap` попадает в обе группы.
+    """
+    names = [name for name in _conditional_attributes(tag) if name != HX_POST_NAME]
+    for name in _cascade_attributes(tag):
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _blind_zone_sites(rel: str, source: str) -> tuple[list[Site], list[Site]]:
+    """Места слепой зоны одного шаблона: (вне тел макросов, внутри тел макросов).
+
+    Тег относится к телу макроса, если его текст лежит внутри текста
+    `{% macro %}…{% endmacro %}` того же исходника без комментариев.
+    """
+    macro_bodies = [match.group(0) for match in MACRO_BODY.finditer(_strip_comments(source))]
+    outside: list[Site] = []
+    inside: list[Site] = []
+    for site in _sites([(rel, source)], HX_ANY_TAG):
+        if not _blind_zone_attributes(site.tag):
+            continue
+        if any(site.tag in body for body in macro_bodies):
+            inside.append(site)
+        else:
+            outside.append(site)
+    return outside, inside
+
+
+def _conditional_hx_sites(sources: dict[str, str]) -> dict[str, Site]:
+    """Места условной сборки ПРОЧИХ `hx-*` ВНЕ тела макроса: ключ `путь#индекс` → место.
+
+    Чистая функция от поданного отображения. Место — тег, у которого
+    `_blind_zone_attributes` непуст; тег, лежащий внутри `{% macro %}…
+    {% endmacro %}`, сюда не входит — это класс 4, и считается он ветвями
+    (`_form_wrapper_branches`), а не тегами.
+    """
+    found: dict[str, Site] = {}
+    for rel, source in sorted(sources.items()):
+        outside, _ = _blind_zone_sites(rel, source)
+        found.update(zip(_ordinal_keys(outside), outside))
+    return found
+
+
+def _macro_conditional_hx_sites(sources: dict[str, str]) -> dict[str, Site]:
+    """Места условной сборки прочих `hx-*` ВНУТРИ тела макроса — та же сеть, другая сторона."""
+    found: dict[str, Site] = {}
+    for rel, source in sorted(sources.items()):
+        _, inside = _blind_zone_sites(rel, source)
+        found.update(zip(_ordinal_keys(inside), inside))
+    return found
+
+
+def _blind_zone_classes(tag: str) -> set[str]:
+    """Классы, к которым относится место; полнота требует РОВНО одного."""
+    classes: set[str] = set()
+    conditional = _conditional_attributes(tag)
+    trigger = _attr_value(tag, HX_TRIGGER_VALUE)
+    if (
+        "hx-trigger" in conditional
+        and trigger is not None
+        and trigger.startswith(POLLING_TRIGGER_PREFIX)
+    ):
+        classes.add(BLIND_ZONE_POLLING)
+    if "hx-swap-oob" in conditional:
+        classes.add(BLIND_ZONE_OOB)
+    if _cascade_attributes(tag):
+        classes.add(BLIND_ZONE_CASCADE)
+    return classes
+
+
+def _form_wrapper_branches(source: str) -> dict[str, tuple[str, ...]]:
+    """Ветви `{% if %}` исходника (без комментариев), раздающие `hx-*`: условие → атрибуты."""
+    branches: dict[str, tuple[str, ...]] = {}
+    for _, condition, block in _if_blocks(_strip_comments(source)):
+        names = tuple(dict.fromkeys(HX_ANY_ATTR.findall(block)))
+        if names:
+            branches[condition] = names
+    return branches
+
+
+def _form_wrapper_excluded_branches(source: str) -> list[tuple[str, str, int]]:
+    """Ветви наивной сети, `hx-*` не раздающие: (причина, условие, строка сырого исходника)."""
+    excluded: list[tuple[str, str, int]] = []
+    comment_spans = [match.span() for match in JINJA_COMMENT.finditer(source)]
+    for comment in JINJA_COMMENT.finditer(source):
+        for statement in IF_STATEMENT.finditer(comment.group(0)):
+            if statement.group(1) == "if" and statement.group(0).startswith(
+                FORM_WRAPPER_NAIVE_BRANCH_NET
+            ):
+                line = source.count("\n", 0, comment.start() + statement.start()) + 1
+                excluded.append(("внутри докстринга макроса", statement.group(2).strip(), line))
+    body = _strip_comments(source)
+    for start, condition, block in _if_blocks(body):
+        opener = IF_STATEMENT.match(body, start)
+        if HX_ANY_ATTR.search(block) or opener is None:
+            continue
+        if not opener.group(0).startswith(FORM_WRAPPER_NAIVE_BRANCH_NET):
+            continue
+        raw_at = next(
+            match.start()
+            for match in re.finditer(re.escape(opener.group(0)), source)
+            if not any(begin <= match.start() < end for begin, end in comment_spans)
+        )
+        excluded.append(("ветвь без единого `hx-*`", condition, source.count("\n", 0, raw_at) + 1))
+    return excluded
+
+
+def _blind_zone_offence(found: dict[str, Site], declared: dict[str, ConditionalHxSite]) -> str:
+    """Пустая строка, если множества ключей совпали; иначе — отказ с именами мест."""
+    if set(found) == set(declared):
+        return ""
+    return (
+        f"мест условной сборки прочих `hx-*` вне макроса найдено {len(found)}, "
+        f"объявлено {len(declared)} — новые: {sorted(set(found) - set(declared))}, "
+        f"пропавшие: {sorted(set(declared) - set(found))}. Число двигается ЗАМЕРОМ "
+        f"и строкой летописи, а не сужением сети"
+    )
+
+
+def _blind_zone_class_offences(found: dict[str, Site]) -> dict[str, list[str]]:
+    """Места, отнесённые не ровно к одному классу: ключ → найденные классы."""
+    return {
+        key: sorted(classes)
+        for key, site in found.items()
+        if len(classes := _blind_zone_classes(site.tag)) != 1
+    }
+
+
+def test_conditional_hx_attributes_outside_the_macro_are_the_declared_twelve() -> None:
+    """Мест условной сборки прочих `hx-*` вне макроса ровно 12, и это объявленные ключи."""
+    sources = dict(_all_templates())
+    found = _conditional_hx_sites(sources)
+
+    assert len(found) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO, _blind_zone_offence(
+        found, CONDITIONAL_HX_SITES
+    )
+    assert set(found) == set(CONDITIONAL_HX_SITES), _blind_zone_offence(found, CONDITIONAL_HX_SITES)
+    assert len(CONDITIONAL_HX_SITES) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO
+    for key, site in found.items():
+        assert _blind_zone_attributes(site.tag) == CONDITIONAL_HX_SITES[key].attributes, (
+            f"{key}: раздаваемые атрибуты {_blind_zone_attributes(site.tag)}, объявлено "
+            f"{CONDITIONAL_HX_SITES[key].attributes}"
+        )
+
+
+def test_blind_zone_class_breakdown_is_the_declared_two_two_eight() -> None:
+    """Разбивка 2 / 2 / 8 — объявленная и измеренная; сумма равна 12."""
+    declared = {
+        BLIND_ZONE_POLLING: CONDITIONAL_HX_CLASS_POLLING,
+        BLIND_ZONE_OOB: CONDITIONAL_HX_CLASS_OOB,
+        BLIND_ZONE_CASCADE: CONDITIONAL_HX_CLASS_CASCADE,
+    }
+    assert sum(declared.values()) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO, (
+        f"сумма разбивки {sum(declared.values())} ≠ {CONDITIONAL_HX_SITES_OUTSIDE_MACRO}"
+    )
+    by_declaration = {
+        kind: sum(1 for entry in CONDITIONAL_HX_SITES.values() if entry.kind == kind)
+        for kind in BLIND_ZONE_CLASS_ORDER
+    }
+    assert by_declaration == declared, f"перечень разбит {by_declaration}, объявлено {declared}"
+
+    found = _conditional_hx_sites(dict(_all_templates()))
+    measured = {kind: 0 for kind in BLIND_ZONE_CLASS_ORDER}
+    for key, site in found.items():
+        for kind in _blind_zone_classes(site.tag):
+            measured[kind] += 1
+            assert key not in CONDITIONAL_HX_SITES or CONDITIONAL_HX_SITES[key].kind == kind, (
+                f"{key}: измеренный класс «{kind}», объявлен «{CONDITIONAL_HX_SITES[key].kind}»"
+            )
+    assert measured == declared, f"измеренная разбивка {measured}, объявлено {declared}"
+
+
+def test_form_wrapper_branches_dispensing_htmx_are_the_declared_six() -> None:
+    """Раздающих `hx-*` ветвей в теле `form_wrapper` ровно 6; `hx-post` и `hx-indicator` безусловны."""
+    sources = dict(_all_templates())
+    branches = _form_wrapper_branches(sources[FORM_WRAPPER_DEFINITION])
+
+    assert len(branches) == FORM_WRAPPER_CONDITIONAL_BRANCHES, (
+        f"раздающих ветвей {len(branches)}, объявлено {FORM_WRAPPER_CONDITIONAL_BRANCHES}: {branches}"
+    )
+    assert branches == FORM_WRAPPER_CONDITIONAL_ATTRIBUTES, (
+        f"ветви раздают {branches}, объявлено {FORM_WRAPPER_CONDITIONAL_ATTRIBUTES}"
+    )
+
+    macro_sites = _macro_conditional_hx_sites(sources)
+    wrapper = [site for site in macro_sites.values() if site.template == FORM_WRAPPER_DEFINITION]
+    assert len(wrapper) == 1, f"тег макроса `form_wrapper` среди мест тела макроса: {sorted(macro_sites)}"
+    printed = HX_ANY_ATTR.findall(wrapper[0].tag)
+    conditional = _conditional_attributes(wrapper[0].tag)
+    for name in FORM_WRAPPER_UNCONDITIONAL_ATTRIBUTES:
+        assert name in printed and name not in conditional, (
+            f"`{name}` в `form_wrapper` перестал быть безусловным (печатается: "
+            f"{name in printed}, под ветвью: {name in conditional}) — довод «условный "
+            f"`hx-post` законно пуст» потерял основание"
+        )
+
+
+def test_form_wrapper_branches_naive_count_exceeds_the_dispensing_by_the_two_named_lines() -> None:
+    """Летопись 8 → 6 доказана машинно: наивных 8, раздающих 6, разность 2 — названа."""
+    source = dict(_all_templates())[FORM_WRAPPER_DEFINITION]
+    naive = source.count(FORM_WRAPPER_NAIVE_BRANCH_NET)
+    dispensing = len(_form_wrapper_branches(source))
+    excluded = _form_wrapper_excluded_branches(source)
+
+    assert naive == FORM_WRAPPER_NAIVE_BRANCHES, f"наивная сеть даёт {naive}"
+    assert dispensing == FORM_WRAPPER_CONDITIONAL_BRANCHES, f"раздающих ветвей {dispensing}"
+    assert naive - dispensing == len(FORM_WRAPPER_EXCLUDED_BRANCHES) == 2, (
+        f"разность наивного счёта и раздающих {naive - dispensing}, объявлено 2"
+    )
+    assert {(reason, condition) for reason, condition, _ in excluded} == set(
+        FORM_WRAPPER_EXCLUDED_BRANCHES.items()
+    ), (
+        f"исключённые ветви {excluded} разошлись с объявленными "
+        f"{FORM_WRAPPER_EXCLUDED_BRANCHES} — летопись 8 → 6 надлежит перезамерить"
+    )
+    assert len(excluded) == naive - dispensing, (
+        f"названо исключённых {len(excluded)} при разности {naive - dispensing}: {excluded}"
+    )
+
+
+def test_blind_zone_every_site_falls_into_exactly_one_class() -> None:
+    """Полнота: каждое место — ровно в одном классе; место без класса НАЗЫВАЕТСЯ."""
+    sources = dict(_all_templates())
+    found = _conditional_hx_sites(sources)
+    assert found, "мест слепой зоны не найдено — полнота утверждала бы пустоту"
+    assert _blind_zone_class_offences(found) == {}, (
+        f"места не ровно в одном классе: {_blind_zone_class_offences(found)}"
+    )
+    assert set(_macro_conditional_hx_sites(sources)) == {f"{FORM_WRAPPER_DEFINITION}#0"}, (
+        f"внутри тел макросов условную сборку несёт не только `form_wrapper`: "
+        f"{sorted(_macro_conditional_hx_sites(sources))} — класса для этого места нет"
+    )
+
+    key = "synthetic/unclassified.html"
+    synthetic = {key: '<div id="u" {% if q %}hx-target="#u"{% endif %}></div>'}
+    offences = _blind_zone_class_offences(_conditional_hx_sites(synthetic))
+    assert offences == {f"{key}#0": []}, (
+        f"место без класса не названо правилом полноты: {offences}"
+    )
+
+
+def test_blind_zone_observation_priority_puts_polling_first() -> None:
+    """Приоритет — ПОЛЕ: 1…12 без пропусков, первые два — вооружение опроса."""
+    ordered = sorted(CONDITIONAL_HX_SITES.items(), key=lambda item: item[1].priority)
+    priorities = [entry.priority for _, entry in ordered]
+    assert priorities == list(range(1, len(CONDITIONAL_HX_SITES) + 1)), (
+        f"приоритеты {priorities} — не 1…{len(CONDITIONAL_HX_SITES)} без повторов"
+    )
+    assert [entry.kind for _, entry in ordered[:2]] == [BLIND_ZONE_POLLING, BLIND_ZONE_POLLING], (
+        f"первые два по приоритету — {[key for key, _ in ordered[:2]]}, а не вооружение опроса"
+    )
+    ranks = [BLIND_ZONE_CLASS_ORDER.index(entry.kind) for _, entry in ordered]
+    assert ranks == sorted(ranks), f"порядок приоритета нарушает порядок классов: {ordered}"
+
+    found = _conditional_hx_sites(dict(_all_templates()))
+    for key, entry in CONDITIONAL_HX_SITES.items():
+        if entry.kind == BLIND_ZONE_POLLING:
+            assert key in found, f"место вооружения опроса {key} не найдено"
+            trigger = _attr_value(found[key].tag, HX_TRIGGER_VALUE)
+            assert trigger is not None and trigger.startswith(POLLING_TRIGGER_PREFIX), (
+                f"{key}: основание приоритета (`hx-trigger=\"every …\"` под ветвью) не "
+                f"измеряется — значение {trigger!r}"
+            )
+
+
+def test_control_negative_a_synthetic_oob_site_grows_the_conditional_hx_attributes() -> None:
+    """Контроль ДОБАВЛЕНИЯ: синтетический условный `hx-swap-oob` — 13 мест, класс назван."""
+    sources = dict(_all_templates())
+    key = SYNTHETIC_CONDITIONAL_OOB_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_CONDITIONAL_OOB}
+    assert changed != sources
+
+    found = _conditional_hx_sites(changed)
+
+    assert len(found) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO + 1, (
+        f"мест после добавления {len(found)}, ожидалось {CONDITIONAL_HX_SITES_OUTSIDE_MACRO + 1}"
+    )
+    assert f"{key}#0" in found, f"добавленное место не найдено: {sorted(found)}"
+    assert _blind_zone_classes(found[f"{key}#0"].tag) == {BLIND_ZONE_OOB}, (
+        f"класс добавленного места {_blind_zone_classes(found[f'{key}#0'].tag)}, ожидался "
+        f"«{BLIND_ZONE_OOB}»"
+    )
+    assert f"{key}#0" in _blind_zone_offence(found, CONDITIONAL_HX_SITES)
+
+
+def test_control_negative_a_cut_branch_shrinks_the_conditional_hx_attributes(tmp_path: Path) -> None:
+    """Контроль СНЯТИЯ: у места вооружения опроса вырезано ветвление — 11 мест, равенство краснеет."""
+    root = _tree_with(
+        tmp_path,
+        Substitution(
+            SYNC_RESULT_TEMPLATE, SYNC_RESULT_POLLING_BRANCH, SYNC_RESULT_POLLING_UNCONDITIONAL
+        ),
+    )
+    found = _conditional_hx_sites(dict(_all_templates(root)))
+    key = f"{SYNC_RESULT_TEMPLATE}#0"
+
+    assert len(found) == CONDITIONAL_HX_SITES_OUTSIDE_MACRO - 1, (
+        f"мест после снятия ветвления {len(found)}, ожидалось "
+        f"{CONDITIONAL_HX_SITES_OUTSIDE_MACRO - 1}"
+    )
+    assert key not in found
+    assert not (set(found) == set(CONDITIONAL_HX_SITES)), (
+        "утверждение равенства перечню осталось истинным при исчезнувшем месте — "
+        "правило краснеет только вверх"
+    )
+    assert key in _blind_zone_offence(found, CONDITIONAL_HX_SITES)
+
+
+def test_control_positive_blind_zone_universe_is_nonempty_and_every_hx_attribute_is_parsed() -> None:
+    """Положительный контроль: `len(sources) > 50`, и каждое вхождение `hx-*` лежит в разобранном теге."""
+    sources = dict(_all_templates())
+    assert len(sources) > CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR, (
+        f"вселенная {len(sources)} шаблонов — обход сломан"
+    )
+    templates = list(sources.items())
+    in_tags = sum(len(HX_ANY_ATTR.findall(site.tag)) for site in _sites(templates, HX_ANY_TAG))
+    total = _attribute_count(templates, HX_ANY_ATTR)
+    assert in_tags == total, (
+        f"вхождений `hx-*` {total}, из них в разобранных тегах {in_tags} — граница "
+        f"тега разобрана неверно, и место слепой зоны может потеряться молча"
+    )
+    assert _conditional_hx_sites(sources), "на непустой вселенной слепая зона пуста — сеть слепа"
+
+
+def test_blind_zone_adjacency_counts_a_doubly_conditional_site_in_both_gates() -> None:
+    """Смежность: место с условными `hx-post` и `hx-swap` считают ОБЕ группы, без дедупликации."""
+    key = "synthetic/doubly_conditional.html"
+    sources = {
+        key: '<form method="post" action="/y" {% if x %}hx-post="/y" hx-swap="none"{% endif %}></form>'
+    }
+    post_sites = _conditional_hx_post_sites(sources)
+    other_sites = _conditional_hx_sites(sources)
+
+    assert f"{key}#0" in post_sites, f"группа условного `hx-post` место не увидела: {post_sites}"
+    assert f"{key}#0" in other_sites, f"группа прочих `hx-*` место не увидела: {other_sites}"
+    assert _blind_zone_attributes(other_sites[f"{key}#0"].tag) == ("hx-swap",), (
+        "группа прочих `hx-*` приписала себе `hx-post` — утверждения перестали быть раздельными"
+    )
+
+
+def test_blind_zone_compares_attribute_values_by_exact_code_points() -> None:
+    """Кодировка: `every` + узкий неразрывный пробел + `5s` — НЕ вооружение опроса."""
+    regular = '<div id="p" {% if s %}hx-get="/p" hx-trigger="every 5s"{% endif %}></div>'
+    narrow = regular.replace("every 5s", "every 5s")
+    assert narrow != regular, "подмена пробела ничего не изменила"
+
+    [regular_site] = _conditional_hx_sites({"synthetic/regular.html": regular}).values()
+    [narrow_site] = _conditional_hx_sites({"synthetic/narrow.html": narrow}).values()
+
+    assert _blind_zone_classes(regular_site.tag) == {BLIND_ZONE_POLLING}
+    assert _blind_zone_classes(narrow_site.tag) == set(), (
+        "значение с узким пробелом приравнено к обычному — сравнение нормализует строки"
+    )
+
+
+# =============================================================================
+# Фаза 15, план 15-05: ОБВОД ФОКУСА ОРГАНА СНЯТИЯ ОБЪЯВЛЕН В CSS — МАШИННАЯ
+# ПОЛОВИНА ПУНКТА 2 ПЕРЕЧНЯ `human_verification`
+# =============================================================================
+#
+# Пункт 2 перечня `human_verification` пятнадцатого круга Фазы 10 спрашивал:
+# «виден ли фокус (`outline: 2px solid var(--focus-ring)`) и срабатывает ли
+# пробел». Первая половина утверждается МАШИННО: правило в дереве СУЩЕСТВУЕТ
+# (`app/static/css/app.css:1329` на 2026-09-24, перезамер Ф-19 `15-RESEARCH.md`),
+# и его существование — предмет гейта ниже.
+#
+# ⚠️ ГРАНИЦА ЭТОГО ГЕЙТА. Зелень означает РОВНО одно: правило объявлено в
+# таблице стилей — с `outline` на переменной `var(--focus-ring)` и с
+# `outline-offset`. Она НЕ означает, что обвод ВИДЕН глазом, что он не перекрыт,
+# что он достаточного контраста и что пробел на `<input type="checkbox">`
+# срабатывает: суита CSS не раскладывает, страниц браузером не рендерит и клавиш
+# не нажимает. ВТОРАЯ ПОЛОВИНА ПУНКТА 2 ОСТАЁТСЯ ЧЕЛОВЕКУ. Сам файл стилей
+# запрещает подмену, дословно (`app/static/css/app.css`, абзац стопки «⚠️ ГРАНИЦА
+# ДОКАЗАННОГО НАЗВАНА ЗДЕСЬ, А НЕ ОСТАВЛЕНА ЧИТАТЕЛЮ: правила утверждают ОБЪЯВЛЕНИЯ
+# этой таблицы»; летопись: прежде указатель `:1255-1258`, его сдвинула правка плана
+# 15-19 выше абзаца — ревью IN-04):
+#
+#   «положение прокрутки, движка раскладки в суите нет, браузерного привода нет ни
+#   одного. Отрисовка остаётся шагам 2.8 и 4.4 ручного обхода, и объявлять их
+#   пройденными по зелени правил НЕЛЬЗЯ — окно 77 журнала записывает, чем такая
+#   подмена уже обошлась фазе.»
+#
+# ⚠️ ЧИСЛО ПРАВИЛ `.failure-stack` ЗДЕСЬ НЕ ОБЪЯВЛЯЕТСЯ, И АДРЕСАТ НАЗЫВАЕТСЯ
+# ПРЯМО (граница FAILURE_STACK_SELECTOR_BOUNDARY_NOTE — только эта запись, без
+# литерала числа). Перезамер Ф-19 даёт ЧЕТЫРЕ селектора (`app.css:1259, 1263,
+# 1266, 1330`) против «шести» записи долга D-18.3, и летопись нужна, — но
+# объявить число ЗДЕСЬ значило бы завести литерал в файле, чей предмет CSS не
+# правит, тогда как план 15-07 в ту же волну ДОБАВЛЯЕТ блок компенсации
+# перекрытия и число сдвинет. Два носителя одного числа в двух файлах — ровно
+# тот дефект «четыре сети», от которого защищается фаза. Поэтому число правил
+# `.failure-stack`, их перечень и летопись `6 → 4 → 5` объявляет план 15-07 в
+# `tests/test_templates/test_banner_dismiss.py` — рядом с правкой CSS, потому что
+# таблицу стилей правит именно он.
+#
+# ⚠️ ПРАВКУ САМОЙ РАЗМЕТКИ ОРГАНА СНЯТИЯ И CSS ЭТОТ ПЛАН НЕ ДЕЛАЕТ — ни строки в
+# `app/templates/includes/htmx_error_banner.html`, ни в `app/static/css/app.css`.
+# Её делает план 15-07 (два различимых доступных имени и объявленная компенсация
+# перекрытия). Здесь — только машинное утверждение существующего правила.
+
+FOCUS_RING_SELECTOR = ".banner-dismiss:focus-visible"
+FOCUS_RING_VARIABLE = "var(--focus-ring)"
+FOCUS_RING_RULE_OPEN = f"{FOCUS_RING_SELECTOR} {{ outline: 2px solid {FOCUS_RING_VARIABLE};"
+FOCUS_RING_LITERAL_COLOUR = "#4d8dff"
+
+
+def _focus_ring_offence(css: str) -> str:
+    """Пустая строка, если обвод фокуса органа снятия объявлен; иначе — что не сошлось.
+
+    Принимает ТЕКСТ таблицы стилей без комментариев (как отдаёт `_app_css`), а
+    не путь: иначе контроль от вакуума на синтетическом CSS невыразим. Правила
+    разбирает общий `_css_rules`, объявления — общий `_declaration`; второго
+    разборщика CSS здесь не заводится.
+    """
+    bodies = [
+        body
+        for selector, body in _css_rules(css)
+        if FOCUS_RING_SELECTOR in [part.strip() for part in selector.split(",")]
+    ]
+    if not bodies:
+        return (
+            f"правила для селектора `{FOCUS_RING_SELECTOR}` в таблице стилей нет — "
+            f"обвод фокуса органа снятия не объявлен"
+        )
+    outline = next(
+        (value for body in bodies if (value := _declaration(body, "outline")) is not None), None
+    )
+    offset = next(
+        (value for body in bodies if (value := _declaration(body, "outline-offset")) is not None),
+        None,
+    )
+    problems: list[str] = []
+    if outline is None:
+        problems.append("нет объявления `outline`")
+    elif FOCUS_RING_VARIABLE not in outline:
+        problems.append(
+            f"`outline: {outline}` не несёт `{FOCUS_RING_VARIABLE}` — цвет обвода задан "
+            f"литералом, а не переменной темы"
+        )
+    if offset is None:
+        problems.append("нет объявления `outline-offset`")
+    if not problems:
+        return ""
+    return f"правило `{FOCUS_RING_SELECTOR}`: " + "; ".join(problems)
+
+
+def test_focus_ring_rule_is_declared_for_the_banner_dismiss() -> None:
+    """Правило обвода фокуса органа снятия объявлено: `outline` на `var(--focus-ring)` и `outline-offset`.
+
+    ⚠️ Зелень — ТОЛЬКО объявление. Видимость обвода и работа пробела остаются
+    человеку (`app/static/css/app.css`, абзац стопки «⚠️ ГРАНИЦА ДОКАЗАННОГО…»:
+    «объявлять их пройденными по зелени правил НЕЛЬЗЯ»; прежде указатель
+    `:1255-1258`, летопись).
+    """
+    css = _app_css()
+    assert _focus_ring_offence(css) == "", _focus_ring_offence(css)
+
+
+def test_control_negative_focus_ring_rule_without_its_selector_is_named() -> None:
+    """Контроль исчезновения первого рода: селектора нет — отказ называет его."""
+    css = _app_css()
+    assert css.count(FOCUS_RING_SELECTOR) == 1, (
+        f"селектор `{FOCUS_RING_SELECTOR}` встречается {css.count(FOCUS_RING_SELECTOR)} раз(а), "
+        f"а не один — подмена меняет не то место"
+    )
+    changed = css.replace(FOCUS_RING_SELECTOR, ".banner-dismiss:focus")
+    assert changed != css, "подмена селектора ничего не изменила"
+
+    offence = _focus_ring_offence(changed)
+
+    assert offence != "", "правило зелено без своего селектора — гейт слеп"
+    assert FOCUS_RING_SELECTOR in offence, f"отказ не называет отсутствующий селектор: {offence}"
+
+
+def test_control_negative_focus_ring_rule_with_a_literal_colour_is_named() -> None:
+    """Контроль исчезновения второго рода: цвет обвода литералом — отказ называет переменную."""
+    css = _app_css()
+    assert css.count(FOCUS_RING_RULE_OPEN) == 1, (
+        f"начало правила {FOCUS_RING_RULE_OPEN!r} встречается {css.count(FOCUS_RING_RULE_OPEN)} "
+        f"раз(а), а не один"
+    )
+    changed = css.replace(
+        FOCUS_RING_RULE_OPEN,
+        FOCUS_RING_RULE_OPEN.replace(FOCUS_RING_VARIABLE, FOCUS_RING_LITERAL_COLOUR),
+    )
+    assert changed != css, "подмена цвета ничего не изменила"
+
+    offence = _focus_ring_offence(changed)
+
+    assert offence != "", "правило зелено при литеральном цвете обвода — гейт слеп"
+    assert FOCUS_RING_VARIABLE in offence and FOCUS_RING_LITERAL_COLOUR in offence, (
+        f"отказ не называет, что именно не сошлось: {offence}"
+    )
+
+
+# =============================================================================
+# Фаза 15, план 15-10: СВЯЗКА «ФОРМА-ТРИГГЕР → МОДАЛКА С `hx-post`» (D-07)
+# =============================================================================
+#
+# ⚠️ КОНТРАКТ СВЯЗКИ ОБЪЯВЛЯЕТСЯ ЗДЕСЬ, ВЫШЕ ПЕРВОГО ЧИСЛА ГРУППЫ, И ВСЕ ЧИСЛА
+# НИЖЕ (этой группы и группы её границ) СНЯТЫ СЧЁТОМ ИМЕННО ПО НЕМУ. Конкретный
+# контракт — дискреция планировщика по D-07 (`15-CONTEXT.md`); объявлен он так:
+#
+#   СВЯЗКА — пара «форма-триггер, отдающая свой `action` событию открытия
+#   модалки» и «единственная форма компонента модалки, несущая `hx-post`,
+#   посимвольно равный полученному параметру `action`».
+#
+#   ⚠️ Атрибут `hx-post` на САМОМ ТРИГГЕРЕ признаком связки НЕ ЯВЛЯЕТСЯ. D-07
+#   объявляет 18 триггеров переведёнными ИМЕННО потому, что действие письма
+#   идёт формой модалки, и требование атрибута на триггере рисковало бы
+#   работающим подтверждением удаления ради буквы атрибута. Основание — FORM-06
+#   закрыт: 18 мест подтверждения одной правкой `components/modal.html`, число
+#   `MODAL_PLACES` (`tests/test_templates/test_components.py`).
+#
+# МАШИННЫЕ ПРИЗНАКИ УЗЛОВ. Исходник каждого шаблона читается без комментариев
+# обоих видов (`_strip_comments`).
+#   • ФОРМА-ТРИГГЕР — тег `<form …>`, несущий атрибут `x-on:submit.prevent`,
+#     чьё значение вызывает `$dispatch('modal-open-…')`. Её АДРЕС — атрибут
+#     `action`; её СОБЫТИЕ — имя после `modal-open-`, и ОСНОВА имени (всё до
+#     первого `{{`) есть ключ сопоставления с модалкой.
+#   • ФОРМА КОМПОНЕНТА — тег `<form …>` в `components/modal.html`, несущий
+#     `hx-post`. Модалку собирает вызов `modal(id=…, action=…, …)`; компонент
+#     слушает `x-on:modal-open-{{ id }}.window` и раздаёт `hx-post="{{ action }}"`.
+#   • «`action` триггера совпадает с тем, что модалка получит параметром» —
+#     статический СКЕЛЕТ адреса триггера (каждое `{{ … }}` → `{}`) равен
+#     скелету аргумента `action=` вызова модалки с той же основой события
+#     (конкатенация `~`: строковые литералы как есть, прочее — `{}`).
+#
+# ⚠️ ДВЕ ПОПРАВКИ, НАЗВАННЫЕ, А НЕ СГЛАЖЕННЫЕ (идиома D-30/D-32).
+#
+# 1. «СХОДЯТСЯ ТРЕМЯ СЧЁТАМИ» → «ЧЕТЫРЬМЯ». `15-CONTEXT.md` §Reusable Assets
+#    говорит, что 18 мест FORM-06 «сходятся тремя счётами». Это УСТАРЕЛО:
+#    `test_modal_site_inventory` сводит инвентарь ЧЕТЫРЬМЯ счётами, и четвёртый
+#    (имена именованных аргументов вызывающих ⊆ имён сигнатуры макроса)
+#    прибавлен планом 10-01 (D-14 Фазы 10) ради свойства, которого до него не
+#    существовало. Запись контекста ошибкой не была — она устарела. Эта группа
+#    берёт форму из дерева, а не из записи, и доказывает связку тоже ЧЕТЫРЬМЯ.
+# 2. КООРДИНАТА ВТОРОГО УЗЛА: 805 → 807. `15-CONTEXT.md` называет второй узел
+#    связки `components/modal.html:805`. Перезамер 2026-09-24: тег
+#    `<form class="modal__form" method="post" action="{{ action }}"` ОТКРЫВАЕТСЯ
+#    на 805, а атрибут `hx-post="{{ action }}"` стои́т на 807. По тегу координата
+#    верна, по атрибуту — на две строки ниже, и ищущий атрибут на 805 его не
+#    найдёт. Номера строк в гейт не вписаны: ключ места — порядковый номер.
+#
+# ⚠️ СВЯЗКА ДОКАЗЫВАЕТСЯ ЧЕТЫРЬМЯ НЕЗАВИСИМЫМИ СЧЁТАМИ, А НЕ ОДНИМ ОБХОДОМ.
+# Одиночный обход сам может ослепнуть, и тогда его ноль неотличим от
+# исполненной работы. Форма взята из `test_modal_site_inventory`, где третий
+# счёт обязан быть ПРЯМЫМ (счёт по импортёрам до числа мест не доходит в
+# принципе: файл подмены статуса панель сознательно не импортирует).
+#   I   — ТРИГГЕРЫ: теги форм-триггеров по РАЗБОРУ ГРАНИЦ ТЕГА; ключ
+#         `путь#порядковый_номер`, число `MODAL_TRIGGER_FORMS`.
+#   II  — ВТОРОЙ УЗЕЛ: формы компонента с `hx-post`; ровно
+#         `MODAL_COMPONENT_POST_FORMS`, и `hx-post` посимвольно равен `action`.
+#   III — СОБЫТИЕ: ПРЯМОЙ счёт вызовов события по ТЕКСТУ значения атрибута, без
+#         разбора границ тега; основы, зовомые триггерами, ⊆ основ, которые
+#         слушает компонент (основ аргумента `id=` вызовов модалки).
+#   IV  — АДРЕС: имена именованных аргументов, несущих адрес у вызывающих, ⊆
+#         имён сигнатуры макроса — ровно форма четвёртого счёта образца; и
+#         скелет адреса каждого триггера равен скелету адреса его модалки.
+# Каждый счёт даёт МНОЖЕСТВО ключей триггеров, которые он признаёт связанными,
+# и `_linkage_offence` сводит их, называя РАЗОШЕДШУЮСЯ ПАРУ счётов и ключи, на
+# которых они разошлись. Расхождение I и III есть ошибка разбора границ тега, а
+# не пропажа разметки, и сообщение это различает.
+#
+# ПЯТЫЙ СВИДЕТЕЛЬ, А НЕ ЗАМЕНА. `MODAL_IMPORTERS`, `MODAL_EVENT_NAMES`,
+# `MODAL_PLACES` и `test_modal_site_inventory` живут в
+# `tests/test_templates/test_components.py`, и этот план тот файл НЕ ПРАВИТ
+# вовсе. Группа ссылается на них по имени и их счётов не дублирует: число
+# триггеров равно `MODAL_PLACES`, число основ события — `MODAL_EVENT_NAMES`.
+# Импорт делается ВНУТРИ теста: `test_components.py` сам импортирует этот
+# модуль, и импорт в шапке замкнул бы круг (так же и с `test_form_inventory.py`).
+#
+# МЕСТА НЕ СЛИВАЮТСЯ (FORM-01 adjacency edge). 18 триггеров и форма модалки —
+# РАЗДЕЛЬНЫЕ учтённые места инвентаря плана 15-02 (`test_form_inventory.py`:
+# класс «сырой POST без hx-post» и класс «сырой POST с hx-post»). Группа
+# утверждает ОТНОШЕНИЕ между ними и в одно место их не сливает: слияние
+# уронило бы объявленное число мест письма с 49 до 31 без всякого изменения
+# дерева, то есть переопределило бы вселенную FORM-01 задним числом.
+#
+# КЛЮЧИ (FORM-01 ordering edge). Порядковый номер — среди ФОРМ-ТРИГГЕРОВ файла
+# (`_ordinal_keys`), а не среди всех мест формы, как у плана 15-02: там тег
+# триггера группы — `account_groups/includes/group_row.html#1`, здесь — `#0`.
+# Гейт сравнивает МНОЖЕСТВА ключей, поэтому текстовый порядок объявления не
+# несущий, и два триггера одного файла не схлопываются в один ключ. Сверка с
+# классами 15-02 идёт по ТЕКСТУ тега, а не по ключу.
+#
+# ⚠️ КОСВЕННОЕ ИМЯ СОБЫТИЯ, ОБЪЯВЛЕННОЕ ПОИМЁННО. Триггер
+# `admin/includes/queue_row.html` зовёт `modal-open-{{ modal_id }}`: основы у
+# имени нет, оно приходит параметром макроса строки. Модалку собирает вызов
+# `modal(id=queue_drop_modal_id(…))`, и тот же макрос отдаёт строке её
+# `modal_id` (`admin/queue.html`). Отображение `MODAL_OPEN_EVENT_INDIRECTIONS`
+# называет это поимённо, а основа выводится из ТЕЛА макроса (`queue-drop-`), а
+# не вписывается: правка макроса рвёт связку вслух. Имя без основы, не
+# названное в отображении, счёт III считает нерасрешённым и не связывает.
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ (D-16). Зелёный цвет означает: триггеров 18, у
+# каждого есть парный узел по всем четырём счётам, и адреса согласованы. Он НЕ
+# означает, что Alpine ДЕЙСТВИТЕЛЬНО перехватывает submit на рантайме — суита
+# не исполняет ни строчки JS, и переинициализация Alpine после свапа есть
+# пункт 5 ручного обхода, закрытый Фазой 11. Он НЕ означает, что модалка
+# ОТКРЫВАЕТСЯ по событию: это предмет правил `test_components.py`, и они здесь
+# пятый свидетель, а не часть утверждения.
+#
+# ГРАНИЦА РАЗБОРЩИКА. Триггер, чей `action` собран Python-кодом обработчика и
+# приезжает в контекст готовой строкой, сети по тексту шаблона не виден НИ В
+# КАКОМ случае. ПЕРЕЗАМЕРЕНО планом 15-10 2026-09-24: у всех 18 триггеров
+# `action` начинается литеральным сегментом маршрута (`/accounts`, `/admin`,
+# `/ads`, `/history`, `/schedules`), и выражения внутри него — только
+# идентификаторы сущностей. Триггеров, чей `action` приезжает готовой строкой
+# из `app/pages/`, — 0 (НОЛЬ); `grep -rn 'modal-open\|modal_id' app/pages/` —
+# 0 строк. Запрет этой границы — в группе границ связки ниже.
+
+# Порог непустоты вселенной связки: тот же, что у групп плана 15-05
+# (`CONDITIONAL_ASSEMBLY_UNIVERSE_FLOOR`); на дереве плана 15-10 шаблонов 113.
+MODAL_LINKAGE_UNIVERSE_FLOOR = 50
+
+MODAL_LINKAGE_COMPONENT = "components/modal.html"
+MODAL_OPEN_EVENT_PREFIX = "modal-open-"
+MODAL_LISTENER = "x-on:modal-open-{{ id }}.window"
+MODAL_ADDRESS_EXPRESSION = "{{ action }}"
+
+
+class ModalTrigger(NamedTuple):
+    """Объявленная форма-триггер: основа события открытия и скелет адреса."""
+
+    event_stem: str
+    address: str
+
+
+# СЧЁТ I. ЛЕТОПИСЬ: 18, Фаза 15, план 15-10 — снято счётом I по объявленному
+# контракту; совпало с D-08 поимённо и с `ALPINE_TRIGGER_PLACES` плана 15-02 по
+# тексту тега (ключи разные — см. абзац «КЛЮЧИ» выше). Выписано ЗДЕСЬ, а не
+# выведено из шаблонов: тест, считающий ожидание по коду, согласится с любой
+# правкой и молча переживёт исчезновение триггера.
+MODAL_TRIGGER_FORMS = 18
+MODAL_TRIGGER_SITES: dict[str, ModalTrigger] = {
+    "account_groups/includes/group_row.html#0": ModalTrigger(
+        "group-del-", "/accounts/{}/groups/{}/delete"
+    ),
+    "accounts/list.html#0": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/list.html#1": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/list.html#2": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partial_cards.html#0": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partial_cards.html#1": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partial_cards.html#2": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partials/sync_status_card.html#0": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partials/sync_status_card.html#1": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "accounts/partials/sync_status_card.html#2": ModalTrigger("acc-del-", "/accounts/{}/delete"),
+    "admin/includes/queue_row.html#0": ModalTrigger("queue-drop-", "/admin/queue/{}/drop"),
+    "admin/includes/user_actions.html#0": ModalTrigger(
+        "user-imp-", "/admin/users/{}/impersonate"
+    ),
+    "admin/includes/user_actions.html#1": ModalTrigger("user-del-", "/admin/users/{}/delete"),
+    "admin/includes/worker_row.html#0": ModalTrigger(
+        "worker-restart-", "/admin/workers/{}/restart"
+    ),
+    "ads/form.html#0": ModalTrigger("ad-del-", "/ads/{}/delete"),
+    "ads/includes/ad_card.html#0": ModalTrigger("ad-del-", "/ads/{}/delete"),
+    "ads/includes/sched_card.html#0": ModalTrigger("sched-del-", "/schedules/{}/delete"),
+    "history/includes/history_card.html#0": ModalTrigger("history-retry-", "/history/{}/retry"),
+}
+
+# СЧЁТ II. Форм компонента модалки, несущих `hx-post`, — ровно одна.
+MODAL_COMPONENT_POST_FORMS = 1
+
+# СЧЁТ III. Основы имён события открытия, зовомых триггерами. Девять — столько
+# же, сколько различных имён у `MODAL_EVENT_NAMES` (пятый свидетель): там основа
+# строки очереди читается пустой, здесь она выведена через косвенное имя.
+MODAL_OPEN_EVENT_NAMES_CALLED: frozenset[str] = frozenset(
+    {
+        "acc-del-",
+        "ad-del-",
+        "group-del-",
+        "history-retry-",
+        "queue-drop-",
+        "sched-del-",
+        "user-del-",
+        "user-imp-",
+        "worker-restart-",
+    }
+)
+
+# Косвенные имена события: переменная в `modal-open-{{ … }}` → макрос, чьё тело
+# собирает и `id` модалки, и имя события. Основа выводится из тела макроса.
+MODAL_OPEN_EVENT_INDIRECTIONS: dict[str, str] = {"modal_id": "queue_drop_modal_id"}
+
+# СЧЁТ IV. Имена именованных аргументов, несущих АДРЕС у вызывающих модалку.
+MODAL_ADDRESS_PARAMETER_NAMES: frozenset[str] = frozenset({"action"})
+
+LINKAGE_COUNT_NAMES = ("I", "II", "III", "IV")
+
+SUBMIT_PREVENT_NAME = "x-on:submit.prevent"
+SUBMIT_PREVENT_TAG = _tag_pattern(SUBMIT_PREVENT_NAME)
+SUBMIT_PREVENT_VALUE = _value_pattern(SUBMIT_PREVENT_NAME)
+MODAL_OPEN_DISPATCH_CALL = re.compile(r"\$dispatch\(\s*(['\"])modal-open-(.*?)\1\s*\)")
+MODAL_MACRO_SIGNATURE = re.compile(r"\{%-?\s*macro\s+modal\s*\((.*?)\)\s*-?%\}", re.DOTALL)
+MODAL_MACRO_CALL = re.compile(r"(?<![\w.])modal\s*\(")
+JINJA_OUTPUT = re.compile(r"\{\{.*?\}\}", re.DOTALL)
+BARE_VARIABLE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+MACRO_NAME_CALL = re.compile(r"(\w+)\s*\(")
+KEYWORD_NAME = re.compile(r"\s*([A-Za-z_]\w*)\s*")
+
+SYNTHETIC_ORPHAN_TRIGGER_TEMPLATE = "synthetic/orphan_trigger.html"
+SYNTHETIC_ORPHAN_TRIGGER = (
+    '<form method="post" action="/synthetic/{{ x.id }}/delete" '
+    "x-data x-on:submit.prevent=\"$dispatch('modal-open-synthetic-orphan-{{ x.id }}')\"></form>"
+)
+MODAL_COMPONENT_HX_POST_ATTRIBUTE = ' hx-post="{{ action }}"'
+
+
+def _linkage_universe_offence(sources: dict[str, str]) -> str:
+    """Пустая строка, если вселенная связки непуста; иначе — отказ словами."""
+    if len(sources) > MODAL_LINKAGE_UNIVERSE_FLOOR:
+        return ""
+    return (
+        f"вселенная связки — {len(sources)} шаблонов при пороге "
+        f"> {MODAL_LINKAGE_UNIVERSE_FLOOR}: ноль мест на ней неотличим от слепоты обхода"
+    )
+
+
+def _scan_to_close(text: str, start: int) -> int:
+    """Индекс скобки, закрывающей вызов, открытый прямо перед ``start``; ``-1`` — не закрыт.
+
+    Вложенность считается вне строковых литералов: скобка внутри текста панели
+    (``body='… (…) …'``) границы вызова не сдвигает.
+    """
+    depth, quote = 1, ""
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _split_top_level(text: str, separator: str) -> list[str]:
+    """Части выражения шаблонизатора по ``separator`` ВНЕ кавычек и скобок.
+
+    ⚠️ ЕДИНСТВЕННОЕ ОПРЕДЕЛЕНИЕ В СУИТЕ (план 15-18, ревью IN-03). Гейт страниц
+    (`tests/test_pages/test_htmx_gates.py`) и гейт компонентов
+    (`tests/test_templates/test_components.py`) его ВВОЗЯТ: до плана 15-18 там
+    жили одноимённые разборщики с иным поведением (один не знал вложенности
+    ``{}``, другой — кавычек), а здешний сравнивал ``char == separator`` и на
+    многосимвольном разделителе молча не делил ничего. Два разборщика одного
+    предмета расходятся молча.
+
+    Предмет: разделитель любой длины (``~``, ``,``, `` else ``, `` if ``)
+    сравнивается через ``startswith`` и пропускается целиком; части не рвутся
+    внутри ``()``, ``[]``, ``{}`` и внутри строкового литерала в одинарных или
+    двойных кавычках — запятые и тильды в тексте панели (``body='…, …'``)
+    аргументов не рвут, ради этого разборщик и не наивный ``split``.
+
+    Граница (названа): экранированная кавычка внутри строкового литерала
+    шаблонизатора (``'it\\'s'``) не разбирается — она закрыла бы литерал раньше.
+    Пустой разделитель — ошибка вызова, а не «ничего не делить».
+    """
+    if not separator:
+        raise ValueError("пустой разделитель: разбор не продвинулся бы ни на символ")
+    parts: list[str] = []
+    depth = 0
+    quote = ""
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif depth == 0 and text.startswith(separator, index):
+            parts.append(text[start:index])
+            index += len(separator)
+            start = index
+            continue
+        index += 1
+    parts.append(text[start:])
+    return parts
+
+
+# --- ПОВЕДЕНИЕ ЕДИНОГО РАЗБОРЩИКА (план 15-18, ревью IN-03) -------------------
+#
+# Разборщику верят три гейта: связка модалок и условная сборка здесь, реестр
+# `hx-push-url` в `tests/test_pages/test_htmx_gates.py`, разбор аргументов
+# панели в `tests/test_templates/test_components.py`. Его поведение закреплено
+# на СИНТЕТИЧЕСКИХ строках: исход на дереве шаблонов сегодня мог бы совпасть и у
+# разборщика, который одну из форм разбора молча не умеет.
+
+
+def test_split_top_level_divides_by_a_multi_character_separator() -> None:
+    """Многосимвольный разделитель делит — у ` else ` и ` if ` нет однобуквенной формы."""
+    assert _split_top_level("a if b else c", " else ") == ["a if b", "c"], (
+        "разборщик НЕ ДЕЛИТ по многосимвольному разделителю ` else `: условное "
+        "выражение шаблонизатора дало бы один скелет вместо двух — "
+        f"{_split_top_level('a if b else c', ' else ')!r}"
+    )
+    assert _split_top_level("a if b", " if ") == ["a", "b"]
+    assert _split_top_level("a~b~c", "~") == ["a", "b", "c"]
+
+
+def test_split_top_level_ignores_separators_inside_three_kinds_of_brackets() -> None:
+    """Запятые внутри `()`, `[]` и `{}` части не рвут."""
+    parts = _split_top_level("f(a, b), {'k': 1, 'm': 2}, [x, y]", ",")
+    assert [part.strip() for part in parts] == ["f(a, b)", "{'k': 1, 'm': 2}", "[x, y]"], (
+        f"разделитель внутри скобок разорвал часть: {parts!r}"
+    )
+    assert _split_top_level("g({'a': x else y}) else z", " else ") == [
+        "g({'a': x else y})",
+        "z",
+    ]
+
+
+def test_split_top_level_ignores_separators_inside_quotes() -> None:
+    """Разделитель внутри строкового литерала — текст, а не граница части."""
+    assert _split_top_level("'a,b', c", ",") == ["'a,b'", " c"]
+    assert _split_top_level('"x else y" else z', " else ") == ['"x else y"', "z"]
+    assert _split_top_level("'a~b' ~ \"(\" ~ c", "~") == ["'a~b' ", ' "(" ', " c"], (
+        "скобка внутри кавычек сдвинула глубину, и следующий разделитель не разделил"
+    )
+
+
+def _string_literal(text: str) -> str | None:
+    """Содержимое строкового литерала Jinja, если ``text`` — ровно один литерал."""
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"" and text[0] not in text[1:-1]:
+        return text[1:-1]
+    return None
+
+
+def _concatenation_skeleton(expression: str) -> str:
+    """Скелет конкатенации ``~``: литералы как есть, прочие слагаемые — ``{}``."""
+    return "".join(
+        literal if (literal := _string_literal(part)) is not None else "{}"
+        for part in _split_top_level(expression, "~")
+    )
+
+
+def _attribute_skeleton(value: str) -> str:
+    """Скелет значения атрибута: каждое ``{{ … }}`` — ``{}``."""
+    return JINJA_OUTPUT.sub("{}", value)
+
+
+def _macro_literal_prefix(name: str, sources: dict[str, str]) -> str | None:
+    """Литеральное начало тела макроса ``name`` (до первого ``{{``/``{%``); ``None`` — не единственный."""
+    pattern = re.compile(
+        rf"\{{%-?\s*macro\s+{re.escape(name)}\s*\(.*?\)\s*-?%\}}(.*?)\{{%-?\s*endmacro",
+        re.DOTALL,
+    )
+    bodies = [
+        match.group(1)
+        for source in sources.values()
+        for match in pattern.finditer(_strip_comments(source))
+    ]
+    if len(bodies) != 1:
+        return None
+    return re.split(r"\{\{|\{%", bodies[0], maxsplit=1)[0] or None
+
+
+def _event_stem(event: str, sources: dict[str, str]) -> str | None:
+    """Основа имени события (после ``modal-open-``); косвенное имя — через тело макроса."""
+    stem = event.split("{{", 1)[0]
+    if stem:
+        return stem
+    bare = BARE_VARIABLE.fullmatch(event.strip())
+    if bare and bare.group(1) in MODAL_OPEN_EVENT_INDIRECTIONS:
+        return _macro_literal_prefix(MODAL_OPEN_EVENT_INDIRECTIONS[bare.group(1)], sources)
+    return None
+
+
+def _id_stem(expression: str, sources: dict[str, str]) -> str | None:
+    """Основа аргумента ``id=`` вызова модалки: первый литерал либо тело макроса-имени."""
+    head = _split_top_level(expression, "~")[0]
+    literal = _string_literal(head)
+    if literal is not None:
+        return literal
+    call = MACRO_NAME_CALL.match(head.strip())
+    if call:
+        return _macro_literal_prefix(call.group(1), sources)
+    return None
+
+
+def _modal_trigger_forms(sources: dict[str, str]) -> dict[str, Site]:
+    """СЧЁТ I: формы-триггеры по разбору границ тега; ключ ``путь#номер_среди_триггеров``.
+
+    Чистая функция от поданного отображения, модульного изменяемого состояния
+    нет: число одинаково под ``-p no:randomly`` и при любом порядке сбора.
+    """
+    found: dict[str, Site] = {}
+    sites = [
+        site
+        for site in _sites(list(sources.items()), SUBMIT_PREVENT_TAG)
+        if _tag_name(site.tag) == "form"
+        and MODAL_OPEN_DISPATCH_CALL.search(_attr_value(site.tag, SUBMIT_PREVENT_VALUE) or "")
+    ]
+    found.update(zip(_ordinal_keys(sites), sites))
+    return found
+
+
+def _modal_component_post_forms(sources: dict[str, str]) -> dict[str, Site]:
+    """СЧЁТ II: формы компонента модалки, несущие ``hx-post``; ключ ``путь#номер``."""
+    found: dict[str, Site] = {}
+    component = [(MODAL_LINKAGE_COMPONENT, sources.get(MODAL_LINKAGE_COMPONENT, ""))]
+    sites = [site for site in _sites(component, HX_POST_TAG) if _tag_name(site.tag) == "form"]
+    found.update(zip(_ordinal_keys(sites), sites))
+    return found
+
+
+def _modal_open_event_calls(sources: dict[str, str]) -> dict[str, str]:
+    """СЧЁТ III, ПРЯМОЙ: вызовы события в значениях ``x-on:submit.prevent`` по тексту.
+
+    Границы тега здесь не разбираются вовсе: ищется значение атрибута в
+    исходнике без комментариев, а в нём — ``$dispatch('modal-open-…')``. Ключ —
+    ``путь#номер`` среди таких вызовов файла, значение — имя после префикса.
+    """
+    found: dict[str, str] = {}
+    for rel, source in sources.items():
+        ordinal = 0
+        for value in SUBMIT_PREVENT_VALUE.finditer(_strip_comments(source)):
+            text = value.group(2) if value.group(2) is not None else value.group(3)
+            for call in MODAL_OPEN_DISPATCH_CALL.finditer(text):
+                found[f"{rel}#{ordinal}"] = call.group(2)
+                ordinal += 1
+    return found
+
+
+def _modal_calls(sources: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
+    """Вызовы макроса модалки: пары «шаблон → именованные аргументы (сырой текст значения)».
+
+    Объявление макроса вызовом не считается — по той же форме, что
+    ``_modal_call_kwargs`` в ``test_components.py``: иначе компонент объявил бы
+    сам себя своим вызывающим.
+    """
+    calls: list[tuple[str, dict[str, str]]] = []
+    for rel, source in sources.items():
+        body = _strip_comments(source)
+        for match in MODAL_MACRO_CALL.finditer(body):
+            if body[: match.start()].rstrip().endswith("macro"):
+                continue
+            close = _scan_to_close(body, match.end())
+            if close < 0:
+                calls.append((rel, {}))
+                continue
+            arguments: dict[str, str] = {}
+            for part in _split_top_level(body[match.end() : close], ","):
+                name, separator, value = part.partition("=")
+                if separator and KEYWORD_NAME.fullmatch(name) and not value.startswith("="):
+                    arguments[name.strip()] = value.strip()
+            calls.append((rel, arguments))
+    return calls
+
+
+def _modal_macro_signature(sources: dict[str, str]) -> set[str]:
+    """Имена параметров сигнатуры макроса модалки."""
+    match = MODAL_MACRO_SIGNATURE.search(
+        _strip_comments(sources.get(MODAL_LINKAGE_COMPONENT, ""))
+    )
+    if not match:
+        return set()
+    return {
+        part.split("=", 1)[0].strip()
+        for part in _split_top_level(match.group(1), ",")
+        if part.strip()
+    }
+
+
+def _modal_address_parameters(calls: list[tuple[str, dict[str, str]]]) -> dict[str, set[str]]:
+    """СЧЁТ IV: имена аргументов, несущих АДРЕС (скелет начинается с ``/``) → файлы вызовов."""
+    found: dict[str, set[str]] = {}
+    for rel, arguments in calls:
+        for name, value in arguments.items():
+            if _concatenation_skeleton(value).startswith("/"):
+                found.setdefault(name, set()).add(rel)
+    return found
+
+
+def _listened_stems(
+    calls: list[tuple[str, dict[str, str]]], sources: dict[str, str]
+) -> dict[str, set[str]]:
+    """Основы имён, которые слушает компонент: основа ``id=`` каждого вызова → файлы."""
+    stems: dict[str, set[str]] = {}
+    for rel, arguments in calls:
+        stem = _id_stem(arguments["id"], sources) if "id" in arguments else None
+        if stem:
+            stems.setdefault(stem, set()).add(rel)
+    return stems
+
+
+def _trigger_event_stem(site: Site, sources: dict[str, str]) -> str | None:
+    dispatch = MODAL_OPEN_DISPATCH_CALL.search(_attr_value(site.tag, SUBMIT_PREVENT_VALUE) or "")
+    return _event_stem(dispatch.group(2), sources) if dispatch else None
+
+
+def _component_post_form_offence(forms: dict[str, Site]) -> str:
+    """Отказ счёта II словами; пустая строка — счёт молчит."""
+    if len(forms) != MODAL_COMPONENT_POST_FORMS:
+        extra = sorted(forms)[MODAL_COMPONENT_POST_FORMS:]
+        tail = (
+            f" — лишние {extra}: «ровно одна» перестала быть истинной, и связка "
+            f"утверждала бы не про ту форму"
+            if extra
+            else " — форма модалки потеряла `hx-post`, и действие письма больше не идёт через htmx"
+        )
+        return (
+            f"СЧЁТ II: форм компонента `{MODAL_LINKAGE_COMPONENT}` с `hx-post` {len(forms)}, "
+            f"объявлено {MODAL_COMPONENT_POST_FORMS}: {sorted(forms)}{tail}"
+        )
+    (site,) = forms.values()
+    post = _attr_value(site.tag, HX_POST_VALUE)
+    action = _attr_value(site.tag, ACTION_VALUE)
+    if post != action or post != MODAL_ADDRESS_EXPRESSION:
+        return (
+            f"СЧЁТ II: у формы компонента `hx-post`={post!r}, `action`={action!r}; ожидались "
+            f"оба {MODAL_ADDRESS_EXPRESSION!r} — две маршрутизации одной формы"
+        )
+    return ""
+
+
+def _linkage_counts(sources: dict[str, str]) -> dict[str, set[str]]:
+    """Четыре счёта: имя счёта → множество ключей триггеров, признанных им СВЯЗАННЫМИ."""
+    triggers = _modal_trigger_forms(sources)
+    calls = _modal_calls(sources)
+    signature = _modal_macro_signature(sources)
+    listened = _listened_stems(calls, sources)
+    component = _strip_comments(sources.get(MODAL_LINKAGE_COMPONENT, ""))
+    hears = MODAL_LISTENER in component and "id" in signature
+    component_ok = _component_post_form_offence(_modal_component_post_forms(sources)) == ""
+    address_names = {name for name in _modal_address_parameters(calls) if name in signature}
+    addresses = {
+        (_id_stem(arguments["id"], sources), _concatenation_skeleton(arguments[name]))
+        for _, arguments in calls
+        if "id" in arguments
+        for name in address_names
+        if name in arguments
+    }
+
+    count_iv: set[str] = set()
+    for key, site in triggers.items():
+        action = _attr_value(site.tag, ACTION_VALUE) or ""
+        pair = (_trigger_event_stem(site, sources), _attribute_skeleton(action))
+        if action.strip() and pair in addresses:
+            count_iv.add(key)
+
+    return {
+        "I": set(triggers),
+        "II": set(triggers) if component_ok else set(),
+        "III": {
+            key
+            for key, event in _modal_open_event_calls(sources).items()
+            if hears and _event_stem(event, sources) in listened
+        },
+        "IV": count_iv,
+    }
+
+
+def _linkage_pair_offence(counts: dict[str, set[str]]) -> str:
+    """Каждая РАЗОШЕДШАЯСЯ ПАРА счётов и ключи расхождения; пустая строка — счёты сошлись."""
+    problems: list[str] = []
+    names = list(counts)
+    for index, first in enumerate(names):
+        for second in names[index + 1 :]:
+            if counts[first] != counts[second]:
+                problems.append(
+                    f"счёты {first} и {second} разошлись: только в {first} — "
+                    f"{sorted(counts[first] - counts[second])}, только в {second} — "
+                    f"{sorted(counts[second] - counts[first])}"
+                )
+    return "; ".join(problems)
+
+
+def _linkage_offence(sources: dict[str, str]) -> str:
+    """Отказ гейта связки словами; пустая строка — все четыре счёта молчат и сходятся.
+
+    Чистая функция от поданного отображения: ни модульного изменяемого
+    состояния, ни чтения диска. Несвязанный триггер называется ключом.
+    """
+    counts = _linkage_counts(sources)
+    linked = set.intersection(*counts.values())
+    problems = [
+        offence
+        for offence in (
+            _linkage_universe_offence(sources),
+            _component_post_form_offence(_modal_component_post_forms(sources)),
+            _linkage_pair_offence(counts),
+        )
+        if offence
+    ]
+    unlinked = sorted(set.union(*counts.values()) - linked)
+    if unlinked:
+        problems.append(f"несвязанные триггеры: {unlinked}")
+    if not counts["I"]:
+        problems.append("счёт I не нашёл ни одного триггера — связка утверждала бы пустоту")
+    return "; ".join(problems)
+
+
+def test_modal_linkage_count_i_trigger_forms_are_the_declared_eighteen() -> None:
+    """СЧЁТ I: форм-триггеров ровно ``MODAL_TRIGGER_FORMS``, и ключи — объявленный перечень."""
+    sources = dict(_all_templates())
+    found = _modal_trigger_forms(sources)
+
+    assert len(MODAL_TRIGGER_SITES) == MODAL_TRIGGER_FORMS, (
+        f"записей в перечне {len(MODAL_TRIGGER_SITES)}, объявлено {MODAL_TRIGGER_FORMS}"
+    )
+    assert set(found) == set(MODAL_TRIGGER_SITES), (
+        f"счёт I разошёлся с перечнем: лишние {sorted(set(found) - set(MODAL_TRIGGER_SITES))}, "
+        f"пропавшие {sorted(set(MODAL_TRIGGER_SITES) - set(found))}"
+    )
+    assert len(found) == MODAL_TRIGGER_FORMS
+
+
+def test_modal_linkage_count_ii_the_component_has_exactly_one_post_form_equal_to_its_action() -> (
+    None
+):
+    """СЧЁТ II: у компонента ровно одна форма с ``hx-post``, и он посимвольно равен ``action``."""
+    forms = _modal_component_post_forms(dict(_all_templates()))
+
+    assert _component_post_form_offence(forms) == "", _component_post_form_offence(forms)
+    (site,) = forms.values()
+    assert _attr_value(site.tag, HX_POST_VALUE) == MODAL_ADDRESS_EXPRESSION
+    assert _attr_value(site.tag, ACTION_VALUE) == MODAL_ADDRESS_EXPRESSION
+
+
+def test_modal_linkage_count_iii_called_event_names_are_heard_by_the_component() -> None:
+    """СЧЁТ III: основы, зовомые триггерами, ⊆ основ, которые слушает компонент; чужая — названа."""
+    sources = dict(_all_templates())
+    events = _modal_open_event_calls(sources)
+    stems = {key: _event_stem(event, sources) for key, event in events.items()}
+    listened = _listened_stems(_modal_calls(sources), sources)
+
+    assert MODAL_LISTENER in _strip_comments(sources[MODAL_LINKAGE_COMPONENT]), (
+        f"компонент больше не слушает `{MODAL_LISTENER}` — ни одно имя не будет услышано"
+    )
+    assert stems == {key: trigger.event_stem for key, trigger in MODAL_TRIGGER_SITES.items()}, (
+        f"основы событий по прямому счёту разошлись с перечнем: {stems}"
+    )
+    assert set(stems.values()) == MODAL_OPEN_EVENT_NAMES_CALLED
+    unheard = {key: stem for key, stem in stems.items() if stem not in listened}
+    assert not unheard, (
+        f"триггер зовёт имя, которого компонент не слушает (ни один вызов модалки не "
+        f"несёт такой основы `id`): {unheard}"
+    )
+
+
+def test_modal_linkage_count_iv_address_parameter_belongs_to_the_macro_signature() -> None:
+    """СЧЁТ IV: имя аргумента адреса ⊆ сигнатуры макроса, и адрес каждого триггера доезжает им."""
+    sources = dict(_all_templates())
+    calls = _modal_calls(sources)
+    parameters = _modal_address_parameters(calls)
+    signature = _modal_macro_signature(sources)
+
+    assert signature, "сигнатура макроса модалки не разобралась — счёт вакуумен"
+    assert set(parameters) == MODAL_ADDRESS_PARAMETER_NAMES, (
+        f"адрес модалке передаётся именами {sorted(parameters)}, объявлено "
+        f"{sorted(MODAL_ADDRESS_PARAMETER_NAMES)}"
+    )
+    unknown = {name: sorted(files) for name, files in parameters.items() if name not in signature}
+    assert not unknown, f"вызывающий передаёт адрес именем вне сигнатуры: {unknown}"
+    assert {f"{{{{ {name} }}}}" for name in parameters} == {MODAL_ADDRESS_EXPRESSION}, (
+        "имя аргумента адреса разошлось с тем, которым компонент раздаёт `hx-post`"
+    )
+
+    triggers = _modal_trigger_forms(sources)
+    addresses = {
+        key: _attribute_skeleton(_attr_value(site.tag, ACTION_VALUE) or "")
+        for key, site in triggers.items()
+    }
+    assert addresses == {key: trigger.address for key, trigger in MODAL_TRIGGER_SITES.items()}, (
+        f"скелеты адресов триггеров разошлись с перечнем: {addresses}"
+    )
+    assert _linkage_counts(sources)["IV"] == set(MODAL_TRIGGER_SITES), (
+        "адрес триггера не доезжает до модалки тем же параметром: "
+        f"{sorted(set(MODAL_TRIGGER_SITES) - _linkage_counts(sources)['IV'])}"
+    )
+
+
+def test_modal_linkage_four_counts_converge_and_a_divergence_names_the_pair() -> None:
+    """Четыре счёта сходятся на объявленном перечне; расхождение называет ПАРУ и ключ."""
+    sources = dict(_all_templates())
+    counts = _linkage_counts(sources)
+
+    assert _linkage_offence(sources) == "", _linkage_offence(sources)
+    for name in LINKAGE_COUNT_NAMES:
+        assert counts[name] == set(MODAL_TRIGGER_SITES), (
+            f"счёт {name} разошёлся с перечнем: {sorted(counts[name] ^ set(MODAL_TRIGGER_SITES))}"
+        )
+
+    diverged = _linkage_pair_offence({"I": {"x#0"}, "II": {"x#0"}, "III": set(), "IV": {"x#0"}})
+    assert "счёты I и III разошлись" in diverged and "x#0" in diverged, diverged
+    assert "счёты I и II разошлись" not in diverged, "сошедшаяся пара названа разошедшейся"
+
+
+def test_modal_linkage_keeps_the_triggers_and_the_component_form_as_separate_places() -> None:
+    """18 триггеров и форма модалки — РАЗНЫЕ места разных классов инвентаря плана 15-02."""
+    from collections import Counter
+
+    from tests.test_templates.test_form_inventory import (
+        WRITE_FORM_PLACES,
+        PlaceKind,
+        _form_places,
+        _write_form_places,
+    )
+
+    sources = dict(_all_templates())
+    places = _form_places(sources)
+    triggers = list(_modal_trigger_forms(sources).values())
+    component = list(_modal_component_post_forms(sources).values())
+    assert triggers and component, "узлы связки не найдены — сверка с инвентарём вакуумна"
+
+    def matched(sites: list[Site]) -> list:
+        wanted = Counter((site.template, site.tag) for site in sites)
+        return [place for place in places if wanted[(place.template, place.text)]]
+
+    trigger_places = matched(triggers)
+    component_places = matched(component)
+    assert len(trigger_places) == MODAL_TRIGGER_FORMS, (
+        f"инвентарь 15-02 видит {len(trigger_places)} из {MODAL_TRIGGER_FORMS} триггеров"
+    )
+    assert len(component_places) == MODAL_COMPONENT_POST_FORMS
+    assert {place.kind for place in trigger_places} == {PlaceKind.RAW_POST_WITHOUT_HX_POST}
+    assert {place.kind for place in component_places} == {PlaceKind.RAW_POST_WITH_HX_POST}
+    keys = {place.key for place in trigger_places + component_places}
+    assert len(keys) == MODAL_TRIGGER_FORMS + MODAL_COMPONENT_POST_FORMS, (
+        "узлы связки слиты в меньшее число мест инвентаря — вселенная FORM-01 переопределена"
+    )
+    assert len(_write_form_places(sources)) == WRITE_FORM_PLACES
+
+
+def test_modal_linkage_fifth_witness_modal_places_and_event_names_agree_by_name() -> None:
+    """Пятый свидетель: числа ``test_components.py`` сходятся с числами связки — по имени."""
+    from tests.test_templates.test_components import MODAL_EVENT_NAMES, MODAL_PLACES
+
+    assert MODAL_TRIGGER_FORMS == MODAL_PLACES
+    assert len(MODAL_OPEN_EVENT_NAMES_CALLED) == MODAL_EVENT_NAMES
+
+
+def test_modal_linkage_event_indirection_is_derived_from_the_macro_body() -> None:
+    """Косвенное имя события строки очереди выводится из тела макроса, а не вписано."""
+    sources = dict(_all_templates())
+    calls = _modal_calls(sources)
+
+    for variable, macro in MODAL_OPEN_EVENT_INDIRECTIONS.items():
+        assert _macro_literal_prefix(macro, sources) == "queue-drop-", (
+            f"тело макроса `{macro}` больше не начинается основой `queue-drop-`"
+        )
+        assert any(
+            arguments.get("id", "").startswith(f"{macro}(") for _, arguments in calls
+        ), f"ни один вызов модалки не берёт `id` из `{macro}` — косвенность выдумана"
+        assert any(
+            f"modal-open-{{{{ {variable} }}}}" in _strip_comments(source)
+            for source in sources.values()
+        ), f"ни один триггер не зовёт `modal-open-{{{{ {variable} }}}}` — запись мертва"
+
+
+def test_modal_linkage_counts_are_a_pure_function_of_the_passed_mapping() -> None:
+    """Порядок ключей поданного отображения на счёты не влияет, и повторный вызов равен первому."""
+    sources = dict(_all_templates())
+    reversed_sources = dict(reversed(list(sources.items())))
+
+    assert _linkage_counts(sources) == _linkage_counts(reversed_sources)
+    assert _linkage_counts(sources) == _linkage_counts(sources)
+    assert _linkage_counts(sources)["I"], "счёт I пуст — сравнение вакуумно"
+
+
+def test_control_negative_modal_linkage_an_unpaired_synthetic_trigger_form_is_named() -> None:
+    """Контроль от вакуума: триггер БЕЗ парной модалки — гейт краснеет и НАЗЫВАЕТ его."""
+    sources = dict(_all_templates())
+    key = SYNTHETIC_ORPHAN_TRIGGER_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_ORPHAN_TRIGGER}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    offence = _linkage_offence(changed)
+
+    assert f"{key}#0" in _linkage_counts(changed)["I"], "счёт I не видит синтетический триггер"
+    assert offence != "", "несвязанный триггер не покраснил гейт — связка зелена вакуумом"
+    assert f"{key}#0" in offence, f"отказ не называет несвязанный триггер: {offence}"
+    assert "счёты I и III разошлись" in offence, f"отказ не называет разошедшуюся пару: {offence}"
+
+
+def test_control_negative_modal_linkage_a_component_without_hx_post_reddens_count_ii() -> None:
+    """Контроль от вакуума: у формы компонента снят ``hx-post`` — краснеет счёт II."""
+    sources = dict(_all_templates())
+    component = sources[MODAL_LINKAGE_COMPONENT]
+    assert component.count(MODAL_COMPONENT_HX_POST_ATTRIBUTE) == 1, (
+        "атрибут отправки формы компонента встречается не один раз — подмена меняет не то место"
+    )
+    changed = {
+        **sources,
+        MODAL_LINKAGE_COMPONENT: component.replace(MODAL_COMPONENT_HX_POST_ATTRIBUTE, "", 1),
+    }
+    assert changed != sources, "подмена ничего не изменила"
+
+    offence = _component_post_form_offence(_modal_component_post_forms(changed))
+
+    assert offence.startswith("СЧЁТ II"), f"счёт II молчит без `hx-post` у компонента: {offence!r}"
+    assert "потеряла `hx-post`" in offence
+    assert _linkage_counts(changed)["II"] == set(), "счёт II связывает триггеры без второго узла"
+    assert "счёты I и II разошлись" in _linkage_offence(changed)
+
+
+def test_control_positive_modal_linkage_untouched_tree_keeps_all_four_counts_silent() -> None:
+    """Положительный контроль: вселенная непуста (> 50), и все четыре счёта молчат."""
+    sources = dict(_all_templates())
+
+    assert len(sources) > MODAL_LINKAGE_UNIVERSE_FLOOR, f"вселенная {len(sources)} — обход сломан"
+    assert _linkage_offence(sources) == "", _linkage_offence(sources)
+    assert all(_linkage_counts(sources)[name] for name in LINKAGE_COUNT_NAMES), (
+        "один из счетов пуст на дереве — молчание гейта вакуумно"
+    )
+
+
+# =============================================================================
+# Фаза 15, план 15-10: ГРАНИЦЫ СВЯЗКИ — НЕВИДИМАЯ ГЕЙТУ ФОРМА ЗАПРЕЩЕНА
+# =============================================================================
+#
+# Приём второго уровня — `tests/test_pages/test_impersonation_gate.py`
+# (названные границы разборщика маршрутов и правило
+# `test_no_route_is_declared_in_a_form_the_gate_cannot_see`): «гейт, который
+# чего-то не видит, обязан требовать, чтобы этого и не было». Границы связки
+# здесь не только НАЗВАНЫ: формы, которых её счёты не видят, ЗАПРЕЩЕНЫ
+# отдельными правилами. Так закрывается критерий 5 ROADMAP Фазы 15 — по каждой
+# слепой зоне либо запрет гейтом, либо проверка глазами. Границ ТРИ.
+#
+# 1. ТРИГГЕР, ЧЕЙ `action` ПРИЕЗЖАЕТ ГОТОВОЙ СТРОКОЙ ИЗ `app/pages/`. Счёт IV
+#    сверяет СКЕЛЕТ адреса, а скелет значения `{{ delete_url }}` есть `{}`: что
+#    за строку положит в контекст обработчик, по тексту шаблона не узнать, и
+#    связка «адрес триггера = адрес модалки» стала бы недоказуемой. → ЗАПРЕТ
+#    `test_linkage_boundary_no_trigger_action_arrives_ready_made_the_gate_cannot_see`:
+#    `action` каждой формы-триггера начинается литеральным сегментом маршрута
+#    (`/` и буква) и не несёт операторов `{% … %}`; перечень изъятий
+#    `MODAL_TRIGGER_ACTION_FROM_PAGES_SITES` объявлен пустым. ЗАМЕР 2026-09-24,
+#    снятый исполнением правила и грепом: форм-триггеров 18, из них с `action`,
+#    приезжающим готовой строкой из `app/pages/`, — 0 (НОЛЬ); строк
+#    `modal-open` и `modal_id` в `app/pages/` — 0.
+#
+# 2. ВЫЗОВ СОБЫТИЯ ОТКРЫТИЯ НЕ ЧЕРЕЗ `x-on:submit.prevent` — `x-on:click`,
+#    сокращение `@submit.prevent`, программный `$dispatch` из другого выражения
+#    Alpine. Счёт I ищет форму по атрибуту `x-on:submit.prevent` и такого вызова
+#    не видит: модалка открылась бы кнопкой, а у действия письма не осталось бы
+#    формы-триггера — то есть пути деградации без JS. → ЗАПРЕТ
+#    `test_linkage_boundary_no_open_event_outside_submit_prevent_the_gate_cannot_see`:
+#    каждое вхождение префикса `modal-open-` в исходниках шаблонов без
+#    комментариев стои́т внутри значения `x-on:submit.prevent`; единственное
+#    изъятие — слушатель компонента `x-on:modal-open-{{ id }}.window` (он не
+#    вызов). ЗАМЕР 2026-09-24: вхождений префикса вне комментариев 19 — 18 в
+#    значениях `x-on:submit.prevent` и 1 слушатель; вне их — 0. Пример с
+#    `x-on:click` в шапке `components/modal.html` лежит в комментарии Jinja и
+#    вырезается до счёта.
+#    ⚠️ ВСЕЛЕННАЯ ЭТОГО ЗАПРЕТА — ШАБЛОНЫ. Скрипты `app/static/js/` в неё не
+#    входят: там лежат только вендорные `htmx.min.js` и `alpine.min.js`, и
+#    вхождений `modal-open` в них 0 (замер 2026-09-24). Собственный скрипт
+#    проекта, зовущий событие, этот запрет НЕ увидит — это названная граница, а
+#    не покрытие.
+#
+# 3. ВТОРАЯ ФОРМА КОМПОНЕНТА МОДАЛКИ. Счёт II сверяет `hx-post` с `action` у
+#    ЕДИНСТВЕННОЙ формы; появись вторая, «ровно одна» перестало бы быть
+#    истинным, и выведенное из дерева число сломало бы счёт молча. Счёт II
+#    объявляет число (`MODAL_COMPONENT_POST_FORMS`) и краснеет на нём; здесь
+#    добавлен КОНТРОЛЬ: синтетическая копия компонента с двумя формами,
+#    несущими `hx-post`, краснит счёт II и называет вторую ключом
+#    `components/modal.html#1`.
+#
+# ЧТО ОСТАЁТСЯ ГЛАЗАМ, С АДРЕСАТАМИ. Перехватывает ли Alpine submit на
+# рантайме, открывается ли модалка, доезжает ли её submit до сервера — ни
+# одного из этого суита не видит: она не исполняет ни строчки JS и не рендерит
+# страниц браузером. Это пункты 3 и 5 ручного обхода, закрытые глазами Фазами 9
+# и 11, и по решению D-15 они ПРИНИМАЮТСЯ ЗАПИСЬЮ СВОИХ ФАЗ, а не
+# переподтверждаются. Зелень связки и её границ — утверждение о ТЕКСТЕ
+# шаблонов; наблюдением рантайма её не читать.
+
+# Триггеры, чей `action` приезжает готовой строкой, — ИМЕНОВАННЫЙ НОЛЬ.
+#
+# ⚠️ ПЕРЕЧЕНЬ ПУСТ — ИМЕНОВАННЫЙ НОЛЬ, А НЕ ЗАБЫТОЕ ОБЪЯВЛЕНИЕ. Утверждается
+# РАВЕНСТВО множества найденных ключей множеству ключей перечня, а не `== 0`
+# (форма — `MANUAL_FETCH_SITES`, `test_htmx_inventory.py`).
+MODAL_TRIGGER_ACTION_FROM_PAGES_SITES: dict[str, str] = {}
+
+# Вызовы события открытия вне `x-on:submit.prevent` — ИМЕНОВАННЫЙ НОЛЬ.
+#
+# ⚠️ ПЕРЕЧЕНЬ ПУСТ — ИМЕНОВАННЫЙ НОЛЬ, А НЕ ЗАБЫТОЕ ОБЪЯВЛЕНИЕ. Пустой словарь
+# стережёт появление первого места: оно покраснеет расхождением перечня с
+# найденным обходом, а не пройдёт молча. Правило ИСТИННО и на пустом дереве —
+# поэтому при нём стоят контроль с синтетическим вызовом вне
+# `x-on:submit.prevent` и контроль пустой вселенной; без них оно зелено по
+# построению.
+MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES: dict[str, str] = {}
+
+LITERAL_ROUTE_START = re.compile(r"/[A-Za-z]")
+MODAL_OPEN_PREFIX = re.compile(re.escape(MODAL_OPEN_EVENT_PREFIX))
+MODAL_LISTENER_OFFSET = MODAL_LISTENER.index(MODAL_OPEN_EVENT_PREFIX)
+MODAL_MACRO_END = "{%- endmacro %}"
+
+SYNTHETIC_OPEN_EVENT_OUTSIDE_TEMPLATE = "synthetic/open_event_outside_submit.html"
+SYNTHETIC_OPEN_EVENT_OUTSIDE = (
+    '<button type="button" x-data '
+    "x-on:click=\"$dispatch('modal-open-synthetic-click-{{ x.id }}')\">Удалить</button>"
+)
+SYNTHETIC_READY_MADE_ACTION_TEMPLATE = "synthetic/ready_made_action.html"
+SYNTHETIC_READY_MADE_ACTION = (
+    '<form method="post" action="{{ delete_url }}" '
+    "x-data x-on:submit.prevent=\"$dispatch('modal-open-ad-del-{{ ad.id }}')\"></form>"
+)
+SYNTHETIC_SECOND_COMPONENT_FORM = (
+    '<form method="post" action="/synthetic/second" hx-post="/synthetic/second"></form>'
+)
+
+
+def _trigger_actions_the_gate_cannot_see(sources: dict[str, str]) -> dict[str, str]:
+    """Формы-триггеры, чей ``action`` не начинается литеральным сегментом маршрута."""
+    found: dict[str, str] = {}
+    for key, site in _modal_trigger_forms(sources).items():
+        action = _attr_value(site.tag, ACTION_VALUE)
+        if action is None or not LITERAL_ROUTE_START.match(action) or "{%" in action:
+            found[key] = f"action={action!r}"
+    return found
+
+
+def _open_event_calls_outside_submit(sources: dict[str, str]) -> dict[str, str]:
+    """Вхождения ``modal-open-`` вне значения ``x-on:submit.prevent`` и вне слушателя компонента.
+
+    Ключ — ``путь#номер`` среди таких вхождений файла, значение — окрестность
+    вхождения одной строкой (номер строки исходника без комментариев не совпал
+    бы с номером в файле).
+    """
+    found: dict[str, str] = {}
+    for rel, source in sources.items():
+        body = _strip_comments(source)
+        inside = [value.span(0) for value in SUBMIT_PREVENT_VALUE.finditer(body)]
+        ordinal = 0
+        for match in MODAL_OPEN_PREFIX.finditer(body):
+            start = match.start()
+            if any(low <= start < high for low, high in inside):
+                continue
+            if rel == MODAL_LINKAGE_COMPONENT and body.startswith(
+                MODAL_LISTENER, start - MODAL_LISTENER_OFFSET
+            ):
+                continue
+            found[f"{rel}#{ordinal}"] = " ".join(body[max(0, start - 60) : start + 60].split())
+            ordinal += 1
+    return found
+
+
+def _modal_open_prefix_occurrences(sources: dict[str, str]) -> int:
+    """Все вхождения ``modal-open-`` в исходниках шаблонов без комментариев."""
+    return sum(len(MODAL_OPEN_PREFIX.findall(_strip_comments(source))) for source in sources.values())
+
+
+def _boundary_offence(found: dict[str, str], declared: dict[str, str], subject: str) -> str:
+    """Пустая строка, если найденное равно перечню; иначе — лишние и пропавшие поимённо."""
+    if set(found) == set(declared):
+        return ""
+    extra = {key: found[key] for key in sorted(set(found) - set(declared))}
+    missing = sorted(set(declared) - set(found))
+    return f"{subject}: не объявлены {extra}, объявлены, но не найдены {missing}"
+
+
+def test_linkage_boundary_no_trigger_action_arrives_ready_made_the_gate_cannot_see() -> None:
+    """ЗАПРЕТ границы 1: ``action`` триггера собран в шаблоне, а не приехал готовой строкой."""
+    sources = dict(_all_templates())
+    assert _linkage_universe_offence(sources) == "", _linkage_universe_offence(sources)
+    assert len(_modal_trigger_forms(sources)) == MODAL_TRIGGER_FORMS, (
+        "вселенная запрета — не объявленные 18 триггеров: правило утверждало бы не про них"
+    )
+
+    found = _trigger_actions_the_gate_cannot_see(sources)
+
+    assert set(found) == set(MODAL_TRIGGER_ACTION_FROM_PAGES_SITES), _boundary_offence(
+        found,
+        MODAL_TRIGGER_ACTION_FROM_PAGES_SITES,
+        "триггер, чей адрес гейт связки сверить не может",
+    )
+
+
+def test_linkage_boundary_no_open_event_outside_submit_prevent_the_gate_cannot_see() -> None:
+    """ЗАПРЕТ границы 2: событие открытия зовётся только из ``x-on:submit.prevent`` формы."""
+    sources = dict(_all_templates())
+    assert _linkage_universe_offence(sources) == "", _linkage_universe_offence(sources)
+
+    found = _open_event_calls_outside_submit(sources)
+
+    assert set(found) == set(MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES), _boundary_offence(
+        found,
+        MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES,
+        "вызов события открытия, невидимый счёту I",
+    )
+    assert _modal_open_prefix_occurrences(sources) == MODAL_TRIGGER_FORMS + 1, (
+        "вхождений `modal-open-` не 18 вызовов + 1 слушатель — замер границы 2 устарел"
+    )
+
+
+def test_control_negative_linkage_boundary_a_synthetic_open_event_outside_submit_prevent_is_named() -> (
+    None
+):
+    """Контроль от вакуума: синтетический вызов события из ``x-on:click`` НАЙДЕН И НАЗВАН.
+
+    И одновременно доказано, что это настоящая слепая зона: счёт I такой вызов
+    не видит, поэтому без запрета связка осталась бы зелёной.
+    """
+    sources = dict(_all_templates())
+    key = SYNTHETIC_OPEN_EVENT_OUTSIDE_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_OPEN_EVENT_OUTSIDE}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    found = _open_event_calls_outside_submit(changed)
+
+    assert f"{key}#0" in found, f"синтетический вызов вне `x-on:submit.prevent` не найден: {found}"
+    assert set(found) != set(MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES)
+    offence = _boundary_offence(found, MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES, "вызов")
+    assert f"{key}#0" in offence, f"отказ не называет вызов ключом: {offence}"
+    assert not any(k.startswith(key) for k in _linkage_counts(changed)["I"]), (
+        "счёт I видит вызов из `x-on:click` — граница названа неверно"
+    )
+
+
+def test_control_negative_linkage_boundary_a_ready_made_trigger_action_is_named() -> None:
+    """Контроль от вакуума: триггер с ``action="{{ delete_url }}"`` краснит запрет границы 1."""
+    sources = dict(_all_templates())
+    key = SYNTHETIC_READY_MADE_ACTION_TEMPLATE
+    assert key not in sources, f"синтетический шаблон {key} совпал с настоящим"
+    changed = {**sources, key: SYNTHETIC_READY_MADE_ACTION}
+    assert changed != sources, "подмена не изменила вселенную — контроль ничего не доказывает"
+
+    found = _trigger_actions_the_gate_cannot_see(changed)
+
+    assert f"{key}#0" in found, f"триггер с готовым адресом не найден: {found}"
+    assert "delete_url" in found[f"{key}#0"], "отказ не показывает, откуда взят адрес"
+    assert f"{key}#0" in _boundary_offence(found, MODAL_TRIGGER_ACTION_FROM_PAGES_SITES, "адрес")
+
+
+def test_control_negative_linkage_boundary_a_second_component_post_form_is_named_by_count_ii() -> (
+    None
+):
+    """Контроль границы 3: вторая форма компонента с ``hx-post`` краснит счёт II и названа."""
+    sources = dict(_all_templates())
+    component = sources[MODAL_LINKAGE_COMPONENT]
+    assert component.count(MODAL_MACRO_END) == 1, (
+        "конец макроса модалки встречается не один раз — подмена меняет не то место"
+    )
+    changed = {
+        **sources,
+        MODAL_LINKAGE_COMPONENT: component.replace(
+            MODAL_MACRO_END, f"{SYNTHETIC_SECOND_COMPONENT_FORM}\n{MODAL_MACRO_END}", 1
+        ),
+    }
+    assert changed != sources, "подмена ничего не изменила"
+
+    forms = _modal_component_post_forms(changed)
+    offence = _component_post_form_offence(forms)
+
+    assert len(forms) == MODAL_COMPONENT_POST_FORMS + 1, f"вторая форма не найдена: {sorted(forms)}"
+    assert "components/modal.html#1" in offence and "лишние" in offence, (
+        f"счёт II не называет вторую форму: {offence!r}"
+    )
+    assert _linkage_counts(changed)["II"] == set(), "счёт II связывает триггеры при двух формах"
+
+
+def test_control_negative_linkage_boundary_prohibitions_on_an_empty_universe_are_caught() -> None:
+    """Контроль пустоты: на пустом словаре оба запрета формально истинны — и это ЗАСЕКАЕТСЯ."""
+    empty: dict[str, str] = {}
+
+    assert set(_open_event_calls_outside_submit(empty)) == set(MODAL_OPEN_CALLS_OUTSIDE_SUBMIT_SITES)
+    assert set(_trigger_actions_the_gate_cannot_see(empty)) == set(
+        MODAL_TRIGGER_ACTION_FROM_PAGES_SITES
+    )
+    offence = _linkage_universe_offence(empty)
+    assert "0 шаблонов" in offence, (
+        "пустая вселенная не засечена: зелень запретов на ней неотличима от слепоты"
+    )

@@ -1221,6 +1221,624 @@ def test_the_declared_manual_fetch_ceiling_never_rises() -> None:
 
 
 # =============================================================================
+# ГРУППА FETCH-03: ЗАПРЕТ РУЧНОЙ СБОРКИ ЗАПРОСА В ШАБЛОНАХ (Фаза 15, план 15-04)
+#
+# ⚠️ ЭТО ДРУГОЙ РЕЧЕВОЙ АКТ, А НЕ ВТОРОЙ СЧЁТЧИК. Группа G-22 выше говорит
+# «сегодня 0, вверх не пускаю»: её число можно поднять СОЗНАТЕЛЬНЫМ РЕШЕНИЕМ —
+# переписав потолок с именем фазы и записав это летописью. Запрет говорит
+# «0 есть КОНТРАКТ»: поднять его нельзя никаким решением внутри вехи, и
+# объявленного числа, которое можно было бы переписать, у него нет вовсе.
+# Критерий 2 ROADMAP §Phase 15 просит второе. Поэтому утверждение запрета
+# сформулировано как ОТСУТСТВИЕ предмета (`assert not found`, перечень найденного
+# — в сообщении), а НЕ как равенство объявленному числу: равенство объявленному
+# есть акт счётчика, и в этом файле он уже стои́т.
+#
+# ДОМ ОБЪЯВЛЕН САМИМ ФАЙЛОМ, и новый файл не заводится. Шапка модуля называет
+# Фазу 15 наследницей своих чисел («Фаза 15, собирающая сводное закрытие
+# GATE-09, унаследует старое число как факт»), а летопись числа G-22 (5 → 0,
+# Фаза 13, план 13-01) говорит дословно: «ОТДЕЛЬНОЕ ПРАВИЛО „В ШАБЛОНАХ НОЛЬ“ —
+# ПРЕДМЕТ ФАЗЫ 15 (FETCH-03), А НЕ ЭТОЙ: здесь ноль стоит ИМЕНОВАННЫМ числом
+# убывающего счётчика, а не утверждением-запретом». Отдельный файл был бы вторым
+# счётчиком, а не другим речевым актом.
+#
+# СЕТЬ И ОБХОД ПЕРЕИСПОЛЬЗУЮТСЯ, А НЕ ПИШУТСЯ ЗАНОВО: `MANUAL_FETCH_CALL`,
+# `_manual_fetch_places`, `_template_sources`. Своя наивная сеть (подстрока
+# вызова) посчитала бы ручной сборкой запроса четыре формы, которые ею не
+# являются, — `.fetch(`, `_fetch(`, `-fetch(`, `prefetch(`; просмотр назад
+# `(?<![-\w.])` отсекает все четыре, и это утверждается отдельным контролем.
+#
+# ПОТОЛОК ФАЗЫ 8 НЕ ТРОНУТ И НЕ ПЕРЕИМЕНОВАН. Его имя утверждает, чему величина
+# была равна в Фазе 8, и переписать его значило бы солгать в опознаваемом
+# месте. Запрет стои́т РЯДОМ со счётчиком и его потолком, а не вместо них: пока
+# веха не закрыта, оба речевых акта говорят каждый своё.
+#
+# ⚠️ ЗАПРЕТ ЗЕЛЕН С РОЖДЕНИЯ, И ПОТОМУ ЗЕЛЕНЬ ЕГО НИКОГДА НЕ ПРИХОДИТ ОДНА.
+# `fetch(` в `app/templates/` равно нулю уже на дереве, где запрет пишется, а
+# «переведено всё» и «разбор сломался» дают `not found` посимвольно одинаково.
+# Отличает их только доказательство из двух половин, снятых ТЕМ ЖЕ прогоном
+# (форма — `tests/test_pages/test_htmx_gates.py`,
+# `test_the_named_zero_of_the_backlog_is_not_a_broken_scanner`): вселенная обхода
+# НЕПУСТА (порог утверждается в самом правиле-запрете, а не только в контроле),
+# и на дереве, где запрету ЕСТЬ ЧТО НАЙТИ, он находит и называет место по ключу
+# `путь#индекс`. Граница в обе стороны снимается тем же прогоном: одно
+# синтетическое место делает запрет ложным, а отрицательное число мест
+# невыразимо по построению — находки суть ключи словаря.
+#
+# ЛЕТОПИСЬ ИМЕНИ `test_no_manual_fetch_remains` (идиома D-30/D-32, форма —
+# `REQUIREMENTS.md` §FORM-06). Имя объявлено в `REQUIREMENTS.md` §GATE-08 и в
+# критерии 2 ROADMAP §Phase 15 («машинно, `test_no_manual_fetch_remains`»).
+#   * ЗАМЕР 2026-09-23, воспроизведённый планированием Фазы 15
+#     (`15-RESEARCH.md` §Ф-06): вхождений этого имени в `tests/` — НОЛЬ.
+#   * ПЕРЕЗАМЕР 2026-09-24 при исполнении плана 15-04: ТЕКСТОВЫХ вхождений
+#     одно — комментарий группы D-05 в
+#     `tests/test_planning/test_plan_prohibitions_census.py` (план 15-01), где
+#     имя названо измеренным экземпляром класса «зелено вакуумом»; ОПРЕДЕЛЕНИЙ
+#     функции с этим именем — НОЛЬ. Эта летопись сама добавляет текстовые
+#     вхождения, поэтому правило летописи ниже меряет ОПРЕДЕЛЕНИЯ разбором `ast`,
+#     а не строку: абзац, цитирующий имя, не должен уметь «назвать свидетеля».
+#   * До Фазы 15 принуждение жило ТРЕМЯ правилами группы G-22 под другими
+#     именами — `test_manual_request_assembly_never_grows` (:1159),
+#     `test_manual_request_assembly_matches_the_declared_count` (:1176),
+#     `test_the_declared_manual_fetch_ceiling_never_rises` (:1201) — и в ДРУГОМ
+#     речевом акте: счётчик, а не запрет.
+#   * ЧЕМ ИМЯ ЗАКРЫТО ТЕПЕРЬ: функцией-запретом
+#     `test_fetch_prohibition_forbids_manual_request_assembly_in_templates`
+#     (`FETCH_PROHIBITION_RULE` ниже). Имя выбрано НЕ равным объявленному:
+#     занять имя требования значило бы закрыть расхождение подгонкой и стереть
+#     летопись. Оно называет речевой акт (запрет), а не число.
+#   * ПРОГНОЗ НЕ БЫЛ ОШИБКОЙ — ОН УСТАРЕЛ: на момент своей записи он был
+#     верным, и правится не он, а числа, которые он пережил. Записи разведки
+#     (`.planning/research/*`) НЕ ПРАВЯТСЯ.
+#
+# ⚠️ НАХОДКА ФАЗЫ: требование GATE-08 отмечено `[x]`, объявляя тест, которого в
+# дереве нет. Формально отметка законна — правило
+# `tests/test_planning/test_requirement_completion_follows_verification.py`
+# сверяет отметку с ВЕРДИКТОМ отчёта фазы, а не с существованием каждого
+# названного теста, — но по существу это ровно класс «зелено вакуумом», и
+# предмет предметно принадлежит FETCH-03 этой фазы. Отметка `[x]` этим планом НЕ
+# снимается: отметка следует вердикту отчёта своей фазы, а не решению
+# исполнителя. Запись летописи и находки в `REQUIREMENTS.md` §GATE-08 делает
+# план 15-06; этот план её только НАЗЫВАЕТ, и коммиты его задач
+# `REQUIREMENTS.md` не трогают.
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ. Зелёный цвет означает ровно две вещи: в
+# `app/templates/**/*.html` нет ни одного места ручной сборки запроса, и сеть при
+# этом не слепа. Он НЕ означает, что ручной сборки запроса нет в `app/static/`:
+# вселенная обхода объявлена самим `_template_sources` (шаблоны, и только они),
+# и ни вендоренные рантаймы, ни собственные сценарии статики в неё не входят.
+# Граница `app/static/` закрыта ДРУГИМИ правилами:
+# `tests/test_templates/test_components.py::test_criterion_three_holds_by_the_numbers`
+# держит множество файлов сценариев равным двум вендоренным рантаймам (своего
+# сценария, который мог бы собирать запрос, в каталоге завестись молча не
+# может), а `tests/test_pages/test_shell.py::test_vendored_htmx_is_the_declared_artifact`
+# держит байты рантайма разметки полным SHA-384; байтового закрепления рантайма
+# клиентского состояния в суите нет (замер 2026-09-24). Он НЕ означает и того,
+# что ни один шаблон не соберёт запрос ИНАЧЕ: `hx-vals='js:'` и `hx-on:` закрыты
+# GATE-07 другими правилами в другом файле —
+# `tests/test_templates/test_htmx_markup_security.py::test_no_markup_declares_request_parameters_or_event_handlers`
+# и `::test_request_param_attributes_go_through_json_serialisation`. И он НЕ
+# означает, что закомментированный двумя косыми чертами вызов не посчитается —
+# граница названа в докстринге `_manual_fetch_places` и наследуется запретом.
+# =============================================================================
+
+# Имя функции-запрета. ⚠️ НЕ РАВНО имени, объявленному в GATE-08: см. летопись.
+FETCH_PROHIBITION_RULE = "test_fetch_prohibition_forbids_manual_request_assembly_in_templates"
+
+# Имя, объявленное `REQUIREMENTS.md` §GATE-08 и критерием 2 ROADMAP §Phase 15.
+# Определения с этим именем в суите НЕТ, и летопись это утверждает, а не прячет.
+FETCH_PROHIBITION_DECLARED_NAME = "test_no_manual_fetch_remains"
+
+# Три действующих правила G-22, которыми принуждение жило до Фазы 15.
+MANUAL_FETCH_COUNTER_RULES = (
+    "test_manual_request_assembly_never_grows",
+    "test_manual_request_assembly_matches_the_declared_count",
+    "test_the_declared_manual_fetch_ceiling_never_rises",
+)
+
+TESTS_DIR = Path(__file__).resolve().parents[1]
+THIS_MODULE = Path(__file__).resolve().relative_to(TESTS_DIR).as_posix()
+
+
+def _suite_sources() -> dict[str, str]:
+    """Модули суиты: путь относительно `tests/` → исходник, по `sorted(rglob)`."""
+    return {
+        path.relative_to(TESTS_DIR).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted(TESTS_DIR.rglob("*.py"))
+    }
+
+
+def _defined_functions(sources: dict[str, str], wanted: frozenset[str]) -> dict[str, list[str]]:
+    """Где ОПРЕДЕЛЕНА каждая функция из `wanted`: имя → модули, по ДЕРЕВУ `ast`.
+
+    Чистая функция от поданного отображения: вселенная суиты приходит
+    параметром, модульного изменяемого состояния нет. Довод «по дереву, а не по
+    строке» тот же, что у группы D-05 `test_plan_prohibitions_census.py`: поиск
+    по тексту нашёл бы имя и в комментарии, и в докстринге — летопись выше
+    цитирует объявленное имя сама. Текстовый предфильтр только решает, какой
+    исходник РАЗБИРАТЬ (определение без текста имени невозможно); вердикт
+    выносит дерево.
+
+    `ast` импортируется здесь, а не в шапке модуля: строка импорта в шапке
+    сдвинула бы на единицу все номера строк, которые цитирует летопись
+    `REQUIREMENTS.md` §GATE-08 (`:1108`, `:1111`, `:1159`, `:1176`, `:1201`).
+    """
+    import ast
+
+    found: dict[str, list[str]] = {name: [] for name in sorted(wanted)}
+    for rel, source in sources.items():
+        if not any(name in source for name in wanted):
+            continue
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in wanted:
+                found[node.name].append(rel)
+    return found
+
+
+def test_fetch_prohibition_name_chronicle_is_measured_by_the_syntax_tree() -> None:
+    """Летопись имени опирается на ЗАМЕР, а не на прозу.
+
+    Три факта летописи утверждаются разбором `ast` всей суиты: объявленное
+    требованием имя НЕ определено нигде; три правила G-22 определены, и ровно в
+    этом модуле; функция-запрет, которой имя теперь закрыто, определена здесь же.
+    Четвёртое утверждение — что имя при этом ЦИТИРУЕТСЯ текстом, — и есть
+    причина мерить деревом: греп нашёл бы «свидетеля» в самой летописи.
+    """
+    sources = _suite_sources()
+    wanted = frozenset(
+        {FETCH_PROHIBITION_RULE, FETCH_PROHIBITION_DECLARED_NAME, *MANUAL_FETCH_COUNTER_RULES}
+    )
+    defined = _defined_functions(sources, wanted)
+
+    assert FETCH_PROHIBITION_RULE != FETCH_PROHIBITION_DECLARED_NAME, (
+        "функция-запрет заняла имя, объявленное требованием, — расхождение "
+        "закрыто подгонкой, и летопись стёрта"
+    )
+    assert defined[FETCH_PROHIBITION_DECLARED_NAME] == [], (
+        f"имя `{FETCH_PROHIBITION_DECLARED_NAME}` теперь ОПРЕДЕЛЕНО в "
+        f"{defined[FETCH_PROHIBITION_DECLARED_NAME]} — летопись «объявлено, в "
+        f"дереве отсутствует» устарела и надлежит дописать её строкой, а не молчать"
+    )
+    assert sum(src.count(FETCH_PROHIBITION_DECLARED_NAME) for src in sources.values()) > 0, (
+        "объявленное имя не цитируется в суите ни разу — летопись выше потеряна"
+    )
+    for name in MANUAL_FETCH_COUNTER_RULES:
+        assert defined[name] == [THIS_MODULE], (
+            f"правило G-22 `{name}` определено в {defined[name]}, ожидалось "
+            f"[{THIS_MODULE!r}] — летопись называет имена, которых больше нет, "
+            f"или разбор суиты ослеп"
+        )
+    assert defined[FETCH_PROHIBITION_RULE] == [THIS_MODULE], (
+        f"функция-запрет FETCH-03 `{FETCH_PROHIBITION_RULE}` определена в "
+        f"{defined[FETCH_PROHIBITION_RULE]}, ожидалось [{THIS_MODULE!r}] — имя "
+        f"`{FETCH_PROHIBITION_DECLARED_NAME}` закрыть НЕЧЕМ: запрета в дереве нет, "
+        f"есть только счётчик G-22"
+    )
+
+
+# Порог непустоты вселенной запрета. Тот же, что у положительного контроля
+# групп выше: на дереве плана 15-04 шаблонов 113 (замер 2026-09-24), и обход,
+# нашедший пятьдесят или меньше, почти наверняка сломан, а не «почищен».
+FETCH_PROHIBITION_UNIVERSE_FLOOR = 50
+
+
+def _fetch_prohibition_universe_offence(templates_: dict[str, str]) -> str:
+    """Пустая строка, если вселенная запрета непуста; иначе — отказ словами.
+
+    Чистая функция от поданного отображения. Это ПЕРВАЯ половина доказательства
+    нуля: `not found` на пустом словаре формально истинно, и без этой половины
+    запрет был бы зелен на сломанном обходе посимвольно так же, как на
+    переведённом дереве.
+    """
+    if len(templates_) > FETCH_PROHIBITION_UNIVERSE_FLOOR:
+        return ""
+    return (
+        f"вселенная запрета — {len(templates_)} шаблонов при пороге "
+        f"> {FETCH_PROHIBITION_UNIVERSE_FLOOR}: ноль мест ручной сборки запроса на "
+        f"ней неотличим от слепоты обхода"
+    )
+
+
+def test_fetch_prohibition_forbids_manual_request_assembly_in_templates() -> None:
+    """ЗАПРЕТ FETCH-03: мест ручной сборки запроса в шаблонах НЕ ОСТАЁТСЯ НИ ОДНОГО.
+
+    Утверждение — ОТСУТСТВИЕ предмета, а не равенство объявленному числу:
+    объявленного числа у запрета нет, и поднять его нечем. Отказ называет КАЖДОЕ
+    найденное место по ключу `путь#индекс` вместе со строкой вокруг вызова.
+
+    Зелень запрета не приходит одна: в этом же правиле утверждается непустота
+    вселенной (первая половина доказательства нуля); вторая половина —
+    `test_control_negative_a_synthetic_manual_fetch_breaks_the_fetch_prohibition`.
+    """
+    sources = _template_sources()
+
+    assert _fetch_prohibition_universe_offence(sources) == "", (
+        _fetch_prohibition_universe_offence(sources)
+    )
+
+    found = _manual_fetch_places(sources)
+
+    assert not found, (
+        f"ЗАПРЕТ FETCH-03 НАРУШЕН: в шаблонах {len(found)} мест(а) ручной сборки "
+        f"запроса — {found}. Ноль мест есть КОНТРАКТ вехи, а не объявленное число: "
+        f"место надлежит перевести на фрагмент разметки, а не разрешить"
+    )
+
+
+def test_control_negative_a_synthetic_manual_fetch_breaks_the_fetch_prohibition() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на дереве, где запрету ЕСТЬ ЧТО НАЙТИ, он находит и НАЗЫВАЕТ.
+
+    Вторая половина доказательства нуля. Ключ синтетический — такого шаблона в
+    дереве нет, и это утверждается, — поэтому контроль не зависит от того, какой
+    настоящий шаблон завтра переименуют, и не трогает ни одного файла проекта.
+    """
+    key = "synthetic/fetch_prohibition_probe.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    changed = dict(sources)
+    changed[key] = "<script>fetch('/synthetic/a-call-the-prohibition-forbids');</script>\n"
+    assert changed != sources, "подмена ничего не изменила"
+
+    found = _manual_fetch_places(changed)
+
+    assert not (not found), (
+        "ЗАПРЕТ ОСТАЛСЯ ИСТИННЫМ НА ДЕРЕВЕ С РУЧНОЙ СБОРКОЙ ЗАПРОСА — ноль запрета "
+        "неотличим от слепоты измерителя"
+    )
+    assert set(found) - set(_manual_fetch_places(sources)) == {f"{key}#0"}, (
+        f"запрет нашёл не то место или не назвал его: найдено {sorted(found)}, "
+        f"ожидалось новое место {key}#0"
+    )
+    assert found[f"{key}#0"].startswith("fetch("), (
+        f"отказ не показывает строку вызова: {found[f'{key}#0']!r}"
+    )
+
+
+# Четыре формы, которые наивная подстрока вызова посчитала бы ручной сборкой
+# запроса, а ею они не являются: вызов-метод чужого объекта, чужая функция с
+# суффиксом имени, дефис внутри текста или атрибута и другое слово, кончающееся
+# тем же именем. Ключ — сама форма, чтобы отказ называл просочившуюся.
+FETCH_NET_LOOKALIKES: dict[str, str] = {
+    ".fetch(": "<script>client.fetch('/synthetic/a-method-of-another-object');</script>",
+    "_fetch(": "<script>cached_fetch('/synthetic/a-helper-with-a-suffix');</script>",
+    "-fetch(": '<p data-note="pre-fetch(later)">текст с дефисом</p>',
+    "prefetch(": "<script>prefetch('/synthetic/another-word-ending-the-same');</script>",
+}
+
+
+def test_control_precision_the_fetch_prohibition_net_ignores_four_lookalike_forms() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: сеть запрета ТОЧНА — четыре двойника дают ноль, голый вызов один.
+
+    Без этого контроля ноль запрета был бы доказан только с одной стороны: сеть,
+    ловящая больше, чем ручную сборку запроса, краснела бы на законных формах, и
+    её первым же делом «починили» бы сужением. Каждая форма подаётся отдельным
+    синтетическим шаблоном ТЕМ ЖЕ прогоном; то, что подстрока вызова в каждой
+    форме действительно есть, утверждается, иначе ноль был бы нулём по построению.
+    """
+    assert len(FETCH_NET_LOOKALIKES) == 4, (
+        f"форм-двойников {len(FETCH_NET_LOOKALIKES)}, объявлено 4 — перечень сужен"
+    )
+    for form, source in FETCH_NET_LOOKALIKES.items():
+        assert source.count(form) == 1, f"синтетика формы {form!r} не несёт саму форму"
+        leaked = _manual_fetch_places({f"synthetic/lookalike{form}.html": source})
+        assert leaked == {}, (
+            f"форма {form!r} ПРОСОЧИЛАСЬ в сеть запрета: {leaked} — сеть посчитала "
+            f"ручной сборкой запроса то, что ею не является"
+        )
+
+    bare = _manual_fetch_places(
+        {"synthetic/bare.html": "<script>fetch('/synthetic/a-bare-call');</script>"}
+    )
+    assert list(bare) == ["synthetic/bare.html#0"], (
+        f"голый вызов сеть не увидела или увидела не один раз: {bare}"
+    )
+
+
+def test_control_positive_the_untouched_tree_keeps_the_fetch_prohibition_silent() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на НЕИЗМЕНЁННОМ дереве запрет молчит — и молчит на НЕПУСТОЙ вселенной.
+
+    Без этого контроля отрицательный выше прошёл бы и у запрета, который
+    краснеет всегда.
+    """
+    sources = _template_sources()
+
+    assert len(sources) > FETCH_PROHIBITION_UNIVERSE_FLOOR, (
+        f"обход нашёл всего {len(sources)} шаблонов — запрет мог сойтись на пустоте"
+    )
+    assert _manual_fetch_places(sources) == {}, "запрет покраснел на неизменённом дереве"
+
+
+def test_control_positive_an_empty_tree_satisfies_the_fetch_prohibition_only_vacuously() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: пустота ЗАСЕКАЕТСЯ — зелень запрета не приходит одна.
+
+    На пустом словаре и на словаре из одного шаблона утверждение отсутствия
+    формально истинно. Это не дефект запрета, а свойство любого «нет ни одного»,
+    и ловится оно отдельным утверждением — непустотой вселенной, которое стои́т в
+    самом правиле-запрете и которое здесь доказанно краснеет.
+    """
+    for universe in ({}, {"includes/nothing_fetches_here.html": "<p>тихо</p>"}):
+        assert not _manual_fetch_places(universe), (
+            f"запрет покраснел на вселенной без единого вызова: {universe}"
+        )
+        assert _fetch_prohibition_universe_offence(universe) != "", (
+            f"ПУСТОТА ПРОШЛА МИМО ЗАПРЕТА: вселенная из {len(universe)} шаблонов "
+            f"не засечена — зелень запрета пришла одна"
+        )
+
+
+# =============================================================================
+# ГРУППА: ИНВЕНТАРЬ ПРОСТЫХ АТРИБУТОВ-ОБРАБОТЧИКОВ СОБЫТИЯ (Фаза 15, план 15-04)
+#
+# ПРЕДМЕТ ПЕРЕДАН ФАЗЕ ДОЛГОМ Фазы 13-05 дословно (`STATE.md`, раздел решений):
+# «components/thumb.html onerror is named in the R-08-02 prose as outside its
+# subject; counting plain event attributes in an inventory is left to Phase 15»,
+# — и решение владельца `chubav` 2026-09-23 ввело его в фазу работой.
+#
+# ⚠️ ПРЕДМЕТ — ИНВЕНТАРЬ, А НЕ УДАЛЕНИЕ. Долг просит СЧЁТ. Атрибут `onerror` в
+# `components/thumb.html` законен и работает: единственное, что он делает, —
+# подменяет упавшую миниатюру полным изображением, и первым же действием
+# снимает себя (`this.onerror=null`), поэтому зациклиться на битом полном
+# изображении не может. Разметка этим планом не правится. Правило объявляет
+# число, называет место с основанием и краснеет на ВТОРОМ таком атрибуте.
+#
+# ЧИСЛО — ОТДЕЛЬНОЙ КОНСТАНТОЙ (форма `tests/test_pages/test_account_groups.py`,
+# `OOB_TARGET_EXCEPTIONS_DECLARED`). Беззвучно выросшее означает, что
+# атрибут-обработчик завёлся, а решения о нём никто не принимал; беззвучно
+# упавшее — что место снято, и это обязано быть записано строкой летописи, а не
+# обнаружено через фазу.
+#
+# СЧЁТ ИДЁТ ПО ИСХОДНИКУ БЕЗ КОММЕНТАРИЕВ, И ВОТ ЧТО ИМЕННО ИЗМЕРЕНО. Грубый греп
+# слова `onerror` по `app/templates/` даёт ДВЕ строки: атрибут
+# `components/thumb.html:34` и упоминание внутри Jinja-комментария
+# `components/modal.html:234` (по вхождениям — три: `this.onerror` в теле самого
+# атрибута тоже слово). Грубый греп всего перечня имён находит в комментариях
+# `modal.html` ДВА слова — ещё и `xhr.onload` на `:126`, которого замер плана не
+# называл (перезамер 2026-09-24). Сама сеть этой группы требует `=` после имени
+# и отсекает точку просмотром назад, поэтому СЕГОДНЯШНИЕ комментарии её не
+# обманывают — на `modal.html` она даёт ноль и с вырезанием, и без. Вырезание
+# (`_strip_comments` этого модуля, тот же порядок «сперва Jinja, потом HTML», что
+# у `tests/test_templates/test_htmx_markup_gates.py`) стережёт ЗАВТРАШНИЙ
+# комментарий-обоснование, выписывающий атрибут вместе со знаком равенства, — и
+# это доказывается синтетикой в правиле о комментариях.
+#
+# ПЕРЕЧЕНЬ ИМЁН СОБЫТИЙ ОБЪЯВЛЕН КОНСТАНТОЙ С ЧИСЛОМ, А НЕ ЗАШИТ В ВЫРАЖЕНИЕ
+# РОССЫПЬЮ: выражение собирается из перечня, поэтому убрать одно имя значит
+# сузить сеть — и это краснит утверждение числа. Иначе сеть можно было бы молча
+# ослепить.
+#
+# ЧЕГО ЭТА ГРУППА НЕ УТВЕРЖДАЕТ. Зелёный цвет означает: простых
+# атрибутов-обработчиков события восьми объявленных имён в
+# `app/templates/**/*.html` ровно одно место, и оно названо с основанием. Он НЕ
+# означает, что обработчик `thumb.html` РАБОТАЕТ: суита не исполняет JS и
+# картинок не грузит. Он НЕ означает, что обработчиков нет в ДРУГОЙ форме:
+# `hx-on:` и `hx-vals='js:'` запрещены правилами GATE-07 в другом файле —
+# `tests/test_templates/test_htmx_markup_security.py::test_no_markup_declares_request_parameters_or_event_handlers`
+# (и его отрицательный контроль
+# `::test_control_negative_an_inline_event_handler_reddens_the_gate`), а атрибуты
+# рантайма клиентского состояния (`x-on:`, краткая форма `@`) — предмет других
+# гейтов и в эту вселенную не входят ПО ОБЪЯВЛЕНИЮ: просмотр назад отсекает
+# `-`, `:` и `@`. Он НЕ означает, что сеть видит имена ВНЕ перечня
+# (`onkeydown=`, `onmouseover=` и прочие): перечень восемь имён, и расширение до
+# полного списка событий HTML предметом долга не было; замер 2026-09-24 сетью
+# «`on` плюс любое имя» по тому же исходнику дал то же одно место, то есть
+# сегодня перечень ничего не прячет. И он НЕ означает, что присваивание
+# обработчика без точки в теле `<script>` (`onload = …`) не посчитается — оно
+# посчитается; сегодня таких нет.
+# =============================================================================
+
+
+class InlineEventSite(NamedTuple):
+    """Объявленное место атрибута-обработчика: какой атрибут и почему он законен."""
+
+    attribute: str
+    reason: str
+
+
+# Перечень имён событий сети и его число. Выражение ниже собирается ИЗ перечня.
+INLINE_EVENT_NAMES = ("error", "click", "load", "change", "submit", "input", "focus", "blur")
+INLINE_EVENT_NAMES_DECLARED = 8
+
+# Атрибут-обработчик: `on` + имя из перечня + `=`. Просмотр назад отсекает
+# свойство чужого объекта (`this.onerror=`), атрибуты с префиксом (`data-onclick`,
+# `hx-on:`, `x-on:`) и краткую форму `@`. Регистр не значим: имена атрибутов в
+# HTML регистронезависимы, и `onClick=` есть тот же обработчик.
+INLINE_EVENT_ATTRIBUTE = re.compile(
+    r"(?<![-\w.:@])(on(?:" + "|".join(INLINE_EVENT_NAMES) + r"))\s*=",
+    re.IGNORECASE,
+)
+
+# Грубый греп замера плана — слово `onerror` без знака равенства. Заведён ТОЛЬКО
+# для правила о комментариях, чтобы разность «сырой текст / без комментариев»
+# утверждалась на измеренном примере, а не пересказывалась.
+NAIVE_ONERROR_GREP = re.compile(r"onerror")
+
+# ЛЕТОПИСЬ ЧИСЛА:
+#   → 1, Фаза 15, план 15-04, задача 2 (RED) — число поставлено ИЗМЕРЕНИЕМ, а не
+#     арифметикой плана: сеть `INLINE_EVENT_ATTRIBUTE` по исходнику без
+#     комментариев, 2026-09-24 — 1 вхождение в 1 файле из 113 шаблонов. Перечень
+#     мест ниже объявлен ПУСТЫМ намеренно, чтобы правило о местах покраснело на
+#     дереве и НАЗВАЛО место, которое сеть действительно видит.
+#   1 → 1, Фаза 15, план 15-04, задача 2 (GREEN) — прогон назвал ровно одно
+#     место, дословно: `найдено, но не объявлено {'components/thumb.html#0':
+#     'onerror'}`. Место объявлено с основанием; разметка не правилась.
+INLINE_EVENT_ATTRIBUTE_PLACES = 1
+
+INLINE_EVENT_ATTRIBUTE_SITES: dict[str, InlineEventSite] = {
+    "components/thumb.html#0": InlineEventSite(
+        attribute="onerror",
+        reason=(
+            "макрос `thumb` (`components/thumb.html:34`): единственное падение "
+            "загрузки миниатюры подменяется полным изображением "
+            "(`this.src=this.dataset.full`), и обработчик СНИМАЕТ СЕБЯ первым же "
+            "действием (`this.onerror=null`), поэтому на битом полном изображении "
+            "не зацикливается. Запроса к приложению не собирает, состояния не "
+            "меняет; вынесен как НЕ предмет R-08-02 (долг Фазы 13-05)"
+        ),
+    ),
+}
+
+
+def _inline_event_attribute_places(templates_: dict[str, str]) -> dict[str, str]:
+    """Места атрибутов-обработчиков: ключ `путь#индекс` → имя атрибута строчными.
+
+    Чистая функция от поданного отображения; комментарии обоих видов вырезаются
+    до счёта. Ключ — путь плюс порядковый номер, по тому же доводу, что у
+    `_manual_fetch_places`: два атрибута одного файла остаются двумя записями.
+    """
+    found: dict[str, str] = {}
+    for rel, source in templates_.items():
+        body = _strip_comments(source)
+        for ordinal, match in enumerate(INLINE_EVENT_ATTRIBUTE.finditer(body)):
+            found[f"{rel}#{ordinal}"] = match.group(1).lower()
+    return found
+
+
+def test_inline_event_attribute_places_are_the_declared_ones() -> None:
+    """Мест атрибутов-обработчиков РОВНО объявленное число, и перечень мест — объявленный.
+
+    Антивакуум здесь же: число равно длине перечня и больше нуля — перечень,
+    опустевший молча, оставил бы правило зелёным ровно тогда, когда его записи
+    тихо отменили.
+    """
+    found = _inline_event_attribute_places(_template_sources())
+    declared = {key: site.attribute for key, site in INLINE_EVENT_ATTRIBUTE_SITES.items()}
+
+    assert len(found) == INLINE_EVENT_ATTRIBUTE_PLACES, (
+        f"мест атрибутов-обработчиков события {len(found)}, объявлено "
+        f"{INLINE_EVENT_ATTRIBUTE_PLACES}: {found} — атрибут заведён или снят без "
+        f"решения; обнови число, перечень и строку летописи одним коммитом"
+    )
+    assert found == declared, (
+        f"перечень мест разошёлся с найденным: найдено, но не объявлено "
+        f"{ {k: v for k, v in found.items() if declared.get(k) != v} }; объявлено, "
+        f"но не найдено { {k: v for k, v in declared.items() if found.get(k) != v} }"
+    )
+    assert len(INLINE_EVENT_ATTRIBUTE_SITES) == INLINE_EVENT_ATTRIBUTE_PLACES, (
+        f"записей в перечне {len(INLINE_EVENT_ATTRIBUTE_SITES)}, объявлено "
+        f"{INLINE_EVENT_ATTRIBUTE_PLACES}"
+    )
+    assert INLINE_EVENT_ATTRIBUTE_PLACES > 0, (
+        "число мест объявлено нулём, а `components/thumb.html` несёт `onerror` — "
+        "долг Фазы 13-05 закрыт пустотой, а не инвентарём"
+    )
+    assert all(site.reason.strip() for site in INLINE_EVENT_ATTRIBUTE_SITES.values()), (
+        "у места нет основания — объявлено число, а не решение"
+    )
+
+
+def test_inline_event_attribute_count_ignores_comments() -> None:
+    """Счёт идёт по исходнику БЕЗ комментариев — на измеренном примере и на синтетике.
+
+    Измеренный пример — `components/modal.html:234`: слово `onerror` внутри
+    Jinja-комментария. Грубый греп даёт на файле одно место, тот же греп по
+    исходнику без комментариев — ноль, разность — единица. Грубый греп ВСЕГО
+    перечня имён даёт на том же файле два (ещё `xhr.onload`, `:126`) и тоже ноль
+    без комментариев. Если комментарии `modal.html` перепишут, правило
+    покраснеет — перемерьте и допишите, а не подгоняйте.
+
+    Сама сеть группы сегодняшними комментариями не обманывается (знак равенства
+    после имени обязателен), поэтому НЕСУЩЕСТЬ вырезания доказывается синтетикой:
+    комментарий, выписывающий атрибут со знаком равенства, сеть по сырому тексту
+    посчитала бы, а по исходнику без комментариев — нет.
+    """
+    key = "components/modal.html"
+    modal = _template_sources()[key]
+
+    naive_raw = len(NAIVE_ONERROR_GREP.findall(modal))
+    naive_stripped = len(NAIVE_ONERROR_GREP.findall(_strip_comments(modal)))
+    assert naive_raw == 1, f"грубый греп `onerror` на {key}: {naive_raw}, замер давал 1"
+    assert naive_stripped == 0, (
+        f"грубый греп `onerror` по {key} без комментариев: {naive_stripped}, замер давал 0"
+    )
+    assert naive_raw - naive_stripped == 1, "разность сырого текста и исходника без комментариев не 1"
+
+    family = re.compile(r"\bon(?:" + "|".join(INLINE_EVENT_NAMES) + r")\b")
+    assert len(family.findall(modal)) == 2, (
+        f"грубый греп перечня имён на {key}: {family.findall(modal)}, замер давал 2"
+    )
+    assert family.findall(_strip_comments(modal)) == [], "имя события вне комментариев modal.html"
+
+    assert _inline_event_attribute_places({key: modal}) == {}, (
+        f"сеть нашла атрибут-обработчик в {key}, где его нет"
+    )
+
+    commented = modal + (
+        '\n{# проза-обоснование: <img onerror="this.src=x"> #}\n'
+        '<!-- и в HTML-комментарии: <button onclick="f()"> -->\n'
+    )
+    assert commented != modal, "подмена ничего не изменила"
+    assert len(INLINE_EVENT_ATTRIBUTE.findall(commented)) == 2, (
+        "сеть по СЫРОМУ тексту не увидела атрибуты в комментариях — синтетика не "
+        "доказывает несущесть вырезания"
+    )
+    assert _inline_event_attribute_places({key: commented}) == {}, (
+        "КОММЕНТАРИЙ ПОСЧИТАН МЕСТОМ: проза объявила атрибут-обработчик там, где "
+        "его нет"
+    )
+
+
+def test_inline_event_attribute_net_covers_the_declared_event_names() -> None:
+    """Вселенная сети объявлена: восемь имён, каждое ловится, двойники — нет.
+
+    Сужение перечня краснит утверждение числа; каждое имя перечня подаётся
+    синтетическим тегом и обязано дать ровно одно место с этим именем, поэтому
+    выражение не может разойтись с перечнем незаметно.
+    """
+    assert len(INLINE_EVENT_NAMES) == INLINE_EVENT_NAMES_DECLARED, (
+        f"имён событий в перечне {len(INLINE_EVENT_NAMES)}, объявлено "
+        f"{INLINE_EVENT_NAMES_DECLARED} — сеть сужена или расширена без решения"
+    )
+    assert len(set(INLINE_EVENT_NAMES)) == len(INLINE_EVENT_NAMES), (
+        "имя в перечне повторено — число держится повтором, а не охватом"
+    )
+    for name in INLINE_EVENT_NAMES:
+        caught = _inline_event_attribute_places({"synthetic/net.html": f'<b on{name}="f()">'})
+        assert caught == {"synthetic/net.html#0": f"on{name}"}, (
+            f"сеть не поймала `on{name}=`: {caught}"
+        )
+
+    assert _inline_event_attribute_places({"synthetic/case.html": '<b onClick="f()">'}) == {
+        "synthetic/case.html#0": "onclick"
+    }, "сеть зависит от регистра имени атрибута"
+
+    for form in ("this.onerror=null", 'data-onclick="f()"', 'hx-on:click="f()"',
+                 'x-on:click="f()"', '@click="f()"'):
+        leaked = _inline_event_attribute_places({"synthetic/lookalike.html": f"<b {form}>"})
+        assert leaked == {}, f"форма {form!r} просочилась в сеть атрибутов-обработчиков: {leaked}"
+
+
+def test_control_negative_a_synthetic_onclick_grows_the_inline_event_attribute_count() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: ВТОРОЙ атрибут-обработчик сеть ВИДИТ и НАЗЫВАЕТ."""
+    key = "synthetic/second_inline_handler.html"
+    sources = _template_sources()
+    assert key not in sources, "синтетический шаблон совпал по имени с настоящим"
+
+    changed = dict(sources)
+    changed[key] = '<button type="button" onclick="doSomething()">кнопка будущей фазы</button>\n'
+    assert changed != sources, "подмена ничего не изменила"
+
+    before = _inline_event_attribute_places(sources)
+    after = _inline_event_attribute_places(changed)
+
+    assert len(after) == len(before) + 1, (
+        f"ВТОРОЙ АТРИБУТ-ОБРАБОТЧИК ПРОШЁЛ МИМО СЕТИ: было {len(before)}, стало {len(after)}"
+    )
+    assert {k: v for k, v in after.items() if k not in before} == {f"{key}#0": "onclick"}, (
+        f"сеть не назвала новое место: {after}"
+    )
+
+
+def test_control_positive_the_untouched_tree_keeps_the_inline_event_attribute_count() -> None:
+    """ЧТО ДОКАЗЫВАЕТ: на НЕИЗМЕНЁННОМ дереве число сходится — и на непустой вселенной."""
+    sources = _template_sources()
+
+    assert len(sources) > 50, (
+        f"обход нашёл всего {len(sources)} шаблонов — инвентарь мог сойтись на пустоте"
+    )
+    assert len(_inline_event_attribute_places(sources)) == INLINE_EVENT_ATTRIBUTE_PLACES
+
+
+# =============================================================================
 # КОНТРОЛИ ОБЕИХ ГРУПП: доказательство того, что гейты КРАСНЕЮТ (`-k control`)
 #
 # ⚠️ ЗАЧЕМ ОНИ. Классификация десяти фрагментов и счётчик, равный шести, зелены

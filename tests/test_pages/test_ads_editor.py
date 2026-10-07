@@ -49,6 +49,9 @@ from app.services.image_keys import media_dom_id
 # читателей у имени в этом модуле не осталось, и оставленный импорт утверждал
 # бы связь, которой нет. Гарантия «человек читает точную причину» переехала на
 # тест фрагмента полосы.
+# Разбор таблицы стилей — помощниками `test_shell.py`, а не третьим разборщиком
+# (находка WR-10 ревью 2026-10-06): комментарии гасятся, селекторы разделяются.
+from tests.test_pages.test_shell import _css_rules_of, _css_value
 
 # Форма ключа вложения — источник правды `app/services/image_upload.py`
 # (переезд плана 12-01; прежде правду держал модуль маршрутов загрузки):
@@ -1887,6 +1890,91 @@ async def test_a_removal_at_the_ceiling_brings_the_add_tile_back(
 
 
 @pytest.mark.asyncio
+async def test_the_file_field_is_reachable_from_the_keyboard(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """«+ ФАЙЛ» доступна с клавиатуры: файловое поле в обходе Tab, обвод на плитке.
+
+    ⚠️ НАХОДКА ОБХОДА, А НЕ ПРЕДПОЛОЖЕНИЕ (`15-UAT.md` У-12, 2026-10-06).
+    Плитка — `<label for="file-input">`, а файловое поле несло `hidden`:
+    подпись не фокусируема, скрытое поле выпадает из обхода, и Tab с последней
+    «Убрать вложение» уходил сразу на «СВЕРНУТЬ». Добавить вложение без мыши
+    было нельзя, а правило `.media-tile--add:focus-visible` не срабатывало
+    никогда.
+
+    Починка — без обработчика: новый узел `x-data` запрещён критерием 3
+    (`test_criterion_three_holds_by_the_numbers`), `hx-on` в проекте ноль.
+    Поле скрывается ВИЗУАЛЬНО и остаётся фокусируемым; Enter и пробел на нём
+    открывают диалог силами браузера, обвод рисуется на плитке через
+    `:has(#file-input:focus-visible)`, а на потолке поле уходит из обхода
+    вместе со скрытой плиткой.
+
+    ⚠️ УТВЕРЖДАЮТСЯ СВОЙСТВА, А НЕ НАПИСАНИЕ (находка WR-10 ревью 2026-10-06).
+    Прежняя редакция сличала подстроки и зеленела, когда поле снова
+    становилось недостижимым (`disabled`, `tabindex="-1"`, `display: none`
+    внутри класса скрытия, форма перед полосой, плитка без `for`), а краснела
+    на простом переформатировании правила.
+    """
+    ad = await _seed_ad(db_session, title="Без вложений", images=[])
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+    anchor = html.index('id="file-input"')
+    tag = html[html.rindex("<", 0, anchor) : html.index(">", anchor) + 1]
+
+    for attribute in ("hidden", "disabled", "inert"):
+        assert not re.search(rf"\s{attribute}(?=[\s=>])", tag), (
+            f"файловое поле несёт `{attribute}`: {tag!r} — оно выпадает из обхода "
+            "Tab, и вложение не добавить без мыши"
+        )
+    assert not re.search(r'tabindex="-\d+"', tag), (
+        f"файловое поле снято с обхода отрицательным tabindex: {tag!r}"
+    )
+    assert "media-file-input" in tag, (
+        f"файловое поле без класса визуального скрытия: {tag!r} — оно встанет "
+        "на экран вторым элементом выбора файла"
+    )
+    assert html.index('id="media-strip"') < anchor, (
+        "форма загрузки стоит ПЕРЕД полосой: Tab встанет на поле раньше кнопок "
+        "убирания, а обвод нарисуется на плитке в конце полосы"
+    )
+    tile = _add_tile_tag(html)
+    assert 'for="file-input"' in tile, (
+        f"плитка «+ ФАЙЛ» не называет поле атрибутом `for`: {tile!r} — поле "
+        "потеряет доступное имя"
+    )
+
+    rules = _css_rules_of(Path(__file__).resolve().parents[2] / "app/static/css/app.css")
+
+    def _selectors(selectors: str) -> list[str]:
+        return [" ".join(part.split()) for part in selectors.split(",")]
+
+    hidden_bodies = [body for sel, body, _ in rules if ".media-file-input" in _selectors(sel)]
+    assert hidden_bodies, "в app.css нет правила `.media-file-input`"
+    for body in hidden_bodies:
+        assert _css_value(body, "display") is None and _css_value(body, "visibility") is None, (
+            f"класс визуального скрытия гасит поле совсем: {body!r} — `display`/"
+            "`visibility` выводят его из обхода Tab"
+        )
+    ceiling = [
+        body for sel, body, _ in rules
+        if "body:has(.media-tile--add[hidden]) .media-file-input" in _selectors(sel)
+    ]
+    assert ceiling and all(_css_value(body, "visibility") == "hidden" for body in ceiling), (
+        "на потолке поле остаётся в обходе Tab, хотя плитка «+ ФАЙЛ» скрыта: "
+        "нет правила `body:has(.media-tile--add[hidden]) .media-file-input "
+        "{ visibility: hidden }`"
+    )
+    ring = [
+        body for sel, body, _ in rules
+        if "body:has(#file-input:focus-visible) .media-tile--add" in _selectors(sel)
+    ]
+    assert ring and any("var(--focus-ring)" in (_css_value(body, "outline") or "") for body in ring), (
+        "фокус на файловом поле не виден на плитке «+ ФАЙЛ»: нет обвода "
+        "`body:has(#file-input:focus-visible) .media-tile--add`"
+    )
+
+
+@pytest.mark.asyncio
 async def test_attachment_remove_is_a_named_submit_inside_the_form(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
@@ -1919,6 +2007,71 @@ async def test_editor_delete_form_degrades_without_alpine(
     assert f'action="/ads/{ad.id}/delete"' in html
     assert f"modal-open-ad-del-{ad.id}" in html
     assert 'role="dialog"' in html
+
+
+@pytest.mark.asyncio
+async def test_editor_ad_delete_confirm_degrades_without_htmx(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Пара к тесту выше (GATE-10, план 15-03): удаление из редактора не зависит и от htmx.
+
+    Ключ предмета тот же — экран `/ads/{ad_id}/edit`, действие
+    `POST /ads/{ad_id}/delete` (записан в
+    `tests/test_templates/test_degradation_pairs.py`). ⚠️ Это НЕ пара к
+    `test_editor_delete_degrades_without_htmx` из `test_editor_schedules.py`:
+    там удаляется РАСПИСАНИЕ, здесь — объявление; совпадение основы имени парой
+    не является. Форма ПАНЕЛИ ПОДТВЕРЖДЕНИЯ, несущая `hx-post`, держит тот же
+    маршрут в `action`, метод — POST, и маршрут без признака htmx отвечает
+    перенаправлением на ПОЛНЫЙ документ.
+
+    НЕ утверждает, что форма работает без htmx НА РАНТАЙМЕ (суита JS не исполняет):
+    утверждает, что РАЗМЕТКА формы и ответ маршрута сохраняют путь без htmx, — это
+    улика, а не наблюдение.
+
+    WR-03 (план 15-17): тем же видом перенаправления `ads_delete` отвечает и на
+    отказе (`/login`), и на холостых ветках «нет строки» / «величина вне колонки».
+    Адрес успеха у запроса с экрана редактора ТОТ ЖЕ, что со списка, — `/ads`
+    (литерал, снятый чтением обработчика: экрана редактора после удаления нет), и
+    он совпадает с адресом холостой ветки. Поэтому несущее утверждение пары — то,
+    что объявления в базе больше НЕТ.
+    """
+    ad = await _seed_ad(db_session, title="Удаляемое без htmx")
+    ad_id = ad.id
+    action = f"/ads/{ad.id}/delete"
+
+    html = (await authed_client.get(f"/ads/{ad.id}/edit")).text
+
+    forms = re.findall(
+        rf'<form[^>]*action="{re.escape(action)}"[^>]*>.*?</form>', html, re.S
+    )
+    enhanced = [f for f in forms if "hx-post=" in f]
+    assert enhanced, "у удаления объявления нет формы с hx-post — пара потеряла предмет"
+    for form in enhanced:
+        open_tag = form[: form.index(">") + 1]
+        assert re.search(r'\smethod="post"', open_tag, re.I), open_tag
+        assert re.search(r'\saction="([^"]*)"', open_tag).group(1) == action, open_tag
+        assert re.search(r'\shx-post="([^"]*)"', open_tag).group(1) == action, (
+            f"hx-post и action разошлись: без htmx форма ушла бы на другой маршрут: "
+            f"{open_tag}"
+        )
+
+    response = await authed_client.post(action, follow_redirects=False)
+    assert response.status_code in (302, 303), (
+        f"маршрут без признака htmx ответил {response.status_code} вместо перенаправления"
+    )
+    assert "HX-Location" not in response.headers
+    assert response.headers["location"] == "/ads", (
+        f"перенаправление ушло на {response.headers['location']!r}, а не на адрес "
+        "ветки успеха удаления — это отказ или иная ветка обработчика"
+    )
+    db_session.expire_all()
+    assert await db_session.get(Ad, ad_id) is None, (
+        "объявление осталось в базе: путь без htmx прошёл холостой веткой, а не удалением"
+    )
+
+    page = await authed_client.get(response.headers["location"])
+    assert page.status_code == 200
+    assert "<!DOCTYPE" in page.text, "путь без htmx привёл не к полному документу"
 
 
 @pytest.mark.asyncio

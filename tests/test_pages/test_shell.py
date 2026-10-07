@@ -2454,7 +2454,17 @@ FAILURE_BANNER_SUCCESS_FLAG = "successful"
 FAILURE_BANNER_DISMISS_CLASS = "banner-dismiss"
 
 # Доступное имя органа снятия — по-русски, как и обе плашки.
-FAILURE_BANNER_DISMISS_LABEL = "Скрыть сообщение"
+#
+# ⚠️ ЛЕТОПИСЬ (идиома D-30/D-32: прежнее значение названо, а не вычеркнуто).
+# До плана 15-07 здесь стояла ОДНА строка `FAILURE_BANNER_DISMISS_LABEL =
+# "Скрыть сообщение"` — одно имя на обе заготовки, и при двойной аварии в
+# порядке обхода стоя́ли два неразличимых доступных имени (WCAG 4.1.2, находка 3
+# долга D-18.3). Правкой плана 15-07 имена разведены ПО ПРЕДМЕТУ заготовки, и
+# ожидание теперь ПО УЗЛУ. Носитель имён ОДИН —
+# `BANNER_DISMISS_ACCESSIBLE_NAMES` в tests/test_templates/test_banner_dismiss.py
+# (там же различимость и соответствие предмету); здесь он импортируется внутри
+# `_dismiss_control_findings`, а не в шапке модуля, чтобы не сдвигать номера
+# строк выше, которые цитируют записи фазы.
 
 # Идентификаторы органов снятия, ПОЗИЦИОННО парные `FAILURE_BANNER_IDS`.
 #
@@ -6689,6 +6699,361 @@ def test_control_a_layer_on_an_in_flow_ancestor_does_not_redden(tmp_path):
     )
 
 
+# ⚠️ КОНТРОЛИ ЦЕПИ ПРЕДКОВ ПЛАНА 10-38 НЕ ВЫПИСЫВАЮТ ИМЁН СВОЙСТВ ЛИТЕРАЛАМИ (запрет
+# `10-38#5`, `must_haves.prohibitions[5]` плана 10-38: «ИМЕНА СВОЙСТВ В КОНТРОЛЕ НЕ
+# ВЫПИСЫВАЮТСЯ ЛИТЕРАЛАМИ ТАМ, ГДЕ ИХ МОЖНО ВЗЯТЬ ИЗ ПЕРЕЧНЯ: представитель группы
+# выбирается ИНДЕКСОМ в перечне, чтобы правка перечня не разошлась с контролем молча»).
+# Правило заведено планом 15-31 (решение владельца Г-1 «Правила сейчас»).
+#
+# СОСТАВ СНЯТ ИСТОРИЕЙ, А НЕ НАБРАН РУКАМИ (план 15-31, 2026-09-26): функции, которые коммит
+# `9809b643` («каждая ветвь гейта цепи предков исполняется контролем») завёл в этот файл и
+# которые стоя́т в нём сегодня. Коммит завёл ТРИ контроля; третий,
+# `test_control_a_trapping_ancestor_reddens`, СНЯТ планом 10-42 (приписка выше у
+# `_NON_STATIC_POSITION`), и его преемник перебирает КАНОН — ВЫПИСАННЫЙ литералами
+# НАМЕРЕННО (`ANCESTOR_TRAP_CANON`: «довод плана 10-38 против литеральной копии остаётся
+# верным и закрывается здесь, а не отменяется» — правилом согласия канона с перечнями).
+# Канон и преемник поэтому в состав НЕ входят: их литералы — решение плана 10-42, а не
+# нарушение запрета плана 10-38. Состав сверяет с историей
+# `tests/test_planning/test_executed_plans_kept_their_scope.py`.
+PLAN_10_38_ANCESTOR_CHAIN_CONTROLS = (
+    "test_control_a_banner_lift_block_without_a_fixed_position_reddens",
+    "test_control_a_layer_on_an_in_flow_ancestor_does_not_redden",
+)
+
+
+def _gate_property_names() -> frozenset[str]:
+    """Имена свойств, которые контроль может взять из перечня: оба перечня групп, свойство
+    слоя, свойство намерения и имена канона."""
+    return frozenset(
+        CONTAINING_BLOCK_PROPERTIES
+        + STACKING_CONTEXT_PROPERTIES
+        + (LAYER_PROPERTY, INTENT_PROPERTY)
+        + tuple(case.prop for case in ANCESTOR_TRAP_CANON)
+    )
+
+
+def property_literals_in(function: ast.FunctionDef, names: frozenset[str]) -> list[str]:
+    """Строковые литералы исполняемого тела функции, выписывающие имя свойства из `names`:
+    литерал, равный имени, либо литерал объявления `имя: значение`. Строка документации —
+    проза, а не исполняемый код, и не читается."""
+    body = list(function.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    declaration = re.compile(
+        r"(?<![\w-])(" + "|".join(re.escape(name) for name in sorted(names)) + r")\s*:"
+    )
+    findings: list[str] = []
+    for statement in body:
+        for node in ast.walk(statement):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if node.value.strip() in names or declaration.search(node.value):
+                findings.append(
+                    f"`{function.name}`, строка {node.lineno}: литерал {node.value!r}"
+                )
+    return findings
+
+
+def test_the_ancestor_chain_controls_take_property_names_from_the_canon():
+    """КОНТРОЛИ ЦЕПИ ПРЕДКОВ ПЛАНА 10-38 НЕ ВЫПИСЫВАЮТ ИМЁН СВОЙСТВ ЛИТЕРАЛАМИ (`10-38#5`).
+
+    Каждая функция состава `PLAN_10_38_ANCESTOR_CHAIN_CONTROLS` стои́т в модуле (снятая
+    функция — отказ, а не зелень: состав разошёлся бы с деревом), и ни один строковый литерал
+    её исполняемого тела не равен имени свойства из перечней гейта и канона и не объявляет его.
+    """
+    names = _gate_property_names()
+    assert names, "перечни свойств пусты — правило судило бы пустоту"
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    absent = [name for name in PLAN_10_38_ANCESTOR_CHAIN_CONTROLS if name not in functions]
+    assert not absent, f"контролей состава нет в модуле: {absent} — состав разошёлся с деревом"
+    findings = [
+        finding
+        for name in PLAN_10_38_ANCESTOR_CHAIN_CONTROLS
+        for finding in property_literals_in(functions[name], names)
+    ]
+    assert not findings, (
+        "контроль цепи предков выписал имя свойства литералом там, где его можно взять из "
+        "перечня:\n" + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+def test_control_a_control_that_writes_a_property_name_literally_reddens():
+    """Зубы на синтетике: литерал `"opacity"` и литерал объявления `"opacity: 0.5"` в теле
+    контроля названы; имя, взятое индексом из перечня, и то же слово в строке документации —
+    нет."""
+    names = _gate_property_names()
+    source = (
+        "def test_control_x(tmp_path):\n"
+        '    """Доктóрит `opacity` у предка."""\n'
+        "    first = declare(STACKING_CONTEXT_PROPERTIES[2])\n"
+        '    second = declare("opacity")\n'
+        '    third = inject("opacity: 0.5")\n'
+    )
+    function = ast.parse(source).body[0]
+    findings = property_literals_in(function, names)
+    assert [finding.split(": литерал ")[1] for finding in findings] == [
+        "'opacity'",
+        "'opacity: 0.5'",
+    ], findings
+    assert STACKING_CONTEXT_PROPERTIES[2] == "opacity", "индекс синтетики разошёлся с перечнем"
+
+
+# ⚠️ СЛОИ ТАБЛИЦЫ НЕ ВЫПИСЫВАЮТСЯ В ИСПОЛНЯЕМЫЙ КОД ПРАВИЛ ЭТОГО МОДУЛЯ (запреты `10-37#5` —
+# «ЛИТЕРАЛОВ СЛОЯ В ИСПОЛНЯЕМОМ КОДЕ ПРАВИЛ НЕ ПОЯВЛЯЕТСЯ: … числа читаются из таблицы и
+# сличаются между собой» — и `10-51#1` — «ЧИСЛО СЛОЯ В ПРАВИЛО НЕ ВЫПИСЫВАЕТСЯ: оба слоя
+# читаются из таблицы и сличаются между собой»). Правило заведено планом 15-32.
+#
+# ПРОЧТЕНИЕ «Б», ВЫБРАННОЕ ВЛАДЕЛЬЦЕМ (`chubav`, 2026-09-26, чекпойнт плана 15-32, выбранный
+# вариант «Accept all 8 (Recommended)», а не слова владельца): «литерал слоя» — это ЧИСЛО СЛОЯ
+# ТАБЛИЦЫ, то есть слой панели и слой подъёма заготовок, о которых говорят оба запрета («оба
+# слоя»). Оба числа правило ЧИТАЕТ из таблицы тем же разбором, которым их сличает правило порядка
+# слоёв, и ни одного не выписывает само. Прочтение «А» (план 15-13: любое значение `z-index` в
+# коде правил) владелец не выбрал: синтетическое значение доктóривания в каноне
+# `ANCESTOR_TRAP_CANON` (решение плана 10-42) и в контроле плана 10-37 слоем таблицы не является.
+#
+# ПРЕДМЕТ — весь исполняемый код этого модуля: сюда планы 10-33, 10-37 и 10-51 писали свои
+# правила (замер истории: их коммиты трогали в суите только этот файл). Строки документации —
+# проза и не читаются; комментарии в дерево разбора не входят.
+#
+# ЧЕГО ПРАВИЛО НЕ УТВЕРЖДАЕТ. Оно не судит другие модули суиты: в
+# `tests/test_pages/test_failure_banner_invariants.py` (план 15-27/15-28) и
+# `tests/test_templates/test_htmx_markup_gates.py` числа слоёв стоят в синтетических копиях
+# таблицы (замер плана 15-32: 5 и 2 места), и запреты Фазы 10 о них не говорят. И оно не судит
+# синтетическое значение, не равное слою таблицы (прочтение «Б»).
+def _table_layers(path: Path) -> frozenset[int]:
+    """Слои таблицы, о которых говорят `10-37#5` и `10-51#1`: слой блока панели и слой блока
+    подъёма заготовок — разбором таблицы, тем же, что сличает их правило порядка слоёв."""
+    rules = _css_rules_of(path)
+    sources = [rule for rule in rules if rule[0] == MODAL_PANEL_SELECTOR] + [
+        rule
+        for rule in rules
+        if any(_selector_lifts_banner(rule[0], banner_id) for banner_id in FAILURE_BANNER_IDS)
+    ]
+    return frozenset(
+        layer for layer in (_css_layer(body) for _selector, body, _raw in sources) if layer is not None
+    )
+
+
+def _docstring_constants(tree: ast.AST) -> set[int]:
+    """Узлы строк документации модуля, классов и функций — проза, а не исполняемый код."""
+    found: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                found.add(id(body[0].value))
+    return found
+
+
+def layer_literals_in(source: str, layers: frozenset[int]) -> list[str]:
+    """Литералы исполняемого кода модуля, выписывающие слой таблицы: целое, равное слою, и
+    строка, где слой стоит отдельным числом (`"z-index: …"`, `"…"`). Число внутри другого числа
+    (`"…0px"`, `"….5"`) отдельным не является. Строки документации не читаются."""
+    if not layers:
+        return []
+    number = re.compile(
+        r"(?<![\w.])(" + "|".join(str(layer) for layer in sorted(layers)) + r")(?![\w.])"
+    )
+    tree = ast.parse(source)
+    prose = _docstring_constants(tree)
+    found: list[tuple[int, int, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or id(node) in prose:
+            continue
+        value = node.value
+        integer = isinstance(value, int) and not isinstance(value, bool) and value in layers
+        text = isinstance(value, str) and number.search(value)
+        if integer or text:
+            found.append((node.lineno, node.col_offset, f"строка {node.lineno}: литерал {value!r}"))
+    return [finding for _line, _column, finding in sorted(found)]
+
+
+def test_no_layer_of_the_table_is_written_into_the_shell_rules():
+    """СЛОИ ТАБЛИЦЫ НЕ ВЫПИСАНЫ В ИСПОЛНЯЕМЫЙ КОД ЭТОГО МОДУЛЯ (`10-37#5`, `10-51#1`, прочтение «Б»).
+
+    Слои читаются из таблицы (слой панели и слой подъёма — два блока, два числа). Ни один литерал
+    исполняемого кода модуля не равен им и не несёт их отдельным числом. Антивакуум: оба слоя
+    найдены — на таблице без них правило судило бы пустоту.
+    """
+    layers = _table_layers(_app_css_path())
+    assert len(layers) == 2, (
+        f"слоёв панели и подъёма в таблице найдено {sorted(layers)}, а не два — правилу нечего "
+        "искать, и оно зеленело бы вакуумом"
+    )
+    findings = layer_literals_in(Path(__file__).read_text(encoding="utf-8"), layers)
+    assert not findings, (
+        "число слоя таблицы выписано в код правил — правка таблицы разошлась бы с правилом "
+        "молча:\n" + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+def test_control_a_layer_number_written_into_a_rule_reddens():
+    """Зубы на синтетике и на доктóренной копии модуля: слой таблицы целым, строкой объявления и
+    строкой отдельного числа назван; то же число в строке документации, синтетическое значение
+    доктóривания, число внутри другого числа и слой, взятый из таблицы, — нет."""
+    low, high = sorted(_table_layers(_app_css_path()))
+    layers = frozenset({low, high})
+    source = (
+        f"LIFT = {high}\n\n\n"
+        "def test_x(css):\n"
+        f'    """Слой {high} назван в прозе."""\n'
+        f"    assert _css_layer(css) == {low}\n"
+        f'    declared = "z-index: {high};"\n'
+        "    trap = \"z-index: 3\"\n"
+        f'    wide = "{low}0px"\n'
+        "    taken = _css_layer(css)\n"
+    )
+    findings = layer_literals_in(source, layers)
+    assert [finding.split(": литерал ")[0] for finding in findings] == [
+        "строка 1",
+        "строка 6",
+        "строка 7",
+    ], findings
+    live = Path(__file__).read_text(encoding="utf-8")
+    assert layer_literals_in(live, layers) == []
+    doctored = live + f"\n\ndef test_doctored_rule():\n    assert value == {high}\n"
+    assert len(layer_literals_in(doctored, layers)) == 1
+
+
+# ⚠️ `_template_chain` ИЗ `tests/test_pages/test_hx_location_destinations.py` НЕ ПЕРЕИСПОЛЬЗУЕТСЯ
+# ДЛЯ ПОСТРОЙКИ ЦЕПИ (запрет `10-38#1`: «`_template_chain` … НЕ ПЕРЕИСПОЛЬЗУЕТСЯ: его докстринг
+# объявляет границей ИЗЪЯТИЕ подключения макросов, а рычаг подключается именно им — правило на
+# этой цепи было бы вакуумно зелёным при любой разметке»). Правило заведено планом 15-32.
+#
+# ПРОЧТЕНИЕ ВЫЧИТАЕМОГО, ВЫБРАННОЕ ВЛАДЕЛЬЦЕМ (`chubav`, 2026-09-26, чекпойнт плана 15-32,
+# выбранный вариант «(а) subtraction reading (Recommended)», а не слова владельца): цепь правила
+# не СТРОИТСЯ из `_template_chain`; ввоз ТОЛЬКО ВЫЧИТАЕМЫМ допустим. Букву «не переиспользуется»
+# нарушил сам план 10-38 (`2bfa658c`): правило изъятия шелла вычитает цепь из своего графа
+# (`_template_graph_from(…) - _template_chain(…)`), чтобы выделить рёбра подключения макросов, а
+# не строит на ней правило. Действующие правила этого модуля ради буквы не правятся.
+#
+# ПРЕДМЕТ — каждый модуль суиты, кроме модуля-владельца: каждое употребление имени (ввезённое
+# имя под любым псевдонимом, атрибут модуля, `getattr` со строкой имени) обязано быть ВЫЗОВОМ,
+# стоящим ПРАВЫМ операндом вычитания. ЧЕГО ПРАВИЛО НЕ УТВЕРЖДАЕТ: оно не судит модуль-владелец
+# (там функция определена и служит своим правилам) и не судит вызов по имени, собранному в
+# рантайме иначе, чем `getattr` со строкой.
+TEMPLATE_CHAIN = "_template_chain"
+TEMPLATE_CHAIN_OWNER = "tests/test_pages/test_hx_location_destinations.py"
+TEMPLATE_CHAIN_MODULE = "tests.test_pages.test_hx_location_destinations"
+
+
+def template_chain_reuses(source: str) -> list[str]:
+    """Употребления `_template_chain` в исходнике, кроме вызова правым операндом вычитания."""
+    tree = ast.parse(source)
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == TEMPLATE_CHAIN_MODULE
+        for alias in node.names
+        if alias.name == TEMPLATE_CHAIN
+    }
+    uses: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in imported and isinstance(node.ctx, ast.Load):
+            uses.append(node)
+        elif isinstance(node, ast.Attribute) and node.attr == TEMPLATE_CHAIN:
+            uses.append(node)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and any(
+                isinstance(argument, ast.Constant) and argument.value == TEMPLATE_CHAIN
+                for argument in node.args
+            )
+        ):
+            uses.append(node)
+    findings: list[str] = []
+    for use in uses:
+        call = parents.get(use)
+        operation = parents.get(call) if call is not None else None
+        subtrahend = (
+            isinstance(call, ast.Call)
+            and call.func is use
+            and isinstance(operation, ast.BinOp)
+            and isinstance(operation.op, ast.Sub)
+            and operation.right is call
+        )
+        if not subtrahend:
+            findings.append(f"строка {use.lineno}: `{ast.unparse(call if call is not None else use)}`")
+    return findings
+
+
+def _template_chain_readers() -> dict[str, str]:
+    """Модули суиты, кроме владельца, в тексте которых стоит имя `_template_chain`."""
+    return {
+        path.relative_to(PROJECT_ROOT).as_posix(): text
+        for path in sorted((PROJECT_ROOT / "tests").rglob("*.py"))
+        if path.relative_to(PROJECT_ROOT).as_posix() != TEMPLATE_CHAIN_OWNER
+        for text in [path.read_text(encoding="utf-8")]
+        if TEMPLATE_CHAIN in text
+    }
+
+
+def test_the_template_chain_is_reused_only_as_a_subtrahend():
+    """`_template_chain` НЕ СТРОИТ ЦЕПЬ НИ ОДНОГО ПРАВИЛА ВНЕ СВОЕГО МОДУЛЯ (`10-38#1`, прочтение
+    вычитаемого): каждое употребление — вызов правым операндом вычитания.
+
+    Антивакуум: функция определена в модуле-владельце (имя живое), и вселенная читателей непуста —
+    этот модуль её имя несёт.
+    """
+    owner = (PROJECT_ROOT / TEMPLATE_CHAIN_OWNER).read_text(encoding="utf-8")
+    assert any(
+        isinstance(node, ast.FunctionDef) and node.name == TEMPLATE_CHAIN
+        for node in ast.parse(owner).body
+    ), f"`{TEMPLATE_CHAIN}` в `{TEMPLATE_CHAIN_OWNER}` не определена — судить нечего"
+    readers = _template_chain_readers()
+    assert Path(__file__).relative_to(PROJECT_ROOT).as_posix() in readers, readers.keys()
+    findings = [
+        f"{path}, {finding}"
+        for path, text in readers.items()
+        for finding in template_chain_reuses(text)
+    ]
+    assert not findings, (
+        f"`{TEMPLATE_CHAIN}` переиспользован для постройки цепи, а не вычтен — правило на этой "
+        "цепи было бы вакуумно зелёным при любой разметке:\n"
+        + "\n".join(f"  — {line}" for line in findings)
+    )
+
+
+def test_control_a_template_chain_reused_to_build_a_chain_reddens():
+    """Зубы: вызов под псевдонимом, через атрибут модуля, левым операндом, голой ссылкой и через
+    `getattr` названы; вызов правым операндом вычитания — нет; доктóренная копия живого модуля
+    (вычитание заменено пересечением) названа."""
+    head = f"from {TEMPLATE_CHAIN_MODULE} import {TEMPLATE_CHAIN} as chain, other\n"
+    module = "from tests.test_pages import test_hx_location_destinations as d\n"
+    cases = {
+        "вычитаемое": (head + "edges = graph - chain(root)\n", 0),
+        "псевдоним": (head + "edges = chain(root)\n", 1),
+        "атрибут модуля": (module + f"edges = d.{TEMPLATE_CHAIN}(root)\n", 1),
+        "левый операнд": (head + "edges = chain(root) - graph\n", 1),
+        "голая ссылка": (head + "builder = chain\n", 1),
+        "getattr": (module + f'edges = getattr(d, "{TEMPLATE_CHAIN}")\n', 1),
+    }
+    for kind, (source, expected) in cases.items():
+        assert len(template_chain_reuses(source)) == expected, (kind, template_chain_reuses(source))
+    live = Path(__file__).read_text(encoding="utf-8")
+    assert template_chain_reuses(live) == []
+    anchor = f"- {TEMPLATE_CHAIN}(AUTH_SHELL_ROOT)"
+    assert live.count(anchor) == 1, "якоря подмены нет — вычитание в правиле изъятия шелла сменилось"
+    doctored = live.replace(anchor, f"& {TEMPLATE_CHAIN}(AUTH_SHELL_ROOT)")
+    assert len(template_chain_reuses(doctored)) == 1
+
+
 # Имена трёх групп гейта. Одно место сборки на весь модуль: две копии слова
 # разошлись бы при первой же правке, и правило согласия сличало бы группу с
 # опечаткой в её названии.
@@ -8269,7 +8634,13 @@ def _dismiss_control_findings(path: Path) -> tuple[str, ...]:
           обход всей страницы, и цена эта берётся не здесь.
     Плюс пятое: идентификатор органа равен объявленному — им сценарий находит
     орган, и разойдясь, он находил бы НИЧЕГО молча.
+
+    Ожидаемое доступное имя — ПО УЗЛУ, из единственного носителя
+    `BANNER_DISMISS_ACCESSIBLE_NAMES` (план 15-07; летопись — в комментарии
+    «Доступное имя органа снятия» выше).
     """
+    from tests.test_templates.test_banner_dismiss import BANNER_DISMISS_ACCESSIBLE_NAMES
+
     findings: list[str] = []
     for banner_id in FAILURE_BANNER_IDS:
         line = _failure_banner_node_line(path, banner_id)
@@ -8305,10 +8676,11 @@ def _dismiss_control_findings(path: Path) -> tuple[str, ...]:
                 "      следствие: узел без роли в порядок обхода с клавиатуры "
                 "не попадает, и человек с клавиатурой выхода не получает"
             )
-        if f'aria-label="{FAILURE_BANNER_DISMISS_LABEL}"' not in tag:
+        expected_label = BANNER_DISMISS_ACCESSIBLE_NAMES.get(banner_id, "")
+        if not expected_label or f'aria-label="{expected_label}"' not in tag:
             findings.append(
                 f"#{banner_id}: у органа снятия НЕТ доступного имени "
-                f"`{FAILURE_BANNER_DISMISS_LABEL}`\n"
+                f"`{expected_label}`\n"
                 f"      получено:  {tag}\n"
                 "      следствие: вспомогательные технологии назовут его "
                 "«флажок» и ничем больше"
