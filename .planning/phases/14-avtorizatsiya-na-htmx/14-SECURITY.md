@@ -59,7 +59,7 @@ created: "2026-09-23"
 | T-14-19 | Repudiation (самозаверение обхода) | `14-UAT.md` | low | mitigate | `tests/test_planning/test_the_walkthrough_cannot_self_certify.py`; файл обхода — `status: testing`, девять пустых таблиц отметок, девять `result: [pending]` | closed |
 | T-14-20 | Tampering (преждевременная отметка требований) | REQUIREMENTS.md | low | mitigate | `tests/test_planning/test_requirement_completion_follows_verification.py`; SIGN-01…03 остаются `[ ]` / `Pending` — `mark-complete` не вызывался ни одним планом | closed |
 | T-14-08 | Spoofing (подделка входа, login CSRF) | форма входа | medium | accept | Вне объёма фазы: решение владельца, `14-CONTEXT.md` §Deferred Ideas. `SameSite=Lax`; `HX-Request` проверкой безопасности не является | closed (accepted) |
-| T-14-09 (14-01) / T-14-31 (14-02) / T-14-32 (14-04) | Spoofing / Info Disclosure (перебор пароля, перечисление адресов) | `login_submit`, шаги отправки кода | medium | accept | Вне объёма фазы (CONTEXT Deferred); тексты переехали ДОСЛОВНО (D-15) — фаза различимость ответов не создавала | closed (accepted) |
+| T-14-09 (14-01) / T-14-31 (14-02) / T-14-32 (14-04) | Spoofing / Info Disclosure (перебор пароля, перечисление адресов) | `login_submit`, шаги отправки кода | medium | accept | Вне объёма фазы (CONTEXT Deferred); тексты переехали ДОСЛОВНО (D-15), но КОДЫ ответа фаза изменила по D-03 — на шагах отправки кода исходы различимы по статусу 422/200 (WR-03). Перепринято 2026-10-07 с исправленным основанием, см. R-14-02 | closed (accepted) |
 | T-14-21 | Elevation of Privilege (переигрывание проверенного токена восстановления) | `forgot_password_reset` | high | accept | **Заведена ПОСЛЕ планирования** — находка ревизии кода (CR-02). См. «Вне реестра планирования» ниже | closed (accepted) |
 | T-14-SC | Tampering (цепочка поставки) | установки пакетов | low | accept | Фаза не устанавливает ни одного пакета (RESEARCH §Package Legitimacy Audit) — проверено: в объёме фазы нет ни одного файла манифеста зависимостей | closed (accepted) |
 
@@ -105,11 +105,29 @@ created: "2026-09-23"
 | Risk ID | Threat Ref | Rationale | Accepted By | Date |
 |---------|------------|-----------|-------------|------|
 | R-14-01 | T-14-08 | Login CSRF вне объёма фазы — записанное решение владельца (`14-CONTEXT.md` §Deferred Ideas); перевод на htmx поверхность не менял | chubav | 2026-09-22 |
-| R-14-02 | T-14-09 (14-01) / T-14-31 (14-02) / T-14-32 (14-04) | Перебор и перечисление вне объёма; тексты переехали дословно по D-15 | chubav | 2026-09-22 |
+| R-14-02 | T-14-09 (14-01) / T-14-31 (14-02) / T-14-32 (14-04) | Перебор и перечисление вне объёма. Тексты переехали дословно по D-15, но фаза СОЗДАЛА однобитовый оракул по коду ответа: `/forgot-password/send-code` отвечает 422 на неизвестный адрес и 200 на известный, `/register/send-code` — 422 на занятый и 200 на свободный; до фазы оба исхода отвечали 200. 422 на ошибке — предметное решение D-03. Починка — вместе с отложенной работой по перечислению адресов (`14-CONTEXT.md` §Deferred Ideas), todo `send-code-status-reveals-account` | chubav | 2026-10-07 |
 | R-14-03 | T-14-21 | Переигрывание проверенного токена восстановления: изъян старше фазы (доказано `git show fd69a26a`), D-15 запрещал чинить его в этой фазе, починка — отдельной задачей | chubav | 2026-09-23 |
 | R-14-04 | T-14-SC | Фаза не устанавливает пакетов | chubav | 2026-09-22 |
 
 *Accepted risks do not resurface in future audit runs.*
+
+⚠️ **Перепринятие R-14-02 — 2026-10-07, решение владельца `chubav`** (ответ на вопрос Q4
+`14-VERIFICATION.md`, круг 2, в прогоне `/gsd-execute-phase 14`; выбран вариант верификатора
+«перепринять с исправленным основанием»). Прежняя запись строки R-14-02 — основание «Перебор и
+перечисление вне объёма; тексты переехали дословно по D-15», дата 2026-09-22 — и прежнее основание
+строки реестра угроз «тексты переехали ДОСЛОВНО (D-15) — фаза различимость ответов не создавала»
+были верны для ТЕКСТОВ и неверны для КОДОВ: замер круга 2 (WR-03 / W-R2-02) нашёл в
+`fd69a26a:app/pages/auth.py` ноль вхождений `status_code=422`, а сегодня оба шага отправки кода
+отвечают на «плохой» исход через `respond_field_error` (422), на «хороший» — через `respond_screen`
+(200): `forgot_password_send_code` (`app/pages/auth.py:818` / `:841`), `register_send_code`
+(обратная полярность, `:311`). При CR-01 (нет сверки источника на девяти POST, R-14-01) оракул
+достижим и со стороннего сайта. Уровень (medium), диспозиция (`accept`) и статус
+(`closed (accepted)`) не менялись — исправлено ОСНОВАНИЕ. Починку держит
+`.planning/todos/pending/send-code-status-reveals-account.md`; 422 на неизвестном адресе
+закрепляет правило `tests/test_pages/test_auth_transport.py::test_an_unknown_email_keeps_the_address_and_answers_422_on_both_transports`,
+422 на занятом — `tests/test_pages/test_registration.py::test_send_code_rejects_existing_email`;
+починка обязана переписать их, а не обойти.
+
 
 ---
 
