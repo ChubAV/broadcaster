@@ -52,6 +52,15 @@ Alembic под SQLite поднимает `NotImplementedError`. Это свой�
 каждой из них в состоянии стартовой ревизии — работа своего размера, и её
 отсутствие здесь есть решение, а не недосмотр.
 
+    Летопись, план 16-03, 2026-10-08: таблиц теперь ДВЕ — `payments` и
+    `messenger_accounts`; до плана 16-03 сверялась одна, и это было верно, пока
+    номер аккаунта не появился в модели (D-04). Ревизия `0023` заводит колонки
+    `phone` и `phone_is_manual`, а `MessengerAccount` читают почти все страницы
+    и воркеры: отображённая колонка без ревизии уронила бы КАЖДОЕ чтение
+    аккаунтов `UndefinedColumn`. Абзац выше оставлен дословно — он запись своего
+    момента; обобщение на ВСЕ таблицы модели по-прежнему не сделано, и это
+    по-прежнему решение.
+
 ⚠️ СНИМОК СТАРТОВОЙ РЕВИЗИИ ШИРЕ ПРОВЕРЯЕМОЙ ТАБЛИЦЫ, И ЭТО НЕ РАСШИРЕНИЕ ПРЕДМЕТА.
 Ревизия `0020` правит `subscriptions` и роняет обе таблицы валюты сообщений, а
 `upgrade head` идёт ЧЕРЕЗ неё: снимок из одной таблицы платежей оборвал бы прогон
@@ -71,6 +80,17 @@ batch-режимом, а `upgrade head` идёт ЧЕРЕЗ неё: без эт�
 `payments`. Ограничение `schedules` этот файл не проверяет и проверить не может —
 это делает `tests/test_migrations/test_0022_schedules_active_requires_next_run.py`,
 а здесь три таблицы лежат ровно ради проходимости очереди.
+
+    Летопись, план 16-03, 2026-10-08: до плана 16-03 из `messenger_accounts` в
+    снимке лежали только колонки, без которых не создаётся таблица; ревизия
+    `0023` пересоздаёт её batch-режимом с `copy_from`, выбирающим ВСЕ колонки,
+    и на четырёх колонках `upgrade head` падал
+    `no such column: messenger_accounts.session_data` (замер разведки
+    2026-10-08) — состав расширен до полного. Теперь `messenger_accounts` —
+    уже не только условие проходимости, но и ВТОРОЙ предмет сверки (абзац о
+    границе объёма выше). Ограничение `ck_messenger_accounts_manual_requires_phone`
+    этот файл не проверяет — это делает
+    `tests/test_migrations/test_0023_messenger_account_phone.py`.
 """
 
 import sqlite3
@@ -81,6 +101,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
+from app.models.messenger_account import MessengerAccount
 from app.models.payment import Payment
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -162,8 +183,15 @@ CREATE TABLE payments (
 -- `0001_initial_schema.py` (таблица и оба индекса), `0002_add_schedule_timezone.py`
 -- (`timezone`) и `0012_schedules_account_id_nullable_set_null.py` (`account_id`
 -- стал NULL-совместимым с `ON DELETE SET NULL`); между `0012` и `0019` таблицу
--- не трогала ни одна ревизия. Из `ads` и `messenger_accounts` взяты только те
--- колонки, без которых не создаётся сама таблица.
+-- не трогала ни одна ревизия. Из `ads` взяты только те колонки, без которых не
+-- создаётся сама таблица.
+--
+-- `messenger_accounts` — ПОЛНОГО состава на `0019` (летопись, план 16-03): до
+-- него здесь лежали четыре колонки, и `copy_from` ревизии `0023` падал на
+-- `no such column: messenger_accounts.session_data`. Состав собран по
+-- `0001_initial_schema.py` (семь колонок) и `0014_sync_result_and_group_missing.py`
+-- (`last_synced_at`, `last_sync_result`); ревизии `0012` и `0022` таблицу лишь
+-- называют внешним ключом `schedules` и её колонок не меняют.
 CREATE TABLE ads (
     id INTEGER NOT NULL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -175,7 +203,12 @@ CREATE TABLE messenger_accounts (
     id INTEGER NOT NULL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     type VARCHAR(20) NOT NULL,
-    credentials TEXT
+    credentials TEXT NOT NULL,
+    session_data TEXT,
+    status VARCHAR(20) NOT NULL DEFAULT 'disconnected',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    last_synced_at DATETIME,
+    last_sync_result TEXT
 );
 
 CREATE TABLE schedules (
@@ -310,6 +343,43 @@ def test_every_mapped_payment_column_exists_at_head(db_at_head):
     """
     mapped = {column.name for column in Payment.__table__.columns}
     actual = _table_columns(db_at_head, "payments")
+
+    absent = missing_columns(mapped, actual)
+    assert not absent, (
+        "отображены моделью, но не заведены ни одной ревизией до головы: "
+        f"{absent}"
+    )
+
+
+def test_control_a_mapped_phone_column_absent_at_head_is_named():
+    """НЕГАТИВНЫЙ КОНТРОЛЬ для `messenger_accounts` — тот же довод, что выше.
+
+    Подаётся перечень отображённых колонок аккаунта и тот же перечень без
+    `phone`. Сверка обязана назвать пропавшую ПОИМЁННО. Колонка выбрана не
+    случайно: это ровно та колонка, ради которой таблица стала предметом файла
+    (план 16-03, D-04), — контроль показывает зубы сверки на её собственном
+    предмете, а не на чужом.
+    """
+    mapped = {column.name for column in MessengerAccount.__table__.columns}
+    without_one = mapped - {"phone"}
+
+    assert missing_columns(mapped, without_one) == ["phone"]
+
+
+def test_every_mapped_messenger_account_column_exists_at_head(db_at_head):
+    """⚠️ ОТОБРАЖЁННАЯ КОЛОНКА АККАУНТА БЕЗ РЕВИЗИИ = 500 НА КАЖДОМ ЧТЕНИИ.
+
+    `MessengerAccount` читают страницы аккаунтов, групп, расписаний, истории,
+    админки и все воркеры отправки; ORM выписывает в `SELECT` ПОЛНЫЙ перечень
+    отображённых колонок. Колонка номера (`phone`, `phone_is_manual`), заведённая
+    в модели и не заведённая ревизией, уронила бы каждый из этих путей
+    `UndefinedColumn` (D-04). Суита на `create_all` этого не видит по
+    построению — см. шапку файла.
+
+    Сверяется ГОЛОВНАЯ РЕВИЗИЯ РЕПОЗИТОРИЯ, не боевая база.
+    """
+    mapped = {column.name for column in MessengerAccount.__table__.columns}
+    actual = _table_columns(db_at_head, "messenger_accounts")
 
     absent = missing_columns(mapped, actual)
     assert not absent, (
