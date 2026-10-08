@@ -87,7 +87,55 @@ def phone_write_offences(source: str, path: str) -> list[str]:
     Чистая функция над текстом: исключения реестра здесь НЕ применяются, поэтому ею
     же доказывается, что в самом модуле-писателе запись видна.
     """
+    tree = ast.parse(source, filename=path)
+    found: list[tuple[int, int, str, str]] = []
+
+    def record(node: ast.AST, kind: str, subject: str) -> None:
+        found.append((node.lineno, node.col_offset, kind, subject))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                for attribute in _assigned_attributes(target):
+                    record(attribute, KIND_ASSIGNMENT, ast.unparse(attribute))
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            for attribute in _assigned_attributes(node.target):
+                record(attribute, KIND_ASSIGNMENT, ast.unparse(attribute))
+        elif isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name in WRITE_CALL_NAMES:
+                for keyword in node.keywords:
+                    if keyword.arg in PHONE_COLUMNS:
+                        record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
+
+    return [
+        f"{path}:{line} — {kind} — {subject}"
+        for line, _column, kind, subject in sorted(found)
+    ]
+
+
+def _assigned_attributes(target: ast.AST) -> list[ast.Attribute]:
+    """Атрибуты номера среди целей присваивания, включая распаковку кортежа.
+
+    Цель-имя (`phone: Mapped[...] = mapped_column(...)` в теле класса модели) не
+    судится: это объявление колонки, а не запись в неё.
+    """
+    if isinstance(target, ast.Attribute):
+        return [target] if target.attr in PHONE_COLUMNS else []
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [item for element in target.elts for item in _assigned_attributes(element)]
+    if isinstance(target, ast.Starred):
+        return _assigned_attributes(target.value)
     return []
+
+
+def _call_name(call: ast.Call) -> str | None:
+    """Последнее звено имени вызова: `update(...)` → `update`, `stmt.values(...)` → `values`."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
 
 
 def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
