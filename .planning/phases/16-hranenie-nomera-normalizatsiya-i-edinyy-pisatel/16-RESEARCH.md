@@ -1,0 +1,723 @@
+# Phase 16: Хранение номера, нормализация и единый писатель - Research
+
+**Researched:** 2026-10-08
+**Domain:** схема `messenger_accounts` (Alembic + SQLAlchemy async), нормализация номера (`phonenumberslite`), условная запись под гонкой, сквозные греп-гейты по исходникам (Python AST + JS-токенизатор), суита записей `tests/test_planning`
+**Confidence:** HIGH для поведения библиотеки, ревизии на SQLite, механики гонки и гейтов (всё замерено запуском в этом прогоне); MEDIUM для ветки PostgreSQL (не исполнялась — PG в окружении тестов нет)
+
+<user_constraints>
+## User Constraints (from CONTEXT.md)
+
+### Locked Decisions
+
+#### Уже заперто роадмапом, требованиями и решениями владельца 2026-10-08 (не пересматривать)
+- **D-01:** Ревизия `0023`, `down_revision = "0022"`, рукописная по образцу `0014`/`0021`/`0022`
+  (без автогена, `batch_alter_table` для SQLite). После `upgrade head` у **каждой** существующей
+  строки `phone IS NULL`, `phone_is_manual = false` — в том числе у MAX, где введённый номер
+  сейчас лежит в `credentials`: его переносом занимается дозаполнение (Фаза 20), а не ревизия.
+  `downgrade` до `0022` снимает обе колонки и больше ничего. — **Reversibility:** one-way —
+  выкат на бой идёт только вместе с невыкаченной очередью `0020…0023` (D-26, R-08-06).
+- **D-02:** Уникального индекса по номеру нет (один SIM законно даёт TG + WA + MAX; TG при
+  пересканировании создаёт новую строку).
+- **D-03:** CHECK в схеме по канону `0021`/`0022`: состояние «`phone_is_manual = true` при
+  `phone IS NULL`» невозможно. Именованное ограничение, проверяемое тестом ревизии.
+- **D-04:** `test_model_matches_head.py` расширяется на `messenger_accounts`: колонка в модели
+  без ревизии роняет суиту.
+- **D-05:** Нормализация — `phonenumberslite` (новая зависимость, в проекте её ещё нет; добавлять
+  через `just add`). Ручной ввод: `parse(text, "RU")` → `is_possible_number` → E.164.
+  Автономер: `region=None` и дописанный `+`. `is_valid_number` **не использовать**: метаданные
+  отстают, а `+888…` (Fragment) он отвергает.
+- **D-06:** Показ: `+7 999 123-45-67`. Сохранённый, но неразбираемый номер показывается как есть,
+  а не как «неизвестен». Мусор и слишком длинный ввод отвергаются, а не становятся «номером».
+- **D-07:** Автоисточник пишет **только** условным
+  `UPDATE … WHERE phone IS NULL AND NOT phone_is_manual`, а не чтением-проверкой-записью.
+  Ручная запись всегда пишет и ставит признак; очистка даёт `phone = NULL`,
+  `phone_is_manual = false` (после неё автоисточники снова вправе писать — PHONE-10).
+- **D-08:** Тест гонки с контролем-отрицанием: подмена условной записи на
+  чтение-проверку-запись краснит его.
+- **D-09:** Гейт приватности охватывает `app/`, `scripts/`, `wa_worker/`, `max_worker/`;
+  подложенная строка с номером доказывает, что гейт не вакуумен. Гейт сквозной: его называет
+  поимённо каждый план фаз 17–20.
+
+#### Маска номера (решение владельца, 2026-10-08)
+- **D-10:** Там, где номер нельзя показывать целиком (вывод скрипта дозаполнения, любой текст
+  для оператора), номер маскируется как **`+7 *** ***-**-67`**: видны код страны и **две**
+  последние цифры, остальные цифры заменены `*`, разбивка повторяет форму показа. Для номера,
+  который не разбирается, маска сохраняет только `+`, код страны (если извлекается) и две
+  последние цифры. Функция маски живёт рядом с нормализацией и форматированием (её потребитель —
+  Фаза 20).
+- **D-11:** В **журналы** приложения и воркеров номер не попадает даже в маске: только признак
+  наличия `phone_set=True/False`. Маска — для вывода, который человек читает, чтобы различить
+  аккаунты; журналу хватает признака и `account_id`.
+
+#### Принято по умолчанию при делегировании (владелец: «решить по умолчаниям»)
+- **D-12:** Модули по раскладке разведки: чистые функции — `app/services/phone.py`
+  (`normalize_manual`, `normalize_reported`, `format_phone`, `mask_phone`); единственный
+  писатель — `app/application/accounts/phone.py` (`record_reported_phone`,
+  `fill_reported_phone`, `set_manual_phone`). *Обоснование:* совпадает со слоями проекта
+  (`app/services/` — чистые сервисы, `app/application/` — сценарии с UoW) и с
+  `.planning/research/ARCHITECTURE.md`, на который уже ссылаются фазы 17–20.
+- **D-13:** «Единственный писатель» закрепляется греп-гейтом: присваивание `.phone =` /
+  `phone_is_manual` и `update(...).values(phone=...)` вне модуля-писателя (и вне ревизии/тестов)
+  краснит суиту, с подложенной строкой против вакуума. *Обоснование:* правило «ручное не
+  затирается» держится только при одном писателе; без гейта Фаза 19 или 20 может обойти модуль.
+- **D-14:** Предел длины ручного ввода — 32 символа сырого текста (до нормализации) и не более
+  15 цифр после неё (предел E.164); длиннее — отказ с текстом ошибки. Колонка — `String(16)`
+  (`+` и до 15 цифр). *Обоснование:* E.164 ограничивает номер 15 цифрами; 32 символа покрывают
+  любые пробелы, скобки и дефисы реального ввода и отсекают вставку мусора.
+- **D-15:** Целое число (`79991234567`) принимается автонормализацией наравне со строкой
+  (`str()` и дописанный `+`). *Обоснование:* критерий 3 роадмапа называет его явно; так отдаёт
+  номер Telethon.
+- **D-16:** Тест гонки — две сессии на одной файловой SQLite-базе (не `:memory:`) или
+  детерминированная перестановка: ручная запись вклинивается между «чтением» и «записью»
+  автоисточника; контроль-отрицание — подменённая реализация чтение-проверка-запись обязана
+  затереть ручное значение и тем покраснеть. Выбор механики — за планировщиком/разведкой,
+  требование одно: отрицание обязано реально краснеть, а не быть зелёным вакуумом.
+- **D-17:** Гейт приватности живёт в `tests/` (рядом с прочими сквозными греп-гейтами, по
+  образцу `tests/test_pages/test_htmx_post_pairs.py` и `tests/test_application/test_declared_invariants.py`),
+  сканирует вызовы журналов во всех четырёх деревьях: Python — `logger.*`/`log.*`/`logging.*`/
+  `print(`, JS — `log.*` (pino) и `console.*`. Краснеет на (а) литерал, похожий на номер, и
+  (б) передачу переменной/поля с именем `phone` (без `phone_set`) в вызов журнала. Исключения —
+  только поимённым реестром с причиной, по образцу прежних `*_EXCEPTIONS`.
+- **D-18:** Форма отказа нормализатора — исключение с русским текстом ошибки (или `None` для
+  автономера, который не разобрался). Русские тексты ошибок пишутся здесь, а показываются в
+  форме Фазы 18. *Обоснование:* автоисточник на мусоре должен молча оставить номер неизвестным
+  (PHONE-15), а ручной ввод — получить объяснение (PHONE-09).
+
+### Claude's Discretion
+- Точное имя CHECK-ограничения и тестового модуля ревизии (`test_0023_*`).
+- Табличный тест нормализации: состав строк сверх названных в критерии 3 (RU `8…`, `+7 (…)`,
+  `79991234567`, int, `+888…`, Казахстан, мусор, слишком длинный ввод, неразбираемый сохранённый).
+- Возвращаемое значение писателей (флаг «записано / не записано») — как удобнее фазам 19–20.
+
+### Deferred Ideas (OUT OF SCOPE)
+- Номер аккаунта MAX живёт вне журналов: переменная окружения `PHONE` контейнера (видна в
+  `docker inspect`) и файл `phone.txt` в томе сессии (`max_worker/main.py:296–305`,
+  `app/services/max_container_manager.py:59–60`). Гейт приватности PHONE-21 касается журналов и
+  этого не ловит. Кандидат в бэклог, если владелец захочет закрыть и это.
+- Журналы сторонних библиотек (Baileys/pino на уровне `warn`, pymax, Telethon) гейтом по нашим
+  исходникам не покрываются — граница гейта, назвать в его докстринге.
+</user_constraints>
+
+## Решения владельца в этом прогоне
+
+Оба решения: **владелец, 2026-10-08, прогон `/gsd-plan-phase 16`**.
+
+1. **Разведку запросили, хотя ROADMAP говорит «Research: не требуется».** Разведка узкая и
+   прицельная. Выбор библиотеки, раскладка модулей и ловушки вехи решены
+   (`.planning/research/*`) и здесь не пересматриваются. Задача разведки: замером проверить то,
+   что планы впишут в тесты, выбрать открытую механику (гонка, гейты) и дать раздел
+   `## Validation Architecture` (у проекта `workflow.nyquist_validation: true`).
+2. **Суита записей `tests/test_planning` красная на текущем дереве, и это не из-за фазы 16.**
+   Решение владельца: чинить ОТДЕЛЬНЫМ планом внутри фазы 16, в первой волне, без продуктового
+   кода. Правила учатся старту новой вехи, но **не ослабляются**: контроли-отрицания остаются и
+   обязаны краснеть; каждое изменённое объявленное число получает строку летописи по идиоме
+   проекта D-30/D-32 (прежнее значение названо, а не стёрто). Разбор всех семи правил и одного
+   восьмого, которое покраснеет при планировании, — раздел «Суита записей» ниже.
+
+> **Примечание о происхождении.** Посреди прогона координатор прислал перечень «находок», которые
+> не были получены этим прогоном, и затем отозвал его как недостоверный. Всё ниже получено
+> собственными замерами этого прогона. Одно совпадение названо прямо: имя CHECK
+> `ck_messenger_accounts_manual_requires_phone` — моя рекомендация по образцу
+> `ck_<таблица>_<правило>` (прецедент `ck_schedules_active_requires_next_run`), и оно совпадает со
+> строкой из отозванного сообщения. Независимым замером это не считается. Имя остаётся на
+> усмотрение планировщика (Claude's Discretion).
+
+<phase_requirements>
+## Phase Requirements
+
+| ID | Description | Research Support |
+|----|-------------|------------------|
+| PHONE-01 | номер хранится в E.164 в отдельном поле (ревизия `0023`, `down_revision = "0022"`); «неизвестен» — отдельное состояние; уникальности нет | §Ревизия 0023 (прототип замерен на SQLite: upgrade/downgrade, CHECK, сохранность FK); §Нормализация (таблица замеров); §Расширение `test_model_matches_head.py` (обязательное расширение снимка, замерено падение без него) |
+| PHONE-02 | ручной номер не затирается автоисточником, в том числе в гонке (условная запись) | §Единый писатель (rowcount, identity map, CHECK на очистке); §Механика теста гонки (замерено: условная запись держит ручное значение во всех позициях, чтение-проверка-запись затирает его в позиции «между чтением и записью»); §Гейт единственного писателя (0 нарушений на дереве) |
+| PHONE-21 | номера не попадают в журналы приложения, воркеров и вывод скрипта — только маска или признак | §Гейт приватности (на дереве: 370 вызовов журнала в Python, 68 в `wa_worker`, 0 срабатываний; синтетические контроли краснеют); §Маска D-10 (замерено `+7 *** ***-**-67`) |
+</phase_requirements>
+
+## Project Constraints (from CLAUDE.md)
+
+- Python 3.12, менеджер `uv`; команды через `just` (`just add <pkg>` = `uv add`, `just test` = `uv run pytest tests/ -v`). [VERIFIED: justfile:58-60 `add *packages:` / `uv add {{ packages }}`]
+- Стек: FastAPI + SQLAlchemy async + Alembic. Тесты на `sqlite+aiosqlite:///:memory:`, схема из модели (`create_all`). Фикстуры `client`, `db_session`, `auth_headers` в `tests/conftest.py`.
+- Перед чтением исходников ориентироваться через `graphify query`; после правки кода — `graphify update .`. Последний шаг должен стоять в каждом плане, правящем код.
+- Полная суита идёт ~40 минут. Исполнители гоняют целевые модули, но сквозные гейты обязаны называться в каждом плане поимённо (память проекта «Cross-cutting gates skipped by executors»).
+- Коммиты: гейт перед коммитом соединять через `&&`, а не `;` (память проекта).
+- Сборка: `uv run python -m compileall -q app main.py tests` (`workflow.build_command`).
+
+## Summary
+
+Разведка узкая. Всё, что попадёт в тесты, замерено запуском. Главные находки:
+
+1. **`phonenumberslite==9.0.41` существует** (опубликован 2026-10-08 10:50 UTC; проекту 12 лет, 274 выпуска, ~1,7 млн загрузок в неделю). Сторож пакетов gsd всё же дал `SUS` по причинам `too-new` / `unknown-downloads` / `no-repository`, поэтому перед `just add` нужен `checkpoint:human-verify`. Замеры по D-05 дали **три уточнения реализации**:
+   - (а) ручной путь обязан требовать `is_possible_number_with_reason(n) == IS_POSSIBLE`, а не `is_possible_number(n)`: семизначный «местный» номер `123-45-67` иначе проходит как `+71234567` (`IS_POSSIBLE_LOCAL_ONLY`);
+   - (б) автономер нельзя проверять через `is_possible_number`: Fragment `+888…` даёт `TOO_SHORT`. Правило автономера — «только цифры, 5–15 штук» плюс успешный `parse(…, None)`;
+   - (в) ручной ввод `+888 0123 4567` по D-05 **отвергается** (`TOO_SHORT`), а ручной `88801234567` без `+` молча становится российским `+78801234567`.
+
+   Показ RU даёт ровно `+7 999 123-45-67`, маска D-10 из формы показа — ровно `+7 *** ***-**-67`.
+2. **Ревизия `0023` прототипирована на копии каталога `alembic/`** (`copy_from` + `batch_alter_table`) и проходит на SQLite: обе колонки, `phone_is_manual` NOT NULL с умолчанием `0` у существующих строк, CHECK отвергает «ручной без номера» (и при UPDATE, и при попытке стереть номер с поднятым признаком), правила `ON DELETE` у `users` → `messenger_accounts` и у детей `groups`/`schedules` целы, downgrade возвращает ровно прежнюю DDL. **Важная находка:** при нынешнем снимке `messenger_accounts` в `test_model_matches_head.py` (4 колонки) `upgrade head` через такую `0023` **падает** (`no such column: messenger_accounts.session_data`). Расширение снимка — обязательная часть плана ревизии, а не только D-04.
+3. **Механика гонки выбрана:** файловая SQLite из двух сессий плюс детерминированная подмена `session.execute` у сессии автоисточника. Это прецедент `tests/test_services/test_payment_concurrency.py` (`_interleave_after_first_read`), сеамов в `app/` не добавляется. Ручная запись вклинивается перед каждым k-м оператором автоисточника и после его коммита. Замер: условный `UPDATE` сохраняет ручное значение во всех позициях. Чтение-проверка-запись в позиции «перед записью» даёт `('+79990000002', True)`: номер чужой, признак ручного стоит. Найдена ловушка вакуума: позиция больше числа операторов писателя не срабатывает молча, поэтому тест обязан утверждать, что ручная запись действительно сработала.
+4. **Гейты стартуют зелёными** (замер): приватность — 0 срабатываний на 370 вызовов журнала в Python (`app` 213, `scripts` 68, `max_worker` 89) и на 68 вызовов в `wa_worker/index.js`; единственный писатель — 0 нарушений в `app/`+`scripts/` при узком предикате (наивный предикат «любой `phone=`» дал бы 3 ложных срабатывания в `app/pages/accounts.py`). JS-парсера в Python-окружении нет, нужен токенизатор. Найдены два ложных срабатывания наивного правила, которые предикат обязан пропускать: `phone_set=account.phone is not None` и `mask_phone(phone)`.
+5. **Суита записей:** 7 красных правил подтверждены (`7 failed, 201 passed`). Найдено **восьмое, будущее красное**: перепись запретов (`test_plan_prohibitions_census.py`) покраснеет на первом же плане фазы 16 с `must_haves.prohibitions`, потому что для него нет строки реестра. Реестр лежит в архиве v2.1. Замер: синтетический `16-01-PLAN.md` даёт сироту биекции.
+
+**Primary recommendation:** пять планов; четыре в волне 1 (записи; зависимость и чистые функции; ревизия с моделью и расширенным снимком; гейт приватности), писатель с тестом гонки и гейтом писателя — в волне 2.
+
+## Architectural Responsibility Map
+
+| Capability | Primary Tier | Secondary Tier | Rationale |
+|------------|-------------|----------------|-----------|
+| Хранение номера и признака, инвариант «ручной без номера невозможен» | Database / Storage (`0023`, CHECK) | API / Backend (модель `MessengerAccount`) | Схема делает состояние невозможным (канон `0021`/`0022`); модель повторяет CHECK, чтобы суита на `create_all` его видела |
+| Нормализация, показ, маска | API / Backend — чистые функции `app/services/phone.py` | — | Нет БД и сети; зовут шаблоны (Фаза 17), форма (Фаза 18), скрипт (Фаза 20). Воркеры не нормализуют (ARCHITECTURE Anti-Pattern 2) |
+| Правило записи «ручное не затирается» | API / Backend — `app/application/accounts/phone.py` | Database (атомарность одного `UPDATE`) | Условие живёт в самом операторе, и гонку решает СУБД, а не Python |
+| Запрет обходных писателей | Тесты (AST-гейт) | — | Свойство кода, а не данных |
+| Приватность журналов | Тесты (AST + JS-токенизатор по `app/`, `scripts/`, `wa_worker/`, `max_worker/`) | — | Сквозное правило для будущих писателей фаз 17–20 |
+
+## Standard Stack
+
+### Core
+| Library | Version | Purpose | Why Standard |
+|---------|---------|---------|--------------|
+| phonenumberslite | 9.0.41 | `parse`, `is_possible_number_with_reason`, `format_number` (E164/INTERNATIONAL) | Порт libphonenumber, тот же API и модуль `phonenumbers`, что у полного пакета, без геокодера и оператора [VERIFIED: PyPI JSON `phonenumberslite/9.0.41` — wheel `phonenumberslite-9.0.41-py2.py3-none-any.whl`, 473205 байт, `requires_python >=2.5`; запуск `uv run --no-project --with phonenumberslite==9.0.41` → `version 9.0.41`] |
+| SQLAlchemy | 2.0.46 (lock) | Core `update().where().values()`, `rowcount` | Уже в проекте [VERIFIED: `uv run python -c` → `2.0.46`] |
+| Alembic | 1.18.4 | ревизия `0023`, `batch_alter_table(copy_from=…)` | Уже в проекте [VERIFIED: запуск → `1.18.4`] |
+| SQLite (тесты) | 3.53.1 | `ADD CONSTRAINT` не умеет, отсюда batch | [VERIFIED: `sqlite3.sqlite_version` → `3.53.1`] |
+
+### Supporting
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| `ast`, `tokenize` (stdlib) | 3.12 | гейты приватности и единственного писателя по Python | всегда; без новых зависимостей |
+| свой токенизатор JS на `re` | — | гейт приватности по `wa_worker/index.js` | JS-парсера в окружении нет [VERIFIED: в `.venv/site-packages` нет `esprima`/`pyjsparser`/`tree_sitter`; в `wa_worker/node_modules` нет `acorn`/`esprima`/`@babel`] |
+
+### Alternatives Considered
+| Instead of | Could Use | Tradeoff |
+|------------|-----------|----------|
+| JS-токенизатор в Python | `run_node_script` из `tests/conftest.py:407-465` и разбор средствами Node | Node есть (`v22.22.1`), но парсера JS без пакетов у Node нет; тянуть `acorn` — новая зависимость. Токенизатор достаточен: вызовы pino однострочные и многострочные с балансом скобок, контроли на синтетике |
+| Файловая SQLite + подмена `execute` | `asyncio.gather` двух сессий | Недетерминирован, «database is locked»; прецедент проекта прямо отверг (`test_payment_concurrency.py`, докстринг) |
+| Файловая SQLite | `:memory:` + `StaticPool` | `StaticPool` даёт обеим сессиям ОДНО соединение и одну транзакцию; независимых сессий не получится [ASSUMED]. Не нужен: файловая база в `tmp_path` — прецедент |
+
+**Installation:**
+```bash
+just add phonenumberslite==9.0.41   # = uv add phonenumberslite==9.0.41 → pyproject.toml [project].dependencies + uv.lock
+```
+Образы воркеров не затрагиваются: `max_worker/Dockerfile` ставит свой `requirements.txt`, `wa_worker` — Node. Нормализация живёт только в приложении [VERIFIED: `max_worker/Dockerfile:9-10` `COPY requirements.txt .` / `RUN pip install --no-cache-dir -r requirements.txt`]. Образ `web` подхватит пакет через `uv sync --frozen --no-dev` [VERIFIED: `Dockerfile:14,17` `COPY pyproject.toml uv.lock ./` / `RUN uv sync --frozen --no-dev`]. Пакета `phonenumbers`/`phonenumberslite` сейчас нет ни в `.venv`, ни в `uv.lock` (`grep -c` → `0`), ни в исходниках, так что конфликта двух пакетов одного модуля нет.
+
+## Package Legitimacy Audit
+
+| Package | Registry | Age | Downloads | Source Repo | Verdict | Disposition |
+|---------|----------|-----|-----------|-------------|---------|-------------|
+| phonenumberslite | PyPI | проект с 2014-03-19 (274 выпуска); версия 9.0.41 — от 2026-10-08 10:50 UTC (день прогона) | ~1,68 млн/нед. (pypistats `last_week: 1684566`) | `project_urls.homepage = https://github.com/daviddrysdale/python-phonenumbers` (сторож репозиторием не распознал) | [SUS] | Flagged — планировщик ставит `checkpoint:human-verify` перед `just add` |
+
+- Сторож gsd: `verdict: "SUS"`, `reasons: ["too-new","unknown-downloads","no-repository"]` (вывод `gsd-tools query package-legitimacy check --ecosystem pypi phonenumberslite`). Все три причины объяснимы: возраст считается от ВЕРСИИ, у PyPI нет поля загрузок, `homepage` не распознан как репозиторий. Но протокол требует человеческой проверки.
+- Автор `David Drysdale <dmd@lurklurk.org>` — тот же, что у полного `phonenumbers`. Полный `phonenumbers 9.0.41` выложен в 10:51:07, через 15 секунд после lite (PyPI JSON). Колесо — чистый Python, `postinstall`-скриптов у PyPI-колёс нет.
+- Пин `==9.0.41` заперт роадмапом. Если владелец на чекпойнте сочтёт пакет «слишком свежим», откат на `9.0.40` (2026-09-24) — его решение, не исполнителя.
+
+**Packages removed due to [SLOP] verdict:** нет
+**Packages flagged as suspicious [SUS]:** `phonenumberslite` — `checkpoint:human-verify` перед установкой.
+
+## Нормализация: замеры `phonenumberslite==9.0.41`
+
+Все строки ниже — вывод скрипта, запущенного `uv run --no-project --with phonenumberslite==9.0.41 python -I` в каталоге разведки, без правки `pyproject`/`uv.lock`. Поле `reason` — `is_possible_number_with_reason`: `{'IS_POSSIBLE': 0, 'INVALID_COUNTRY_CODE': 1, 'TOO_SHORT': 2, 'TOO_LONG': 3, 'IS_POSSIBLE_LOCAL_ONLY': 4, 'INVALID_LENGTH': 5}` (замерено `dir(ValidationResult)`). [VERIFIED: запуск]
+
+### Ручной путь `parse(text, "RU")`
+
+| Вход | E.164 | INTERNATIONAL | possible | reason | Итог по рекомендуемому правилу |
+|------|-------|---------------|----------|--------|-------------------------------|
+| `8 999 123-45-67` | `+79991234567` | `+7 999 123-45-67` | True | 0 | принять |
+| `+7 (999) 123-45-67` | `+79991234567` | `+7 999 123-45-67` | True | 0 | принять |
+| `79991234567` | `+79991234567` | `+7 999 123-45-67` | True | 0 | принять |
+| `89991234567`, `9991234567`, `(999) 123-45-67`, `+7-999-123-45-67` | `+79991234567` | `+7 999 123-45-67` | True | 0 | принять |
+| `   +7 999 123 45 67   ` (пробелы по краям) | `+79991234567` | `+7 999 123-45-67` | True | 0 | принять |
+| `+77011234567`, `8 701 123 4567`, `77011234567` (Казахстан) | `+77011234567` | `+7 701 123 4567` | True | 0 | принять (регион KZ) |
+| `+998901234567` | `+998901234567` | `+998 90 123 45 67` | True | 0 | принять |
+| `8-800-555-35-35` | `+78005553535` | `+7 800 555-35-35` | True | 0 | принять |
+| `８ ９９９ １２３ ４５ ６７` (полноширинные цифры) | `+79991234567` | `+7 999 123-45-67` | True | 0 | принять |
+| `tel:+79991234567` | `+79991234567` | — | True | 0 | принять |
+| **`123-45-67`**, `1234567` | `+71234567` | `+7 1234567` | **True** | **4** | **отвергнуть** — `is_possible_number` здесь True |
+| `+7 999 123-45-6` | `+7999123456` | — | False | 2 | отвергнуть |
+| `+7 999 123-45-678`, `+799912345678` (12 цифр) | `+799912345678` | — | False | 5 | отвергнуть |
+| `+7999123456789012` (16 цифр) | `+7999123456789012` | — | False | 3 | отвергнуть |
+| `1234567890123456` | `+71234567890123456` | — | False | 3 | отвергнуть |
+| `12` | `+712` | — | False | 2 | отвергнуть |
+| **`+888 0123 4567`** (Fragment) | `+88801234567` | `+888 01234567` | **False** | **2** | **по D-05 отвергается** (см. Open Questions, вопрос владельцу О-1) |
+| **`88801234567`** (Fragment без `+`) | **`+78801234567`** | `+7 8801234567` | **True** | 0 | **по D-05 принимается как РОССИЙСКИЙ номер — неверный номер молча** |
+| `+7 999 123 45 67 доб 5`, `… ext 12` | `+79991234567`, `extension='5'`/`'12'` | `… ext. 5` | True | 0 | **отвергнуть по `n.extension`**: иначе добавочный молча теряется |
+| `abc`, `привет`, `''`, `+`, `x`×33, `+1` | — | — | — | — | `NumberParseException`, `error_type=1` (`NOT_A_NUMBER`) |
+| `+0 999 123` | — | — | — | — | `NumberParseException`, `error_type=0` (`INVALID_COUNTRY_CODE`) |
+
+**Находки против буквы D-05/D-06** (это находки, решение не пересматривается):
+- **Ф-1.** `is_possible_number` считает возможным `IS_POSSIBLE_LOCAL_ONLY` [VERIFIED: исходник `is_possible_number` в 9.0.41 — `return (result == ValidationResult.IS_POSSIBLE or result == ValidationResult.IS_POSSIBLE_LOCAL_ONLY)`]. Буква D-05 пропустила бы `123-45-67` как `+71234567`, а это противоречит D-06 («мусор отвергается»). Рекомендация: ручной путь требует `is_possible_number_with_reason(n) == ValidationResult.IS_POSSIBLE`. Это строже буквы и не отменяет её смысла.
+- **Ф-2.** Ручной `+888…` по D-05 отвергается (`TOO_SHORT`), хотя критерий 3 называет `+888…` среди «допустимых написаний». В критерии `+888…` стоит после библиотечных форм, и автопуть его принимает (ниже). Табличный тест закрепляет Fragment через автопуть. Ручной Fragment — вопрос владельцу О-1, по умолчанию — буква D-05.
+- **Ф-3.** Добавочный номер (`доб.`/`ext`) разбирается, и E.164 его молча отбрасывает. Рекомендация: отказ ручного ввода при `n.extension`.
+
+### Автопуть (`region=None`, дописанный `+`, `int` через `str()`)
+
+| Сырой вход | Строка после `+` | E.164 | possible | reason | Итог по рекомендуемому правилу |
+|-----------|------------------|-------|----------|--------|-------------------------------|
+| `"79991234567"`, `79991234567` (int), `" 79991234567 "`, `"+79991234567"` | `+79991234567` | `+79991234567` | True | 0 | принять |
+| `"88801234567"` (Telethon, Fragment) | `+88801234567` | `+88801234567` | **False** | 2 | **принять** — поэтому `is_possible` в автопути НЕ применяется |
+| `888012345678` (int, Fragment 12 цифр) | `+888012345678` | `+888012345678` | False | 2 | принять |
+| `"77011234567"`, `"998901234567"` | — | `+77011234567`, `+998901234567` | True | 0 | принять |
+| `"12345"` | `+12345` | `+12345` | False | 2 | принять по правилу «5–15 цифр» STACK.md (граница) |
+| `"1234"` | `+1234` | — | — | — | отвергнуть (4 цифры < 5) |
+| `"7999123456789012"` (16 цифр) | — | — | — | 3 | отвергнуть (>15 цифр) |
+| `"7(999)1234567"` | `+7(999)1234567` | `+79991234567` | True | 0 | **отвергнуть** предпроверкой «только цифры»: автоисточник отдаёт цифры, всё прочее — сбой источника |
+| `"79991234567:12"` (сырой JID) | — | — | — | — | `NumberParseException` → `None` (и предпроверка цифр тоже) |
+| `"0"`, `"abc"`, `""` | — | — | — | — | `None` |
+
+**Рекомендуемое правило автопути (D-05 + D-15 + D-18):** `s = str(raw).strip()`; снять один ведущий `+`; `None`, если `s` пусто или не состоит из одних цифр ASCII, или длина вне 5…15; затем `parse("+" + s, None)`, при `NumberParseException` — `None` (отсекает несуществующий код страны: `+0…`, `+999…`); итог — `format_number(n, E164)`. `bool` отсекается явно до `str()`: `str(True) == "True"` и так не пройдёт проверку цифр, но лучше `isinstance(raw, bool)` [ASSUMED]. `is_valid_number` и `is_possible_number` не вызываются.
+
+### Показ `format_phone(stored)`
+
+| Сохранено | Показ | Как |
+|-----------|-------|-----|
+| `+79991234567` | `+7 999 123-45-67` | `format_number(parse(s, None), INTERNATIONAL)` [VERIFIED: запуск; пробелы обычные, `repr` без `\xa0`] |
+| `+77011234567` | `+7 701 123 4567` | то же (разбивка KZ отличается — ради этого и библиотека) |
+| `+88801234567` / `+888012345678` | `+888 01234567` / `+888 012345678` | разбирается, поэтому форматируется |
+| `+998901234567`, `+12025550123`, `+4915123456789` | `+998 90 123 45 67`, `+1 202-555-0123`, `+49 1512 3456789` | — |
+| `+79991234` (короткий, но разбирается) | `+7 9991234` | разбирается — не «как есть» |
+| `+999123456`, `garbage`, `+7abc` | **как есть** | `NumberParseException` (`error_type` 0/1) → вернуть сохранённую строку |
+| `None` | — | «неизвестен» — забота подписи Фазы 17, не `format_phone` (`parse(None)` даёт `NumberParseException`) |
+
+### Маска D-10 `mask_phone`
+
+Алгоритм на форме показа: цифры кода страны (всё до первого пробела INTERNATIONAL) и две последние цифры видны, остальные цифры заменены `*`, разделители сохранены. Замер:
+
+| E.164 | Показ | Маска |
+|-------|-------|-------|
+| `+79991234567` | `+7 999 123-45-67` | **`+7 *** ***-**-67`** (ровно образец D-10) |
+| `+77011234567` | `+7 701 123 4567` | `+7 *** *** **67` |
+| `+88801234567` | `+888 01234567` | `+888 ******67` |
+| `+998901234567` | `+998 90 123 45 67` | `+998 ** *** ** 67` |
+| `+12025550123` | `+1 202-555-0123` | `+1 ***-***-**23` |
+
+Код страны рекомендуется брать из `numobj.country_code` (`n.country_code` → `7`), а не из «до пробела», и сверять тестом. Для неразбираемого значения: `+`, затем `*` по числу цифр минус две, затем две последние цифры; если цифр меньше четырёх — сплошные `*`. Код страны из неразбираемой строки надёжно не извлекается: `+999123456` — несуществующий код, `+7abc12` — мусор. «Если извлекается» по D-10 честно сводится к «если разобралось» [ASSUMED — правило для неразбираемого предлагается, в замере только разложение цифр].
+
+## Ревизия `0023`
+
+### Образцы, прочитанные в этом прогоне
+- `0014` добавляет nullable-колонки в `messenger_accounts` через `op.add_column`, без batch. Литералы типов выписаны в ревизии и не импортируются из `app.models` [VERIFIED: alembic/versions/0014_sync_result_and_group_missing.py:30-57].
+- `0022` — канон «ограничение + ветки диалектов + `copy_from`» [VERIFIED: alembic/versions/0022_schedules_active_requires_next_run.py:168-177 — `revision = "0022"`, `down_revision = "0021"`, `CONSTRAINT_NAME = "ck_schedules_active_requires_next_run"`, `CONDITION = "NOT (is_active AND next_run_at IS NULL)"`]. PostgreSQL — `op.create_check_constraint`; SQLite — `batch_alter_table(…, copy_from=_schedules(with_constraint=False))` (там же, `:263-272`). Докстринг `:115-125`: на отражении SQLite терялись `ON DELETE`, поэтому состав таблицы выписан явно.
+- Модель повторяет условие константой, тест ревизии сверяет равенство [VERIFIED: app/models/schedule.py:46-57 — `ACTIVE_REQUIRES_NEXT_RUN = "NOT (is_active AND next_run_at IS NULL)"`, `ACTIVE_REQUIRES_NEXT_RUN_NAME = "ck_schedules_active_requires_next_run"`, `__table_args__ = (CheckConstraint(ACTIVE_REQUIRES_NEXT_RUN, name=ACTIVE_REQUIRES_NEXT_RUN_NAME,),)`; tests/test_migrations/test_0022_schedules_active_requires_next_run.py:499-500 — `assert revision.CONDITION == ACTIVE_REQUIRES_NEXT_RUN`, `assert revision.CONSTRAINT_NAME == ACTIVE_REQUIRES_NEXT_RUN_NAME`].
+- Состав `messenger_accounts` на `0022`: из `0001` — `id`, `user_id` (FK `users.id` `ondelete="CASCADE"`, NOT NULL), `type String(20)` NOT NULL, `credentials Text` NOT NULL, `session_data Text` NULL, `status String(20)` NOT NULL `server_default="disconnected"`, `created_at DateTime(timezone=True)` `server_default=sa.func.now()` NOT NULL [VERIFIED: alembic/versions/0001_initial_schema.py:56-75]; из `0014` — `last_synced_at DateTime(timezone=True)` NULL, `last_sync_result Text` NULL [VERIFIED: 0014:40-47]. Индексов у таблицы нет (в `0001` у неё нет `index=True`). На неё ссылаются `groups.account_id` (CASCADE) и `schedules.account_id` (SET NULL) [VERIFIED: app/models/group.py:50 `ForeignKey("messenger_accounts.id", ondelete="CASCADE")`; app/models/schedule.py:66 `ForeignKey("messenger_accounts.id", ondelete="SET NULL"), nullable=True`].
+- PRAGMA `foreign_keys` нигде не включается (`grep PRAGMA|foreign_keys` по `alembic/env.py`, `app/database.py`, `tests/conftest.py` — пусто). Поэтому пересоздание родительской таблицы на SQLite не каскадит удаление детей; замер ниже это подтверждает.
+
+### Прототип (замерен, в репозиторий не вносился)
+Копия `alembic/` и `alembic.ini` в каталоге разведки плюс файл `0023_proto.py`. База — снимок `SCHEMA_AT_START` из `test_model_matches_head.py`, где `messenger_accounts` расширен до полного состава `0019` и добавлена таблица `groups`. Затем `command.stamp(cfg, "0019")` и `command.upgrade(cfg, "head")`. Состав прототипа (форма, которую планировщик берёт за образец):
+
+```python
+TABLE = "messenger_accounts"
+CONSTRAINT_NAME = "ck_messenger_accounts_manual_requires_phone"   # дискреция; см. примечание о происхождении
+CONDITION = "NOT (phone_is_manual AND phone IS NULL)"             # форма 0022; замерены обе эквивалентные формы
+# PG: op.add_column(phone String(16) NULL); op.add_column(phone_is_manual Boolean NOT NULL server_default=sa.false());
+#     op.create_check_constraint(...)
+# SQLite: with op.batch_alter_table(TABLE, copy_from=_accounts(with_new=False, with_constraint=False)) as b:
+#             b.add_column(...phone...); b.add_column(...phone_is_manual...); b.create_check_constraint(CONSTRAINT_NAME, CONDITION)
+# downgrade: обратный порядок; SQLite — copy_from=_accounts(with_new=True, with_constraint=True), drop_constraint, drop_column×2
+```
+
+Результаты (вывод запуска) [VERIFIED: запуск прототипа]:
+- `head [('0023',)]`; колонки `… ('phone', 'VARCHAR(16)', 0, None, 0), ('phone_is_manual', 'BOOLEAN', 1, '0', 0)`.
+- Существующие строки: `rows [(1, '+79991234567', None, 0), (2, 'sess', None, 0)]`. У строки MAX `credentials` с номером не тронут, `phone IS NULL`, признак `0` — ровно D-01.
+- DDL после upgrade содержит `CONSTRAINT ck_messenger_accounts_manual_requires_phone CHECK (…)` и `FOREIGN KEY(user_id) REFERENCES users (id) ON DELETE CASCADE`. FK детей целы: `groups … 'CASCADE'`, `schedules … 'SET NULL'`; строка `groups` и привязка `schedules.account_id` пережили пересоздание.
+- CHECK: `update … set phone_is_manual=1` при `phone NULL` → `IntegrityError CHECK constraint failed: ck_messenger_accounts_manual_requires_phone`. `set phone=…, phone_is_manual=1` → OK. **`set phone=NULL` при поднятом признаке → тот же отказ**, поэтому очистка обязана менять обе колонки одним оператором. Два аккаунта с одним номером (`tg_user` и `wa`) вставляются без ошибки — уникальности нет (критерий 2).
+- downgrade до `0022`: `after down head [('0022',)]`, колонки ровно прежние девять, данные строк целы, DDL идентична исходной (FK `ON DELETE CASCADE` на месте, CHECK нет), строка `groups` цела.
+- Обе формы условия (`phone IS NOT NULL OR NOT phone_is_manual` и `NOT (phone_is_manual AND phone IS NULL)`) дают одинаковые отказы.
+
+**Ветка PostgreSQL не исполнялась.** В окружении нет тестового PG, а на хосте крутятся боевые контейнеры (`web-broadcaster`, `celery-*`), трогать их нельзя. Тесты ревизий проекта тоже идут только по SQLite, и `test_0022` прямо называет эту границу. Рендер `server_default=sa.false()` в `DEFAULT false` на PG и отсутствие пересоздания таблицы — [ASSUMED], и их надо назвать в шапке ревизии так же, как это сделано в `0022`.
+
+### Тест ревизии (`tests/test_migrations/test_0023_messenger_account_phone.py`)
+По образцу `test_0022`: синхронный, файловая база в `tmp_path`, явный `monkeypatch.setenv("DATABASE_URL", url)`, снимок схемы на `0022` (`users`, `messenger_accounts` полного состава, `groups`, `ads`, `schedules` — дети нужны для проверки FK), `command.stamp(config, "0022")`, затем настоящие `upgrade`/`downgrade`. Предметы:
+1. До ревизии колонок нет (половина утверждения, как `test_a_dead_row_is_accepted_before_the_upgrade`).
+2. После upgrade у каждой строки, включая MAX с номером в `credentials`, `phone IS NULL`, `phone_is_manual = 0`, а `credentials` не изменён.
+3. CHECK отвергает «ручной без номера» при INSERT и при UPDATE (обе стороны: поднять признак без номера и стереть номер при признаке); три законные пары (`NULL/0`, `номер/0`, `номер/1`) принимаются. Это защита от ограничения «запретить всё».
+4. Два аккаунта с одним номером сосуществуют (нет UNIQUE, критерий 2): `PRAGMA index_list(messenger_accounts)` пуст.
+5. Пересоздание не теряет `ON DELETE` (`PRAGMA foreign_key_list` у `messenger_accounts`, `groups`, `schedules`).
+6. downgrade снимает ровно две колонки и CHECK: `PRAGMA table_info` до upgrade равно после downgrade, данные целы.
+7. `revision.CONDITION == <константа модели>`, `revision.CONSTRAINT_NAME == <константа модели>`, `revision.down_revision == "0022"`.
+
+### Расширение `test_model_matches_head.py` (D-04) — обязательно в плане ревизии
+- Сейчас снимок держит `messenger_accounts` из четырёх колонок [VERIFIED: tests/test_migrations/test_model_matches_head.py:174-179 — `CREATE TABLE messenger_accounts ( id INTEGER NOT NULL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, type VARCHAR(20) NOT NULL, credentials TEXT );`], а `START_REVISION = "0019"` (`:89`). Комментарий над ним: «Из `ads` и `messenger_accounts` взяты только те колонки, без которых не создаётся сама таблица».
+- **Замер:** с этим снимком `upgrade head` через `0023` на `copy_from` падает: `sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) no such column: messenger_accounts.session_data`. Пересоздание выбирает все колонки `copy_from`. То есть ревизия без расширения снимка роняет и существующую проверку `payments`. С полным составом (`credentials TEXT NOT NULL`, `session_data TEXT`, `status VARCHAR(20) NOT NULL DEFAULT 'disconnected'`, `created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL`, `last_synced_at DATETIME`, `last_sync_result TEXT`) прогон доходит до `0023` [VERIFIED: оба запуска].
+- Что добавить: (а) снимок `messenger_accounts` полного состава на `0019` с летописью: прежняя граница «только колонки, без которых таблица не создаётся» названа и заменена с причиной; (б) `test_every_mapped_messenger_account_column_exists_at_head(db_at_head)` по образцу `test_every_mapped_payment_column_exists_at_head`; (в) отрицательный контроль `missing_columns(mapped, mapped - {"phone"}) == ["phone"]` на колонках `MessengerAccount.__table__`; (г) абзац шапки «ГРАНИЦА ОБЪЁМА… ОДНА таблица» переписать с летописью: было «одна таблица `payments`», стало «две».
+- Свойство «колонка в модели без ревизии роняет суиту» замерено косвенно: `missing_columns` — чистая разность множеств, а с прототипом головы колонки на месте. Красноту доказывает отрицательный контроль (в).
+
+## Единый писатель
+
+### Форма слоя (прочитано)
+- `app/application/accounts/` — сценарии принимают `AsyncSession` первым аргументом и не коммитят: транзакцией владеет вызывающий [VERIFIED: app/application/accounts/use_cases.py:69-89 — `async def detach_schedules_from_account(session: AsyncSession, account_id: int) -> int:` … `.execution_options(synchronize_session=False)` / `return result.rowcount or 0`; app/application/accounts/group_resync.py:27-28 — «не коммитит: транзакцией управляет вызывающий»]. UoW (`app/infrastructure/uow.py:10-40`) существует, но сценарии `accounts` его не берут. Писатель следует соседям: `session` аргументом, без `commit`.
+- Прецедент «compare-and-swap условным UPDATE» с прямым запретом read-check-write: `_claim_payment` [VERIFIED: app/services/payment_service.py:811-839 — `.where(Payment.yookassa_payment_id == yookassa_id, Payment.status.not_in(TERMINAL_STATUSES),)` … `.execution_options(synchronize_session=False)` / `return result.rowcount == 1`]. Его докстринг (`:815-829`) объясняет, почему это работает и на SQLite, и на PG. В бою он идёт на asyncpg (`pyproject.toml:11` `"asyncpg>=0.31.0"`, `.env.example:1` `postgresql+asyncpg://…`), то есть `rowcount == 1` на asyncpg уже эксплуатируется [CITED: in-repo прецедент; поведение драйвера — ASSUMED].
+
+### Замеры (aiosqlite, отдельная модель-двойник в каталоге разведки) [VERIFIED: запуск]
+- Условный `update(...).where(id, phone IS NULL, phone_is_manual IS false).values(phone=…).execution_options(synchronize_session=False)`: первый вызов — `rowcount == 1` (`True`), повторный — `False`.
+- С `synchronize_session=False` загруженный в ту же сессию объект остаётся устаревшим (`obj.phone stale: None`) до `refresh`. С умолчанием (`auto`) ORM-объект обновляется (`default sync_session obj.phone: +79990000001 True`).
+- Очистка, меняющая только `phone`, при поднятом признаке ловит `IntegrityError … CHECK constraint failed` — модель с CHECK в `__table_args__` даёт ту же защиту и суите на `create_all`.
+
+### Рекомендуемый контракт (дискреция D-12; удобен фазам 19–20)
+- `fill_reported_phone(session, account_id, raw) -> PhoneWrite`. Автоисточник для существующей строки (дозаполнение, опрос WA/MAX). `normalize_reported(raw)`, при `None` — `PhoneWrite.UNPARSEABLE` без обращения к базе. Затем ОДИН условный `UPDATE` с `synchronize_session=False`: `rowcount == 1` → `WRITTEN`, иначе `KEPT` («уже есть номер или ручной» — не ошибка). Фаза 20 различит «ручной» и «уже заполнен» своим отбором до записи; KEPT при гонке и есть «ручной успел первым».
+- `record_reported_phone(session, account, raw) -> PhoneWrite`. Новая строка мастера (Фаза 19): `await session.flush()`, если у объекта нет `id`, затем тот же условный оператор по `account.id`, а при `WRITTEN` значение отзеркаливается на объект (как `_mirror_claim`). ORM-присваивания `account.phone = …` нет вовсе, поэтому гейт писателя может запрещать присваивание и в самом модуле-писателе. Это строже D-13 и проще для гейта.
+- `set_manual_phone(session, account_id, text_or_none) -> str | None`. `normalize_manual(text)` поднимает исключение с русским текстом (D-18) до обращения к базе. Пустая строка или `None` — очистка: один `UPDATE … SET phone=NULL, phone_is_manual=false`. Иначе `SET phone=:e164, phone_is_manual=true`. Владение (`user_id`) проверяет страница Фазы 18; писатель принимает только `account_id`.
+- `PhoneWrite` — `enum.Enum` из трёх значений: `WRITTEN`, `KEPT`, `UNPARSEABLE` [ASSUMED — рекомендация, не замер].
+
+## Механика теста гонки (D-16 — выбор разведки)
+
+**Выбор: файловая SQLite (`tmp_path`) и ДВЕ независимые сессии одной фабрики; детерминированная подмена `session.execute` у сессии автоисточника.** Прецедент — `tests/test_services/test_payment_concurrency.py` [VERIFIED: :80-90 фикстура `sessions(tmp_path)` — `create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'concurrency.db'}")`; :119-136 `_interleave_after_first_read`; докстринг :24-31 — «Подменяется метод СЕССИИ, а не введённый ради теста крючок в боевом коде: сеамов для тестов в `app/` не добавляется» и «pysqlite … открывает транзакцию не на `SELECT`, а на первом операторе записи»].
+
+Форма (замерена на двойнике модели с тем же CHECK):
+- Помощник `run_interleaved(writer, position)`. Сидирует строку `(phone NULL, manual 0)`. Открывает сессию автоисточника и подменяет её `execute` обёрткой со счётчиком: перед вызовом номер `position` выполняется **ручная запись другой сессией с коммитом**. `position = 0` означает ручную запись строго после коммита автоисточника. Затем `await writer(auto, id, AUTO)`, `await auto.commit()`, чтение итога третьей сессией.
+- Позиции: `1…N`, где `N` — число вызовов `execute` у писателя (снимается прогоном без вклинивания), плюс `0`. Позиция «после k-го оператора и до коммита» запрещена: автоисточник держит блокировку записи SQLite, и ручная сессия ждала бы `database is locked`.
+- Утверждение для каждой позиции: итог `== (MANUAL, True)` **и ручная запись действительно состоялась** (флаг/счётчик).
+
+Замер [VERIFIED: запуск `race.py`]:
+```
+conditional manual-before-execute# 1 (1, False, ('+79990000001', True))
+conditional manual-before-execute# 2 (1, True,  ('+79990000002', False))   ← позиция 2 у писателя из ОДНОГО оператора не сработала: вакуум
+conditional manual-after-commit    0 (1, True,  ('+79990000001', True))
+rcw         manual-before-execute# 1 (1, False, ('+79990000001', True))
+rcw         manual-before-execute# 2 (2, True,  ('+79990000002', True))   ← чтение-проверка-запись ЗАТЁРЛА ручной номер, признак остался True
+rcw         manual-after-commit    0 (2, True,  ('+79990000001', True))
+```
+- Строка 2 — **ловушка вакуума**, найденная замером. Позиция за пределами числа операторов не вызывает ручную запись, и итог «автономер, не ручной» выглядит законным исходом. Поэтому позиции берутся из измеренного `N`, а флаг «ручная запись сработала» утверждается в каждой позиции.
+- Контроль-отрицание (D-08): тот же помощник, писатель — функция теста `read_check_write` (`select(phone, phone_is_manual)` → проверка в Python → безусловный `update().values(phone=…)`, оба оператора через `session.execute`). Утверждение: помощник называет позицию 2 нарушением, итог `('+79990000002', True)`. Отрицание детерминированно и краснеет, потому что подмена приходится ровно между чтением и записью.
+- Подменяется не боевой код, а писатель, поданный помощнику. Боевой `fill_reported_phone` и отрицание проходят через один и тот же помощник. Если исполнитель «упростит» боевой писатель до read-check-write, основной тест покраснеет так же, как отрицание.
+- Последовательные случаи — отдельные тесты в `test_account_phone_writer.py` на `db_session`: ручной, затем авто → ручной цел (`KEPT`); авто, затем ручной → ручной перезаписал; очистка, затем авто → `WRITTEN` (PHONE-10); авто на мусоре → `UNPARSEABLE`, строка не тронута.
+
+## Гейт единственного писателя (D-13)
+
+Замер по дереву AST-обходом [VERIFIED: запуск `writer.py`]. Присваивания атрибутам `phone`/`phone_is_manual` и именованные аргументы `phone`/`phone_is_manual` в любых вызовах:
+```
+app/pages/accounts.py:836 ('kw:render', ['phone'])
+app/pages/accounts.py:938 ('kw:start_session', ['phone'])
+app/pages/accounts.py:903 ('kw:_max_step_markup', ['phone'])
+max_worker/main.py:432 ('assign', 'state.phone')
+max_worker/main.py:211 ('assign', 'self.phone')
+tests/test_messengers/test_max.py:286 ('kw:start_session', ['phone'])
+tests/test_pages/test_max_connect_transport.py:195 ('kw:_max_step_markup', ['phone'])
+```
+- Наивный предикат «любой `phone=`» покраснел бы на трёх законных вызовах `app/pages/accounts.py` (номер из формы MAX уходит в разметку и воркер, а не в колонку).
+- **Рекомендуемый предикат** (вселенная — `app/**/*.py` и `scripts/**/*.py` обходом; `alembic/`, `tests/`, `max_worker/` вне вселенной; `max_worker` пишет в `SessionState`, а не в базу): (1) цель присваивания (`Assign`/`AugAssign`/`AnnAssign`) — атрибут `phone` или `phone_is_manual`; (2) именованный аргумент `phone`/`phone_is_manual` в вызове, чьё имя — `values`, `update`, `insert` или `MessengerAccount`; (3) ключ `"phone"`/`"phone_is_manual"` или `MessengerAccount.phone` в словаре-аргументе `values(...)`; (4) `setattr(…, "phone"|"phone_is_manual", …)`; (5) строковая константа с `SET phone` / `phone_is_manual` (сырой SQL). Исключение — ровно модуль `app/application/accounts/phone.py` (реестр `PHONE_WRITER_EXCEPTIONS` с причиной).
+- На дереве с таким предикатом — **0 нарушений** (все семь находок выше вне предиката или вне вселенной).
+- Зубы — синтетические исходники, поданные той же чистой функции (идиома `test_declared_invariants.py`: «зубы доказываются негативными контролями над СИНТЕТИЧЕСКИМИ исходниками, а не правкой настоящих файлов»), по каждому из пяти видов. Плюс подложенный файл в синтетическом дереве `tmp_path/app/…`, найденный тем же обходом (идиома `test_no_metering_remains.application_sources(root)`). Плюс антивакуум: обход видел больше нуля файлов, модуль-писатель существует и сам несёт `update(` с `phone`.
+
+## Гейт приватности (D-17, PHONE-21)
+
+### Замер дерева — гейт стартует зелёным [VERIFIED: запуск `scan2.py`, `js2.py`]
+- Python: 104 файла в `app/`, `scripts/`, `max_worker/`; **370 вызовов журнала** (`app` 213, `scripts` 68, `max_worker` 89; по виду: `logger.*` 176, `log.*` 117, `get_logger().*` 8, `print(` 69). **0 срабатываний** обоих правил.
+- Получатели вызовов на дереве: `logger`, `log`, `self.log` (39 вызовов в `app/`), `structlog.get_logger()…`, `structlog.get_logger(__name__)…`. `parser.error(…)` (argparse, 4 в `scripts/`) — не журнал, правило его пропускает. Имя `log` в трёх местах — объект `SendLog` (`log = await db.get(SendLog, log_id)`), но методов уровня журнала на нём не зовут; предикат «метод ∈ уровни журнала» его не задевает.
+- JS: `wa_worker/index.js` — **68 вызовов** `log.*`/`console.*`, **0 срабатываний**. Локальная `phone` участника группы (`index.js:890-901`) в вызовы журнала не уходит и не задета. `wa_bridge/index.js` (наследие, вне D-09) — 44 вызова, 0 срабатываний; его можно включить без цены.
+- `max_worker/main.py` пишет через `logging` (`log = logging.getLogger("max_worker")`); номер в журнал не уходит. `PHONE` и `phone.txt` — Deferred.
+
+### Определение предиката (рекомендуется; замерено на синтетике) [VERIFIED: запуск `pyctl.py`, `js2.py`]
+- **Вызов журнала (Python):** `print(...)`; `X.<m>(...)`, где `m ∈ {debug, info, warning, warn, error, exception, critical, fatal, msg, log, bind, new}`, а получатель `X` — имя `logger`/`log`/`logging`/`_log`/`_logger`, атрибут, оканчивающийся на `.log`/`.logger`, или вызов `get_logger(...)`/`getLogger(...)`. `bind` включён намеренно: `logger.bind(phone=x)` кладёт номер во все строки.
+- **Вызов журнала (JS):** `\b(log|console|logger|baileysLogger)\s*\.\s*(trace|debug|info|warn|error|fatal|log|child)\s*\(` вне комментариев. Аргументы — по балансу скобок с пропуском строковых литералов. **Выражения `${…}` шаблонных строк идут в код**: первая версия токенизатора вырезала их вместе со строкой и пропускала ``log.info(`connected ${phone}`)`` — замерено и исправлено.
+- **(б) Имя:** идентификатор аргумента (Python — `Name.id`, `Attribute.attr`, `keyword.arg` во всём поддереве аргументов, включая f-строки; JS — идентификаторы кода аргументов), содержащий `phone`, кроме `phone_set`. **Обязательные исключения поддеревьев**, иначе ложные срабатывания на рекомендуемых формах:
+  - значение именованного `phone_set=…`, если это сравнение с `None` (`x.phone is not None`) или `bool(...)`. Замер: `logger.info("x", phone_set=account.phone is not None)` наивное правило флагует `['phone']`;
+  - аргументы вызова `mask_phone(...)`. Иначе `print(mask_phone(phone))` в скрипте Фазы 20 покраснеет, хотя D-10 велит именно так.
+- **(в) Носители (рекомендуется сверх D-17):** в JS — `sock.user`, `creds.me`: там JID с номером, а имя `phone` не встречается. Замер: ``console.log(`me ${sock.user.id}`)`` и `log.info({ me: creds.me })` ловятся только этим пунктом. На дереве 0 вхождений.
+- **(а) Литерал, похожий на номер:** в строковых константах аргументов (Python `Constant`, JS — тексты строк): `\+\d[\d\s\-().]{5,}\d` с числом цифр 7…15 ИЛИ `(?<![\d.])[78]\d{10}(?!\d)` (11 цифр, начинается с 7/8). Не ловит: дату `2026-10-08 14:54:23` (нет `+`), id чата `-1001234567890`, миллисекунды `1696771234567`, групповой JID `120363025246125888@g.us`, маску `+7 *** ***-**-67`. Ловит `+7 999 123-45-67`, `+79991234567`, `79991234567`. Замерено на синтетике.
+- **Реестр исключений** `PHONE_LOG_EXCEPTIONS: dict[str, str]` («путь:функция» → причина), сейчас пустой. Пустота — норма; храповик-потолок по образцу `WITHOUT_WITNESS_CEILING` рекомендуется с потолком 0.
+- **Антивакуум и подложенная строка (критерий 5):** (1) обход нашёл больше нуля файлов в каждом из четырёх деревьев и больше нуля вызовов журнала в каждом; числа печатаются в сообщении; (2) синтетические исходники по каждому виду (Python: имя, f-строка, литерал, `bind`, `print`; JS: имя, `${}`, литерал, носитель) краснят ту же чистую функцию, а позитивный контроль (`phone_set=… is not None`, `mask_phone(phone)`, `parser.error("phone required")`, `logger.info("max_phone_required")`) — нет; (3) подложенный файл в синтетическом дереве `tmp_path/{app,scripts,wa_worker,max_worker}` находится обходом тем же помощником, что и живое дерево.
+- **Граница гейта (в докстринг):** журналы сторонних библиотек (Baileys/pino `warn`, pymax, Telethon), `PHONE`/`phone.txt` у MAX (Deferred), значения, приходящие в журнал без имени `phone` и без носителя (например, `logger.info("x", value=v)`, где `v` — номер), — вне охвата. Это объявленная граница средства.
+
+## Architecture Patterns
+
+### System Architecture Diagram
+```
+  ручной ввод (Фаза 18)        автоисточник (Фаза 19 мастер / Фаза 20 скрипт)
+        │ text                          │ raw: str | int
+        ▼                               ▼
+  normalize_manual ──отказ(RU-текст)    normalize_reported ──None──► UNPARSEABLE (база не тронута)
+        │ e164 | "" (очистка)           │ e164
+        ▼                               ▼
+  set_manual_phone                fill_reported_phone / record_reported_phone
+  UPDATE SET phone, manual=…      UPDATE … WHERE id AND phone IS NULL AND NOT phone_is_manual
+        │                               │ rowcount 1 → WRITTEN, 0 → KEPT
+        └───────────────┬───────────────┘
+                        ▼
+      messenger_accounts.phone / phone_is_manual  (+ CHECK ck_…: ручной без номера невозможен)
+                        ▼
+      format_phone ─► «+7 999 123-45-67» | как есть (неразбираемое)     mask_phone ─► «+7 *** ***-**-67»
+      (Фаза 17: экраны)                                                 (Фаза 20: вывод скрипта)
+  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+  гейты (tests/): AST «писатель один» по app/+scripts/;  AST+JS «номер не в журнале» по 4 деревьям
+```
+
+### Recommended Project Structure
+```
+alembic/versions/0023_messenger_account_phone.py      # рукописная, copy_from, ветки диалектов
+app/models/messenger_account.py                         # +phone, +phone_is_manual, константы CHECK, __table_args__
+app/services/phone.py                                   # normalize_manual, normalize_reported, format_phone, mask_phone (+ PhoneError)
+app/application/accounts/phone.py                       # PhoneWrite, fill_reported_phone, record_reported_phone, set_manual_phone
+tests/test_migrations/test_0023_messenger_account_phone.py
+tests/test_migrations/test_model_matches_head.py        # расширение (снимок + проверка + контроль)
+tests/test_services/test_phone.py                       # табличный тест нормализации/показа/маски
+tests/test_application/test_account_phone_writer.py     # последовательные правила, очистка, CHECK
+tests/test_application/test_account_phone_race.py       # файловая SQLite, перестановки, отрицание
+tests/test_application/test_phone_single_writer_gate.py # AST-гейт D-13
+tests/test_phone_privacy_gate.py                        # гейт PHONE-21 (рядом с test_logging_config.py)
+```
+
+### Anti-Patterns to Avoid
+- **`is_possible_number` в ручном пути:** пропускает `IS_POSSIBLE_LOCAL_ONLY` (`123-45-67` → `+71234567`). Использовать `…_with_reason == IS_POSSIBLE`.
+- **`is_possible_number` в автопути:** Fragment `+888…` → `TOO_SHORT`, номер потерян.
+- **Пропуск библиотечных цифр через `normalize_manual`:** `88801234567` становится `+78801234567`. Автоисточник всегда идёт через `normalize_reported`.
+- **ORM-присваивание `account.phone = …` у автоисточника:** read-check-write по построению; гейт D-13 запрещает.
+- **Очистка одной колонкой:** CHECK отвергает `phone=NULL` при поднятом признаке. Только одним оператором обе колонки.
+- **Позиции перестановки «с запасом»:** позиция за пределами числа операторов писателя молча не срабатывает.
+- **`op.batch_alter_table` без `copy_from`:** отражение SQLite теряет `ON DELETE` (`0022:115-125`); у `messenger_accounts` это `user_id … ON DELETE CASCADE`.
+
+## Don't Hand-Roll
+
+| Problem | Don't Build | Use Instead | Why |
+|---------|-------------|-------------|-----|
+| Разбор `8…`/`+7 (…)`/полноширинных цифр/`tel:` | регулярки и правило ведущей `8` | `phonenumbers.parse(text, "RU")` | Зона +7 — РФ и KZ с разной разбивкой; замер показал KZ `+7 701 123 4567` |
+| Разбивка показа по странам | шаблон `+7 XXX XXX-XX-XX` | `format_number(…, INTERNATIONAL)` | UZ, US, DE, Fragment форматируются по-разному |
+| Защита от гонки | блокировки, `SELECT … FOR UPDATE` | условный `UPDATE … WHERE` | SQLite игнорирует `FOR UPDATE`, суита регрессию блокировки не увидит (`payment_service.py:821-825`) |
+| Разбор JS | самописный полный парсер | токенизатор вызовов журнала с балансом скобок | Предмет узкий (аргументы вызовов журнала) |
+
+**Key insight:** все три «самодельных» соблазна фазы (формат номера, гонка, разбор кода) уже имеют в проекте либо библиотеку, либо прецедент. Ценность фазы — в контролях, которые доказывают зубы.
+
+## Common Pitfalls
+
+### Pitfall 1: Снимок `test_model_matches_head.py` без полного `messenger_accounts`
+**What goes wrong:** `upgrade head` падает `no such column: messenger_accounts.session_data`, красная вся проверка `payments`. **Why:** batch-пересоздание выбирает колонки `copy_from`, а снимок держит 4 колонки (замер). **How to avoid:** расширять снимок в ТОМ ЖЕ плане, что и ревизию, с летописью. **Warning signs:** красный `test_the_upgrade_actually_reached_head`.
+
+### Pitfall 2: `IS_POSSIBLE_LOCAL_ONLY` и `extension`
+**What goes wrong:** `123-45-67` хранится как `+71234567`; `… доб. 5` теряет добавочный молча. **How to avoid:** `reason == IS_POSSIBLE` и отказ при `n.extension`; строки в табличном тесте.
+
+### Pitfall 3: Fragment по ручному пути
+**What goes wrong:** `+888 …` отвергается (`TOO_SHORT`), `888…` без `+` становится российским номером. **How to avoid:** табличный тест закрепляет и то и другое явно, чтобы поведение было решением, а не случайностью (вопрос О-1).
+
+### Pitfall 4: Вакуум перестановки
+**What goes wrong:** позиция вклинивания за пределами числа операторов не вызывает ручную запись, тест зеленеет. **How to avoid:** позиции из измеренного `N`; утверждать флаг «ручная запись состоялась».
+
+### Pitfall 5: Ложные срабатывания гейта приватности на рекомендуемых формах
+**What goes wrong:** `phone_set=account.phone is not None` и `mask_phone(phone)` краснеют по правилу (б), и следующий автор ослабит гейт. **How to avoid:** исключать поддеревья именно этих двух форм; позитивные контроли на обе.
+
+### Pitfall 6: Шаблонные строки JS
+**What goes wrong:** вырезание строк вместе с `${…}` ослепляет правило (б). **How to avoid:** `${…}` идёт в код; синтетический контроль ``log.info(`… ${phone}`)``.
+
+### Pitfall 7: Перепись запретов краснеет от планов фазы
+**What goes wrong:** первый `16-NN-PLAN.md` с `must_haves.prohibitions` — сирота биекции (замер). **How to avoid:** план записей сеет реестр после того, как все планы фазы написаны (раздел ниже).
+
+### Pitfall 8: Отметки ROADMAP без `progress` в STATE
+**What goes wrong:** строки `- [ ]` фазы 16 в ROADMAP двигают выведенный счёт, а `progress.total_plans` в STATE остаётся `0` → красный `test_the_machine_readable_progress_is_derived_from_the_roadmap` (память проекта «ROADMAP mark desyncs STATE progress»). **How to avoid:** править оба места одним коммитом планирования.
+
+## Суита записей `tests/test_planning` — разбор семи красных правил и одного будущего
+
+Замер этого прогона: `uv run pytest tests/test_planning -q` → `7 failed, 201 passed` [VERIFIED: запуск]. Все семь — те, что назвал оркестратор. Ни одно не связано с кодом фазы: все реагируют на смену вехи. Общий принцип починки: **законная пустота старта вехи отличается от настоящего вакуума признаком, который при вакууме обязан присутствовать**. Пропуск ставится только при законной пустоте и с названной причиной (идиома `_require_live_phases`). Каждый контроль-отрицание получает субъекта, который существует, и по-прежнему краснеет. Мета-гейт `test_planning_gates_are_independent_of_the_live_verdict.py` (запрещает утверждать вердикт или отсутствие отчёта живого дерева; см. `test_a_gate_that_asserts_the_absence_of_a_report`) обязан остаться зелёным: развилки ниже делаются ветвлением на `pytest.skip`, а не `assert … is None`.
+
+### 1–2. `test_deferred_items_are_idempotent.py` — два правила
+- **Что утверждают:** у каждого ЖИВОГО файла отложенного (под `.planning/phases/` и с разделами `## План …`) якорь `<!-- deferred-items:end -->` стоит последним; антивакуум требует хотя бы один живой файл. Пропуск разрешён только когда в `.planning/phases/` нет ни одного каталога фазы [VERIFIED: tests/test_planning/test_deferred_items_are_idempotent.py:158-181 — `anchor_is_required`, `_require_live_phases`: `if not phases_root.is_dir() or not any(p.is_dir() for p in phases_root.iterdir()): pytest.skip(...)`; :192-260 — оба правила].
+- **Почему красны:** с коммита `36f01b39` существует каталог `.planning/phases/16-…/` (CONTEXT, DISCUSSION-LOG), пропуск больше не срабатывает, а живого `deferred-items.md` у фазы 16 нет. Найдены 10 архивных файлов, живых 0.
+- **Минимальная починка с зубами:** различать «живых кандидатов нет вовсе» (законно: дописывать отложенное ещё некуда — пропуск с причиной) и «кандидат есть, но не опознан как живой» (настоящий вакуум: файл `deferred-items.md` под `.planning/phases/` без единого раздела `## План …` — красное, с именем файла). Иначе: `live_candidates = [p for p in files if PLANNING_ROOT/"phases" in p.parents]`; пусто → `pytest.skip("в живых фазах файлов отложенного нет …")`; непусто и `live` пусто → красное. Синтетический контроль: живой кандидат без разделов краснит (на дереве `tmp_path`, а не правкой `.planning/`).
+- **Изменится само?** Да, если исполнитель фазы 16 заведёт `.planning/phases/16-…/deferred-items.md` с разделом `## План 16-NN` и якорем: тогда оба правила позеленеют без правки. Не гарантировано, поэтому починка нужна, но с таким файлом она совместима.
+
+### 3. `test_requirement_completion_follows_verification.py::test_the_number_of_requirement_rows_is_declared`
+- **Что утверждает:** число строк таблицы состояний записи требований равно объявленному [VERIFIED: :99 `REQUIREMENT_ROWS_DECLARED = 44`; :434-446].
+- **Почему красно:** живая запись — v2.2, строк `PHONE-01…PHONE-21` = 21 (`строк … найдено 21, а объявлено 44`).
+- **Починка:** объявленное число становится картой по вехе записи: `REQUIREMENT_ROWS_DECLARED = {"v2.1": 44, "v2.2": 21}`, ключ — `_record_milestone(text)`. Веха, которой нет в карте, — красное с требованием объявить число и записать летопись. Строка летописи: «44 — число v2.1 (план 10-14, 2026-09-04) — не стёрто, а отнесено к своей вехе; 21 — v2.2, замер 2026-10-08 разборщиком `_requirement_rows`». Так архивное чтение (между вехами запись берётся из `.planning/milestones/<веха>-REQUIREMENTS.md`, `:58-75`) остаётся под тем же числом. Контроль: синтетическая запись с вехой `v9.8` краснит «веха не объявлена».
+- **Изменится само?** Нет: 21 строка держится всю веху.
+
+### 4. `…::test_the_milestone_of_the_record_is_derived_and_non_empty`
+- **Что утверждает:** веха записи разобрана, непуста, и в индексе отчётов есть хотя бы один отчёт с меткой, к которой она ведёт [VERIFIED: :778-800].
+- **Почему красно:** запись `v2.2` ни одним архивным путём не названа → метка `«действующая веха»` → отчётов `*-VERIFICATION.md` в `.planning/phases/` ещё нет.
+- **Починка:** законная пустота — «нет отчётов действующей вехи И ни одна строка записи не помечена `Complete`». Тогда несущему правилу судить нечего по построению, и ставится пропуск с причиной. Если хоть одна строка `Complete`, а отчётов нет, — красное, как сейчас (это и есть вакуум: завершённые строки сверялись бы не с чем). Ветвление `if not found and not any(row.is_completed …): pytest.skip(…)` не утверждает отсутствия отчёта, поэтому мета-гейт не задет (проверить прогоном). Контроль на синтетическом корне (`_fake_planning_root` уже есть, `:470-530`): запись с `Complete` и без отчётов краснит.
+- **Изменится само?** Да: правило позеленеет, когда появится `.planning/phases/16-…/16-VERIFICATION.md` (конец исполнения фазы). План записей идёт раньше, так что починка нужна и с этим совместима.
+
+### 5–6. `…::test_control_negative_a_disagreeing_flag_reddens_the_agreement_rule`, `…::test_control_negative_the_three_kinds_of_disagreement_are_named_apart`
+- **Что утверждают:** переворот флажка одного требования (и удаление строки другого) даёт названные несогласия [VERIFIED: :999-1046; субъекты — литералы `"FORM-01"` и `"QUAL-04"`; :935-946 `_with_flag` → `assert count == 1, … ожидался ровно один флажок …`].
+- **Почему красны:** `FORM-01`/`QUAL-04` — требования v2.1, в живой записи их нет (`найдено 0`).
+- **Починка (выбор одного из двух, оба с зубами):** (а) **рекомендуется** — субъекты выводятся из поданной записи: первые два требования таблицы, несущие клетку фазы (сейчас `PHONE-01`, `PHONE-02`), с антивакуумом «таких строк не меньше двух». Контроль переживает любую будущую веху, и вывод не закрепляет временное состояние (тот же довод, что у `_flipped_flag`, `:948-962`). (б) Подавать контролям архивную запись `.planning/milestones/v2.1-REQUIREMENTS.md`: в ней есть оба флажка (`grep` → 2) и 44 строки. Литералы сохраняются, но контроль перестаёт касаться живой записи. Позитивная половина контроля 5 («на непрáвленой записи правило зелено») в варианте (а) остаётся на живой записи.
+- **Изменится само?** Нет.
+
+### 7. `test_state_progress_matches_roadmap.py::test_the_prose_plan_counts_agree_with_the_marks`
+- **Что утверждает:** разделов `### Phase ` больше нуля; разделов с прозой опознаваемой формы «N планов, из них M исполнено» больше нуля; проза равна отметкам [VERIFIED: tests/test_planning/test_state_progress_matches_roadmap.py:111-115 — `PLANS_PROSE_PREFIX = "**Plans**"`, `_PLANS_PROSE_RE = re.compile(r"(?P<total>\d+)\s+планов,\s+из\s+них\s+(?P<executed>\d+)\s+исполнено")`; :312-355].
+- **Почему красно:** 7 разделов (фазы 16…20 и бэклог 999.1/999.2), у всех `**Plans**: TBD`.
+- **Изменится само?** **Да, при планировании:** если оркестратор впишет в раздел Фазы 16 `**Plans**: N планов, из них 0 исполнено` и перечень `- [ ] 16-NN-PLAN.md`, правило позеленеет; одновременно `progress.total_plans` в STATE надо поднять до N (Pitfall 8). Английская форма GSD по умолчанию (`N plans`) не опознаётся и оставит правило красным.
+- **Починка (для устойчивости к следующему старту вехи):** антивакуум требует опознанной прозы только когда хоть у одного раздела есть отметки плана (`roadmap_plan_counts` → `total > 0`). Нет отметок нигде — пропуск с причиной «ни у одной фазы нет перечня планов». Отметки есть, а прозы опознаваемой формы нет — красное, как сейчас. Синтетические контроли: роадмап «все TBD» → пропуск; роадмап «отметки есть, проза `N plans`» → красное. **Порядок:** план записей должен сначала прогнать правило. Если планирование уже вписало прозу, правка антивакуума остаётся (следующий старт вехи), но гонки нет: правило не читает ничего, что меняет фаза при исполнении, кроме отметок, а их ставит оркестратор.
+
+### 8 (будущее красное). `test_plan_prohibitions_census.py` — биекция переписи и реестра
+- **Что утверждает:** каждый запрет `must_haves.prohibitions` в планах вселенной (живой `.planning/phases/*/NN-MM-PLAN.md` ∪ архив v2.1) имеет строку реестра, и наоборот; длина реестра равна переписи; планы после фиксированного набора несут засеянные строки [VERIFIED: scripts/prohibitions_census.py:89-98 — `PLAN_GLOB = ".planning/phases/*/[0-9]*-PLAN.md"`, `ARCHIVED_PHASES_DIR = ".planning/milestones/v2.1-phases"`, `REGISTRY_RELATIVE_PATH = (f"{ARCHIVED_PHASES_DIR}/15-uprochnenie-i-svodnyy-obhod-47-form/15-prohibitions-registry.yaml")`; tests/test_planning/test_plan_prohibitions_census.py:1174-1258].
+- **Замер:** сейчас вселенная — 175 планов, 741 запрет, 741 строка реестра, живых планов фазы 16 нет. Синтетический `.planning/phases/16-…/16-01-PLAN.md` с одним запретом → `orphans … [ProhibitionIdentity(plan_path='.planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-01-PLAN.md', index=0)]` [VERIFIED: запуск функций `scripts/prohibitions_census.py` над поданным словарём, файлы не правились]. 174 из 175 планов v2.1 несут `prohibitions:`, так что планы фазы 16 почти наверняка их понесут.
+- **Покраснеют:** `test_the_census_and_the_registry_are_a_bijection`, `test_the_registry_declares_its_own_length`, `test_plans_after_the_fixed_set_only_add_rows_outside_the_decision_scope`. Это случится в момент коммита планов фазы 16, а не при исполнении.
+- **Штатное средство:** `uv run python scripts/prohibitions_census.py --seed-registry` (идемпотентен по тождествам; сообщение правила само велит «перезасейте реестр»). Он пишет строки `unclassified`/`unresolved` в файл реестра, который лежит в АРХИВЕ v2.1. Жёсткая привязка `ARCHIVED_PHASES_DIR` к v2.1 на вселенную не влияет: живые планы читаются из `.planning/phases/` независимо от вехи.
+- **Рекомендация:** план записей (волна 1) последней задачей сеет реестр, когда все планы фазы 16 написаны и проверены (исполнение идёт после планирования). Состав запретов планов после сева не менять: правило дайджеста `test_every_statement_digest_matches_the_statement_found_by_identity` покраснеет. Если планы ревизуются позже (gap-закрытие), сев повторяется тем же планом или оркестратором. Где хранить строки v2.2 (архив v2.1 или новый живой реестр) — вопрос владельцу О-2, по умолчанию — штатный сев в существующий файл со строкой летописи в его шапке.
+
+### Что меняется само по ходу фазы (чтобы план записей не гонялся с записями фазы)
+| Правило | Меняется при | Действие плана записей |
+|---------|--------------|------------------------|
+| deferred-items ×2 | появлении `16-…/deferred-items.md` с разделом плана (если исполнитель отложит находку) | чинить развилку; совместимо |
+| rows declared | не меняется | чинить картой по вехе |
+| milestone derived | появлении `16-VERIFICATION.md` (конец фазы) | чинить развилкой «нет Complete»; совместимо |
+| контроли FORM-01/QUAL-04 | не меняется | чинить выводом субъекта |
+| prose counts | вписывании прозы и отметок фазы 16 в ROADMAP при планировании | сначала прогнать; чинить антивакуум по отметкам |
+| census ×3 (будущее) | коммите планов фазы 16 | сеять реестр после финала планов |
+| `progress` STATE (зелёное сейчас) | вписывании отметок фазы 16 в ROADMAP | не трогать; планирование правит `progress.total_plans` вместе с отметками |
+
+## Сквозные гейты, которые встретят новые модули и планы
+
+- Широкие гейты по исходникам `app/` и `tests/` (`test_no_metering_remains.py`, `test_payment_status_vocabulary.py`, `test_schedule_invariants.py`, `test_ops_state.py`, `test_notices_channel.py`, `test_declared_invariants.py`) прогнаны: `130 passed`. Их предикаты к коду номера не относятся (запрещённые имена валюты, словарь статусов платежа, `rollback()` в `finally`, `priority` у Celery, коды уведомлений, абзацы денежного пути) [VERIFIED: запуск и чтение предикатов]. Назвать их в `<automated>` плана писателя всё равно стоит: дёшево, ~46 с.
+- `test_htmx_post_pairs.py` обходит `tests/**/*.py` по утверждениям `status_code == 302` (`:2989`, `:3159`). У тестов фазы 16 POST и 302 нет, поэтому сдвигов нет [VERIFIED: чтение обхода].
+- `test_htmx_gates.py`, `tests/test_templates/*` читают шаблоны и страницы. Фаза 16 их не трогает, сдвигов нет.
+- `tests/test_planning/*` — см. разбор выше. Исполнители по умолчанию отбрасывают этот каталог (память проекта «Orchestrator gate catches records defects»), поэтому план записей обязан гнать его явно.
+- `test_executed_plans_kept_their_scope.py` перечисляет `pyproject.toml`/`uv.lock` среди путей PRODUCT, но судит только коммиты планов фазы 10 по запретам фазы 10. На `just add` в фазе 16 не реагирует [VERIFIED: чтение :220-245 и шапки].
+
+## Code Examples
+
+```python
+# Ручной путь (рекомендация по замерам; тексты ошибок — по-русски, D-18)
+n = phonenumbers.parse(text, "RU")                    # NumberParseException → PhoneError("…")
+if n.extension:                                        # Ф-3
+    raise PhoneError("Добавочный номер не поддерживается …")
+if phonenumbers.is_possible_number_with_reason(n) != phonenumbers.ValidationResult.IS_POSSIBLE:   # Ф-1
+    raise PhoneError("Не похоже на номер телефона. Пример: +7 999 123-45-67")
+e164 = phonenumbers.format_number(n, phonenumbers.PhoneNumberFormat.E164)
+```
+```python
+# Условная запись автоисточника — форма прецедента _claim_payment (payment_service.py:833-839)
+result = await session.execute(
+    update(MessengerAccount)
+    .where(MessengerAccount.id == account_id,
+           MessengerAccount.phone.is_(None),
+           MessengerAccount.phone_is_manual.is_(False))
+    .values(phone=e164)
+    .execution_options(synchronize_session=False)
+)
+return PhoneWrite.WRITTEN if result.rowcount == 1 else PhoneWrite.KEPT
+```
+
+## State of the Art
+
+| Old Approach | Current Approach | When Changed | Impact |
+|--------------|------------------|--------------|--------|
+| `is_possible_number` как «похоже на номер» | `is_possible_number_with_reason == IS_POSSIBLE` для полностью квалифицированных | `IS_POSSIBLE_LOCAL_ONLY` учитывается в `is_possible_number` (замер 9.0.41) | Без строгой формы короткие местные номера проходят |
+| Отражение таблицы в batch SQLite | `copy_from` с явным составом | `0022` (проект) | Без него теряется `ON DELETE` |
+
+## Assumptions Log
+
+| # | Claim | Section | Risk if Wrong |
+|---|-------|---------|---------------|
+| A1 | На PostgreSQL `server_default=sa.false()` рендерится в `DEFAULT false`, ветка `op.add_column` + `create_check_constraint` проходит без пересоздания таблицы | Ревизия 0023 | Накат на бою падает; ловится только выкатом (деплой-гейт D-26) |
+| A2 | `rowcount` условного UPDATE на asyncpg отдаёт число затронутых строк | Единый писатель | Писатель возвращает неверный исход; прецедент `_claim_payment` в бою снижает риск |
+| A3 | `:memory:` + `StaticPool` не даёт двух независимых сессий | Standard Stack / Alternatives | Не используется, риска для плана нет |
+| A4 | Контракт `PhoneWrite` (WRITTEN/KEPT/UNPARSEABLE) удобен фазам 19–20 | Единый писатель | Фаза 20 заведёт свой отбор исходов; правка дешёвая |
+| A5 | Правило маски для неразбираемого значения (`+`, `*`, две последние цифры) | Маска D-10 | Косметика вывода скрипта Фазы 20 |
+| A6 | Отсечение `bool` в автопути до `str()` | Автопуть | `True` и так отвергается проверкой цифр, риск нулевой |
+
+## Open Questions (RESOLVED)
+
+1. **Какая механика теста гонки (D-16)?**
+   - RESOLVED: файловая SQLite и две сессии с детерминированной подменой `session.execute` (прецедент `test_payment_concurrency.py`); позиции из измеренного числа операторов; флаг «ручная запись состоялась»; отрицание — функция read-check-write через тот же помощник. Замерено (§Механика теста гонки).
+2. **Стартует ли гейт приватности зелёным и где ложные срабатывания?**
+   - RESOLVED: 0 срабатываний на 370 Python- и 68 JS-вызовах; исключения поддеревьев `phone_set=<сравнение с None>` и `mask_phone(...)` обязательны; `${}` шаблонов идёт в код (§Гейт приватности).
+3. **Есть ли JS-парсер?**
+   - RESOLVED: нет; токенизатор на `re` с балансом скобок и комментариев (§Standard Stack).
+4. **Стартует ли гейт писателя зелёным?**
+   - RESOLVED: да, при узком предикате; наивный дал бы 3 ложных срабатывания (§Гейт единственного писателя).
+5. **Нужна ли ревизии правка соседних тестов?**
+   - RESOLVED: да, снимок `test_model_matches_head.py` обязан быть расширен в том же плане, иначе `upgrade head` падает (замер).
+6. **Что делать с семью красными правилами записей?**
+   - RESOLVED решением владельца в этом прогоне: отдельный план волны 1 без продуктового кода; починка по каждому правилу — §Суита записей.
+7. **Затронут ли образы воркеров?**
+   - RESOLVED: нет (`max_worker/requirements.txt`, Node у `wa_worker`).
+
+### Вопросы владельцу (не блокируют; у каждого есть умолчание)
+- **О-1. Ручной ввод номера Fragment.** По D-05 ручной `+888 0123 4567` отвергается (`TOO_SHORT`), а `888…` без `+` молча становится российским `+788…`. Критерий 3 ставит `+888…` среди библиотечных форм, и автопуть его принимает. *Умолчание:* буква D-05 — ручной `+888…` отвергается, табличный тест закрепляет оба поведения явно. Альтернатива — разрешить ручной `+888` (код страны 888, 11–12 цифр) особым случаем; это расширение D-05, и решать его владельцу.
+- **О-2. Где хранить строки реестра запретов для планов v2.2.** Штатный `--seed-registry` пишет в реестр, лежащий в архиве v2.1. *Умолчание:* сеять в существующий файл, записав в его шапке летопись «с 2026-10-08 несёт и строки v2.2». Альтернатива — живой реестр v2.2 и правка `REGISTRY_RELATIVE_PATH`/вселенной; это шире объёма плана записей.
+
+## Environment Availability
+
+| Dependency | Required By | Available | Version | Fallback |
+|------------|------------|-----------|---------|----------|
+| Python + uv | всё | ✓ | 3.12 (`.venv`) | — |
+| SQLite | тесты ревизии и гонки | ✓ | 3.53.1 | — |
+| SQLAlchemy / Alembic / aiosqlite | ревизия, писатель | ✓ | 2.0.46 / 1.18.4 / dev-группа | — |
+| PyPI (сеть) | `just add phonenumberslite==9.0.41` | ✓ | JSON API ответил | — |
+| Node | не нужен гейту (токенизатор на Python) | ✓ | v22.22.1 | — |
+| PostgreSQL для тестов | ветка PG ревизии | ✗ | — | Нет; граница называется в шапке ревизии, как у `0022` |
+| Docker | — | ✓, но на хосте работают **боевые** контейнеры | — | **Не использовать** в фазе 16 |
+
+**Missing dependencies with no fallback:** нет.
+**Missing dependencies with fallback:** PostgreSQL — ветка PG не исполняется тестами (принятая граница проекта).
+
+## Validation Architecture
+
+### Test Framework
+| Property | Value |
+|----------|-------|
+| Framework | pytest ≥9.0.2 + pytest-asyncio ≥1.3.0 (`pyproject.toml` `[dependency-groups].dev`) |
+| Config file | нет раздела настроек (маркеры объявляются хуком в `tests/conftest.py`, `:465+`) |
+| Quick run command | `uv run pytest tests/test_services/test_phone.py tests/test_application/test_account_phone_writer.py tests/test_application/test_account_phone_race.py tests/test_application/test_phone_single_writer_gate.py tests/test_phone_privacy_gate.py tests/test_migrations -q` |
+| Records command | `uv run pytest tests/test_planning -q` (~16 с; исполнители отбрасывают каталог — гнать явно) |
+| Full suite command | `just test` (~40 мин; только гейт фазы) |
+
+### Phase Requirements → Test Map
+| Req ID / Критерий | Behavior | Test Type | Automated Command | File Exists? |
+|-------------------|----------|-----------|-------------------|-------------|
+| PHONE-01 / SC1 | upgrade: у каждой строки `phone NULL`, `manual 0`, `credentials` MAX не тронут; downgrade снимает ровно две колонки и CHECK; `down_revision == "0022"` | migration | `uv run pytest tests/test_migrations/test_0023_messenger_account_phone.py -q` | ❌ Wave 0 |
+| PHONE-01 / SC1 | колонка модели без ревизии роняет суиту; снимок `messenger_accounts` полный; голова достигнута | migration | `uv run pytest tests/test_migrations/test_model_matches_head.py -q` | ✅ (расширить) |
+| PHONE-01 / SC2 | два аккаунта с одним номером; нет индекса; CHECK отвергает «ручной без номера» (INSERT, UPDATE обеих сторон); три законные пары приняты; FK `ON DELETE` целы | migration + unit (модель на `db_session`) | `uv run pytest tests/test_migrations/test_0023_messenger_account_phone.py tests/test_application/test_account_phone_writer.py -q` | ❌ Wave 0 |
+| PHONE-01 / SC3 | табличный тест: все входы критерия 3 поимённо (`8 999 123-45-67`, `+7 (999) 123-45-67`, `"79991234567"`, `79991234567` int, `"88801234567"` Fragment через автопуть, KZ `+77011234567`/`8 701 123 4567`, мусор, `x`×33, 16 цифр, 12 цифр, `123-45-67` LOCAL_ONLY, `доб.`), показ `+7 999 123-45-67` / KZ `+7 701 123 4567` / `+888 01234567`, неразбираемый сохранённый `+999123456` → как есть, маска `+7 *** ***-**-67` | unit | `uv run pytest tests/test_services/test_phone.py -q` | ❌ Wave 0 |
+| PHONE-02 / SC4 | последовательно: ручной → авто = ручной цел (`KEPT`); очистка → `NULL/false` и авто снова `WRITTEN`; мусор → `UNPARSEABLE` без записи | unit (`db_session`) | `uv run pytest tests/test_application/test_account_phone_writer.py -q` | ❌ Wave 0 |
+| PHONE-02 / SC4 | гонка: условная запись держит ручное во всех позициях; контроль-отрицание read-check-write краснит позицию «между чтением и записью»; антивакуум «ручная запись сработала» | integration (файловая SQLite) | `uv run pytest tests/test_application/test_account_phone_race.py -q` | ❌ Wave 0 |
+| PHONE-02 (D-13) | писатель один: 0 нарушений в `app/`+`scripts/`; пять синтетических видов краснят; подложенный файл находится обходом; модуль-писатель существует | gate (AST) | `uv run pytest tests/test_application/test_phone_single_writer_gate.py -q` | ❌ Wave 0 |
+| PHONE-21 / SC5 | номер в журнале (имя, f-строка/`${}`, литерал, `bind`, носители JS) краснит; `phone_set=… is not None`, `mask_phone(phone)`, `parser.error` — нет; обход 4 деревьев непуст; подложенная строка в синтетическом дереве краснит | gate (AST + JS-токенизатор) | `uv run pytest tests/test_phone_privacy_gate.py -q` | ❌ Wave 0 |
+| Записи (решение владельца) | 7 правил зелены без ослабления; каждый изменённый контроль-отрицание по-прежнему краснеет (синтетика); перепись засеяна; мета-гейт вердиктов зелен | records | `uv run pytest tests/test_planning -q` | ✅ (править) |
+
+### Sampling Rate
+- **Per task commit:** целевой модуль задачи и `tests/test_migrations` (≤10 с); у плана записей — `uv run pytest tests/test_planning -q`.
+- **Per wave merge:** quick run command (весь набор фазы) + `tests/test_planning` + широкие гейты `tests/test_application/test_no_metering_remains.py tests/test_services/test_payment_status_vocabulary.py tests/test_pages/test_schedule_invariants.py tests/test_services/test_ops_state.py tests/test_pages/test_notices_channel.py tests/test_application/test_declared_invariants.py` (~46 с).
+- **Phase gate:** `just test` зелёный перед `/gsd-verify-work`.
+
+### Wave 0 Gaps
+- [ ] `tests/test_services/test_phone.py` — SC3 (таблица нормализации, показ, маска)
+- [ ] `tests/test_migrations/test_0023_messenger_account_phone.py` — SC1, SC2
+- [ ] `tests/test_migrations/test_model_matches_head.py` — расширение снимка и проверки (SC1, D-04)
+- [ ] `tests/test_application/test_account_phone_writer.py` — SC2, SC4 (последовательно)
+- [ ] `tests/test_application/test_account_phone_race.py` — SC4 (гонка, отрицание)
+- [ ] `tests/test_application/test_phone_single_writer_gate.py` — D-13
+- [ ] `tests/test_phone_privacy_gate.py` — SC5
+- [ ] Framework install: не нужен (pytest есть); `phonenumberslite` — `just add` за `checkpoint:human-verify`
+
+## Security Domain
+
+### Applicable ASVS Categories (уровень 1)
+
+| ASVS Category | Applies | Standard Control |
+|---------------|---------|-----------------|
+| V2 Authentication | no | номер — подпись, не учётные данные |
+| V3 Session Management | no | — |
+| V4 Access Control | no в этой фазе | владение — страница Фазы 18 (`WHERE id AND user_id`) |
+| V5 Input Validation | yes | предел 32 символа до разбора, `phonenumbers.parse` + `IS_POSSIBLE` + ≤15 цифр, отказ по `extension`; автопуть — только цифры 5…15; SQLAlchemy Core с привязанными параметрами |
+| V6 Cryptography | no | — |
+| V7 Error Handling & Logging | yes | гейт приватности: в журнал только `phone_set` и `account_id` (D-11) |
+| V8 Data Protection | yes | номер не в журналах; маска для вывода оператору (D-10) |
+
+### Known Threat Patterns
+
+| Pattern | STRIDE | Standard Mitigation |
+|---------|--------|---------------------|
+| Утечка ПДн (номер) в Loki/stdout/вывод скрипта | Information Disclosure | AST/JS-гейт по четырём деревьям; маска; `phone_set` |
+| Потерянное обновление: автоисточник затирает ручной номер | Tampering | условный `UPDATE … WHERE phone IS NULL AND NOT phone_is_manual`; тест гонки с отрицанием |
+| Обход правила вторым писателем | Tampering | AST-гейт единственного писателя |
+| Длинный ввод → 500 на PG (`String(16)`) | Denial of Service | отказ до базы: 32 символа, ≤15 цифр (SQLite длину не проверяет — ловушка 9 разведки вехи) |
+| Несогласованное состояние «ручной без номера» | Tampering | CHECK в схеме + константа в модели |
+
+## Sources
+
+### Primary (HIGH confidence)
+- Запуски этого прогона: `phonenumberslite==9.0.41` (`probe.py`, `probe2.py`); прототип `0023` на копии `alembic/` (`run.py`, `run_orig.py`); двойник модели и гонка (`race.py`); сканеры гейтов (`scan2.py`, `recv.py`, `pyctl.py`, `js2.py`, `writer.py`); функции `scripts/prohibitions_census.py` над поданным словарём; `uv run pytest tests/test_planning -q` → `7 failed, 201 passed`; `tests/test_migrations tests/test_services/test_payment_concurrency.py tests/test_logging_config.py` → `132 passed`; широкие гейты → `130 passed`.
+- Прочитанные файлы: `alembic/versions/0001_initial_schema.py:56-75`, `0014_*.py`, `0022_*.py:100-289`; `app/models/messenger_account.py`, `app/models/schedule.py:46-66`, `app/models/group.py:50`; `app/application/accounts/use_cases.py`, `group_resync.py`; `app/infrastructure/uow.py`; `app/services/payment_service.py:811-845`; `tests/test_migrations/test_model_matches_head.py`, `test_0022_*.py`; `tests/test_services/test_payment_concurrency.py`; `tests/test_application/test_declared_invariants.py`; `tests/conftest.py:1-60,395-470`; `tests/test_planning/{test_deferred_items_are_idempotent,test_requirement_completion_follows_verification,test_state_progress_matches_roadmap,test_plan_prohibitions_census,test_planning_gates_are_independent_of_the_live_verdict,test_executed_plans_kept_their_scope}.py`; `scripts/prohibitions_census.py:80-430`; `wa_worker/index.js:13-48,880-905`; `max_worker/main.py` (строки с `phone`); `Dockerfile`, `max_worker/Dockerfile`; `justfile:55-60`; `pyproject.toml`.
+- PyPI JSON API `phonenumberslite` / `phonenumbers` 9.0.41; pypistats `phonenumberslite/recent`.
+
+### Secondary (MEDIUM confidence)
+- `.planning/research/{SUMMARY,STACK,ARCHITECTURE,PITFALLS}.md` — разведка вехи (не перепроверялась сверх названного).
+
+### Tertiary (LOW confidence)
+- Поведение ветки PostgreSQL ревизии и `rowcount` asyncpg — без исполнения (A1, A2).
+
+## Metadata
+
+**Confidence breakdown:**
+- Standard stack: HIGH — версия и поведение замерены запуском; вердикт SUS объяснён, но требует чекпойнта.
+- Architecture: HIGH — прототип ревизии и механика гонки исполнены; PG-ветка MEDIUM.
+- Pitfalls: HIGH — каждая ловушка воспроизведена замером (снимок, LOCAL_ONLY, Fragment, вакуум позиции, ложные срабатывания гейта, перепись).
+
+**Research date:** 2026-10-08
+**Valid until:** 2026-11-07 (стабильно; пересмотреть, если пин `phonenumberslite` сменится или правила `tests/test_planning` правятся до исполнения)
