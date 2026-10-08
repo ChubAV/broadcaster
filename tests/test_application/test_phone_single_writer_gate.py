@@ -65,6 +65,12 @@ WRITE_CALL_NAMES = frozenset({"values", "update", "insert", "MessengerAccount"})
 
 KIND_ASSIGNMENT = "присваивание"
 KIND_KEYWORD = "именованный аргумент"
+KIND_DICT_KEY = "ключ словаря values"
+KIND_SETATTR = "запись атрибута по имени"
+KIND_RAW_SQL = "сырой SQL"
+
+# Реестр исключений: путь → причина.
+PHONE_WRITER_EXCEPTIONS: dict[str, str] = {}
 
 
 def writer_sources(root: Path) -> list[Path]:
@@ -136,6 +142,11 @@ def _call_name(call: ast.Call) -> str | None:
     if isinstance(call.func, ast.Attribute):
         return call.func.attr
     return None
+
+
+def judged_offences(source: str, path: str) -> list[str]:
+    """Находки, которые гейт судит: предикат плюс исключения реестра."""
+    return []
 
 
 def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
@@ -273,3 +284,215 @@ def test_no_phone_write_outside_the_writer_in_the_live_tree():
         "писатель обходит условную запись, и ручной номер снова затирается (D-13):\n"
         + "\n".join(f"  {offence}" for offence in offences)
     )
+
+
+def test_a_raw_sql_phone_write_reddens_the_gate(tmp_path):
+    """Сырой UPDATE в строковой константе синтетического `app/` краснит гейт."""
+    _plant(
+        tmp_path,
+        "app/x.py",
+        'SQL = "UPDATE messenger_accounts SET phone = :p WHERE id = :id"\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "app/x.py"
+    ], "обход синтетического дерева не нашёл подложенный файл"
+    assert any(
+        offence.startswith(f"app/x.py:1 — {KIND_RAW_SQL} — ") for offence in offences
+    ), f"сырой SQL с номером не найден: {offences}"
+
+
+DICT_KEY_CASES = [
+    pytest.param(
+        'stmt = update(MessengerAccount).values({"phone": x})\n',
+        "values({'phone': …})",
+        id="values-dict-string-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone: x})\n",
+        "values({MessengerAccount.phone: …})",
+        id="values-dict-column-key",
+    ),
+    pytest.param(
+        'stmt = stmt.values({"phone_is_manual": True})\n',
+        "values({'phone_is_manual': …})",
+        id="values-dict-phone-is-manual",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "subject"), DICT_KEY_CASES)
+def test_a_phone_key_in_a_values_dict_is_a_write(source, subject):
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert offences == [f"app/x.py:1 — {KIND_DICT_KEY} — {subject}"], (
+        f"ключ номера в словаре `values(...)` гейт не нашёл: {offences}"
+    )
+
+
+SETATTR_CASES = [
+    pytest.param(
+        'setattr(account, "phone", x)\n',
+        "setattr(…, 'phone', …)",
+        id="setattr-phone",
+    ),
+    pytest.param(
+        'set_committed_value(account, "phone_is_manual", True)\n',
+        "set_committed_value(…, 'phone_is_manual', …)",
+        id="set-committed-value-phone-is-manual",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "subject"), SETATTR_CASES)
+def test_a_phone_attribute_written_by_name_is_a_write(source, subject):
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert offences == [f"app/x.py:1 — {KIND_SETATTR} — {subject}"], (
+        f"запись атрибута номера по имени гейт не нашёл: {offences}"
+    )
+
+
+RAW_SQL_CASES = [
+    pytest.param(
+        'stmt = text("update messenger_accounts set phone_is_manual = true")\n',
+        id="text-update-lowercase",
+    ),
+    pytest.param(
+        "SQL = \"INSERT INTO messenger_accounts (user_id, phone) "
+        "VALUES (1, '+79991234567')\"\n",
+        id="insert-into-messenger-accounts",
+    ),
+]
+
+
+@pytest.mark.parametrize("source", RAW_SQL_CASES)
+def test_a_raw_sql_phone_write_in_a_string_constant_is_a_write(source):
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert len(offences) == 1 and offences[0].startswith(
+        f"app/x.py:1 — {KIND_RAW_SQL} — "
+    ), f"сырой SQL с номером в строковой константе гейт не нашёл: {offences}"
+
+
+LEGITIMATE_CASES = [
+    pytest.param(
+        'return render(request, "x.html", phone=phone)\n', id="render-phone-kwarg"
+    ),
+    pytest.param(
+        "async def f(client, phone):\n    await client.start_session(phone=phone)\n",
+        id="start-session-phone-kwarg",
+    ),
+    pytest.param(
+        '_max_step_markup(request, step="phone", phone=phone)\n',
+        id="max-step-markup-phone-kwarg",
+    ),
+    pytest.param(
+        "class MessengerAccount(Base):\n"
+        "    phone: Mapped[str | None] = mapped_column(String(16), nullable=True)\n"
+        "    phone_is_manual: Mapped[bool] = mapped_column(Boolean, default=False)\n",
+        id="model-column-declaration",
+    ),
+    pytest.param(
+        'MANUAL_REQUIRES_PHONE = "NOT (phone_is_manual AND phone IS NULL)"\n',
+        id="check-condition-constant",
+    ),
+    pytest.param(
+        "def fill(session):\n"
+        '    """Пишет одним оператором UPDATE messenger_accounts SET phone = :p."""\n',
+        id="docstring-with-update-set-phone",
+    ),
+    pytest.param(
+        '"""Модуль: INSERT INTO messenger_accounts делает мастер."""\n',
+        id="module-docstring-with-insert",
+    ),
+    pytest.param(
+        "number = account.phone\n"
+        "stmt = select(MessengerAccount).where(MessengerAccount.phone.is_(None))\n",
+        id="read-and-filter-by-phone",
+    ),
+    pytest.param(
+        'logger.info("account_connected", phone_set=account.phone is not None)\n',
+        id="phone-set-flag-in-log",
+    ),
+    pytest.param(
+        'SQL = "UPDATE groups SET title = :t WHERE phone = :p"\n',
+        id="update-filtering-by-phone-in-where",
+    ),
+]
+
+
+@pytest.mark.parametrize("source", LEGITIMATE_CASES)
+def test_a_legitimate_phone_mention_is_not_a_write(source):
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert offences == [], (
+        f"законное упоминание номера гейт счёл записью — шум снимет гейт: {offences}"
+    )
+
+
+def test_the_walk_leaves_max_worker_alembic_and_tests_outside(tmp_path):
+    """`max_worker/`, `alembic/` и `tests/` вне вселенной: их записи не судятся."""
+    planted_write = "def f(state):\n    state.phone = '+79991234567'\n"
+    _plant(tmp_path, "max_worker/main.py", planted_write)
+    _plant(tmp_path, "tests/x.py", planted_write)
+    _plant(tmp_path, "alembic/versions/x.py", planted_write)
+    _plant(tmp_path, "app/pages/clean.py", 'render(request, "x.html", phone=phone)\n')
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "app/pages/clean.py"
+    ], "обход вышел за `app/` и `scripts/` или не нашёл файл вселенной"
+    assert offences == [], f"законный вызов в `app/` дал находку: {offences}"
+
+
+def test_the_exception_registry_names_only_the_writer_module():
+    """Реестр — ровно модуль-писатель с причиной; его записи видов 2–5 не судятся.
+
+    Второй исключённый модуль есть второй писатель: расширение реестра — решение
+    владельца, а не правка ради зелени.
+    """
+    assert list(PHONE_WRITER_EXCEPTIONS) == [PHONE_WRITER_MODULE], (
+        f"реестр исключений — не ровно модуль-писатель: {sorted(PHONE_WRITER_EXCEPTIONS)}"
+    )
+    assert PHONE_WRITER_EXCEPTIONS[PHONE_WRITER_MODULE].strip(), (
+        "исключение модуля-писателя записано без причины"
+    )
+    writer_path = PROJECT_ROOT / PHONE_WRITER_MODULE
+    assert writer_path.is_file(), f"исключён несуществующий файл {PHONE_WRITER_MODULE}"
+
+    writer_source = writer_path.read_text(encoding="utf-8")
+    raw = phone_write_offences(writer_source, PHONE_WRITER_MODULE)
+    raw_kinds = {offence.split(" — ")[1] for offence in raw}
+
+    assert {KIND_KEYWORD, KIND_SETATTR} <= raw_kinds, (
+        f"в модуле-писателе предикат без исключения видит виды {sorted(raw_kinds)} — "
+        "условный UPDATE и зеркало set_committed_value обязаны быть видны"
+    )
+    assert judged_offences(writer_source, PHONE_WRITER_MODULE) == [], (
+        "записи модуля-писателя видов 2–5 судятся, хотя он в реестре"
+    )
+
+
+def test_control_an_assignment_inside_the_writer_module_still_reddens():
+    """Присваивание атрибуту номера исключением не покрывается — даже в писателе.
+
+    Писатель пишет только операторами UPDATE и зеркалит `set_committed_value`;
+    присваивание сделало бы объект грязным, и ORM выдала бы на коммите второй,
+    безусловный UPDATE мимо условной записи.
+    """
+    sneaked = "    account.phone = '+79990000000'"
+    source = (
+        (PROJECT_ROOT / PHONE_WRITER_MODULE).read_text(encoding="utf-8")
+        + "\n\ndef _sneak(account):\n"
+        + sneaked
+        + "\n"
+    )
+    line = source.splitlines().index(sneaked) + 1
+
+    assert judged_offences(source, PHONE_WRITER_MODULE) == [
+        f"{PHONE_WRITER_MODULE}:{line} — {KIND_ASSIGNMENT} — account.phone"
+    ], "присваивание номера в модуле-писателе прикрыто исключением"
