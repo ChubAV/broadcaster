@@ -44,6 +44,47 @@ from phonenumbers import NumberParseException, PhoneNumberFormat
 REPORTED_MIN_DIGITS = 5
 E164_MAX_DIGITS = 15
 
+# Регион ручного ввода: номер без кода страны человек из России пишет как
+# `8 999 …` или `999 …`, и разбор обязан понять его как российский.
+MANUAL_REGION = "RU"
+
+# Предел сырого ручного ввода (D-14), меряется по строке КАК ПРИШЛА — до
+# разбора. Самое длинное честное написание (`+7 (999) 123-45-67` с пробелами
+# по краям) укладывается с запасом; всё длиннее отвергается, не доходя до
+# библиотеки и до колонки `String(16)`.
+MANUAL_INPUT_MAX_CHARS = 32
+
+# Пример в каждом тексте отказа: человек видит, как написать правильно.
+EXAMPLE_PHONE = "+7 999 123-45-67"
+
+# Тексты отказа ручного ввода — ЗАКРЫТЫЙ НАБОР констант (D-18, PHONE-21).
+# Ввод в них не подставляется никогда: исключение может уйти в журнал, а номер
+# в журнал не попадает. Показывает тексты форма ручной правки Фазы 18.
+PHONE_ERROR_BLANK = f"Введите номер телефона. Пример: {EXAMPLE_PHONE}"
+PHONE_ERROR_TOO_LONG = (
+    f"Слишком длинный ввод: не больше {MANUAL_INPUT_MAX_CHARS} символов "
+    f"и {E164_MAX_DIGITS} цифр. Пример: {EXAMPLE_PHONE}"
+)
+PHONE_ERROR_EXTENSION = (
+    f"Добавочный номер не поддерживается — укажите номер без него. Пример: {EXAMPLE_PHONE}"
+)
+PHONE_ERROR_NOT_A_NUMBER = f"Не похоже на номер телефона. Пример: {EXAMPLE_PHONE}"
+PHONE_ERROR_MESSAGES = (
+    PHONE_ERROR_BLANK,
+    PHONE_ERROR_TOO_LONG,
+    PHONE_ERROR_EXTENSION,
+    PHONE_ERROR_NOT_A_NUMBER,
+)
+
+
+class PhoneError(ValueError):
+    """Ручной ввод не сводится к номеру; текст — один из `PHONE_ERROR_MESSAGES`."""
+
+
+def normalize_manual(text: str) -> str:
+    """Ручной ввод → E.164 или `PhoneError` (заготовка RED)."""
+    return text
+
 
 def normalize_reported(raw: object) -> str | None:
     """Номер от мессенджера (строка или целое) → E.164 или `None` (D-05, D-15).
@@ -91,3 +132,8 @@ def format_phone(stored: str) -> str:
     except NumberParseException:
         return stored
     return phonenumbers.format_number(number, PhoneNumberFormat.INTERNATIONAL)
+
+
+def mask_phone(stored: str) -> str:
+    """Сохранённый номер → маска для человека (заготовка RED)."""
+    return stored

@@ -14,12 +14,41 @@
   «возможности» библиотеки считает его слишком коротким; мусор источника (сырой
   JID, скобки, лишние цифры, `None`, `bool`) обязан дать `None`, а не «номер»;
 - показ (`DISPLAYED`) — разбивка своя у каждой страны, а сохранённое, но
-  неразбираемое значение показывается как есть, а не «неизвестен» (D-06).
+  неразбираемое значение показывается как есть, а не «неизвестен» (D-06);
+- ручной ввод (`MANUAL_*`) — свободное написание человека сводится к E.164,
+  а местный номер без кода, добавочный, мусор и слишком длинный ввод
+  отвергаются одним из четырёх русских текстов с примером (D-06, D-14, D-18);
+- решение владельца О-1 закреплено строками явно: ручной `+888 0123 4567`
+  отвергается, ручной `88801234567` без `+` становится российским
+  `+78801234567`; Fragment попадает в базу только автопутём;
+- маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
+- разбор `ast` модуля — модуль чист (D-12) и не спрашивает «действительность»
+  номера (D-05).
 """
 
+import ast
+import sys
+from pathlib import Path
+
+import phonenumbers
 import pytest
 
-from app.services.phone import format_phone, normalize_reported
+from app.services.phone import (
+    EXAMPLE_PHONE,
+    MANUAL_INPUT_MAX_CHARS,
+    PHONE_ERROR_BLANK,
+    PHONE_ERROR_EXTENSION,
+    PHONE_ERROR_MESSAGES,
+    PHONE_ERROR_NOT_A_NUMBER,
+    PHONE_ERROR_TOO_LONG,
+    PhoneError,
+    format_phone,
+    mask_phone,
+    normalize_manual,
+    normalize_reported,
+)
+
+PHONE_MODULE = Path(__file__).resolve().parents[2] / "app" / "services" / "phone.py"
 
 E164_RUSSIAN = "+79991234567"
 DISPLAY_RUSSIAN = "+7 999 123-45-67"
@@ -114,3 +143,239 @@ def test_a_stored_number_is_shown_in_the_international_form(stored, expected):
     shown = format_phone(stored)
     assert shown == expected, f"показ {stored!r}"
     assert "\xa0" not in shown, "в показе обычные пробелы, а не неразрывные"
+
+
+# Граница D-14: тот же верный номер, дополненный пробелами до предела и за него.
+# Строки собираются из одного номера, чтобы отказ на 33 символах нельзя было
+# списать ни на что, кроме длины.
+VALID_TYPED = "+7 999 123 45 67"
+AT_INPUT_LIMIT = VALID_TYPED.center(MANUAL_INPUT_MAX_CHARS)
+OVER_INPUT_LIMIT = VALID_TYPED.center(MANUAL_INPUT_MAX_CHARS + 1)
+
+
+def test_the_length_boundary_rows_are_exactly_at_and_over_the_limit():
+    """Граничные строки таблиц — ровно 32 и 33 символа, иначе граница не проверена."""
+    assert len(AT_INPUT_LIMIT) == 32, "строка на пределе обязана быть ровно 32 символа"
+    assert len(OVER_INPUT_LIMIT) == 33, "строка за пределом обязана быть ровно 33 символа"
+
+
+def test_a_russian_number_typed_by_hand_lands_in_e164():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 3: самое частое русское написание → E.164.
+
+    `8 999 …` — привычная форма междугороднего набора; ведущая `8` значит `+7`
+    только при региональном разборе, поэтому ручной путь разбирает с `RU`.
+    """
+    assert normalize_manual("8 999 123-45-67") == "+79991234567", (
+        "ручное «8 999 123-45-67» обязано стать +79991234567"
+    )
+
+
+MANUAL_ACCEPTED = [
+    pytest.param("8 999 123-45-67", "+79991234567", id="eight_prefix"),
+    pytest.param("+7 (999) 123-45-67", "+79991234567", id="plus_seven_brackets"),
+    pytest.param("79991234567", "+79991234567", id="digits_with_country"),
+    pytest.param("89991234567", "+79991234567", id="digits_eight_prefix"),
+    pytest.param("9991234567", "+79991234567", id="ten_digits_no_prefix"),
+    pytest.param("(999) 123-45-67", "+79991234567", id="brackets_no_prefix"),
+    pytest.param("+7-999-123-45-67", "+79991234567", id="dashes"),
+    pytest.param("   +7 999 123 45 67   ", "+79991234567", id="spaces_around"),
+    pytest.param("８ ９９９ １２３ ４５ ６７", "+79991234567", id="fullwidth_digits"),
+    pytest.param("tel:+79991234567", "+79991234567", id="tel_uri"),
+    pytest.param("+77011234567", "+77011234567", id="kazakhstan_e164"),
+    pytest.param("8 701 123 4567", "+77011234567", id="kazakhstan_eight_prefix"),
+    pytest.param("77011234567", "+77011234567", id="kazakhstan_digits"),
+    pytest.param("+998901234567", "+998901234567", id="uzbekistan"),
+    pytest.param("8-800-555-35-35", "+78005553535", id="toll_free_800"),
+    pytest.param("88801234567", "+78801234567", id="o1_fragment_without_plus_becomes_russian"),
+    pytest.param(AT_INPUT_LIMIT, "+79991234567", id="exactly_32_chars"),
+]
+
+
+@pytest.mark.parametrize("text,expected", MANUAL_ACCEPTED)
+def test_a_number_typed_by_hand_is_normalized_to_e164(text, expected):
+    """Ручной ввод в свободной форме → одна строка E.164 (критерий 3, D-05).
+
+    Строка `o1_fragment_without_plus_becomes_russian` — НЕ ошибка таблицы, а
+    решение владельца О-1 (2026-10-08): буква D-05 разбирает ручной ввод с
+    регионом `RU`, и `888…` без `+` читается как российский номер с ведущей `8`.
+    Строка закрепляет это поведение, чтобы оно было решением, а не случайностью.
+    """
+    assert normalize_manual(text) == expected, f"ручной ввод {text!r}"
+
+
+MANUAL_REJECTED = [
+    pytest.param("123-45-67", PHONE_ERROR_NOT_A_NUMBER, id="local_only_dashed"),
+    pytest.param("1234567", PHONE_ERROR_NOT_A_NUMBER, id="local_only_digits"),
+    pytest.param("+7 999 123-45-6", PHONE_ERROR_NOT_A_NUMBER, id="one_digit_short"),
+    pytest.param("+7 999 123-45-678", PHONE_ERROR_NOT_A_NUMBER, id="one_digit_long"),
+    pytest.param("+799912345678", PHONE_ERROR_NOT_A_NUMBER, id="twelve_digits"),
+    pytest.param("+7999123456789012", PHONE_ERROR_NOT_A_NUMBER, id="sixteen_digits"),
+    pytest.param("1234567890123456", PHONE_ERROR_NOT_A_NUMBER, id="sixteen_digits_no_plus"),
+    pytest.param("12", PHONE_ERROR_NOT_A_NUMBER, id="two_digits"),
+    pytest.param("+888 0123 4567", PHONE_ERROR_NOT_A_NUMBER, id="o1_fragment_by_hand_refused"),
+    pytest.param("+7 999 123 45 67 доб 5", PHONE_ERROR_EXTENSION, id="extension_russian"),
+    pytest.param("+7 999 123 45 67 ext 12", PHONE_ERROR_EXTENSION, id="extension_ext"),
+    pytest.param("abc", PHONE_ERROR_NOT_A_NUMBER, id="latin_letters"),
+    pytest.param("привет", PHONE_ERROR_NOT_A_NUMBER, id="cyrillic_letters"),
+    pytest.param("+", PHONE_ERROR_NOT_A_NUMBER, id="plus_only"),
+    pytest.param("+1", PHONE_ERROR_NOT_A_NUMBER, id="country_code_only"),
+    pytest.param("+0 999 123", PHONE_ERROR_NOT_A_NUMBER, id="invalid_country_code"),
+    pytest.param("", PHONE_ERROR_BLANK, id="empty"),
+    pytest.param("   ", PHONE_ERROR_BLANK, id="spaces_only"),
+    pytest.param("x" * 33, PHONE_ERROR_TOO_LONG, id="garbage_33_chars"),
+    pytest.param(OVER_INPUT_LIMIT, PHONE_ERROR_TOO_LONG, id="valid_number_padded_to_33_chars"),
+]
+
+
+@pytest.mark.parametrize("text,message", MANUAL_REJECTED)
+def test_a_number_typed_by_hand_is_refused_with_an_explanation(text, message):
+    """Мусор, местный номер, добавочный и длинный ввод — отказ, а не «номер».
+
+    - `local_only_*`: библиотека считает `123-45-67` «возможным» местным
+      номером (`IS_POSSIBLE_LOCAL_ONLY`) и дала бы `+71234567` — поэтому
+      ручной путь требует строго `IS_POSSIBLE` (Ф-1 RESEARCH, D-06).
+    - `extension_*`: E.164 молча отбросил бы добавочный, и сохранился бы не
+      тот номер, что ввёл человек (Ф-3).
+    - `o1_fragment_by_hand_refused`: решение владельца О-1 — ручной `+888…`
+      отвергается, Fragment попадает в базу только автопутём.
+    - `valid_number_padded_to_33_chars`: тот же верный номер, но на символ
+      длиннее предела D-14 — отказ до разбора.
+    """
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual(text)
+    assert str(excinfo.value) == message, f"текст отказа для {text!r}"
+
+
+@pytest.mark.parametrize("text,message", MANUAL_REJECTED)
+def test_every_refusal_text_is_a_declared_constant_with_the_example(text, message):
+    """⚠️ ТЕКСТ ОТКАЗА — ИЗ ЗАКРЫТОГО НАБОРА И БЕЗ ПРИЧИНЫ (D-18, PHONE-21).
+
+    Исключение может уйти в журнал. Если бы текст собирался из ввода или к
+    исключению цеплялась причина библиотеки, номер человека оказался бы в
+    журнале. Поэтому: текст — ровно одна из констант модуля, в нём пример
+    правильного написания, а `__cause__` и `__context__` пусты.
+    """
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual(text)
+    error = excinfo.value
+    assert str(error) in PHONE_ERROR_MESSAGES, "текст отказа обязан быть константой модуля"
+    assert f"Пример: {EXAMPLE_PHONE}" in str(error), "в тексте отказа обязан быть пример"
+    assert error.__cause__ is None, "к отказу не цепляется причина"
+    assert error.__context__ is None, "у отказа нет контекста чужого исключения"
+
+
+def test_the_refusal_texts_are_exactly_four_distinct_russian_constants():
+    """Набор закрыт: четыре разных текста, каждый с примером `+7 999 123-45-67`."""
+    assert EXAMPLE_PHONE == "+7 999 123-45-67"
+    assert PHONE_ERROR_MESSAGES == (
+        PHONE_ERROR_BLANK,
+        PHONE_ERROR_TOO_LONG,
+        PHONE_ERROR_EXTENSION,
+        PHONE_ERROR_NOT_A_NUMBER,
+    )
+    assert len(set(PHONE_ERROR_MESSAGES)) == 4, "тексты отказа не повторяются"
+
+
+MASKED = [
+    pytest.param("+79991234567", "+7 *** ***-**-67", id="russia"),
+    pytest.param("+77011234567", "+7 *** *** **67", id="kazakhstan"),
+    pytest.param("+88801234567", "+888 ******67", id="fragment"),
+    pytest.param("+998901234567", "+998 ** *** ** 67", id="uzbekistan"),
+    pytest.param("+12025550123", "+1 ***-***-**23", id="usa"),
+    pytest.param("+999123456", "+*******56", id="unparseable_with_digits"),
+    pytest.param("garbage", "+***", id="unparseable_without_digits"),
+]
+
+
+@pytest.mark.parametrize("stored,expected", MASKED)
+def test_a_stored_number_is_masked_for_a_human(stored, expected):
+    """Маска D-10 повторяет форму показа: код страны и две последние цифры.
+
+    Неразбираемое значение — `+`, звёзды по числу цифр минус две и две
+    последние цифры; меньше четырёх цифр — сплошные `+***`.
+    """
+    assert mask_phone(stored) == expected, f"маска {stored!r}"
+
+
+PARSEABLE_MASKED = [
+    pytest.param(row.values[0], id=row.id)
+    for row in MASKED
+    if not row.id.startswith("unparseable")
+]
+
+
+@pytest.mark.parametrize("stored", PARSEABLE_MASKED)
+def test_a_mask_shows_only_the_country_code_and_two_last_digits(stored):
+    """В маске цифр ровно столько, сколько в коде страны, плюс две (D-10).
+
+    Сравнение со строкой образца ловит разбивку, а этот счёт — утечку: маска,
+    раскрывшая лишнюю цифру, выдала бы её при любой разбивке.
+    """
+    country_code = phonenumbers.parse(stored, None).country_code
+    shown_digits = [ch for ch in mask_phone(stored) if ch.isdigit()]
+    assert len(shown_digits) == len(str(country_code)) + 2, f"маска {stored!r} раскрывает лишнее"
+
+
+FORBIDDEN_CALLS = {"is_valid_number", "is_possible_number"}
+
+
+def _imported_modules(tree: ast.Module) -> list[str]:
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            names.append(node.module or "")
+    return names
+
+
+def _called_names(tree: ast.Module) -> set[str]:
+    called: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                called.add(node.func.attr)
+            elif isinstance(node.func, ast.Name):
+                called.add(node.func.id)
+    return called
+
+
+def test_the_module_is_pure_and_never_asks_validity():
+    """⚠️ МОДУЛЬ ЧИСТ И НЕ СПРАШИВАЕТ «ДЕЙСТВИТЕЛЬНОСТЬ» (D-05, D-12, Ф-1).
+
+    - Ввозы — только `phonenumbers*` и стандартная библиотека: ни базы, ни
+      слоёв приложения (D-12).
+    - Валидатор «действительности» не зовётся вовсе: метаданные отстают, а
+      Fragment он отвергает (D-05).
+    - Голая проверка «возможности» не зовётся: она пропускает местный номер
+      `IS_POSSIBLE_LOCAL_ONLY`; разрешена только форма `…_with_reason`.
+    """
+    tree = ast.parse(PHONE_MODULE.read_text(encoding="utf-8"))
+
+    imported = _imported_modules(tree)
+    assert imported, "антивакуум: в модуле обязан быть хотя бы ввоз phonenumbers"
+    foreign = [
+        name
+        for name in imported
+        if name.split(".")[0] != "phonenumbers"
+        and name.split(".")[0] not in sys.stdlib_module_names
+    ]
+    assert foreign == [], f"модуль номера ввозит лишнее: {foreign}"
+
+    called = _called_names(tree)
+    assert "parse" in called, "антивакуум: разбор обязан найтись среди вызовов"
+    assert called & FORBIDDEN_CALLS == set(), (
+        f"запрещённые вызовы: {sorted(called & FORBIDDEN_CALLS)}"
+    )
+
+
+def test_the_ast_rule_catches_a_validity_call_and_a_database_import():
+    """Контроль-отрицание: правило выше краснеет на подложенном исходнике."""
+    planted = ast.parse(
+        "import phonenumbers\n"
+        "from sqlalchemy import select\n"
+        "def f(n):\n"
+        "    return phonenumbers.is_valid_number(n) or phonenumbers.is_possible_number(n)\n"
+    )
+    assert "sqlalchemy" in _imported_modules(planted)
+    assert _called_names(planted) & FORBIDDEN_CALLS == FORBIDDEN_CALLS
