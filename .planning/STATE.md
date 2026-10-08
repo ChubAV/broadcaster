@@ -14,8 +14,8 @@ progress:
   total_phases: 5
   completed_phases: 0
   total_plans: 6
-  completed_plans: 0
-  percent: 0
+  completed_plans: 4
+  percent: 67
 ---
 
 # Project State
@@ -40,7 +40,7 @@ See: .planning/PROJECT.md (updated 2026-10-08)
 ## Current Position
 
 Phase: 16 (Хранение номера, нормализация и единый писатель) — EXECUTING
-Plan: 1 of 6
+Plan: 5 of 6
 Status: Executing Phase 16
 Last activity: 2026-10-08 — Phase 16 execution started
 (устарело, предмет — планирование фазы 16) 2026-10-08 — Фаза 16 спланирована: 6 планов в 3 волнах (16-01…16-06), проверка планов пройдена
