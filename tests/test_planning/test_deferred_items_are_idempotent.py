@@ -155,9 +155,16 @@ def deferred_files() -> list[Path]:
     return sorted(PLANNING_ROOT.rglob(DEFERRED_FILE_NAME))
 
 
-def anchor_is_required(path: Path) -> bool:
-    """Живой ли это файл отложенного: под `.planning/phases/` и с разделами ПЛАНОВ."""
-    if PLANNING_ROOT / "phases" not in path.parents:
+LIVE_PHASES_ROOT = PLANNING_ROOT / "phases"
+
+
+def anchor_is_required(path: Path, phases_root: Path = LIVE_PHASES_ROOT) -> bool:
+    """Живой ли это файл отложенного: под `.planning/phases/` и с разделами ПЛАНОВ.
+
+    `phases_root` — параметр с умолчанием живого корня (план 16-01): без него
+    синтетический контроль в `tmp_path` был бы невыразим. Тело и смысл прежние.
+    """
+    if phases_root not in path.parents:
         return False
     return any(
         _PLAN_SECTION_RE.match(line)
@@ -165,20 +172,66 @@ def anchor_is_required(path: Path) -> bool:
     )
 
 
-def _require_live_phases() -> None:
-    """Между вехами живых фаз нет — правило о ЖИВЫХ файлах пропускается С ИМЕНЕМ ПРИЧИНЫ.
+# Три состояния живой половины. ⚠️ Значения — русские слова, НЕ совпадающие ни с одним
+# вердиктом отчёта верификации: мета-гейт
+# `test_planning_gates_are_independent_of_the_live_verdict.py` ловит вердиктные литералы
+# в функциях, называющих живой корень, и состояние, названное вердиктом, покраснело бы
+# там на работе, а не на дефекте.
+DEFERRED_NO_CANDIDATES = "кандидатов нет"
+DEFERRED_UNRECOGNISED = "кандидат не опознан"
+DEFERRED_LIVE = "живые есть"
 
-    Закрытие вехи переносит каталоги фаз в `.planning/milestones/<веха>-phases/`, и до первой
-    фазы следующей вехи `.planning/phases/` пуст. Это замер, а не догадка: пропуск ставится,
-    только когда в живом каталоге нет НИ ОДНОГО каталога фазы; при любой живой фазе
-    антивакуумная половина ниже снова обязана найти живой файл отложенного.
+
+def live_deferred_state(files: list[Path], phases_root: Path) -> tuple[str, list[Path]]:
+    """Состояние живой половины по ПОДАННЫМ файлам и корню — чистая функция.
+
+    КАНДИДАТ — файл отложенного, лежащий под `phases_root`. Кандидатов нет —
+    `DEFERRED_NO_CANDIDATES` (законная пустота: дописывать отложенное ещё некуда).
+    Кандидаты есть, но ни один не несёт раздела плана — `DEFERRED_UNRECOGNISED` со
+    списком кандидатов (вакуум: файл есть, требование якоря не предъявлено никому).
+    Иначе — `DEFERRED_LIVE` со списком живых.
+
+    Корень и файлы приходят параметрами, а не читаются с живого дерева: иначе все три
+    состояния нельзя было бы показать на синтетике, не правя `.planning/`.
     """
-    phases_root = PLANNING_ROOT / "phases"
-    if not phases_root.is_dir() or not any(p.is_dir() for p in phases_root.iterdir()):
+    candidates = [path for path in files if phases_root in path.parents]
+    if not candidates:
+        return DEFERRED_NO_CANDIDATES, []
+    live = [path for path in candidates if anchor_is_required(path, phases_root)]
+    if not live:
+        return DEFERRED_UNRECOGNISED, candidates
+    return DEFERRED_LIVE, live
+
+
+def unrecognised_report(candidates: list[Path], base: Path) -> str:
+    """Текст отказа состояния `DEFERRED_UNRECOGNISED`: каждый кандидат назван путём."""
+    listed = "\n".join(f"  — {path.relative_to(base)}" for path in candidates)
+    return (
+        "файл отложенного под `.planning/phases/` есть, но разделов плана в нём нет — "
+        "требование якоря не предъявлено никому, правило зеленело бы впустую:\n"
+        f"{listed}"
+    )
+
+
+# ЛЕТОПИСЬ УСЛОВИЯ ПРОПУСКА (план 16-01, 2026-10-08): до плана 16-01 пропуск ставился,
+# только когда в `.planning/phases/` не было ни одного каталога фазы (помощник
+# `_require_live_phases`); старт вехи v2.2 (коммит `36f01b39`: каталог фазы 16 есть,
+# файла отложенного нет) показал третье состояние, и правило краснело на законной
+# пустоте; различитель — наличие КАНДИДАТА, а не каталога. Состояние «`.planning/phases/`
+# пуст» (между вехами) — частный случай отсутствия кандидатов, отдельной ветки не нужно.
+# Вакуум по-прежнему красный: кандидат есть, а опознанного живого нет.
+def _live_deferred_or_skip(files: list[Path]) -> list[Path]:
+    """Живые файлы отложенного; законная пустота — пропуск С ИМЕНЕМ ПРИЧИНЫ, вакуум — отказ."""
+    state, subjects = live_deferred_state(files, LIVE_PHASES_ROOT)
+    if state == DEFERRED_NO_CANDIDATES:
         pytest.skip(
-            "в `.planning/phases/` нет ни одного каталога фазы (веха закрыта, следующая не "
-            "начата) — живых файлов отложенного нет по построению"
+            "в живых фазах `.planning/phases/` нет ни одного файла `deferred-items.md` — "
+            "дописывать отложенное ещё некуда (старт вехи либо фаза без отложенного); "
+            "архивные файлы проверены правилом append-safe"
         )
+    if state == DEFERRED_UNRECOGNISED:
+        pytest.fail(unrecognised_report(subjects, PROJECT_ROOT))
+    return subjects
 
 
 def _report(path: Path, findings: list[Finding]) -> str:
@@ -192,23 +245,19 @@ def _report(path: Path, findings: list[Finding]) -> str:
 def test_every_deferred_items_file_stays_append_safe():
     """ПОВТОРНАЯ ПРАВКА ОТЛОЖЕННОГО НЕОТЛИЧИМА ОТ ПЕРВОЙ — у ВСЕХ файлов дерева.
 
-    Антивакуумная половина идёт ПЕРВОЙ и называет числа: правило, не нашедшее ни
-    одного файла отложенного либо ни одного ЖИВОГО файла, зеленело бы само собой —
-    то есть ровно тогда, когда каталог переехал и сторожить стало нечего.
+    Антивакуумная половина «файлов найдено больше нуля» идёт ПЕРВОЙ и называет числа:
+    правило, не нашедшее ни одного файла отложенного, зеленело бы само собой — то есть
+    ровно тогда, когда каталог переехал и сторожить стало нечего.
+
+    ⚠️ ПОРЯДОК НЕСУЩИЙ (план 16-01). Проверка ВСЕХ файлов дерева (архив включительно)
+    идёт ВТОРОЙ, живая половина `_live_deferred_or_skip` — ПОСЛЕДНЕЙ: законный пропуск
+    старта вехи никогда не снимает проверку архивных файлов, а вакуум живой половины
+    (кандидат есть, не опознан) краснит правило после неё.
     """
     files = deferred_files()
     assert files, (
         "в дереве планирования не найдено ни одного файла отложенного — обход "
         f"ищет `{DEFERRED_FILE_NAME}` под {PLANNING_ROOT.relative_to(PROJECT_ROOT)}"
-    )
-
-    live = [path for path in files if anchor_is_required(path)]
-    if not live:
-        _require_live_phases()
-    assert live, (
-        f"файлов отложенного найдено {len(files)}, но ЖИВЫХ (под `.planning/phases/` "
-        "и с разделами, именованными планами) — ни одного: требование якоря не "
-        "предъявлено никому, и правило зеленеет впустую"
     )
 
     reports = []
@@ -222,6 +271,9 @@ def test_every_deferred_items_file_stays_append_safe():
 
     assert not reports, "\n".join(reports)
 
+    live = _live_deferred_or_skip(files)
+    assert live, "живая половина вернула пустой перечень — помощник обязан был отказать"
+
 
 def test_the_anchor_closes_every_live_deferred_file():
     """ЯКОРЬ СТОИ́Т ПОСЛЕДНИМ СОДЕРЖАТЕЛЬНЫМ ЭЛЕМЕНТОМ, а не где придётся.
@@ -229,9 +281,7 @@ def test_the_anchor_closes_every_live_deferred_file():
     Якорь посреди файла разделил бы перечень надвое, и «внести перед якорем»
     означало бы для двух авторов два разных места.
     """
-    live = [path for path in deferred_files() if anchor_is_required(path)]
-    if not live:
-        _require_live_phases()
+    live = _live_deferred_or_skip(deferred_files())
     assert live, "живых файлов отложенного не найдено — сторожить нечего"
 
     for path in live:
@@ -388,3 +438,99 @@ def test_the_archived_file_is_judged_without_the_anchor_requirement():
     findings = deferred_items_findings(doubled_without_anchor, anchor_required=False)
     assert len(findings) == 1, "\n".join(str(item) for item in findings)
     assert findings[0].reason == REASON_DUPLICATE_SECTION
+
+
+# --- зубы живой половины: три состояния на синтетическом корне (план 16-01) ----------
+
+# ⚠️ НЕЦИКЛИЧНОСТЬ — та же, что выше: тексты выписаны литералами, файлы кладутся в
+# `tmp_path`, а не в `.planning/`. Правка живого дерева ради контроля была бы правкой
+# того, что проверяется.
+
+_SYNTHETIC_LIVE_WITHOUT_A_PLAN_SECTION = "\n".join(
+    [
+        "# Синтетическое отложенное без разделов плана",
+        "",
+        "## DEF-90-01",
+        "",
+        "### Находка, именованная находкой, а не планом",
+    ]
+)
+
+_SYNTHETIC_LIVE_WITH_A_PLAN_SECTION = "\n".join(
+    [
+        "# Синтетическое отложенное",
+        "",
+        f"Разделы вносятся ПЕРЕД якорем `{DEFERRED_END_ANCHOR}`.",
+        "",
+        "## План 90-01",
+        "",
+        "### Находка первая",
+        "",
+        DEFERRED_END_ANCHOR,
+    ]
+)
+
+
+def _plant(root: Path, relative: str, text: str) -> Path:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_control_an_unrecognised_live_candidate_is_named(tmp_path):
+    """Вакуум: кандидат под `phases/` без раздела плана — `DEFERRED_UNRECOGNISED`, путь назван.
+
+    Без этого контроля развилка старта вехи могла бы зеленеть и там, где файл
+    отложенного в живой фазе есть, но правило якоря никому не предъявлено.
+    """
+    phases_root = tmp_path / "phases"
+    planted = _plant(
+        phases_root, "90-sintetika/deferred-items.md", _SYNTHETIC_LIVE_WITHOUT_A_PLAN_SECTION
+    )
+
+    state, subjects = live_deferred_state([planted], phases_root)
+
+    assert state == DEFERRED_UNRECOGNISED, state
+    assert subjects == [planted], subjects
+    report = unrecognised_report(subjects, tmp_path)
+    assert "phases/90-sintetika/deferred-items.md" in report, report
+    assert state != DEFERRED_NO_CANDIDATES, "вакуум не обязан выглядеть законной пустотой"
+
+
+def test_control_a_recognised_live_candidate_is_live(tmp_path):
+    """Позитивная пара: тот же путь с разделом `## План 90-01` и якорем — `DEFERRED_LIVE`.
+
+    Это и есть состояние после волны, если исполнитель фазы заведёт живой файл
+    отложенного с разделом плана: правило не пропускается, а судит его.
+    """
+    phases_root = tmp_path / "phases"
+    planted = _plant(
+        phases_root, "90-sintetika/deferred-items.md", _SYNTHETIC_LIVE_WITH_A_PLAN_SECTION
+    )
+
+    state, subjects = live_deferred_state([planted], phases_root)
+
+    assert state == DEFERRED_LIVE, state
+    assert subjects == [planted], subjects
+    assert deferred_items_findings(planted.read_text(encoding="utf-8")) == []
+
+
+def test_control_an_archive_only_tree_has_no_live_candidates(tmp_path):
+    """Законная пустота: файл только в архиве вехи (с разделом плана) — `DEFERRED_NO_CANDIDATES`.
+
+    Раздел плана у архивного файла живым его не делает: граница — корень `phases/`,
+    а не форма текста.
+    """
+    phases_root = tmp_path / "phases"
+    phases_root.mkdir()
+    archived = _plant(
+        tmp_path,
+        "milestones/v9.8-phases/90-x/deferred-items.md",
+        _SYNTHETIC_LIVE_WITH_A_PLAN_SECTION,
+    )
+
+    state, subjects = live_deferred_state([archived], phases_root)
+
+    assert state == DEFERRED_NO_CANDIDATES, state
+    assert subjects == [], subjects
