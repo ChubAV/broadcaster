@@ -54,7 +54,7 @@ from app.pages.htmx import HX_LOCATION_HEADER
 # Разборщик блока конфигурации и сидеры — ИМПОРТОМ, а не вторыми копиями: два
 # разборщика одного атрибута разъехались бы молча (D-01, прецедент —
 # tests/test_pages/test_htmx_response_contract.py).
-from tests.test_pages.test_responsive_markup import _seed_account
+from tests.test_pages.test_responsive_markup import _seed_account, _seed_ad
 from tests.test_pages.test_shell import _htmx_config_of
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -204,4 +204,89 @@ async def test_the_swap_after_an_account_deletion_cannot_strip_the_hidden_state_
         "рантайм вернёт корням панелей серверный атрибут без style и сотрёт "
         "display: none, записанный Alpine, — панели оставшихся аккаунтов "
         "всплывут стопкой после подтверждения (issue #51)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_swap_after_an_ad_deletion_cannot_strip_the_hidden_state_of_the_other_panels(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Свидетель того, что механизм ОБЩИЙ, а не свойство раздела аккаунтов.
+
+    Та же панель (`components/modal.html`), тот же ответ перехода
+    (`HX-Location: /ads`), та же подмена тела — и панели оставшихся объявлений
+    под прежними `id`. Замер планировщика по этой поверхности до правки: после
+    подтверждения открыты `ad-del-2` и `ad-del-3`. Собственный литеральный POST,
+    а не параметризация адреса: гейты пар транспорта разбирают адрес из
+    исходника.
+    """
+    ads = [await _seed_ad(db_session, title=f"Объявление {n}") for n in range(3)]
+    doomed, *survivors = ads
+
+    page = await authed_client.get("/ads")
+    assert page.status_code == 200
+    config = _htmx_config_of(page.text, "base.html")
+
+    runtime_default = _runtime_settle_default()
+    assert "style" in runtime_default, (
+        f"умолчание вендоренного рантайма {runtime_default} больше не осаждает "
+        "style — предпосылка регрессии issue #51 пересобирается по артефакту"
+    )
+
+    before = _panel_roots(page.text, "ad-del-")
+    assert set(before) == {f"ad-del-{ad.id}" for ad in ads}, before.keys()
+    _assert_panel_roots_have_alpine_owned_style(before, "/ads")
+
+    deleted = await authed_client.post(
+        f"/ads/{doomed.id}/delete",
+        headers={"HX-Request": "true"},
+        follow_redirects=False,
+    )
+    assert deleted.status_code == 204, deleted.status_code
+    assert deleted.headers.get(HX_LOCATION_HEADER) == "/ads", deleted.headers
+
+    swapped = await authed_client.get("/ads", headers={"HX-Request": "true"})
+    assert swapped.status_code == 200
+    after = _panel_roots(swapped.text, "ad-del-")
+    assert after, "ответ подмены не принёс ни одной панели — сценарий вакуумен"
+    assert set(after) == {f"ad-del-{ad.id}" for ad in survivors}, after.keys()
+    assert set(after) <= set(before), (
+        "панели оставшихся объявлений пришли под НОВЫМИ id — оседанию нечего "
+        "сопоставлять, сценарий не воспроизводит issue #51"
+    )
+
+    effective = _effective_settle_list(config)
+    assert _settled_panel_state(effective) == [], (
+        f"действующий список оседания документа {effective} (умолчание "
+        f"вендоренного рантайма {runtime_default}) осаждает "
+        f"{_settled_panel_state(effective)}: при подмене тела по HX-Location "
+        "рантайм вернёт корням панелей серверный атрибут без style и сотрёт "
+        "display: none, записанный Alpine, — панели оставшихся объявлений "
+        "всплывут стопкой после подтверждения (issue #51)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_control_negative_the_panel_settle_predicate_names_style_on_the_runtime_default(
+    authed_client: AsyncClient,
+):
+    """Предикат умеет называть `style` — и называет его ровно на умолчании рантайма.
+
+    Без этого контроля зелёный предикат сценариев неотличим от предиката, не
+    умеющего называть ничего: пустое пересечение получилось бы и от сломанного
+    кортежа владения, и от сломанного чтения бандла. Поданный умолчанию
+    вендоренного рантайма предикат обязан вернуть `["style"]`, поданный
+    действующему списку отгруженного шелла — пусто.
+    """
+    assert _settled_panel_state(_runtime_settle_default()) == ["style"], (
+        f"предикат на умолчании рантайма {_runtime_settle_default()} не назвал "
+        "style — регрессия issue #51 стала вакуумной"
+    )
+
+    response = await authed_client.get("/dashboard")
+    assert response.status_code == 200
+    shipped = _effective_settle_list(_htmx_config_of(response.text, "base.html"))
+    assert _settled_panel_state(shipped) == [], (
+        f"отгруженный список оседания {shipped} осаждает атрибуты, которыми "
+        "владеет состояние панели (issue #51)"
     )
