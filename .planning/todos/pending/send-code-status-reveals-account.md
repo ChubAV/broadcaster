@@ -5,6 +5,9 @@ source: 14-VERIFICATION.md WR-03 / W-R2-02 / Q4; 14-REVIEW.md WR-03; решен�
 area: auth / безопасность
 severity: medium
 addressee: отложенная работа по перечислению адресов (`14-CONTEXT.md` §Deferred Ideas)
+audit_acknowledged:
+  milestone: v2.1
+  at: 2026-10-08
 ---
 
 # Код ответа шагов отправки кода раскрывает существование учётки

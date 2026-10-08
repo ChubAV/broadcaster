@@ -52,7 +52,27 @@ pytestmark = pytest.mark.planning
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PLANNING_ROOT = PROJECT_ROOT / ".planning"
-REQUIREMENTS_PATH = PLANNING_ROOT / "REQUIREMENTS.md"
+LIVE_REQUIREMENTS_PATH = PLANNING_ROOT / "REQUIREMENTS.md"
+
+
+def _requirements_record_path() -> Path:
+    """Запись требований: живая, а между вехами — архив вехи, названной STATE.
+
+    Закрытие вехи снимает `.planning/REQUIREMENTS.md` (свежий приходит с
+    `/gsd-new-milestone`) и кладёт запись в `.planning/milestones/<веха>-REQUIREMENTS.md`.
+    Веха берётся из поля `milestone` frontmatter `.planning/STATE.md` — тем же, чем её
+    называет закрытие; нет ни живой записи, ни архива — `FileNotFoundError` живого пути,
+    громко, а не пропуском.
+    """
+    if LIVE_REQUIREMENTS_PATH.is_file():
+        return LIVE_REQUIREMENTS_PATH
+    state = PLANNING_ROOT / "STATE.md"
+    named = re.search(r"^milestone:\s*\"?(?P<label>v[\d.]+)", state.read_text(encoding="utf-8"), re.M)
+    if named:
+        archived = PLANNING_ROOT / MILESTONES_DIR_NAME / f"{named.group('label')}-REQUIREMENTS.md"
+        if archived.is_file():
+            return archived
+    return LIVE_REQUIREMENTS_PATH
 
 # Состояние клетки, которым таблица объявляет требование завершённым. Литерал взят
 # у самой записи (`.planning/REQUIREMENTS.md`, раздел Traceability) и НЕ выводится
@@ -98,6 +118,7 @@ _FRONTMATTER_FENCE = "---"
 #     основание записано докстрингом сборки индекса ниже.
 MILESTONES_DIR_NAME = "milestones"
 _ARCHIVE_MILESTONE_DIR_RE = re.compile(r"^(?P<milestone>.+)-phases$")
+REQUIREMENTS_PATH = _requirements_record_path()
 
 # МЕТКА РАСПОЛОЖЕНИЯ, А НЕ ИМЯ ВЕХИ, И ЭТО РАЗЛИЧЕНИЕ НЕСУЩЕЕ. Отчёты действующей
 # вехи лежат в каталоге фаз, имени вехи в их пути нет, поэтому вывести это имя из
@@ -202,7 +223,14 @@ def _record_milestone(text: str) -> str:
     проверять что бы то ни было, ничем этого не показав.
     """
     lines = text.splitlines()
-    heading = next((line for line in lines if line.startswith("# ")), "")
+    # Архив записи (`.planning/milestones/<веха>-REQUIREMENTS.md`) открывается своим
+    # заголовком «Requirements Archive», а собственный заголовок записи идёт следом, —
+    # берётся первый заголовок, НАЗЫВАЮЩИЙ веху; ни одного — тот же громкий отказ.
+    headings = [line for line in lines if line.startswith("# ")]
+    heading = next(
+        (line for line in headings if _RECORD_MILESTONE_RE.search(line)),
+        headings[0] if headings else "",
+    )
     named = _RECORD_MILESTONE_RE.search(heading)
     if named is None:
         raise AssertionError(

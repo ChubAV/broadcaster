@@ -93,12 +93,19 @@ from app.services.schedule_service import compute_next_run_at
 pytestmark = pytest.mark.planning
 
 TREE_ROOT = Path(__file__).resolve().parents[2]
-WALKTHROUGH_PATH = (
-    TREE_ROOT
-    / ".planning"
-    / "phases"
-    / "10-rychag-components-modal-html"
-    / "10-UAT.md"
+_WALKTHROUGH_RELATIVE = Path("10-rychag-components-modal-html") / "10-UAT.md"
+# Закрытие вехи v2.1 (2026-10-08) перенесло каталоги фаз в `.planning/milestones/v2.1-phases/`;
+# живой путь остаётся первым, чтобы файл, вернувшийся в работу, читался оттуда.
+WALKTHROUGH_PATH = next(
+    (
+        candidate
+        for candidate in (
+            TREE_ROOT / ".planning" / "phases" / _WALKTHROUGH_RELATIVE,
+            TREE_ROOT / ".planning" / "milestones" / "v2.1-phases" / _WALKTHROUGH_RELATIVE,
+        )
+        if candidate.is_file()
+    ),
+    TREE_ROOT / ".planning" / "phases" / _WALKTHROUGH_RELATIVE,
 )
 
 # ⚠️ ПУТЬ ЗДЕСЬ ОДИН, И ГРАНИЦА НАЗВАНА: правило стережёт РОВНО ОДНУ команду РОВНО
