@@ -5,11 +5,11 @@ milestone_name: Номера аккаунтов
 current_phase: 16
 current_phase_name: Хранение номера, нормализация и единый писатель
 status: planning
-stopped_at: Роадмап вехи v2.2 создан (фазы 16…20), ждёт одобрения владельца
-last_updated: "2026-10-08T13:13:13.894Z"
+stopped_at: Phase 16 context gathered
+last_updated: "2026-10-08T13:54:02.987Z"
 last_activity: 2026-10-08
 last_activity_desc: "Роадмап вехи v2.2 создан: 5 фаз (16…20), 21/21 требование отображено"
-state_head: d46514cd2c9b9785adbce5e8a0c44b81d19b17bc
+state_head: 36f01b393c384c72e45efa073ea86da09aa91139
 progress:
   total_phases: 5
   completed_phases: 0
@@ -830,9 +830,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-10-08T13:12:47.143Z
-Stopped at: Роадмап вехи v2.2 создан (фазы 16…20), ждёт одобрения владельца
-Resume file: None
+Last session: 2026-10-08T13:54:02.875Z
+Stopped at: Phase 16 context gathered
+Resume file: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-CONTEXT.md
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 
