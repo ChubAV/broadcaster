@@ -961,6 +961,24 @@ in-memory SQLite через `ASGITransport` без процесса и порт�
 Полный перечень с основаниями — `.planning/STATE.md` §Deferred Items,
 `.planning/MILESTONES.md` §v2.0.
 
+## Backlog
+
+### Phase 999.1: Follow-up — Phase 14 deferred UAT follow-up: Test 8 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 14 verification
+**Source phase:** 14
+**Deferred at:** 2026-10-08 during /gsd-verify-work 14 session completion (решение владельца `chubav`, Q7)
+**Follow-ups:**
+- (открыто) Test 8: Наблюдать фокус и объявление скринридера после подмены `#auth-step` (14-UI-REVIEW WARNING 2): куда встаёт фокус после Tab на экране кода и на входе, что объявляет скринридер и какой (deferred 2026-10-08)
+
+### Phase 999.2: Follow-up — Phase 14 deferred UAT follow-up: Test 9 (BACKLOG)
+
+**Goal:** Resolve the UAT checkpoint deferred during Phase 14 verification
+**Source phase:** 14
+**Deferred at:** 2026-10-08 during /gsd-verify-work 14 session completion (решение владельца `chubav`, Q7)
+**Follow-ups:**
+- (открыто) Test 9: Наблюдать вторую кнопку экрана кода, пока первый запрос в полёте (14-UI-REVIEW WARNING 3): выглядит ли «Отправить код повторно» живой, есть ли у неё индикатор (deferred 2026-10-08)
+
 ---
 
 *Требования вехи — `.planning/REQUIREMENTS.md`. Разведка — `.planning/research/SUMMARY.md`.*
