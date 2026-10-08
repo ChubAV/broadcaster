@@ -1,10 +1,11 @@
 ---
 phase: 14-avtorizatsiya-na-htmx
-verified: 2026-10-08T06:16:48Z
+verified: 2026-10-08T06:33:16Z
 status: passed
 score: 13/13 must-haves verified  # 12 VERIFIED + 1 PASSED (override) — SC4 по подписи владельца
 covered_files:
   - ".planning/REQUIREMENTS.md"
+  - ".planning/ROADMAP.md"
   - ".planning/phases/14-avtorizatsiya-na-htmx/14-01-PLAN.md"
   - ".planning/phases/14-avtorizatsiya-na-htmx/14-01-SUMMARY.md"
   - ".planning/phases/14-avtorizatsiya-na-htmx/14-02-PLAN.md"
@@ -63,8 +64,26 @@ covered_files:
   - "tests/test_pages/test_registration.py"
   - "tests/test_planning/test_the_walkthrough_cannot_self_certify.py"
   - "tests/test_templates/test_htmx_markup_gates.py"
-covered_digest: "v3:sha256:665f42786c4be900bb75753c13582c9201941d9449ea4f0659eee8b6165da3a4"
+covered_digest: "v3:sha256:c3d1606bee98bf86eeab86c2f92850a8f7a160d716cd4623bee7db3fd1d49b0c"
 
+# Отпечаток КРУГА 6 (2026-10-08) посчитан штатным вербом gsd-core 1.16 `verification.fingerprint`
+# и скопирован из его вывода дословно. Передано 46 путей: список кругов 3–5 (45) плюс
+# `.planning/ROADMAP.md`. Верб добавил 14 PLAN/SUMMARY фазы, итого 60; сверено поимённо скриптом в
+# scratchpad (`lost: set()`, дублей 0). Второй вызов, с одноразовым дублем первого пути, дал те же
+# 60 файлов и то же значение. `ROADMAP.md` добавлен потому, что этот круг ОПИРАЕТ вердикт на его
+# раздел `## Backlog`: записи 999.1 и 999.2 — адресат находок UI WARNING 2 и 3 по решению владельца
+# Q7 (а). Если их снять или переписать, вердикт должен стать устаревшим. Прежнее значение
+# `v3:sha256:665f4278…` ошибкой не было: оно устарело по правке `14-UAT.md` (e392145c — причины
+# проверок 8 и 9 → `Deferred follow-up: …`, раздел `## Deferred Follow-Ups`). `14-UAT.md`,
+# `.planning/REQUIREMENTS.md` и теперь `.planning/ROADMAP.md` в списке намеренно: закрытие фазы
+# (`phase.complete`) правит первые два из трёх покрытых учётных файлов и, возможно, `ROADMAP.md`, и
+# сделает этот вердикт устаревшим. Пересчитывать — тем же вербом по тому же списку из 46 путей,
+# вердикт не трогать. Сам `14-VERIFICATION.md` с подписанным блоком `overrides` верб в покрытие не
+# берёт. Улика круга вне дерева покрытию не подлежит и названа в теле: журнал сессии оркестратора
+# `~/.claude/projects/-source-broadcaster/de9e5bcb-….jsonl` (вопрос Q7 06:18:54.064Z, ответ 06:19:00.030Z).
+#
+# --- Летописи круга 5, круга 4, круга 3, круга 2 и круга 1 — перенесены ДОСЛОВНО, записи своего дня ---
+#
 # Отпечаток КРУГА 5 (2026-10-08) посчитан штатным вербом gsd-core 1.16 `verification.fingerprint`
 # и скопирован из его вывода дословно. Передано 45 путей — тот же список, что в кругах 3 и 4. Верб
 # добавил 14 PLAN/SUMMARY фазы, итого 59; сверено поимённо скриптом в scratchpad (`lost: set()`,
@@ -180,6 +199,10 @@ decision_coverage:  # перемерено 2026-10-07 `check.decision-coverage-v
 # `resolution` пунктов человеку 8 и 9 и в счёт не входит. `decision_coverage` перемерено в круге 5:
 # 15/15, `not_honored: []`. Правило закрытия D-02 владелец ослабил только для Фазы 14. Гейт покрытия
 # решений меряет поставленные артефакты, поэтому его итог от этого не меняется.
+# круг 6: счётчики те же — `behavior_unverified: 0`, `backstop_abstentions: 0`, `overrides_applied: 1`.
+# Правка e392145c ни одной истины не касается: SC4 по-прежнему PASSED (override 1), override 2 по-прежнему
+# вне счёта. `decision_coverage` перемерено в круге 6 (`check.decision-coverage-verify` с явным путём к
+# 14-CONTEXT.md): 15/15, `not_honored: []`.
 
 overrides:
   # Подписано владельцем 2026-10-08T06:03:27Z в `/gsd-verify-work 14` (ответ на Q6, вариант (б) верификатора круга 4).
@@ -195,104 +218,129 @@ overrides:
     accepted_at: "2026-10-08T06:03:27Z"
     covers: "human_verification 8 и 9 — отказ от наблюдения; находки UI WARNING 2/3 не закрыты"
 re_verification:
-  round: 5
-  previous_status: human_needed
-  previous_score: 12/13
-  previous_round_record:  # круг 4 — его блок `re_verification` ДОСЛОВНО (сдвинут на два пробела) под реквизитами круга 4
-    verified: 2026-10-08T05:50:52Z
-    report_commit: 97b35cfc
-    tree: f447c5ed
-    covered_digest: "v3:sha256:d55cf413d341bbd4509e051af8e6d1948064ca1882f4f5fe9cf6b9349565e7ba"
+  round: 6
+  previous_status: passed
+  previous_score: 13/13
+  previous_round_record:  # круг 5 — его блок `re_verification` ДОСЛОВНО (сдвинут на два пробела) под реквизитами круга 5
+    verified: 2026-10-08T06:16:48Z
+    report_commit: 833a16eb
+    tree: bae74ab7
+    covered_digest: "v3:sha256:665f42786c4be900bb75753c13582c9201941d9449ea4f0659eee8b6165da3a4"
     covered_files_count: 59
-    backup: "/tmp/claude-1000/-source-broadcaster/de9e5bcb-8120-4312-a510-6c1b1de2dbd7/scratchpad/14-VERIFICATION.pre-round5.md"
-    backup_note: "копия файла на bae74ab7, то есть отчёт круга 4 плюс внесённые оркестратором поля Q6 и блок `overrides`; отчёт круга 4 сам по себе — 97b35cfc"
-    round: 4
+    backup: "/tmp/claude-1000/-source-broadcaster/de9e5bcb-8120-4312-a510-6c1b1de2dbd7/scratchpad/14-VERIFICATION.pre-round6.md"
+    backup_note: "копия файла на e392145c, то есть отчёт круга 5 плюс внесённое оркестратором поле Q7 `owner_answer`; отчёт круга 5 сам по себе — 833a16eb"
+    round: 5
     previous_status: human_needed
     previous_score: 12/13
-    previous_round_record:  # круг 3 — его блок `re_verification` ДОСЛОВНО (сдвинут на два пробела) под реквизитами круга 3
-      verified: 2026-10-07T15:58:55Z
-      report_commit: 93e1d4d2
-      tree: 9cce13ea
-      covered_digest: "v3:sha256:8b0c2b00eda5eefb7c450e7cc50a2be8ac7d12a4d5c73859281ea7ff2de61147"
+    previous_round_record:  # круг 4 — его блок `re_verification` ДОСЛОВНО (сдвинут на два пробела) под реквизитами круга 4
+      verified: 2026-10-08T05:50:52Z
+      report_commit: 97b35cfc
+      tree: f447c5ed
+      covered_digest: "v3:sha256:d55cf413d341bbd4509e051af8e6d1948064ca1882f4f5fe9cf6b9349565e7ba"
       covered_files_count: 59
-      backup: "/tmp/claude-1000/-source-broadcaster/de9e5bcb-8120-4312-a510-6c1b1de2dbd7/scratchpad/14-VERIFICATION.pre-round4.md"
-      round: 3
+      backup: "/tmp/claude-1000/-source-broadcaster/de9e5bcb-8120-4312-a510-6c1b1de2dbd7/scratchpad/14-VERIFICATION.pre-round5.md"
+      backup_note: "копия файла на bae74ab7, то есть отчёт круга 4 плюс внесённые оркестратором поля Q6 и блок `overrides`; отчёт круга 4 сам по себе — 97b35cfc"
+      round: 4
       previous_status: human_needed
       previous_score: 12/13
-      previous_round_record:  # круг 2 — его блок `re_verification` ДОСЛОВНО (сдвинут на два пробела) под реквизитами круга 2
-        verified: 2026-10-07T12:31:06Z
-        report_commit: cbbcc5e9
-        tree: ec41dcef
-        covered_digest: "v3:sha256:617245a760d52dcb8a469e52e4dfd94ab805b2e1369c6d7503538eb74b3d466f"
-        covered_files_count: 55
-        backup: "/tmp/claude-1000/-source-broadcaster/e571cfb6-41a3-4d6e-a625-61385c368bcd/scratchpad/14-VERIFICATION.pre-round3.md"
-        round: 2
-        previous_status: "frontmatter `passed` (канонизация 3260c9b7, 2026-09-23 15:35Z, на посылке «UAT 9/9»); тело отчёта `human_needed` (65b313bc)"
+      previous_round_record:  # круг 3 — его блок `re_verification` ДОСЛОВНО (сдвинут на два пробела) под реквизитами круга 3
+        verified: 2026-10-07T15:58:55Z
+        report_commit: 93e1d4d2
+        tree: 9cce13ea
+        covered_digest: "v3:sha256:8b0c2b00eda5eefb7c450e7cc50a2be8ac7d12a4d5c73859281ea7ff2de61147"
+        covered_files_count: 59
+        backup: "/tmp/claude-1000/-source-broadcaster/de9e5bcb-8120-4312-a510-6c1b1de2dbd7/scratchpad/14-VERIFICATION.pre-round4.md"
+        round: 3
+        previous_status: human_needed
         previous_score: 12/13
-        previous_round_record:
-          verified: 2026-09-23T08:15:00Z
-          report_commit: 65b313bc
-          tree: 63f744be
-          status_canonicalized_by: 3260c9b7
-          covered_digest: "v1:sha256:740a47e9fa6e00d45fbac8f45def06dc68bc4bd009676eec70f19d5fd9bb5ee9"
-          covered_files_count: 46
-          backup: "/tmp/claude-1000/-source-broadcaster/5237445f-ef32-49eb-8249-b51037b7bd3a/scratchpad/14-VERIFICATION.pre-round.md"
-        why_stale: "покрытые файлы изменились после закрытия круга: REQUIREMENTS.md; 14-02…14-06-PLAN.md (только перенумерация угроз, feaa701f); app.css и четыре модуля гейтов (дописаны Фазой 15)"
+        previous_round_record:  # круг 2 — его блок `re_verification` ДОСЛОВНО (сдвинут на два пробела) под реквизитами круга 2
+          verified: 2026-10-07T12:31:06Z
+          report_commit: cbbcc5e9
+          tree: ec41dcef
+          covered_digest: "v3:sha256:617245a760d52dcb8a469e52e4dfd94ab805b2e1369c6d7503538eb74b3d466f"
+          covered_files_count: 55
+          backup: "/tmp/claude-1000/-source-broadcaster/e571cfb6-41a3-4d6e-a625-61385c368bcd/scratchpad/14-VERIFICATION.pre-round3.md"
+          round: 2
+          previous_status: "frontmatter `passed` (канонизация 3260c9b7, 2026-09-23 15:35Z, на посылке «UAT 9/9»); тело отчёта `human_needed` (65b313bc)"
+          previous_score: 12/13
+          previous_round_record:
+            verified: 2026-09-23T08:15:00Z
+            report_commit: 65b313bc
+            tree: 63f744be
+            status_canonicalized_by: 3260c9b7
+            covered_digest: "v1:sha256:740a47e9fa6e00d45fbac8f45def06dc68bc4bd009676eec70f19d5fd9bb5ee9"
+            covered_files_count: 46
+            backup: "/tmp/claude-1000/-source-broadcaster/5237445f-ef32-49eb-8249-b51037b7bd3a/scratchpad/14-VERIFICATION.pre-round.md"
+          why_stale: "покрытые файлы изменились после закрытия круга: REQUIREMENTS.md; 14-02…14-06-PLAN.md (только перенумерация угроз, feaa701f); app.css и четыре модуля гейтов (дописаны Фазой 15)"
+          what_changed:
+            - "Продуктовый код фазы — НОЛЬ строк: `git diff 63f744be HEAD` по app/pages/auth.py, app/pages/htmx.py, app/main.py, app/templates/auth/, auth_base.html, base.html, components/, includes/notice_area.html, app/services/auth_service.py пуст (замер круга 2)"
+            - "includes/htmx_error_banner.html (его включает auth_base.html:66): изменены ТОЛЬКО два aria-label органа снятия плашки (планы 15-07/15-19); новых обработчиков нет"
+            - "app.css: правила `.auth-*`, `.field*`, `.form-busy`, `.form-wrapper` побайтово те же; Фаза 15 тронула токен `--focus-ring`, отступ `.failure-stack > .alert` и плитку медиа"
+            - "test_auth_transport.py: +16 строк докстроки правила CR-02 (81894644), кода 0; прочие модули правил фазы — без правок; модули гейтов выросли правилами Фазы 15 (номера строк сдвинуты, значения констант фазы те же)"
+            - "14-UAT.md: объявление `complete` отозвано (f2361428); 14-SECURITY.md: перенумерация угроз T-14-22…34 (feaa701f), принятие T-14-21/R-14-03"
+          premise_withdrawn: "обход человека 9/9 — отозван владельцем; `passed` круга 1 не наследуется"
+          gaps_closed: []  # в круге 1 блока `gaps` не было
+          gaps_remaining: []
+          regressions: []  # регрессий кода нет; расхождения ЗАПИСЕЙ — см. W-R2-01…03 в теле
+          carried_items_closed:
+            - "Эскалация CR-02 / WR-07 — решена владельцем 2026-09-23 (T-14-21 closed (accepted), R-14-03; летопись правила 81894644)"
+            - "Отсрочка 3 (`hx-push-url` на формах авторизации) — закрыта Фазой 15, критерий 3 (15-FORM-DECISIONS.md, строки 35–44; правила `test_push_url_*` зелены)"
+        why_stale: "покрытые файлы изменились после круга 2: `14-UAT.md` (f63a3c49 — обход «пройден заново», шапка `complete`, девять отметок заполнены) и `14-SECURITY.md` (9cce13ea — перепринятие R-14-02). Круг 2 сам внёс `14-UAT.md` в покрытие, чтобы заполнение отметок сделало вердикт устаревшим"
         what_changed:
-          - "Продуктовый код фазы — НОЛЬ строк: `git diff 63f744be HEAD` по app/pages/auth.py, app/pages/htmx.py, app/main.py, app/templates/auth/, auth_base.html, base.html, components/, includes/notice_area.html, app/services/auth_service.py пуст (замер круга 2)"
-          - "includes/htmx_error_banner.html (его включает auth_base.html:66): изменены ТОЛЬКО два aria-label органа снятия плашки (планы 15-07/15-19); новых обработчиков нет"
-          - "app.css: правила `.auth-*`, `.field*`, `.form-busy`, `.form-wrapper` побайтово те же; Фаза 15 тронула токен `--focus-ring`, отступ `.failure-stack > .alert` и плитку медиа"
-          - "test_auth_transport.py: +16 строк докстроки правила CR-02 (81894644), кода 0; прочие модули правил фазы — без правок; модули гейтов выросли правилами Фазы 15 (номера строк сдвинуты, значения констант фазы те же)"
-          - "14-UAT.md: объявление `complete` отозвано (f2361428); 14-SECURITY.md: перенумерация угроз T-14-22…34 (feaa701f), принятие T-14-21/R-14-03"
-        premise_withdrawn: "обход человека 9/9 — отозван владельцем; `passed` круга 1 не наследуется"
-        gaps_closed: []  # в круге 1 блока `gaps` не было
+          - "С `cbbcc5e9` ровно два коммита, оба только под `.planning/`: `git diff --name-only cbbcc5e9..HEAD` — 14-SECURITY.md, 14-UAT.md, todos/pending/send-code-status-reveals-account.md"
+          - "Вне `.planning/` с `feaa701f` не изменилось НИЧЕГО: `git diff --name-only feaa701f..HEAD -- . ':!.planning'` — 0 строк. Продуктовый код и правила фазы — те же, что в круге 2"
+          - "14-UAT.md: `status: human_needed` → `testing` → `complete`; девять `result: pass` → `[pending]` (с `history:`) → `pass`; девять таблиц отметок заполнены одной шаблонной строкой; `## Summary` — `passed: 9`"
+          - "14-SECURITY.md: основание строки реестра T-14-09/T-14-31/T-14-32 и строки R-14-02 исправлено (оракул 422/200), абзац-летопись; уровень, диспозиция, статус, `threats_open: 0` — без изменений"
+          - "REQUIREMENTS.md (в `cbbcc5e9`, после записи отчёта круга 2): SIGN-01…03 → `[ ]` / `Pending`, летопись `:64` — исполнение Q1"
+        premise_checked: "обход 2026-10-07 — запись проверена по первичным уликам (журнал сессии, журналы стенда, форма отметок): наблюдения не несёт → пункты 1–9 `still_required`; `passed` не выводится (W-R3-01, Q5)"
+        gaps_closed: []  # блока `gaps` не было ни в одном круге
         gaps_remaining: []
-        regressions: []  # регрессий кода нет; расхождения ЗАПИСЕЙ — см. W-R2-01…03 в теле
+        regressions: []  # кода не меняли; 27 именованных правил — PASS
         carried_items_closed:
-          - "Эскалация CR-02 / WR-07 — решена владельцем 2026-09-23 (T-14-21 closed (accepted), R-14-03; летопись правила 81894644)"
-          - "Отсрочка 3 (`hx-push-url` на формах авторизации) — закрыта Фазой 15, критерий 3 (15-FORM-DECISIONS.md, строки 35–44; правила `test_push_url_*` зелены)"
-      why_stale: "покрытые файлы изменились после круга 2: `14-UAT.md` (f63a3c49 — обход «пройден заново», шапка `complete`, девять отметок заполнены) и `14-SECURITY.md` (9cce13ea — перепринятие R-14-02). Круг 2 сам внёс `14-UAT.md` в покрытие, чтобы заполнение отметок сделало вердикт устаревшим"
+          - "human_verification 10 / Q3 / отсрочка 1 (адресат) — адресат записан владельцем 2026-10-06 (457b354f), подтверждён ответом на Q3; круг 2 его не нашёл"
+          - "W-R2-02 / Q4 — R-14-02 перепринят с исправленным основанием (9cce13ea)"
+          - "W-R2-03 / Q1 — SIGN-01…03 возвращены в `Pending` (cbbcc5e9); правило записей зелено"
+      why_stale: "покрытый `14-UAT.md` изменён после круга 3 (f447c5ed): обход перезапущен, затем снова объявлен `complete`. Круг 2 внёс файл обхода в покрытие именно для того, чтобы любая правка записи обхода делала вердикт устаревшим"
       what_changed:
-        - "С `cbbcc5e9` ровно два коммита, оба только под `.planning/`: `git diff --name-only cbbcc5e9..HEAD` — 14-SECURITY.md, 14-UAT.md, todos/pending/send-code-status-reveals-account.md"
-        - "Вне `.planning/` с `feaa701f` не изменилось НИЧЕГО: `git diff --name-only feaa701f..HEAD -- . ':!.planning'` — 0 строк. Продуктовый код и правила фазы — те же, что в круге 2"
-        - "14-UAT.md: `status: human_needed` → `testing` → `complete`; девять `result: pass` → `[pending]` (с `history:`) → `pass`; девять таблиц отметок заполнены одной шаблонной строкой; `## Summary` — `passed: 9`"
-        - "14-SECURITY.md: основание строки реестра T-14-09/T-14-31/T-14-32 и строки R-14-02 исправлено (оракул 422/200), абзац-летопись; уровень, диспозиция, статус, `threats_open: 0` — без изменений"
-        - "REQUIREMENTS.md (в `cbbcc5e9`, после записи отчёта круга 2): SIGN-01…03 → `[ ]` / `Pending`, летопись `:64` — исполнение Q1"
-      premise_checked: "обход 2026-10-07 — запись проверена по первичным уликам (журнал сессии, журналы стенда, форма отметок): наблюдения не несёт → пункты 1–9 `still_required`; `passed` не выводится (W-R3-01, Q5)"
+        - "С `93e1d4d2` ровно один коммит — `f447c5ed` (2026-10-08T05:43:56Z): `git diff --name-only 93e1d4d2..HEAD` — только `14-UAT.md`, +42/−20"
+        - "Вне `.planning/` с `ec41dcef` не изменилось НИЧЕГО: `git diff --name-only ec41dcef..HEAD -- . ':!.planning'` — 0 строк"
+        - "14-UAT.md: абзац 2026-10-07T16:28:14Z отзывает `complete` от f63a3c49 (решение владельца «Restart walkthrough») и цитирует прежний шаблон отметок; база шага 7.2 `master` → `fd69a26a`; девять `result: pass` с `reported:` — словами владельца дословно; девять строк отметок; шапка `complete`; `## Summary` — `passed: 9`"
+        - "Каждая строка отметки называет то, чего в ней нет: «дата наблюдения не названа», «не названы» (браузер / ОС), «Признаков шагов N.1–N.k владелец не назвал; оркестратор их не дописывал». У проверок 8 и 9 то же сказано и о ЗНАЧЕНИЯХ"
+      premise_checked: "запись обхода 2026-10-08 сверена с первичными уликами: журналом сессии de9e5bcb (вопросы оркестратора и ответы владельца с метками времени) и журналами стенда за окно 16:27Z–05:46Z. Шаблона больше нет, отметки — слова владельца дословно, и о пропусках запись говорит честно. Но наблюдённого признака в ней нет ни одного, а просьбу назвать признаки владелец трижды оставил без ответа. → пункты 1–9 `still_required`, засчитать заявление закрытием может только решение владельца (W-R4-01, W-R4-02, Q6)"
       gaps_closed: []  # блока `gaps` не было ни в одном круге
       gaps_remaining: []
-      regressions: []  # кода не меняли; 27 именованных правил — PASS
+      regressions: []  # кода не меняли; 27 именованных правил — PASS (16.96 с)
       carried_items_closed:
-        - "human_verification 10 / Q3 / отсрочка 1 (адресат) — адресат записан владельцем 2026-10-06 (457b354f), подтверждён ответом на Q3; круг 2 его не нашёл"
-        - "W-R2-02 / Q4 — R-14-02 перепринят с исправленным основанием (9cce13ea)"
-        - "W-R2-03 / Q1 — SIGN-01…03 возвращены в `Pending` (cbbcc5e9); правило записей зелено"
-    why_stale: "покрытый `14-UAT.md` изменён после круга 3 (f447c5ed): обход перезапущен, затем снова объявлен `complete`. Круг 2 внёс файл обхода в покрытие именно для того, чтобы любая правка записи обхода делала вердикт устаревшим"
+        - "W-R3-03 — база шага 7.2 исправлена в записи (`14-UAT.md:302`: «с деревом до фазы `fd69a26a`… не `master`»); `fd69a26a` — родитель первого коммита плана 14-01 `ca66794f` (замерено). Сверялись ли промежутки с этой базой, запись не говорит (см. пункт 7)"
+        - "W-R3-01 — в ФОРМЕ: шаблона оркестратора больше нет, вариант «Chrome + Firefox / Linux» не подставлен, отметка несёт только слова владельца. По существу находка перешла в W-R4-01"
+    why_stale: "покрытый `14-UAT.md` изменён после круга 4 (feabd7fb): у проверок 8 и 9 `pass` → `skipped` с причиной «отказ владельца», `## Summary` 9/0 → 7/2, абзац решения владельца 2026-10-08T06:03:27Z над `## Current Test`"
     what_changed:
-      - "С `93e1d4d2` ровно один коммит — `f447c5ed` (2026-10-08T05:43:56Z): `git diff --name-only 93e1d4d2..HEAD` — только `14-UAT.md`, +42/−20"
+      - "С `97b35cfc` ровно четыре коммита, все только под `.planning/`: dce39090, d886e4c4, feabd7fb, bae74ab7; `git diff --name-only 97b35cfc..HEAD` — `14-UAT.md`, `14-VERIFICATION.md`"
       - "Вне `.planning/` с `ec41dcef` не изменилось НИЧЕГО: `git diff --name-only ec41dcef..HEAD -- . ':!.planning'` — 0 строк"
-      - "14-UAT.md: абзац 2026-10-07T16:28:14Z отзывает `complete` от f63a3c49 (решение владельца «Restart walkthrough») и цитирует прежний шаблон отметок; база шага 7.2 `master` → `fd69a26a`; девять `result: pass` с `reported:` — словами владельца дословно; девять строк отметок; шапка `complete`; `## Summary` — `passed: 9`"
-      - "Каждая строка отметки называет то, чего в ней нет: «дата наблюдения не названа», «не названы» (браузер / ОС), «Признаков шагов N.1–N.k владелец не назвал; оркестратор их не дописывал». У проверок 8 и 9 то же сказано и о ЗНАЧЕНИЯХ"
-    premise_checked: "запись обхода 2026-10-08 сверена с первичными уликами: журналом сессии de9e5bcb (вопросы оркестратора и ответы владельца с метками времени) и журналами стенда за окно 16:27Z–05:46Z. Шаблона больше нет, отметки — слова владельца дословно, и о пропусках запись говорит честно. Но наблюдённого признака в ней нет ни одного, а просьбу назвать признаки владелец трижды оставил без ответа. → пункты 1–9 `still_required`, засчитать заявление закрытием может только решение владельца (W-R4-01, W-R4-02, Q6)"
+      - "14-VERIFICATION.md (dce39090, d886e4c4, bae74ab7 — правки оркестратора по ответам владельца): поля Q6 `owner_answer`, `owner_answer_followup`, `owner_decision_final`; блок `overrides` из двух записей (accepted_by chubav, accepted_at 2026-10-08T06:03:27Z, у каждой `covers`). Вердикт, счёт и прочие поля круга 4 не тронуты: `git diff 97b35cfc..HEAD` по файлу — +16 строк, удалённых 0"
+      - "14-UAT.md (feabd7fb): проверки 8 и 9 — `result: skipped`, `reason` с отказом владельца, строка `history:` о прежнем `pass` (W-R4-02); строки отметок 8 и 9 не правились; проверки 1–7 — `pass` со словами владельца, как в f447c5ed; `updated: 2026-10-08T06:03:56.887Z`"
+    premise_checked: "решение владельца сверено с первичной записью, журналом сессии de9e5bcb. 05:57:42Z вопрос Q6 с тремя вариантами → 06:00:09Z «Назову признаки». 06:00:23Z просьба о признаках проверки 1 → 06:01:16Z «все мы закончили», 06:01:56Z «закрой фазу 14». 06:02:20Z вопрос «Override». Его текст называет, что запишется под именем владельца: «проверки 1–7 засчитаны по вашему заявлению без признаков, и правило D-02 для фазы 14 ослаблено вами». Вариант «Подписываю, 8–9 — отказ» называет последствие: «Находки UI WARNING 2 и 3 остаются открытыми и не наблюдёнными». 06:02:49Z — ответ «Подписываю, 8–9 — отказ». Запись `overrides` совпадает с вопросом, на который дан ответ, и не шире его. Решение — не наблюдение: признаков в отметках по-прежнему нет, и стенд запросов обхода не видел (замер продлён до 06:09Z)"
     gaps_closed: []  # блока `gaps` не было ни в одном круге
     gaps_remaining: []
-    regressions: []  # кода не меняли; 27 именованных правил — PASS (16.96 с)
+    regressions: []  # кода не меняли; 27 именованных правил — PASS (17.65 с)
     carried_items_closed:
-      - "W-R3-03 — база шага 7.2 исправлена в записи (`14-UAT.md:302`: «с деревом до фазы `fd69a26a`… не `master`»); `fd69a26a` — родитель первого коммита плана 14-01 `ca66794f` (замерено). Сверялись ли промежутки с этой базой, запись не говорит (см. пункт 7)"
-      - "W-R3-01 — в ФОРМЕ: шаблона оркестратора больше нет, вариант «Chrome + Firefox / Linux» не подставлен, отметка несёт только слова владельца. По существу находка перешла в W-R4-01"
-  why_stale: "покрытый `14-UAT.md` изменён после круга 4 (feabd7fb): у проверок 8 и 9 `pass` → `skipped` с причиной «отказ владельца», `## Summary` 9/0 → 7/2, абзац решения владельца 2026-10-08T06:03:27Z над `## Current Test`"
+      - "Q6 — решён владельцем: ветвь (б), подписанный `overrides` (ответ 06:02:49Z, запись 06:03:27Z). SC4 → PASSED (override); пункты человеку 1–7 → discharged по override 1"
+      - "W-R4-01 — закрыта РЕШЕНИЕМ владельца. Правило D-02 «отметка без наблюдённого признака закрытием не считается» он для Фазы 14 ослабил явно, поэтому шапка `complete` поверх заявлений больше не противоречит правилу, действующему для фазы. Наблюдённых признаков по-прежнему нет — это записано"
+      - "W-R4-02 — закрыта: проверки 8 и 9 переписаны из `pass` в `skipped` с причиной (feabd7fb), прежний `pass` сохранён строкой `history:`. Пункты человеку 8 и 9 → discharged по override 2 (отказ от наблюдения). Находки UI WARNING 2 и 3 — ОТКРЫТЫ и не наблюдены"
+  why_stale: "покрытый `14-UAT.md` изменён после круга 5 (e392145c): у проверок 8 и 9 причина `skipped` переписана в `Deferred follow-up: …` по решению владельца Q7 (а), прежняя причина сохранена строкой `history:`; добавлен раздел `## Deferred Follow-Ups`; `updated:` 06:03:56.887Z → 06:19:28Z"
   what_changed:
-    - "С `97b35cfc` ровно четыре коммита, все только под `.planning/`: dce39090, d886e4c4, feabd7fb, bae74ab7; `git diff --name-only 97b35cfc..HEAD` — `14-UAT.md`, `14-VERIFICATION.md`"
+    - "С `833a16eb` ровно один коммит — `e392145c` (2026-10-08T06:20:45Z), только под `.planning/`: `git diff --numstat 833a16eb..HEAD` — `ROADMAP.md` +18/−0, `14-UAT.md` +18/−3, `14-VERIFICATION.md` +1/−0"
     - "Вне `.planning/` с `ec41dcef` не изменилось НИЧЕГО: `git diff --name-only ec41dcef..HEAD -- . ':!.planning'` — 0 строк"
-    - "14-VERIFICATION.md (dce39090, d886e4c4, bae74ab7 — правки оркестратора по ответам владельца): поля Q6 `owner_answer`, `owner_answer_followup`, `owner_decision_final`; блок `overrides` из двух записей (accepted_by chubav, accepted_at 2026-10-08T06:03:27Z, у каждой `covers`). Вердикт, счёт и прочие поля круга 4 не тронуты: `git diff 97b35cfc..HEAD` по файлу — +16 строк, удалённых 0"
-    - "14-UAT.md (feabd7fb): проверки 8 и 9 — `result: skipped`, `reason` с отказом владельца, строка `history:` о прежнем `pass` (W-R4-02); строки отметок 8 и 9 не правились; проверки 1–7 — `pass` со словами владельца, как в f447c5ed; `updated: 2026-10-08T06:03:56.887Z`"
-  premise_checked: "решение владельца сверено с первичной записью, журналом сессии de9e5bcb. 05:57:42Z вопрос Q6 с тремя вариантами → 06:00:09Z «Назову признаки». 06:00:23Z просьба о признаках проверки 1 → 06:01:16Z «все мы закончили», 06:01:56Z «закрой фазу 14». 06:02:20Z вопрос «Override». Его текст называет, что запишется под именем владельца: «проверки 1–7 засчитаны по вашему заявлению без признаков, и правило D-02 для фазы 14 ослаблено вами». Вариант «Подписываю, 8–9 — отказ» называет последствие: «Находки UI WARNING 2 и 3 остаются открытыми и не наблюдёнными». 06:02:49Z — ответ «Подписываю, 8–9 — отказ». Запись `overrides` совпадает с вопросом, на который дан ответ, и не шире его. Решение — не наблюдение: признаков в отметках по-прежнему нет, и стенд запросов обхода не видел (замер продлён до 06:09Z)"
+    - "14-UAT.md: у проверок 8 и 9 `result: skipped` прежний; `reason` начинается с `Deferred follow-up:`, прежняя причина «Отказ владельца…» сохранена строкой `history:`; раздел `## Deferred Follow-Ups` — две записи (`test`, `idea`, `deferred_at`, `promoted_to`). Разделы проверок 1–7 побайтово те же, что в f447c5ed (сверено скриптом), строки отметок 8 и 9 — тоже"
+    - "ROADMAP.md: новый раздел `## Backlog` перед подвалом — `### Phase 999.1` (тест 8, UI WARNING 2) и `### Phase 999.2` (тест 9, UI WARNING 3) в форме шаблона `verify-work.md:558-564`. Одно отступление: строка пункта `- (открыто) Test N: …` вместо `- [ ] Test N: …` (I-R6-03). Текст `idea` в строках бэклога совпадает с YAML `## Deferred Follow-Ups` дословно (сверено скриптом)"
+    - "14-VERIFICATION.md: поле Q7 `owner_answer` (оркестратор). Других правок нет; резервная копия `pre-round6` совпадает с файлом побайтово (`cmp`)"
+  premise_checked: "решение владельца сверено с первичной записью, журналом сессии de9e5bcb. 06:18:54.064Z вопрос Q7 с тремя вариантами. Описание варианта (а) называло, что будет записано: «Отказ «смотреть не буду» станет отложенной работой «посмотрим позже». У 8 и 9 появятся причина «Deferred follow-up: …» и раздел Deferred Follow-Ups, а у находок UI WARNING 2 и 3 — адресат в бэклоге ROADMAP 999.x. Дальше круг 6 сверит правку, потом закрытие фазы.» 06:19:00.030Z — ответ «Отложить на потом (рек.)». Правка e392145c совпадает с описанием варианта и не шире его: проверки 1–7, все отметки и подписанный блок `overrides` не тронуты, находки UI WARNING 2 и 3 нигде не записаны закрытыми"
   gaps_closed: []  # блока `gaps` не было ни в одном круге
   gaps_remaining: []
-  regressions: []  # кода не меняли; 27 именованных правил — PASS (17.65 с)
+  regressions: []  # кода не меняли; 27 именованных правил — PASS (17.14 с)
   carried_items_closed:
-    - "Q6 — решён владельцем: ветвь (б), подписанный `overrides` (ответ 06:02:49Z, запись 06:03:27Z). SC4 → PASSED (override); пункты человеку 1–7 → discharged по override 1"
-    - "W-R4-01 — закрыта РЕШЕНИЕМ владельца. Правило D-02 «отметка без наблюдённого признака закрытием не считается» он для Фазы 14 ослабил явно, поэтому шапка `complete` поверх заявлений больше не противоречит правилу, действующему для фазы. Наблюдённых признаков по-прежнему нет — это записано"
-    - "W-R4-02 — закрыта: проверки 8 и 9 переписаны из `pass` в `skipped` с причиной (feabd7fb), прежний `pass` сохранён строкой `history:`. Пункты человеку 8 и 9 → discharged по override 2 (отказ от наблюдения). Находки UI WARNING 2 и 3 — ОТКРЫТЫ и не наблюдены"
+    - "Q7 — решён владельцем: ветвь (а) «Отложить на потом (рек.)» (06:19:00.030Z), исполнено e392145c, сверено этим кругом"
+    - "W-R5-01 — закрыта: `phase uat-passed 14 --raw` — `passed: true`, блокеров 0, у проверок 8 и 9 `deferred: true`; `audit-uat` относит оба пункта к категории `deferred` (в круге 5 — `skipped_unresolved`)"
 
 deferred:
   - truth: "23 `must_haves.prohibitions` across plans 14-01…14-07 stand at `status: flagged-unverified`, `verification: none` — no machine enforcement reads them"
@@ -308,6 +356,8 @@ deferred:
     round_4_evidence: "без изменений с круга 3: реестр Фазы 15 и todo `classify-420…` не правились (`git diff --name-only 93e1d4d2..HEAD` — только 14-UAT.md). Адресат есть, решений по 23 строкам нет; ни один запрет не засчитан зелёным"
     round_5_status: open
     round_5_evidence: "без изменений с круга 4: реестр Фазы 15 и todo `classify-420…` не правились (`git diff --name-only 97b35cfc..HEAD` — только 14-UAT.md и 14-VERIFICATION.md). Подписанный `overrides` запретов не касается; ни один запрет не засчитан зелёным, и вердикт `passed` их не поглощает — они остаются отсрочкой с записанным адресатом"
+    round_6_status: open
+    round_6_evidence: "без изменений с круга 5: реестр Фазы 15 и todo `classify-420…` не правились (`git diff --name-only 833a16eb..HEAD` — ROADMAP.md, 14-UAT.md, 14-VERIFICATION.md). Решение Q7 запретов не касается; ни один запрет не засчитан зелёным"
   - truth: "Cross-origin (`is_same_origin`) guard absent on nine of ten auth POST handlers — CR-01"
     addressed_in: "Owner-recorded deferral, 14-CONTEXT.md §Deferred Ideas (not a numbered later phase)"
     evidence: "14-CONTEXT.md §Deferred Ideas: «Проверка источника запроса на формах входа и регистрации. Сегодня у девяти форм `is_same_origin` нет, защита — только `SameSite=Lax`. Подделка входа… — отдельная работа по безопасности, не транспорт.» Also named out-of-boundary at 14-CONTEXT.md:32."
@@ -319,6 +369,8 @@ deferred:
     round_4_evidence: "код не менялся (diff вне `.planning/` с `ec41dcef` пуст): в `app/pages/auth.py` по-прежнему 10 `@router.post` и один вызов `is_same_origin` (`:691`). Риск T-14-08 / R-14-01 в силе, адресат-фаза не назначен"
     round_5_status: open
     round_5_evidence: "код не менялся; перемерено в круге 5: в `app/pages/auth.py` 10 `@router.post` и один вызов `is_same_origin` (`:691`). Риск T-14-08 / R-14-01 в силе, адресат-фаза не назначен"
+    round_6_status: open
+    round_6_evidence: "код не менялся; перемерено в круге 6: в `app/pages/auth.py` 10 `@router.post` и один вызов `is_same_origin` (`:691`). Риск T-14-08 / R-14-01 в силе, адресат-фаза не назначен"
   - truth: "`hx-push-url` на формах авторизации — решение Фазы 15 (D-08 этой фазы)"
     addressed_in: "Phase 15"
     evidence: "D-08 этой фазы + критерий 3 Фазы 15 («По КАЖДОЙ форме принято и записано решение о `hx-push-url` по конвенции трёх случаев…»)"
@@ -330,6 +382,14 @@ deferred:
     round_4_evidence: "без изменений: разметка авторизации и 15-FORM-DECISIONS.md не менялись"
     round_5_status: closed
     round_5_evidence: "без изменений: разметка авторизации и 15-FORM-DECISIONS.md не менялись"
+    round_6_status: closed
+    round_6_evidence: "без изменений: разметка авторизации и 15-FORM-DECISIONS.md не менялись"
+  - truth: "Наблюдение проверок обхода 8 и 9 — фокус и объявление после подмены; вторая кнопка экрана кода в полёте (14-UI-REVIEW WARNING 2 и 3). В Фазе 14 не проведено"
+    addressed_in: "Бэклог ROADMAP — Phase 999.1 (тест 8, UI WARNING 2) и Phase 999.2 (тест 9, UI WARNING 3); решение владельца `chubav`, Q7 (а), 2026-10-08"
+    evidence: "`.planning/ROADMAP.md` §Backlog: «### Phase 999.1: Follow-up — Phase 14 deferred UAT follow-up: Test 8 (BACKLOG)», «### Phase 999.2: … Test 9 (BACKLOG)»; `14-UAT.md` §Deferred Follow-Ups — `promoted_to: \"ROADMAP.md — Phase 999.1\"`, `\"… Phase 999.2\"`"
+    raised_in: "круг 6, 2026-10-08"
+    round_6_status: open
+    round_6_evidence: "Не гап: ни одна из двух находок истину фазы не опровергает, блокером не была ни в одном круге. Пункты человеку 8 и 9 закрыты override 2 (отказ от наблюдения в Фазе 14); эта запись называет адресата, которого у находок до Q7 не было. Механизма фокуса нет и сегодня: `autofocus`/`tabindex`/`aria-live` в шаблонах авторизации — 0 (перемерено); отброс второго запроса — PASS (`test_both_code_forms_ride_the_anchor_and_drop_a_second_request`)"
 
 escalations:
   - id: CR-02 / WR-07
@@ -344,6 +404,7 @@ escalations:
     round_3_status: closed  # без изменений; изъян CR-02 в коде остаётся по решению владельца (`verified_at` — только `auth.py:408, :443, :916, :950`, перемерено)
     round_4_status: closed  # без изменений; код не менялся, `verified_at` — те же четыре строки
     round_5_status: closed  # без изменений; код не менялся, `verified_at` — те же четыре строки (`auth.py:408, :443, :916, :950`, перемерено)
+    round_6_status: closed  # без изменений; код не менялся, `verified_at` — те же четыре строки (`auth.py:408, :443, :916, :950`, перемерено)
 
 flagged_prohibitions: 23 # all `verification: none` / `status: flagged-unverified`; never counted green — deferred to Phase 15 SC6
 # круг 2: всё ещё 23, открыто. Фаза 15 их ПЕРЕПИСАЛА (реестр, 23 строки), но НЕ РЕШИЛА (D-02 —
@@ -354,6 +415,8 @@ flagged_prohibitions: 23 # all `verification: none` / `status: flagged-unverifie
 # круг 5: всё ещё 23, открыто, адресат тот же. Подписанный `overrides` запретов не касается. Вердикт
 # `passed` их НЕ поглощает молча: они названы здесь, в отсрочке 1 и в пункте человеку 10 (адресат
 # записан владельцем). Итог круга читается как «passed с 23 помеченными запретами».
+# круг 6: всё ещё 23, открыто, адресат тот же. Решение Q7 запретов не касается. Итог круга по-прежнему
+# читается как «passed с 23 помеченными запретами».
 
 human_verification:
   # Сверка с 14-UAT.md (9 проверок) — один пункт на проверку; пункт 10 — решение владельца по
@@ -374,6 +437,10 @@ human_verification:
   # (отказ от наблюдения). Закрытие — РЕШЕНИЕ, а не наблюдение. Прежнее состояние сохранено полем
   # `round_4_state: still_required`; `state_evidence` и `round_4_state_evidence` перенесены дословно;
   # улика круга 5 — в поле `round_5_state_evidence`. Пункт 10 — без изменений. Открытых пунктов 0.
+  # Круг 6: состояния те же — все десять `discharged`, `resolution` и прежние поля перенесены дословно.
+  # Улика круга 6 — в поле `round_6_state_evidence`. Правка e392145c пунктов 1–7 не касается. У пунктов 8
+  # и 9 основание закрытия прежнее — override 2, отказ от наблюдения В ФАЗЕ 14. Решение Q7 (а) добавило
+  # находкам адресата (бэклог 999.1 / 999.2) и пункт не переоткрывает. Открытых пунктов 0.
   - test: "UAT проверка 1 (круг 1 — п.1). Полный вход в браузере: открыть `/login`, ввести неверный пароль, затем верный"
     expected: "Неверный пароль перерисовывает карточку БЕЗ перезагрузки, email остаётся в поле, заголовок вкладки — «Вход — Broadcaster»; верный пароль уводит в кабинет ПОЛНОЙ загрузкой, cookie `access_token` сменилась"
     why_human: "Рантайм подмены htmx, заголовок вкладки и смена cookie сервером не измеряются — суита не исполняет JS ни строчки (ROADMAP критерий 4, D-02)"
@@ -383,6 +450,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 1 (chubav, 2026-10-08T06:03:27Z) засчитал закрытием заявление «закрой все по тесту 1 я все проверил»; правило D-02 для Фазы 14 ослаблено владельцем явно. Наблюдённых признаков (1.1–1.5, значение `access_token`) в отметке нет"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (журнал de9e5bcb, 06:02:49Z) на вопрос 06:02:20Z, текст которого называл последствие для проверок 1–7 дословно. Отметка проверки 1 не менялась с f447c5ed. Стенд за окно 2026-10-07T16:27Z…2026-10-08T06:09Z: 0 `POST /login` любого статуса"
+    round_6_state_evidence: "Без изменений: раздел проверки 1 и её отметка побайтово те же, что в f447c5ed (сверено скриптом). e392145c проверок 1–7 не касался. Основание — override 1"
   - test: "UAT проверка 2 (круг 1 — п.2, первая половина). Регистрация: `/register` → новый адрес → экран кода; затем короткий и годный пароль на завершении"
     expected: "Экран кода приезжает без перезагрузки, адресная строка остаётся `/register`, вкладка — «Подтверждение email — Broadcaster»; короткий пароль оставляет имя; завершение уводит в кабинет полной загрузкой с пробным сроком"
     why_human: "Рантайм подмены, адресная строка и заголовок вкладки — только в браузере"
@@ -392,6 +460,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 1 (chubav, 2026-10-08T06:03:27Z) засчитал закрытием заявление «закрой все по тесту 2 я все проверил»; D-02 для Фазы 14 ослаблено владельцем явно. Признаков 2.1–2.4 в отметке нет"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z). Отметка не менялась с f447c5ed. Стенд за окно: 0 `POST /register/complete`; 34 `POST /register/send-code` — сторонний трафик I-R4-01 (полностраничные ответы устаревшим клиентам), не обход"
+    round_6_state_evidence: "Без изменений: раздел проверки 2 и отметка — те же, что в f447c5ed. Основание — override 1"
   - test: "UAT проверка 3 (круг 1 — п.2, вторая половина). Подтверждение почты НАСТОЯЩИМ письмом: код из реального ящика, неверный код, повтор, F5 на шаге"
     expected: "Письмо доходит; неверный код — «Неверный код. Осталось попыток: N» и набранный код в поле; повтор присылает новое письмо, обе формы живы; F5 возвращает к началу пути (D-08)"
     why_human: "Доставка настоящего письма (D-02: код из базы подставлять запрещено; правило останова) и рантайм подмены"
@@ -401,6 +470,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 1 (chubav, 2026-10-08T06:03:27Z) засчитал закрытием заявление «закрой все по тесту 3 я все проверил»; D-02, включая его правило останова о настоящем письме, для Фазы 14 ослаблено владельцем явно. Доставка двух настоящих писем не наблюдена и не названа"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z). Отметка не менялась с f447c5ed. Стенд за окно: 0 `POST /register/verify` и `/register/resend-code`"
+    round_6_state_evidence: "Без изменений: раздел проверки 3 и отметка — те же, что в f447c5ed. Основание — override 1; доставка писем не наблюдена"
   - test: "UAT проверка 4 (круг 1 — п.3). Восстановление пароля целиком: `/forgot-password` → код из письма → новый пароль → `/login` с плашкой → вход новым паролем"
     expected: "Плашка «Пароль успешно изменён. Войдите с новым паролем.» видна на `/login` и переживает ошибку входа старым паролем; вход новым паролем проходит"
     why_human: "Доставка письма и визуальное подтверждение плашки области уведомления шелла"
@@ -410,6 +480,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 1 (chubav, 2026-10-08T06:03:27Z) засчитал закрытием заявление «закрой все по тесту 4 я все проверил»; D-02 для Фазы 14 ослаблено владельцем явно. Признаков 4.1–4.5 в отметке нет"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z). Отметка не менялась с f447c5ed. Стенд за окно: 0 запросов к `/forgot-password/*`"
+    round_6_state_evidence: "Без изменений: раздел проверки 4 и отметка — те же, что в f447c5ed. Основание — override 1"
   - test: "UAT проверка 5 (круг 1 — п.4). Возврат из-под чужой личности: «ВЕРНУТЬСЯ В АДМИНА» из полосы"
     expected: "Адресная строка `/admin`, заголовок вкладки — админки, полосы имперсонации нет, cookie без признака действующего лица"
     why_human: "Смена cookie личности и заголовок вкладки через границу шеллов в живом браузере (D-12)"
@@ -419,6 +490,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 1 (chubav, 2026-10-08T06:03:27Z) засчитал закрытием заявление «закрой все по тесту 5 я все проверил»; D-02 для Фазы 14 ослаблено владельцем явно. Признаков 5.1–5.5 в отметке нет"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z). Отметка не менялась с f447c5ed. Стенд за окно: 0 `POST /impersonation/stop`"
+    round_6_state_evidence: "Без изменений: раздел проверки 5 и отметка — те же, что в f447c5ed. Основание — override 1"
   - test: "UAT проверка 6 (в круге 1 НЕ было — добавлено при сверке). Менеджер паролей в Chrome и Firefox на чистом профиле, база сравнения — путь без JS"
     expected: "Пять наблюдений RESEARCH Находки 7: предложение сохранить пароль после верного входа и завершения регистрации, обновить — после нового пароля, нет предложения на 422; регрессия относительно пути без JS выносится владельцу, а не глушится"
     why_human: "Эвристики сохранения пароля — свойство браузера (A1–A3), сервером не измеряются ни одним утверждением"
@@ -428,6 +500,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 1 (chubav, 2026-10-08T06:03:27Z) засчитал закрытием заявление «закрой все по тесту 6 я все проверил»; D-02 для Фазы 14 ослаблено владельцем явно. Браузеры и итог базы без JS не названы, поэтому вопрос о регрессии менеджера паролей владельцу не вынесен — владелец закрыл его сам"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z). Отметка не менялась с f447c5ed. Стенд за окно: 0 `POST /login`, 0 `POST /register/complete`, 0 запросов к `/forgot-password/*` — ни одного из трёх путей, где менеджер паролей предлагает сохранение"
+    round_6_state_evidence: "Без изменений: раздел проверки 6 и отметка — те же, что в f447c5ed. Основание — override 1; база без JS не названа"
   - test: "UAT проверка 7 (круг 1 — п.7). Карточка авторизации на 375px и на десктопе, во всех семи экранах"
     expected: "Подзаголовок сразу под брендом, промежутки как до фазы, индикатор у кнопки; читаема ли иерархия (все тексты тела 13px, заголовочного элемента нет ни на одном экране)"
     why_human: "Визуальное суждение; дев-сервер во время ревизии не отвечал, скриншотов нет (14-UI-REVIEW Pillars 2/4/5, A4)"
@@ -437,6 +510,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 1 (chubav, 2026-10-08T06:03:27Z) засчитал закрытием заявление «закрой все по тесту 7 я все проверил»; D-02 для Фазы 14 ослаблено владельцем явно. Сверка промежутков с `fd69a26a` и ширины не названы"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z). Отметка не менялась с f447c5ed. Визуальная проверка обязательного следа в журнале стенда не оставляет; против неё улики нет"
+    round_6_state_evidence: "Без изменений: раздел проверки 7 и отметка — те же, что в f447c5ed. Основание — override 1"
   - test: "UAT проверка 8 (круг 1 — п.5). Клавиатурный проход по экрану кода после 422: нажать Tab сразу после неверного кода; то же со скринридером и на экране входа"
     expected: "Наблюдаемо, куда попадает фокус после `hx-swap=\"innerHTML\"` в `#auth-step` и объявляется ли смена экрана"
     why_human: "В дереве шаблонов авторизации нет ни `autofocus`, ни `tabindex`, ни `aria-live` (машинно подтверждено и в круге 2 — 0 совпадений); КУДА при этом попадает фокус и что слышит скринридер — наблюдение, не грепа (14-UI-REVIEW WARNING 2)"
@@ -446,6 +520,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 2 (chubav, 2026-10-08T06:03:27Z) — отказ от наблюдения проверки 8. Значение (куда встаёт фокус после Tab, что объявляет скринридер и какой) не записано. Находка 14-UI-REVIEW WARNING 2 остаётся ОТКРЫТОЙ и ненаблюдённой; в `14-UAT.md` — `result: skipped` с причиной (feabd7fb)"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z) на вопрос, где вариант описан так: «От наблюдения 8 и 9 отказываетесь, и это записывается. Находки UI WARNING 2 и 3 остаются открытыми и не наблюдёнными». Механизма по-прежнему нет: `autofocus`/`tabindex`/`aria-live` в шаблонах авторизации — 0 (перемерено). Предикат `phase uat-passed 14` читает этот `skipped` как блокер — W-R5-01, Q7"
+    round_6_state_evidence: "Решение Q7 (а) (06:19:00.030Z), исполнено e392145c: `14-UAT.md:151` — `reason: \"Deferred follow-up: …\"`, прежняя причина «Отказ владельца…» — строкой `history:` (`:152`); запись `## Deferred Follow-Ups` `test: 8` с `promoted_to: \"ROADMAP.md — Phase 999.1\"`. Значение проверки по-прежнему не записано, строка отметки та же, что в f447c5ed. Находка UI WARNING 2 ОТКРЫТА и теперь имеет адресата. Основание закрытия пункта прежнее — override 2; его `reason` и `covers` с записью сходятся. Предикат `phase uat-passed 14` — `deferred: true`, не блокер (W-R5-01 закрыта)"
   - test: "UAT проверка 9 (круг 1 — п.6). На экране кода нажать «Отправить код повторно», пока «Подтвердить» в полёте"
     expected: "Наблюдаемо, выглядит ли вторая кнопка живой при отброшенном `hx-sync` запросе; действие не теряется"
     why_human: "`hx-disabled-elt=\"find button[type=submit]\"` гасит кнопку ТОЛЬКО своей формы; запрос отбрасывается `hx-sync` (доказано `test_both_code_forms_ride_the_anchor_and_drop_a_second_request`, PASS в круге 2), но видимость этого — суждение глазами (14-UI-REVIEW WARNING 3)"
@@ -455,6 +530,7 @@ human_verification:
     round_4_state: still_required
     resolution: "Решение владельца, не наблюдение: override 2 (chubav, 2026-10-08T06:03:27Z) — отказ от наблюдения проверки 9. Значение 9.1 (выглядит ли вторая кнопка живой, есть ли у неё индикатор) не записано. Находка 14-UI-REVIEW WARNING 3 остаётся ОТКРЫТОЙ и ненаблюдённой; в `14-UAT.md` — `result: skipped` с причиной (feabd7fb)"
     round_5_state_evidence: "Ответ «Подписываю, 8–9 — отказ» (06:02:49Z). Шаг 9.2 (отброс второго запроса) машинно доказан правилом `test_both_code_forms_ride_the_anchor_and_drop_a_second_request` — PASS в круге 5. Предикат `phase uat-passed 14` читает этот `skipped` как блокер — W-R5-01, Q7"
+    round_6_state_evidence: "Решение Q7 (а) (06:19:00.030Z), исполнено e392145c: `14-UAT.md:159` — `reason: \"Deferred follow-up: …\"`, прежняя причина — строкой `history:` (`:160`); запись `## Deferred Follow-Ups` `test: 9` с `promoted_to: \"ROADMAP.md — Phase 999.2\"`. Значение 9.1 не записано. Находка UI WARNING 3 ОТКРЫТА и теперь имеет адресата. Шаг 9.2 машинно доказан правилом `test_both_code_forms_ride_the_anchor_and_drop_a_second_request` — PASS в круге 6. Основание закрытия пункта прежнее — override 2. Предикат — `deferred: true`, не блокер"
   - test: "НЕ проверка обхода — решение владельца. 23 запрета планов 14-01…14-07 (`flagged-unverified`, `verification: none`): назначить адресата и/или принять по каждому решение (принуждение правилом либо явное разрешение)"
     expected: "У каждой из 23 строк реестра `15-prohibitions-registry.yaml` (14-01#0…14-07#2) — диспозиция, поставленная по ответу владельца, либо записанный адресат следующей вехи"
     why_human: "Запреты уровня суждения (ADR-550): помеченный запрет не поглощается вердиктом молча; Фаза 15 их переписала, но решать запретила себе сама (D-02). Назначить адресата может только владелец"
@@ -463,6 +539,7 @@ human_verification:
     state_evidence: "Замер круга 3: 23 строки реестра фазы 14 (14-01#0…14-07#2) — все `unclassified` / `unresolved`, все входят в 420 строк todo. Реестр не правился (D-02 Фазы 15). Запреты остаются непринуждёнными — `flagged_prohibitions: 23`, отсрочка 1 открыта; закрыт пункт «назначить адресата», а не сами запреты"
     round_4_state_evidence: "Без изменений: адресат тот же, todo `classify-420…` и реестр не правились. Пункт остаётся закрытым по `resolution`"
     round_5_state_evidence: "Без изменений: адресат тот же, todo `classify-420…` и реестр не правились. Пункт закрыт по `resolution` с круга 3"
+    round_6_state_evidence: "Без изменений: адресат тот же, todo `classify-420…` и реестр не правились. Пункт закрыт по `resolution` с круга 3"
 
 human_verification_round_1:  # круг 1 — ДОСЛОВНО (7 пунктов); все 7 открыты в круге 2
   - test: "Полный вход в браузере: открыть `/login`, ввести неверный пароль, затем верный"
@@ -505,6 +582,7 @@ owner_questions:
     round_3_check: "Подтверждено чтением. Правило `test_no_requirement_is_marked_complete_before_its_phase_verification_passed` зелено при вердикте круга 3 (§Self-check). Вторая половина рекомендации — обход до `/gsd-complete-milestone` — по существу НЕ исполнена: см. Q2, Q5, W-R3-01. Верификатор REQUIREMENTS.md не правил; вердикт не `passed`, поэтому отметки и не просятся"
     round_4_check: "SIGN-01…03 по-прежнему `[ ]` / `Pending` (`REQUIREMENTS.md:60-62`, `:160-162`). Вердикт круга 4 — `human_needed`, поэтому правило записей зелено (§Self-check). Отметки не просятся"
     round_5_check: "Вердикт круга 5 — `passed`. SIGN-01…03 стоят `[ ]` / `Pending` (`REQUIREMENTS.md:60-62`, `:160-162`). Правило `test_no_requirement_is_marked_complete_before_its_phase_verification_passed` одностороннее: `Pending` при `passed` его не краснит (§Self-check), а перевод в `[x]` / `Complete` оно теперь допускает. Верификатор REQUIREMENTS.md не правил. Отметки ставит закрытие фазы (`phase.complete`), а закрытие стоит за предикатом обхода — Q7. `REQUIREMENTS.md` входит в покрытие, поэтому перевод отметок сделает этот вердикт устаревшим; пересчитывать — штатным вербом"
+    round_6_check: "Вердикт круга 6 — `passed`. SIGN-01…03 по-прежнему `[ ]` / `Pending` (`REQUIREMENTS.md:60-62`, `:160-162`), летопись `:64` без изменений. Предикат закрытия обхода теперь проходит (Q7 решён), так что закрытию фазы больше ничего не мешает. Отметки `[x]` / `Complete` ставит оно, а не верификатор: REQUIREMENTS.md верификатор не правил. Правило `test_no_requirement_is_marked_complete_before_its_phase_verification_passed` их допускает при `passed` и не краснит `Pending`. `REQUIREMENTS.md` покрыт, поэтому перевод отметок сделает этот вердикт устаревшим. Пересчитывать — штатным вербом по списку из 46 путей, вердикт не трогать"
   - id: Q2
     question: "В `14-UAT.md` раздел `## Tests` несёт `result: pass` / `reported: \"pass\"` у всех девяти проверок, `## Summary` — `passed: 9`, `Current Test` — `[testing complete]`; абзац отзыва в шапке того же файла говорит «Обход Фазы 14 глазами НЕ ПРОВОДИЛСЯ» и эти поля оставил нетронутыми намеренно. Оставить их или вернуть в `[pending]`?"
     verifier_recommendation: "Вернуть девять `result` в `[pending]`, `passed: 9` → `pending: 9` и `Current Test` в нетерминальное — правкой ЧЕЛОВЕКА или по его прямому указанию: это снятие неподтверждённой записи, а не заполнение. Правило самозаверения считает только таблицы отметок и сегодня зелено, поэтому само расхождение не поймает. Верификатор файл не правил"
@@ -556,9 +634,323 @@ owner_questions:
     decision_owner: chubav
     raised_in: "круг 5, 2026-10-08"
     owner_answer: "(а) «Отложить на потом» — выбор владельца `chubav` в `/gsd-verify-work 14`, 2026-10-08T06:19:28Z. Исполнено: у проверок 8 и 9 `14-UAT.md` причина `Deferred follow-up: …` + раздел `## Deferred Follow-Ups`; бэклог ROADMAP — Phase 999.1 (тест 8, UI WARNING 2) и 999.2 (тест 9, UI WARNING 3)"
+    answered_at: 2026-10-08T06:19:00.030Z  # по журналу сессии; запись `owner_answer` и причины в `14-UAT.md` называют 06:19:28Z — время записи (I-R6-01)
+    answered_where: "`/gsd-verify-work 14`, сессия de9e5bcb (журнал `~/.claude/projects/-source-broadcaster/de9e5bcb-….jsonl`; вопрос 06:18:54.064Z, ответ 06:19:00.030Z — дословно «Отложить на потом (рек.)»)"
+    executed: "e392145c — `14-UAT.md`: причины проверок 8 и 9 с префиксом `Deferred follow-up:`, прежние причины — строками `history:`, раздел `## Deferred Follow-Ups` (две записи с `promoted_to`); `ROADMAP.md` §Backlog — Phase 999.1 и 999.2"
+    round_6_check: "Подтверждено чтением и вербами. Правка совпадает с описанием выбранного варианта и не шире его. Проверки 1–7 и все отметки не тронуты; подписанный блок `overrides` побайтово тот же, что в bae74ab7; находки UI WARNING 2 и 3 нигде не записаны закрытыми (в бэклоге — «(открыто)»). Перенос в бэклог 999.x описание варианта называло прямо, поэтому отдельного вопроса [P]/[K] шага `verify-work` не требовалось. `phase uat-passed 14 --raw` — `passed: true`, блокеров 0. Отступление формы бэклога (`- (открыто)` вместо `- [ ]`) верификатор принимает — I-R6-03. Q7 закрыт"
 ---
 
 # Phase 14: Авторизация на htmx — Verification Report
+
+**Phase Goal:** неверный код или пароль перестаёт стирать заполненную форму — заявленный выигрыш вехи именно в ОШИБКЕ, а не в успехе
+**Verified:** 2026-10-08T06:33:16Z (круг 6; круг 5 — 2026-10-08T06:16:48Z; круг 4 — 2026-10-08T05:50:52Z; круг 3 — 2026-10-07T15:58:55Z; круг 2 — 2026-10-07T12:31:06Z; круг 1 — 2026-09-23T08:15:00Z)
+**Status:** passed — 13/13, из них **1 PASSED (override)**: SC4 закрыт подписанным РЕШЕНИЕМ владельца, а не наблюдением. Вердикт круга 5 перенесён без изменений
+**Re-verification:** Да — КРУГ 6. HEAD `e392145c`. Повод: вердикт круга 5 прочитался `stale`, потому что изменился покрытый `14-UAT.md`. Блока `gaps` не было ни в одном круге, поэтому по букве шага 0 это снова прогон в полном объёме: все 13 истин перепроверены прогоном, а не перенесены. Тело отчёта круга 5 перенесено целиком в §Приложение — запись круга 5, отчёты кругов 4, 3, 2 и 1 — в свои приложения, как и прежде. Все пять — дословно.
+
+**Что изменилось с круга 5 (замерено, а не взято из поручения).**
+- `git log 833a16eb..HEAD` — один коммит, `e392145c` (2026-10-08T06:20:45Z).
+- `git diff --numstat 833a16eb..HEAD` — `.planning/ROADMAP.md` +18/−0, `14-UAT.md` +18/−3, `14-VERIFICATION.md` +1/−0 (поле Q7 `owner_answer`).
+- `git diff --name-only ec41dcef..HEAD -- . ':!.planning'` — **0 строк**: ни продуктовый код, ни правила с круга 2 не менялись.
+
+**Чего не наследую и что проверил сам.** Поручение называет ответ владельца и состав правки. Всё это сверено с первичными уликами, а не взято на слово:
+- **Ответ.** Журнал сессии de9e5bcb: вопрос Q7 целиком, со всеми тремя вариантами и их описаниями, и ответ с меткой времени (§Решение владельца по Q7). Без текста варианта не понять, что именно владелец выбрал.
+- **Правка.** Сверена построчно с диффом коммита. Разделы проверок 1–7 сверены скриптом с f447c5ed, строки отметок 8 и 9 — тоже. Текст `idea` сличён между YAML и строками бэклога.
+- **Отступление формы бэклога.** Проверено против шаблона `verify-work.md` и против обоих читателей: правила проекта и вербов gsd-core.
+- **Блок `overrides`.** Сличён с подписанным состоянием `bae74ab7` и перенесён побайтово; его `covers` не расширены и не сужены.
+
+**Method.** Goal-backward; must-haves — те же четыре критерия ROADMAP и истины фронтматтера семи планов. Улики круга:
+- **Прогон.** 27 именованных правил одним вызовом `pytest` — **27 passed, 357 deselected за 17.14 с**. Это те же 25 правил круга 2 и два правила записи Q4. После записи отчёта — `tests/test_planning` целиком (§Self-check).
+- **Чтение дерева и записей.** Номера строк выписаны в таблицах.
+- **Штатные вербы gsd-core 1.16.** `phase uat-passed 14` в трёх режимах, `verification.status`, `audit-uat`, `roadmap.analyze`, `check.decision-coverage-verify`, `verification.fingerprint`. Разобраны правило пропуска в предикате (`bin/lib/uat-predicate.cjs:61-76`, `:570-590`) и вывод `disk_status` (`bin/lib/phase-status.cjs:137-138`).
+- **Одна первичная улика вне дерева, только чтение.** Журнал сессии оркестратора de9e5bcb за 06:17Z–06:22Z: вопрос, варианты, ответ, сообщения оркестратора. Журнал стенда в этом круге не снимался: правка — учётная, наблюдения она не заявляет, и ни одна истина на новом наблюдении не стоит.
+
+## Goal Achievement
+
+### Observable Truths
+
+| # | Truth | Status | Evidence (круг 6) |
+|---|-------|--------|----------|
+| 1 | **SC1 / SIGN-02.** Неверный код или пароль перерисовывает форму С СОХРАНЕНИЕМ введённого: 422 + эхо в `value=`; свойство создаёт СЕРВЕР | ✓ VERIFIED | Код не менялся (diff вне `.planning/` с `ec41dcef` пуст). ПРОГОН круга 6: правила 1–4, 22 (трасер входа), 24 — PASS |
+| 2 | **SC2 / SIGN-01.** Все 9 форм авторизации идут через `hx-post` и остаются рабочими без JS | ✓ VERIFIED | Прогон: правила 5–7, 10 — PASS |
+| 3 | **SC3 / SIGN-03.** Успех авторизации уходит `HX-Redirect` через границу шеллов; `HX-Location` — по летописи | ✓ VERIFIED | По летописи — разбор §Criterion 3 круга 2 в силе, источник не менялся. Прогон: правила 8–9, 13–15, 19–21 — PASS |
+| 4 | **SC4.** Вход, регистрация, подтверждение почты и восстановление пароля проходят в браузере целиком | **PASSED (override)** | **Решение, а не наблюдение — как в круге 5.** Override: «Заявление владельца «я все проверил» по проверкам 1–7 `14-UAT.md` без наблюдённых признаков (f447c5ed). Правило D-02 … для Фазы 14 ослаблено владельцем явным решением» — accepted by `chubav` on 2026-10-08T06:03:27Z. Совпадение `must_have` с истиной — 100%. Правка e392145c проверок 1–7 не касалась: их разделы и отметки побайтово те же, что в f447c5ed. Машинная половина зелена (27/27) |
+| 5 | Враждебный ввод возвращается в `value=` ТОЛЬКО экранированным, на обоих транспортах | ✓ VERIFIED | Прогон: правила 2 и 24 — PASS |
+| 6 | Пароль не возвращается НИКОГДА — ни в `value=`, ни в теле, ни в контексте шаблона | ✓ VERIFIED | Прогон: правила 1, 11 — PASS |
+| 7 | Отказ 422 не несёт cookie сессии ни на одном транспорте; заблокированный с ВЕРНЫМ паролем получает 422 с `BLOCKED_LOGIN_ERROR` | ✓ VERIFIED | Прогон: правила 1, 12 — PASS |
+| 8 | Смена экрана — 200 на обоих транспортах; подписанный токен шага едет ТОЛЬКО скрытым полем | ✓ VERIFIED | Прогон: правила 3, 4, 23 — PASS |
+| 9 | Возврат из-под чужой личности: три ветки, cookie перезаписана НА ЭТОМ ЖЕ ответе, следующий `GET /admin` отдаёт админку | ✓ VERIFIED (behaviour-dependent — доказано прогоном, не присутствием) | Прогон круга 6: правила 13–15 — PASS |
+| 10 | Восстановление пароля под чужой личностью остаётся запрещённым на ВСЕХ четырёх шагах, на обоих транспортах | ✓ VERIFIED (behaviour-dependent) | Прогон: правила 16–17 — PASS |
+| 11 | Счётчик отставания вехи — ИМЕНОВАННЫЙ НОЛЬ, доказанный НЕ ВАКУУМНЫМ | ✓ VERIFIED | Прогон: правило 10 — PASS |
+| 12 | Реестр `AUTH_SCREENS` накрывает ВСЕ семь страниц второго шелла; заголовок фрагмента и заголовок страницы сличаются | ✓ VERIFIED | Прогон: правила 18 и 25 — PASS |
+| 13 | Записи фазы приведены в объявленную форму: летописи критериев 2 и 3, строки Research, SIGN-03, рамки вехи; окно 63 переведено ЗАМЕРОМ; артефакт обхода размечен | ✓ VERIFIED | Истина плана 14-07 — о ПОСТАВЛЕННОЙ им разметке. Летописи ROADMAP (`:701`, `:703`, `:705`) и REQUIREMENTS не тронуты: e392145c дописал в ROADMAP только новый раздел `## Backlog` после `## Перенесено незакрытым из v2.0`. Артефакт обхода несёт `checks_declared: 9`, 9 разделов, 9 таблиц, предусловия П-1…П-7 и правило останова |
+
+**Score:** 13/13 truths verified — 12 ✓ VERIFIED и 1 PASSED (override); 0 present-but-behaviour-unverified; воздержаний бэкстопа 0. Круг 5 → круг 6: все тринадцать истин — те же статусы, тем же прогоном. Правка круга учётная и ни одну истину не затрагивает.
+
+**Override 2 в счёт не входит** — как в круге 5. Его предмет — пункты человеку 8 и 9 и находки UI-ревизии, а не истина. `overrides_applied: 1`.
+
+### Решение владельца по Q7 — сверка правки
+
+Это главный предмет круга. Вопрос — исполнила ли правка e392145c выбор владельца и не вышла ли за подписанные `covers`.
+
+**Первичная запись (журнал сессии de9e5bcb).**
+
+| Время (UTC) | Событие |
+|---|---|
+| 06:18:54.064 | Вопрос Q7: «Верификатор вынес passed 13/13 (SC4 засчитан по вашему override). Но фаза штатно не закроется: предикат закрытия принимает пропуск только с причиной «Deferred follow-up:», а простой отказ по 8 и 9 блокирует. … Как записать проверки 8 и 9 (Q7)?» |
+| | Вариант **«Отложить на потом (рек.)»**: «Отказ «смотреть не буду» станет отложенной работой «посмотрим позже». У 8 и 9 появятся причина «Deferred follow-up: …» и раздел Deferred Follow-Ups, а у находок UI WARNING 2 и 3 — адресат в бэклоге ROADMAP 999.x. Дальше круг 6 сверит правку, потом закрытие фазы.» |
+| | Вариант «Назову два значения»: 8 и 9 станут `pass` со значениями |
+| | Вариант «Оставить как есть»: «Вердикт останется passed, но в ROADMAP и STATE фаза не закроется, а SIGN-01…03 останутся Pending» |
+| 06:19:00.030 | Ответ: **«Отложить на потом (рек.)»** |
+| 06:20:20 | Оркестратор: «Правило счёта планов приняло чекбоксы бэклога за планы. Убираю у них чекбоксы» |
+| 06:20:45 | Коммит `e392145c` |
+
+**Сверка правки с выбранным вариантом — по пунктам.**
+
+| Что обещало описание варианта | Что в дереве | Сходится |
+|---|---|---|
+| У 8 и 9 — причина «Deferred follow-up: …» | `14-UAT.md:151`, `:159` — `reason: "Deferred follow-up: …"`; `result: skipped` прежний | ✓ |
+| Раздел Deferred Follow-Ups | `14-UAT.md:373-384` — две записи: `test`, `idea`, `deferred_at: 2026-10-08`, `promoted_to` | ✓ |
+| У находок UI WARNING 2 и 3 — адресат в бэклоге ROADMAP 999.x | `ROADMAP.md:964-980` — `## Backlog`, `### Phase 999.1` (тест 8, WARNING 2), `### Phase 999.2` (тест 9, WARNING 3); `promoted_to` указывает на них | ✓ |
+| «Смотреть не буду» → «посмотрим позже» — смысл меняется, прежнее не стирается | Прежние причины «Отказ владельца…» сохранены строками `history:` (`:152`, `:160`); строки `history:` прежнего `pass` (W-R4-02) — на месте | ✓ |
+| Находки остаются открытыми (вариант их не закрывает) | Причины: «находка UI WARNING 2/3 открыта до наблюдения»; бэклог: «(открыто)»; ни одна запись не называет их закрытыми | ✓ |
+
+**Чего правка не трогала — и не должна была.**
+- **Проверки 1–7.** Разделы `### 1.`…`### 7.` и `## Проверка 1…7` (с отметками) побайтово те же, что в f447c5ed; сверено скриптом по разделам.
+- **Отметки 8 и 9.** Строки таблиц отметок — те же, что в f447c5ed (md5 строк совпадает). Слова владельца «я все проверил закрой тест N» не тронуты, и значения не дописаны.
+- **Подписанный блок `overrides`.** Побайтово тот же, что в подписанном состоянии `bae74ab7` и в отчёте круга 5 `833a16eb` (`diff` — пусто).
+- **Счёт `## Summary`.** `passed: 7`, `skipped: 2` — тот же.
+
+**Суждение верификатора — сходятся ли с правкой подписанные `covers`.**
+- **Override 1** — `covers: "SC4 и human_verification 1–7 (проверки обхода 1–7). НЕ покрывает проверки 8 и 9"`. Правка проверок 1–7 не касалась, а 8 и 9 под override 1 не подведены. **Сходится**: SC4 — PASSED (override), пункты 1–7 — discharged, как в круге 5.
+- **Override 2** — `covers: "human_verification 8 и 9 — отказ от наблюдения; находки UI WARNING 2/3 не закрыты"`. Каждая часть его `reason` верна и после правки: «Владелец отказался от наблюдения проверок 8 и 9» — в Фазе 14 их так никто и не наблюдал; «значения не записаны» — не записаны; «Находки … остаются ОТКРЫТЫМИ и не наблюдёнными» — открыты и в UAT, и в бэклоге; «у проверок `result: skipped` с причиной» — так и есть. Q7 (а) добавил то, чего override не говорит, но и не отрицает: адресат и обещание вернуться. Это **отдельное** решение владельца с собственной первичной записью. Подписи под override 2 оно не меняет, и пересогласовывать override не нужно. **Сходится**: пункты 8 и 9 — discharged по override 2. Находки по-прежнему не закрыты, и верификатор их закрытыми не записывает.
+- **Обратная граница.** Ни одна часть правки не опирается на override как на разрешение. Бэклог назван в описании варианта, который выбрал владелец. Поэтому отдельный вопрос [P]/[K] шага `verify-work.md:541-548` был бы повтором уже данного ответа, а не пропущенным согласием.
+
+**Вывод.** Правка e392145c исполняет Q7 (а) и не шире его. Предикат закрытия обхода теперь проходит. Вердикт `passed` переносится без изменений.
+
+### Отступление формы бэклога — суждение верификатора (I-R6-03)
+
+Шаблон `verify-work.md:558-564` требует строку пункта `- [ ] Test {test}: {idea} (deferred {deferred_at})`. В дереве — `- (открыто) Test N: …`. Оркестратор объяснил: с чекбоксом правило проекта `test_state_progress_matches_roadmap` принимает пункты за планы (177 против 175).
+
+**Причина подтверждена чтением правила.** `roadmap_plan_counts` (`tests/test_planning/test_state_progress_matches_roadmap.py:68-93`) открывает раздел на ЛЮБОМ заголовке `### Phase ` и считает внутри все строки `- [x] ` и `- [ ] `. Исключения для разделов 999.x у него нет. Два чекбокса бэклога дали бы `total_plans` 177 при 175 в `STATE.md:15`, и правило покраснело бы.
+
+**Верификатор отступление ПРИНИМАЕТ.** Основания:
+1. **Ни один машинный читатель gsd-core строку пункта не разбирает.** `roadmap.analyze` исключает 999.x как служебный номер (`isSentinelPhaseId`; в выдаче 9 фаз, 999.x нет). `/gsd-review-backlog` ищет записи по заголовкам `### Phase 999.x` и каталогам `.planning/phases/999*` (`commands/gsd-review-backlog.md:22-26`). Предикат закрытия читает `14-UAT.md`, а не ROADMAP.
+2. **Всё, что несёт смысл, — в форме шаблона.** Заголовок `### Phase 999.N: Follow-up — Phase 14 deferred UAT follow-up: Test N (BACKLOG)` — дословно. `**Goal:**`, `**Source phase:**`, `**Follow-ups:**` — тоже. `**Deferred at:**` дополнен ссылкой на решение («(решение владельца `chubav`, Q7)»). `idea` и `deferred_at` совпадают с YAML раздела дословно (сверено скриптом).
+3. **Обе другие дороги хуже.** Поднять `total_plans` до 177 значило бы записать в счёт планов два пункта бэклога, то есть исказить прогресс. Научить правило пропускать 999.x — правка теста вне границы этой фазы, и закрытие записей Фазы 14 ей не повод.
+4. **Смысл сохранён.** «(открыто)» говорит то же, что `[ ]`: пункт не исполнен.
+
+**Цена, названная прямо.** Отметки, которую можно поставить, больше нет. Когда пункт будет исполнен, «(открыто)» придётся переписать словами. Состояние пункта читается из текста, а не из чекбокса. Предложение — не гап и не условие закрытия: при следующей правке правила счёта планов научить `roadmap_plan_counts` пропускать служебные разделы 999.x (как `isSentinelPhaseId` в gsd-core) и вернуть пунктам бэклога `- [ ]` шаблона.
+
+### Required Artifacts
+
+| Artifact | Expected | Status | Details (круг 6) |
+|---|---|---|---|
+| `app/pages/htmx.py`, `app/pages/auth.py`, `app/main.py` | Выходы слоя; 10 обработчиков; реестр экранов | ✓ VERIFIED | Без изменений с круга 2 (diff вне `.planning/` с `ec41dcef` пуст) |
+| `app/templates/auth/**`, `auth_base.html`, `base.html`, `components/*`, `includes/*` | Разметка экранов, якорь, макросы | ✓ VERIFIED | Без изменений |
+| `tests/test_pages/*`, `tests/test_templates/test_htmx_markup_gates.py` | Правила фазы | ✓ VERIFIED | Без изменений; 27 именованных правил — PASS |
+| `.planning/phases/14-…/14-UAT.md` | Артефакт обхода критерия 4 | ✓ VERIFIED как артефакт · запись приёмки — 7 `pass` по решению владельца, 2 `skipped` как отложенная работа (`Deferred follow-up:`) | Разметка на месте; предикат обхода — `passed: true` |
+| `.planning/ROADMAP.md` §Backlog | Адресат находок UI WARNING 2 и 3 (Q7 а) | ✓ VERIFIED | 999.1 и 999.2 в форме шаблона, кроме строки пункта (I-R6-03, принято); `idea` дословно из UAT |
+| `.planning/phases/14-…/14-SECURITY.md` | Реестр угроз | ✓ VERIFIED | Не менялся с круга 3; `threats_open: 0` |
+
+Таблицы трёх уровней (артефакты, связи, поток данных) — в §Приложение — запись круга 2. Источник не менялся, поэтому их выводы в силе. Ни одного MISSING, STUB или ORPHANED.
+
+### Key Link Verification
+
+Все семь связей круга 2 — ✓ WIRED; прогон их правил (1, 13, 15, 16–17, 19–21, 8–9) в круге 6 — PASS. Файлы источника не менялись.
+
+Новая связь записей круга 6 — `14-UAT.md` §Deferred Follow-Ups `promoted_to` → `ROADMAP.md` `### Phase 999.1` / `999.2`. ✓ WIRED: оба заголовка существуют, номера совпадают, `idea` совпадает дословно.
+
+### Data-Flow Trace (Level 4)
+
+Шесть цепочек круга 2 — ✓ FLOWING (эхо email, двух кодов и имени; подписанный токен; намеренно пустой пароль по D-04). Источник не менялся.
+
+### Behavioural Spot-Checks
+
+**Круг 6: 27 именованных правил одним вызовом `pytest` — 27 passed, 357 deselected, 21 warnings, за 17.14 с** (`-k` по 27 именам в шести модулях: `test_auth_transport.py`, `test_htmx_gates.py`, `test_htmx_post_pairs.py`, `test_impersonation.py`, `test_registration.py`, `test_htmx_markup_gates.py`; `-p no:cacheprovider -p no:randomly`). Это те же 25 правил таблицы круга 2 (номера 1–25 — как в приложении круга 2) и правила 26–27 записи Q4 (приложение круга 3). Суита целиком НЕ перезапускалась: вне `.planning/` с `ec41dcef` не изменилось ничего (замерено).
+
+Независимые замеры круга 6:
+
+| Measurement | Command | Result |
+|---|---|---|
+| Коммиты после круга 5 | `git log 833a16eb..HEAD` | 1: `e392145c` |
+| Изменённые файлы после круга 5 | `git diff --numstat 833a16eb..HEAD` | `ROADMAP.md` +18/−0, `14-UAT.md` +18/−3, `14-VERIFICATION.md` +1/−0 |
+| Изменения вне `.planning/` с `ec41dcef` | `git diff --name-only ec41dcef..HEAD -- . ':!.planning'` | **0** |
+| Резервная копия = файл до круга | `cmp 14-VERIFICATION.pre-round6.md 14-VERIFICATION.md` | побайтово одно и то же |
+| Решение владельца | журнал сессии de9e5bcb, 06:17Z–06:22Z | вопрос 06:18:54.064Z → «Отложить на потом (рек.)» 06:19:00.030Z |
+| Проверки 1–7 не тронуты | скрипт: разделы `### N.` и `## Проверка N` в `f447c5ed` и `HEAD` | 14 разделов из 14 — `SAME` |
+| Отметки 8 и 9 не тронуты | `grep -E '^\|.*закрой тест (8\|9)»'` в `f447c5ed` и `HEAD`, md5 | совпадает |
+| Блок `overrides` | `diff` строк блока: `bae74ab7` и `833a16eb` против `HEAD` | пусто в обоих случаях |
+| `idea` UAT ↔ бэклог | скрипт: строка `- (открыто) Test N: {idea} (deferred {deferred_at})` в ROADMAP; `reason` ↔ `idea` | обе — `True` |
+| Предикат обхода, только UAT | `gsd-tools phase uat-passed 14 --uat-only --raw` | `passed: true`, блокеров 0; 8 и 9 — `deferred: true` |
+| Предикат обхода, по умолчанию | `gsd-tools phase uat-passed 14 --raw` (до записи отчёта) | `passed: true`, блокеров 0 |
+| Предикат обхода, с вердиктом | `gsd-tools phase uat-passed 14 --require-verification --raw` (до записи отчёта) | `passed: false`; единственный блокер — `policy: verification status=stale` (вердикт круга 5 устарел; снимается этим отчётом, см. §Self-check) |
+| Классы пунктов обхода | `gsd-tools query audit-uat --raw` | у `14-UAT.md` пункты 8 и 9 — `category: deferred` (в круге 5 — `skipped_unresolved`) |
+| Правило пропуска в предикате | чтение `uat-predicate.cjs:61-76`, `:570-590` | `skipped` проходит, если `reason` совпадает с `/^["']?deferred follow-up\b/i`; раздел `## Deferred Follow-Ups` — «the durable project-level record», в файле есть |
+| Счёт планов | чтение `test_state_progress_matches_roadmap.py:68-93` | `- [ ] ` под любым `### Phase ` считается планом — причина отступления I-R6-03 подтверждена |
+| ROADMAP — машинный разбор | `gsd-tools query roadmap.analyze --raw` (до записи отчёта) | 9 фаз, 999.x исключены; `total_plans: 175`; `checkbox_conflict` по фазе 14 (`roadmap_complete: true`, `disk_status: executed`), потому что `stale` → EXECUTED (`phase-status.cjs:137-138`); после записи — §Self-check |
+| Механизм фокуса | `grep -rnE 'autofocus\|tabindex\|aria-live' app/templates/auth/ app/templates/auth_base.html` | 0 — UI WARNING 2 по-прежнему в силе |
+| `is_same_origin` | `grep -n is_same_origin app/pages/auth.py`; `grep -c '@router.post'` | импорт + `:691` из 10 |
+| `verified_at` | `grep -n verified_at app/pages/auth.py` | `:408, :443, :916, :950` |
+| Покрытие решений | `check.decision-coverage-verify <phaseDir> 14-CONTEXT.md` | 15/15, `not_honored: []` (ключ `workflow.context_coverage_gate` не задан — гейт включён) |
+| Долговые метки | `grep -E 'TBD\|FIXME\|XXX'` по `ROADMAP.md` и по добавленным строкам e392145c | 0 и 0 |
+| Верб отпечатка | `verification.fingerprint` по 46 путям, с дублем первого пути и без него | оба: 60 файлов, потерянных 0, дублей 0, `v3:sha256:c3d1606b…` |
+
+### Probe Execution
+
+Проб в дереве нет, и фаза их не объявляла (`find scripts -path '*/tests/probe-*.sh'` → 0). Шаг пропущен по отсутствию предмета, как в кругах 1–5.
+
+### Requirements Coverage
+
+| Requirement | Source plans | Description | Status | Evidence |
+|---|---|---|---|---|
+| **SIGN-01** | 14-01…14-07 | 9 форм авторизации идут через htmx | ✓ SATISFIED (машинно); рантайм подмены — по решению владельца (SC4, override) | Истина 2; правила 5–7. Остаток — пункты человеку 1–5, закрытые override 1 |
+| **SIGN-02** | 14-01…14-05, 14-07 | Неверный код или пароль перерисовывает форму с сохранением введённого | ✓ SATISFIED | Истины 1, 5, 6, 7; правила 1–4, 11–12, 22, 24. **Цель фазы достигнута сервером** |
+| **SIGN-03** | 14-01, 14-03, 14-05, 14-06, 14-07 | Успех — `HX-Redirect`; `HX-Location` — у возврата (по летописи) | ✓ SATISFIED | Истина 3; правила 8–9, 13–15, 19–21 |
+
+**Записи требований.** `REQUIREMENTS.md:60-62` — `[ ]`, `:160-162` — `Pending`, летопись `:64` — без изменений с круга 3. Верификатор требований не правил. С решением Q7 закрытию фазы больше ничего не мешает, а отметки ставит именно оно (§Закрытие фазы). Сирот нет: прослеживаемость относит к Фазе 14 ровно SIGN-01…03, и все три заявлены планами.
+
+### Decision Coverage
+
+15/15 отслеживаемых решений `14-CONTEXT.md` опознаны, `not_honored: []`. Перемерено в круге 6 (с явным путём к CONTEXT.md). Решение Q7 поставленных планами артефактов D-02 не трогало: предусловия П-1…П-7, правило останова и девять таблиц отметок на месте.
+
+### Anti-Patterns Found
+
+| File | Line | Pattern | Severity | Impact |
+|---|---|---|---|---|
+| — | — | `TBD` / `FIXME` / `XXX` в `ROADMAP.md` целиком и в добавленных строках e392145c (`14-UAT.md`, `ROADMAP.md`) | — | **Ноль.** Гейт долговых меток зелёный |
+| — | — | Отключённые тесты, пустые реализации, статические возвраты | — | Ноль; код и правила не менялись с круга 2 |
+
+### Findings Handed Over By Hand (code review and UI review)
+
+Счёт: 15 находок, **закрыто 2, открыто 13** — как в кругах 2–5. Код не менялся, поэтому ни одна находка не закрылась. Поимённая таблица с уликами — в §Приложение — запись круга 3. В круге 6 изменилась только запись двух находок:
+
+| ID | Круг 5 | Круг 6 |
+|---|---|---|
+| **UI WARNING 2** — ни фокуса, ни живой области после свопа | ОТКРЫТА, НЕ НАБЛЮДЕНА — по решению владельца (override 2); адресата нет | **ОТКРЫТА, НЕ НАБЛЮДЕНА, С АДРЕСАТОМ** — бэклог ROADMAP Phase 999.1 (Q7 а). Механизма по-прежнему нет (0 совпадений) |
+| **UI WARNING 3** — вторая кнопка живая на экранах кода | ОТКРЫТА, НЕ НАБЛЮДЕНА — по решению владельца (override 2) | **ОТКРЫТА, НЕ НАБЛЮДЕНА, С АДРЕСАТОМ** — бэклог ROADMAP Phase 999.2 (Q7 а). Отброс второго запроса — PASS (правило 23) |
+
+**Ни одна из этих находок не опровергает истину фазы**, поэтому ни одна не поднята до 🛑 Blocker. Открытые предупреждения вердикту `passed` не мешают: правило 1 шага 9 срабатывает только на блокерах.
+
+### Findings Of Round 5 — State In Round 6
+
+| ID | Круг 5 | Круг 6 — состояние и улика |
+|---|---|---|
+| **W-R5-01** — простой отказ от 8 и 9 блокирует предикат закрытия фазы | ⚠️ Warning → Q7 | **ЗАКРЫТА РЕШЕНИЕМ ВЛАДЕЛЬЦА** (Q7 а, e392145c). `phase uat-passed 14` — `passed: true`, блокеров 0; `audit-uat` — `deferred`. Обещанное владельцу последствие («потом закрытие фазы») теперь сходится с правилом инструмента |
+| **I-R5-01** — `accepted_at` и причины 06:03:27Z на 38 с позже ответа 06:02:49Z | ℹ️ → оркестратору | **ОТКРЫТА** — подписанный блок не правится; та же картина повторилась в Q7 (I-R6-01) |
+| **I-R4-01** — сторонние `POST /register/send-code` с устаревших клиентов | ℹ️ → владельцу | **ОТКРЫТА.** Журнал стенда в этом круге не снимался (§Method) |
+| **I-R4-02** — верб отпечатка первый путь не теряет | ℹ️ → оркестратору | Подтверждена в третий раз (с дублем и без — одно значение) |
+| **I-R3-02** — R-14-02 и todo называют 200 строкой `:841`, основной выход — `:876` | ℹ️ → оркестратору | **ОТКРЫТА.** `14-SECURITY.md` и todo не правились |
+| **I-R2-02** — устаревшие записи (`STATE.md:29`, строка T-14-19 `14-SECURITY.md:59`) | ℹ️ | **ОТКРЫТА, НО ТЕПЕРЬ С ДОРОГОЙ.** Файлы не правились. Текст для `STATE.md:29` — в §Закрытие фазы |
+| **I-R2-04** — вербы `verify.artifacts` / `verify.key-links` не разбирают строковые блоки планов | ℹ️ | **ОТКРЫТА** — планы не менялись |
+
+### New Findings Of Round 6
+
+| ID | Finding | Severity | Evidence | Route |
+|---|---|---|---|---|
+| **I-R6-01** | Время и слова ответа в записи расходятся с журналом. Поле Q7 `owner_answer` и обе причины в `14-UAT.md` называют 06:19:28Z, а ответ в журнале — 06:19:00.030Z, на 28 с раньше. Как и в I-R5-01, это время записи, а не ответа. Ответ передан как «Отложить на потом», в журнале — «Отложить на потом (рек.)». Суть не меняется | ℹ️ Info | журнал de9e5bcb; `owner_questions[Q7].owner_answer`; `14-UAT.md:7`, `:151`, `:159` | Верификатор добавил к Q7 `answered_at` по журналу, поле `owner_answer` не правил. Оркестратору — на усмотрение |
+| **I-R6-02** | Слова записи — оркестратора, а не владельца. Шаблон `verify-work.md:450`, `:456` велит писать в `reason` и `idea` «verbatim user response». Владелец ответил выбором из меню, поэтому его дословных слов — только метка варианта. Тексты `idea` составил оркестратор из `expected` самих проверок, и они не шире их. Отдельно: датированный абзац решения 06:03:27Z (`14-UAT.md:91-95`) по-прежнему говорит «От наблюдения проверок 8 и 9 владелец отказался». Как запись своего дня он верен, но парного абзаца о Q7 рядом нет. Решение Q7 видно только в причинах и строках `history:` | ℹ️ Info | `14-UAT.md:91-95`, `:151-152`, `:159-160`, `:373-384`; журнал de9e5bcb 06:18:54Z | Оркестратору — на усмотрение: строка-летопись под абзацем 06:03:27Z («2026-10-08T06:19:00Z — по Q7 (а) отказ от 8 и 9 переведён в отложенную работу, бэклог 999.1/999.2»). Не условие закрытия |
+| **I-R6-03** | Строка пункта бэклога — `- (открыто) Test N: …` вместо `- [ ] Test N: …` шаблона | ℹ️ Info — **принято верификатором** | §Отступление формы бэклога; `test_state_progress_matches_roadmap.py:68-93`; `roadmap.analyze` | Предложение на будущее: научить правило счёта планов пропускать 999.x и вернуть `- [ ]` |
+| **I-R6-04** | Пока вердикт `stale`, `roadmap.analyze` показывает `checkbox_conflict` по фазе 14 (ROADMAP `[x]`, на диске `executed`). Это следствие устаревания, а не расхождение записей: `stale` отображается в EXECUTED | ℹ️ Info | `phase-status.cjs:137-138`; вывод до и после записи — §Self-check | Учтено в §Закрытие фазы: после `phase.complete` и пересчёта отпечатка конфликт должен остаться снятым |
+
+### Self-check (после записи отчёта)
+
+| Check | Command | Result |
+|---|---|---|
+| Вердикт читается владельцем статуса | `gsd-tools query verification.status <phaseDir> --pick status` | `passed`, код 0 (до записи — `stale`); `next_action: «Verification passed — continue.»`, маршрута нет |
+| Отпечаток | `gsd-tools query verification.fingerprint <phaseDir> <46 путей>` и тот же вызов с дублем первого пути | 60 покрытых файлов (46 + 14 PLAN/SUMMARY), потерянных путей 0, дублей 0; оба вызова — `v3:sha256:c3d1606b…`; `covered_digest` скопирован из вывода дословно. Все 59 файлов круга 5 в списке остались, добавлен `.planning/ROADMAP.md` |
+| Фронтматтер разбирается | `yaml.safe_load` блока между разделителями | ок: `status: passed`, `score` 13/13, `overrides_applied: 1`, `backstop_abstentions: 0`; 10 пунктов человеку — все `discharged`, у всех десяти `round_6_state_evidence`; 7 вопросов (Q1–Q7), у Q7 добавлены `answered_at`, `answered_where`, `executed`, `round_6_check`; 4 отсрочки (open, open, closed, open — четвёртая новая); блок `re_verification` круга 5 вложен под `previous_round_record`, круги 4, 3 и 2 — под ним |
+| Подписанный блок `overrides` | сравнение 13 строк блока с резервной копией и с `bae74ab7` | **побайтово тот же**; `covers` не тронуты |
+| Предикат обхода | `gsd-tools phase uat-passed 14 --raw` и `--require-verification --raw` | оба `passed: true`, блокеров 0; у проверок 8 и 9 `deferred: true`. До записи единственным блокером второго режима был `verification status=stale`, теперь он снят |
+| Разборщик пунктов человеку | `gsd-tools query audit-uat --raw` | `14-VERIFICATION.md` в выдаче нет (вердикт `passed`, открытых пунктов 0). У `14-UAT.md` — `status: complete`, пункты 8 и 9 — `category: deferred` |
+| ROADMAP — машинный разбор | `gsd-tools query roadmap.analyze --raw` | `checkbox_conflict: []` (до записи — фаза 14, `executed` при `[x]`; I-R6-04 подтверждена), `completed_phases: 9` из 9, `total_plans: 175` |
+| Перенос записи — по значениям | `carry_check_r6.py`: каждое поле фронтматтера резервной копии `14-VERIFICATION.pre-round6.md` против нового файла (`re_verification` круга 5 — против `previous_round_record`) | расхождений **0**. Все поля `deferred`, `escalations`, `human_verification`, `human_verification_round_1`, `owner_questions` Q1–Q7 (с `owner_answer`, `owner_answer_followup`, `owner_decision_final`), `decision_coverage`, `flagged_prohibitions`, `overrides`, `status`, `score`, счётчики равны прежним; новые поля только добавлены, новых ключей верхнего уровня нет |
+| Перенос записи — по строкам | тот же скрипт: каждая непустая строка копии (1750 строк) против нового файла, с учётом кратности | потерянных строк **0**, нехватки по кратности 0. Заменена только шапка круга 5 (`verified`/`covered_files`/`covered_digest`; `status` и `score` — те же значения). Блок `re_verification` круга 5 сдвинут на два пробела, заголовки тела круга 5 понижены с меткой «[круг 5]», финальная подпись круга 5 переехала в конец §Приложение — запись круга 5 как «Подпись круга 5: …». Остальное побайтово |
+| Правила записей | `uv run pytest tests/test_planning -q -p no:cacheprovider` | **208 passed** за 16.34 с, включая `test_requirement_completion_follows_verification.py` (SIGN-01…03 `Pending` при `passed` — правило одностороннее, зелено), `test_state_progress_matches_roadmap.py` и `test_the_walkthrough_cannot_self_certify.py` |
+
+### Advisory (New Scope, Unevidenced)
+
+Нет. Узкий гейт улик (#3304) этому кругу формально не применим: блока `gaps` не было ни в одном круге, и шаг 0 ведёт прогон в полном объёме. Каждая новая находка несёт детерминированную улику: вывод штатного верба, номер строки правила, метку времени первичной записи. Ни одна не 🛑 Blocker и ни одна не опровергает истину фазы.
+
+### Escalation — решение владельца, которое я не вправе принять за него
+
+**Открытых развилок нет.** Эскалация CR-02 / WR-07 закрыта с круга 2. Q6 решён подписью в круге 5. Q7 решён выбором владельца (а) и сверен этим кругом. Новых вопросов владельцу круг 6 не поднимает. I-R6-01…04 — информационные, решения владельца не требуют.
+
+### Deferred Items
+
+Круг 5 → круг 6: четыре пункта, **открыто 3, закрыто 1**. Четвёртый пункт новый. Это не гап, а запись адресата, которого находкам UI WARNING 2 и 3 дал Q7 (а). Ни одна отсрочка не адресована более поздней фазе вехи: Фаза 15 закрыта, позже неё фаз в вехе нет. Каждая открытая несёт адресата, записанного владельцем, или его запись об отсрочке. Вердикта они не меняют.
+
+| # | Item | Круг 5 | Круг 6 — состояние и улика |
+|---|---|---|---|
+| 1 | 23 запрета планов 14-01…14-07 — `flagged-unverified` / `verification: none` | ОТКРЫТ, адресат есть | **ОТКРЫТ, АДРЕСАТ ТОТ ЖЕ** — бэклог следующей вехи (todo `classify-420…`). Не засчитан зелёным: «passed с 23 помеченными запретами» |
+| 2 | CR-01 — гард источника запроса на девяти формах | ОТКРЫТ; риск принят (R-14-01) | **ОТКРЫТ.** Код не менялся: 1 вызов из 10 (`:691`). Адресат-фаза не назначен |
+| 3 | `hx-push-url` на формах авторизации | ЗАКРЫТ Фазой 15 | **ЗАКРЫТ** — без изменений |
+| 4 | Наблюдение проверок 8 и 9 (UI WARNING 2 и 3) | — (в круге 5 — «адресата нет», Q7) | **ОТКРЫТ, С АДРЕСАТОМ** — бэклог ROADMAP 999.1 и 999.2 (Q7 а) |
+
+### Human Verification Required
+
+**Нет открытых пунктов.** Круг 6: все десять пунктов `discharged`, основания те же, что в круге 5. Улика круга — в поле `round_6_state_evidence`; прежние `state_evidence`, `round_4_state_evidence`, `round_5_state_evidence` и `resolution` сохранены рядом дословно.
+
+| # | Пункт | Круг 5 | Круг 6 | Основание |
+|---|---|---|---|---|
+| 1–7 | UAT 1–7 (вход, регистрация, почта, восстановление, возврат, менеджер паролей, карточка) | discharged | discharged | override 1 — заявление без признаков, D-02 ослаблено; e392145c их не касался |
+| 8 | Фокус и объявление после свопа — UAT 8 | discharged | discharged | override 2 — отказ от наблюдения в Фазе 14; UI WARNING 2 открыта, адресат — 999.1 |
+| 9 | Вторая кнопка на экранах кода — UAT 9 | discharged | discharged | override 2; UI WARNING 3 открыта, адресат — 999.2 |
+| 10 | Решение владельца по 23 запретам | discharged | discharged | адресат — бэклог следующей вехи (с круга 3) |
+
+### Owner Questions
+
+Полные формулировки, рекомендации, ответы и места исполнения — во фронтматтере `owner_questions`.
+
+- **Q1** — SIGN-01…03. В круге 6 по-прежнему `Pending`; отметки ставит закрытие фазы, и ему больше ничего не мешает.
+- **Q2** — `result: pass` ×9 при отозванном обходе. Исполнено в круге 3; у 8 и 9 — `skipped` с причиной `Deferred follow-up:`.
+- **Q3** — адресат 23 запретов. Закрыт в круге 3.
+- **Q4** — R-14-02. Исполнено в круге 3; I-R3-02 открыта.
+- **Q5** — проводился ли обход глазами. Засчитан подписью владельца в круге 5 (Q6).
+- **Q6** — решён в круге 5: ветвь (б), `overrides`.
+- **Q7** — **решён владельцем** (06:19:00.030Z): (а) «Отложить на потом». Исполнено e392145c, сверено этим кругом. Открытых вопросов 0.
+
+### Закрытие фазы — что делать оркестратору
+
+Верификатор не коммитит и учётных файлов не правит. Ниже — что закрытие фазы должно сделать и как не сломать этот вердикт.
+
+1. **Вердикт не трогать.** `status: passed`, `score: 13/13`, `verified`, блок `overrides` — как записано.
+2. **Отметки SIGN-01…03** ставит штатный шаг закрытия (`phase.complete 14`, он же завершение `/gsd-verify-work 14`). Ожидаемое состояние:
+   - `REQUIREMENTS.md:60-62` — `- [ ]` → `- [x]` у SIGN-01, SIGN-02, SIGN-03;
+   - таблица прослеживаемости `:160-162` — `Pending` → `Complete`. Не `Gaps Found`: в круге 2 верб возврата писал его ошибочно, сверить после шага;
+   - текст требований и летопись SIGN-03 `:63` — не трогать;
+   - летопись отметок `:64` заканчивается словами «Отметки вернутся после обхода `14-UAT.md` (`/gsd-verify-work 14`) и вердикта `passed`». По идиоме D-30/D-32 строку не вычёркивать, а дописать к ней одно предложение о возврате, например: «**Возвращены 2026-10-08** — вердикт круга 6 `passed` 13/13: SC4 — PASSED (override владельца `chubav`: проверки обхода 1–7 по заявлению без наблюдённых признаков, D-02 для Фазы 14 ослаблено им же); проверки 8 и 9 не наблюдены и отложены в бэклог ROADMAP 999.1/999.2 (Q7 а).»
+3. **`STATE.md:29`** заменить действующей редакцией. Прежнюю назвать поколением (идиома D-30/D-32, как в `STATE.md:33-39`):
+
+   > **Пройдено в вехе v2.1: Фазы 7…15** (9 фаз из 9). Фаза 14 закрыта 2026-10-08 после шестого круга верификации — 7/7 планов, верификация `passed` 13/13, из них SC4 — PASSED (override): проверки обхода 1–7 засчитаны подписанным решением владельца `chubav` по его заявлению без наблюдённых признаков (правило D-02 для Фазы 14 ослаблено им же), проверки 8 и 9 не наблюдены и по решению владельца (Q7) отложены в бэклог ROADMAP 999.1/999.2 — находки 14-UI-REVIEW WARNING 2 и 3 открыты; 23 запрета планов помечены и зелёным не засчитаны (адресат — бэклог следующей вехи); `threats_open: 0`, Nyquist `validated`. Фаза 15 отгружена 2026-10-07 (PR #54). (Поколение D-30/D-32: редакция «Фазы 7…14 (8 фаз из 9). Фаза 14 закрыта 2026-09-23 — 7/7 планов, верификация `passed` (12/13), обход человека 9/9 без находок, `threats_open: 0`, Nyquist `validated`. Осталась одна фаза вехи — 15» была верна до отзыва обхода владельцем 2026-09-23 (план 15-06, `f2361428`) и до отгрузки Фазы 15; не вычёркивается, а заменена действующей.)
+
+   Заодно стоит сверить `STATE.md:27` (Current focus): «перепроверка фаз 10–14, обход `14-UAT.md`» после закрытия для Фазы 14 исполнены.
+4. **ROADMAP.** Фаза 14 уже `[x]` (`:76`) и `Complete` (`:933`, дата 2026-09-23). Если `phase.complete` перепишет дату или строку прогресса, это допустимо. Бэклог 999.1/999.2 не трогать. После шага прогнать `tests/test_planning` целиком (в круге 6 — 208 passed). Отдельно смотреть `test_state_progress_matches_roadmap` и `test_requirement_completion_follows_verification`. Если правило прогресса покраснеет, `progress.completed_plans`/`total_plans` в `STATE.md` выправляется рукой.
+5. **Отпечаток.** `REQUIREMENTS.md` и `ROADMAP.md` покрыты, поэтому закрытие сделает вердикт `stale`. Пересчитать штатным вербом по тому же списку из 46 путей (scratchpad `covered46.txt`): `node .claude/gsd-core/bin/gsd-tools.cjs query verification.fingerprint .planning/phases/14-avtorizatsiya-na-htmx $(cat covered46.txt)`. В `covered_files` и `covered_digest` скопировать вывод дословно. Вердикт, счёт и `verified` не трогать; дописать строку-летопись к комментарию отпечатка: что изменилось и почему пересчёт — арифметика над разрешённой правкой. Затем `verification.status` → `passed`, `phase uat-passed 14 --require-verification` → `passed: true`, `roadmap.analyze` → без `checkbox_conflict` по фазе 14.
+
+### Gaps Summary
+
+**Изъянов, блокирующих достижение цели, не найдено** — ни в одном из шести кругов.
+
+Цель фазы — «неверный код или пароль перестаёт стирать заполненную форму» — **истинна в дереве, и истинной её делает СЕРВЕР**:
+- 422 стоит литералом в `respond_field_error`;
+- эхо едет параметром в автоэкранирующий шаблон;
+- путь без JS получает ту же страницу прямо в ответ на POST.
+
+В круге 6 это снова подтверждено прогоном 27 именованных правил со значимыми утверждениями на обоих транспортах — на дереве, где вне `.planning/` с круга 2 не изменилось ничего.
+
+**Почему `passed` переносится.**
+- Правило 1 (`gaps_found`) не срабатывает: ни одна истина не FAILED, ни один артефакт не MISSING или STUB, ни одна связь не NOT_WIRED, блокеров нет.
+- Правило 2 (`human_needed`) не срабатывает: открытых пунктов человеку 0.
+- Правка e392145c исполняет Q7 (а) и не шире его; подписанные `covers` обоих override с записью сходятся.
+- Единственный остаток круга 5, W-R5-01, закрыт: предикат закрытия обхода проходит.
+
+**Что `passed` здесь НЕ означает** — как и в круге 5. Это не «обход наблюдён». Проверки 1–7 засчитаны подписью владельца, проверки 8 и 9 не проводились: в Фазе 14 от них отказались, а их предмет отложен в бэклог 999.1/999.2. Находки UI WARNING 2 и 3 открыты. Двадцать три запрета не засчитаны зелёным. Вердикт держится на машинной половине и на двух решениях владельца — подписи (Q6) и отсрочке (Q7). Каждая опора записана под своим именем.
+
+## Приложение — запись круга 5 дословно
+
+Тело отчёта круга 5 (коммит `833a16eb`, дерево `bae74ab7`, 2026-10-08T06:16:48Z) перенесено ЦЕЛИКОМ и ДОСЛОВНО как запись своего дня, а не как действующий вердикт. Единственное механическое преобразование — то же, что круги 2–5 применили к записям предыдущих кругов. Строки заголовков (`#`…`####`) переписаны в жирный текст с меткой «[круг 5]», чтобы разборщики пунктов человеку (`src/uat.cts`) не собрали их второй раз. Все прочие строки совпадают побайтово; это проверено скриптом при сборке, см. §Self-check. Действующие состояния каждого пункта — в разделах круга 6 выше. Подпись круга 5 перенесена в конец этого приложения.
+
+**[круг 5] Phase 14: Авторизация на htmx — Verification Report**
 
 **Phase Goal:** неверный код или пароль перестаёт стирать заполненную форму — заявленный выигрыш вехи именно в ОШИБКЕ, а не в успехе
 **Verified:** 2026-10-08T06:16:48Z (круг 5; круг 4 — 2026-10-08T05:50:52Z; круг 3 — 2026-10-07T15:58:55Z; круг 2 — 2026-10-07T12:31:06Z; круг 1 — 2026-09-23T08:15:00Z)
@@ -580,9 +972,9 @@ owner_questions:
   - Журнал сессии оркестратора de9e5bcb за 05:56Z–06:05Z: вопросы, варианты, ответы.
   - Журнал контейнера `nginx-broadcaster` за окно 2026-10-07T16:27Z…2026-10-08T06:09Z (окно круга 4, продлённое до этого круга). Сняты только агрегированные счёты маршрутов авторизации; IP-адреса не печатались, ничего не запускалось и не менялось.
 
-## Goal Achievement
+**[круг 5] Goal Achievement**
 
-### Observable Truths
+**[круг 5] Observable Truths**
 
 | # | Truth | Status | Evidence (круг 5) |
 |---|-------|--------|----------|
@@ -604,7 +996,7 @@ owner_questions:
 
 **Override 2 в счёт не входит.** Его `must_have` («UAT проверки 8 и 9 — фокус и объявление после подмены; вторая кнопка экрана кода в полёте (14-UI-REVIEW WARNING 2 и 3)») не совпадает ни с одной из 13 истин даже наполовину. Его предмет — пункты человеку 8 и 9 и находки UI-ревизии. Поэтому он применён как подписанное основание `resolution` этих двух пунктов, а не как истина. `overrides_applied: 1`.
 
-### Решение владельца 2026-10-08 — что оно закрывает и чего не закрывает
+**[круг 5] Решение владельца 2026-10-08 — что оно закрывает и чего не закрывает**
 
 Это главный предмет круга: от него зависит, вправе ли вердикт стать `passed`.
 
@@ -638,7 +1030,7 @@ owner_questions:
 
 **Граница поступка.** Ни `14-UAT.md`, ни `REQUIREMENTS.md` верификатор не правил. Блок `overrides` перенесён побайтово.
 
-### Required Artifacts
+**[круг 5] Required Artifacts**
 
 | Artifact | Expected | Status | Details (круг 5) |
 |---|---|---|---|
@@ -650,15 +1042,15 @@ owner_questions:
 
 Таблицы трёх уровней (артефакты, связи, поток данных) — в §Приложение — запись круга 2. Источник не менялся, поэтому их выводы в силе. Ни одного MISSING, STUB или ORPHANED.
 
-### Key Link Verification
+**[круг 5] Key Link Verification**
 
 Все семь связей круга 2 — ✓ WIRED; прогон их правил (1, 13, 15, 16–17, 19–21, 8–9) в круге 5 — PASS. Файлы источника не менялись.
 
-### Data-Flow Trace (Level 4)
+**[круг 5] Data-Flow Trace (Level 4)**
 
 Шесть цепочек круга 2 — ✓ FLOWING (эхо email, двух кодов и имени; подписанный токен; намеренно пустой пароль по D-04). Источник не менялся.
 
-### Behavioural Spot-Checks
+**[круг 5] Behavioural Spot-Checks**
 
 **Круг 5: 27 именованных правил одним вызовом `pytest` — 27 passed, 357 deselected, за 17.65 с** (`-k` по 27 именам в шести модулях правил фазы, `-p no:cacheprovider -p no:randomly`). Это те же 25 правил таблицы круга 2 (номера 1–25 — как в приложении круга 2) и правила 26–27 записи Q4 (приложение круга 3). Суита целиком НЕ перезапускалась. Полный прогон 4084 passed взят входом: вне `.planning/` с `ec41dcef` не изменилось ничего (замерено).
 
@@ -680,11 +1072,11 @@ owner_questions:
 | Долговые метки | `grep -E 'TBD\|FIXME\|XXX'` по 45 переданным покрытым файлам | 0 |
 | Верб отпечатка | `verification.fingerprint` с дублем первого пути и без него | оба: 59 файлов, `v3:sha256:665f4278…` — потери первого пути нет |
 
-### Probe Execution
+**[круг 5] Probe Execution**
 
 Проб в дереве нет, и фаза их не объявляла (`find scripts -path '*/tests/probe-*.sh'` → 0). Шаг пропущен по отсутствию предмета, как в кругах 1–4.
 
-### Requirements Coverage
+**[круг 5] Requirements Coverage**
 
 | Requirement | Source plans | Description | Status | Evidence |
 |---|---|---|---|---|
@@ -694,18 +1086,18 @@ owner_questions:
 
 **Записи требований.** `REQUIREMENTS.md:60-62` — `[ ]`, `:160-162` — `Pending`, летопись `:64` — без изменений с круга 3. Правило `test_no_requirement_is_marked_complete_before_its_phase_verification_passed` одностороннее: при вердикте `passed` оно зелено и с `Pending`, а перевод в `Complete` теперь допускает. Верификатор требований не правил. Отметки ставит закрытие фазы (`phase.complete`), а закрытие стоит за предикатом обхода (Q7). Сирот нет: прослеживаемость относит к Фазе 14 ровно SIGN-01…03, и все три заявлены планами.
 
-### Decision Coverage
+**[круг 5] Decision Coverage**
 
 15/15 отслеживаемых решений `14-CONTEXT.md` опознаны, `not_honored: []`. Перемерено в круге 5 (с явным путём к CONTEXT.md). Владелец ослабил D-02 только в части правила закрытия обхода и только для Фазы 14 — запись 1 `overrides`. Поставленные планами артефакты D-02 (предусловия П-1…П-7, правило останова, девять таблиц отметок) на месте.
 
-### Anti-Patterns Found
+**[круг 5] Anti-Patterns Found**
 
 | File | Line | Pattern | Severity | Impact |
 |---|---|---|---|---|
 | — | — | `TBD` / `FIXME` / `XXX` в 45 переданных покрытых файлах круга 5, включая `14-UAT.md` | — | **Ноль.** Гейт долговых меток зелёный |
 | — | — | Отключённые тесты, пустые реализации, статические возвраты | — | Ноль; код и правила не менялись с круга 2 |
 
-### Findings Handed Over By Hand (code review and UI review)
+**[круг 5] Findings Handed Over By Hand (code review and UI review)**
 
 Счёт: 15 находок, **закрыто 2, открыто 13** — как в кругах 2–4. Код не менялся, поэтому ни одна находка не закрылась. Поимённая таблица с уликами — в §Приложение — запись круга 3. В круге 5 изменилась только запись двух находок:
 
@@ -716,7 +1108,7 @@ owner_questions:
 
 **Ни одна из этих находок не опровергает истину фазы**, поэтому ни одна не поднята до 🛑 Blocker. Открытые предупреждения вердикту `passed` не мешают: правило 1 шага 9 срабатывает только на блокерах.
 
-### Findings Of Round 4 — State In Round 5
+**[круг 5] Findings Of Round 4 — State In Round 5**
 
 | ID | Круг 4 | Круг 5 — состояние и улика |
 |---|---|---|
@@ -729,14 +1121,14 @@ owner_questions:
 | **I-R2-02** — устаревшие записи (`STATE.md:29`, строка T-14-19 `14-SECURITY.md:59`) | ℹ️ | **ОТКРЫТА.** Файлы не правились. При закрытии фазы оркестратору стоит переписать `STATE.md:29` («верификация `passed` (12/13), обход человека 9/9 без находок») по факту: 13/13 с одним override, 7 по решению, 2 отказа |
 | **I-R2-04** — вербы `verify.artifacts` / `verify.key-links` не разбирают строковые блоки планов | ℹ️ | **ОТКРЫТА** — планы не менялись |
 
-### New Findings Of Round 5
+**[круг 5] New Findings Of Round 5**
 
 | ID | Finding | Severity | Evidence | Route |
 |---|---|---|---|---|
 | **W-R5-01** | Отказ от проверок 8 и 9 записан простым `skipped` с причиной «Отказ владельца…». Штатный предикат закрытия фазы `phase uat-passed` такой пропуск блокирует: проходят только `skipped` с причиной `Deferred follow-up:…`. Поэтому при вердикте `passed` `/gsd-verify-work` фазу в ROADMAP и STATE не переведёт («phase advancement is blocked»). Описание варианта, который подписал владелец, обещало обратное: «статус passed (override), SIGN-01…03 отмечаются выполненными, фаза закрывается». Вердикт верен; не сходится обещанное последствие с правилом инструмента | ⚠️ Warning (запись приёмки; истину не затрагивает) | `phase uat-passed 14 --raw` — блокеры `test 8 (skipped)`, `test 9 (skipped)`; `uat-predicate.cjs:69`, `:576`; `verify-work.md:702-716`; журнал de9e5bcb 06:02:20Z | **Q7** — владельцу |
 | **I-R5-01** | `accepted_at` обеих записей `overrides`, `owner_decision_final` Q6 и обе причины `skipped` в `14-UAT.md` стоят на 2026-10-08T06:03:27Z, а ответ владельца в журнале — 06:02:49.661Z, на 38 с раньше. Это время записи, а не ответа; решение предшествует записи. Для подписи несущественно, но кто будет сличать запись с журналом, увидит расхождение | ℹ️ Info | журнал de9e5bcb; `overrides[*].accepted_at`; `14-UAT.md:151`, `:158` | Оркестратору — на усмотрение; верификатор подписанный блок не правит |
 
-### Self-check (после записи отчёта)
+**[круг 5] Self-check (после записи отчёта)**
 
 | Check | Command | Result |
 |---|---|---|
@@ -750,15 +1142,15 @@ owner_questions:
 | Перенос записи — по строкам | тот же скрипт: каждая непустая строка копии (1851 строка) против нового файла | потеряна **одна** строка, намеренно: финальная подпись круга 4 переехала в конец §Приложение — запись круга 4 как «Подпись круга 4: …». Сверх неё заменены: шапка круга 4 (`verified`/`status`/`score`/`covered_files`/`covered_digest`), две строки счётчиков (прежний текст сохранён комментарием дословно) и девять строк `state:`. Блок `re_verification` круга 4 — со сдвигом на два пробела, заголовки тела круга 4 — понижены с меткой «[круг 4]», остальное побайтово |
 | Правила записей | `uv run pytest tests/test_planning -q -p no:cacheprovider` | **208 passed** за 15.61 с, включая `test_requirement_completion_follows_verification.py` (SIGN-01…03 `Pending` при `passed` — правило одностороннее, зелено) и `test_the_walkthrough_cannot_self_certify.py` |
 
-### Advisory (New Scope, Unevidenced)
+**[круг 5] Advisory (New Scope, Unevidenced)**
 
 Нет. Узкий гейт улик (#3304) этому кругу формально не применим: блока `gaps` не было ни в одном круге, и шаг 0 ведёт прогон в полном объёме. Каждая новая находка несёт детерминированную улику: вывод штатного верба, номер строки правила, метку времени первичной записи. Ни одна не 🛑 Blocker и ни одна не опровергает истину фазы.
 
-### Escalation — решение владельца, которое я не вправе принять за него
+**[круг 5] Escalation — решение владельца, которое я не вправе принять за него**
 
 Эскалация CR-02 / WR-07 **закрыта** с круга 2 и не переоткрывается. Развилку круга 4, Q6, владелец решил подписью. Развилка круга 5 — **Q7**: как записать отказ от проверок 8 и 9, чтобы штатный предикат закрытия фазы его принял. На вердикт ответ не влияет — он `passed` при любой ветви. Но от него зависит, закроется ли фаза штатно. Решить это может только владелец. Перезапись «смотреть не буду» в «посмотрим позже» (`Deferred follow-up:`) меняет смысл его подписи и даёт находкам UI WARNING 2 и 3 адресата. Это не правка формы, которую оркестратор вправе сделать сам.
 
-### Deferred Items
+**[круг 5] Deferred Items**
 
 Круг 4 → круг 5: три пункта. **Открыто 2, закрыто 1** — без изменений. Ни одна отсрочка не адресована более поздней фазе вехи: Фаза 15 закрыта, позже неё в вехе фаз нет. Обе открытые несут адресата, записанного владельцем (отсрочка 1), или запись владельца об отсрочке (отсрочка 2). Вердикта они не меняют.
 
@@ -768,7 +1160,7 @@ owner_questions:
 | 2 | CR-01 — гард источника запроса на девяти формах | ОТКРЫТ; риск принят (R-14-01) | **ОТКРЫТ.** Код не менялся: 1 вызов из 10 (`:691`). Адресат-фаза не назначен |
 | 3 | `hx-push-url` на формах авторизации | ЗАКРЫТ Фазой 15 | **ЗАКРЫТ** — без изменений |
 
-### Human Verification Required
+**[круг 5] Human Verification Required**
 
 **Нет открытых пунктов.** Круг 5: все десять пунктов `discharged`. Пункты 1–9 закрыты подписанным решением владельца, а не наблюдением; пункт 10 закрыт с круга 3 адресатом. Поимённые основания — во фронтматтере: `resolution`, `round_5_state_evidence`; прежние `state_evidence` и `round_4_state_evidence` сохранены рядом.
 
@@ -787,7 +1179,7 @@ owner_questions:
 
 Сверка с правилом «overrides не подавляют пункты человеку». Пункты 1–9 закрыл не верификатор, обойдя человека. Их закрыл сам человек, который должен был наблюдать: по 1–7 — своим заявлением и подписью, по 8–9 — подписанным отказом. Улики наблюдения у них нет, и это записано в каждом `resolution`.
 
-### Owner Questions
+**[круг 5] Owner Questions**
 
 Полные формулировки, рекомендации, ответы и места исполнения — во фронтматтере `owner_questions`.
 
@@ -799,7 +1191,7 @@ owner_questions:
 - **Q6** — **решён владельцем** (06:02:49Z): ветвь (б), `overrides` — 1–7 по заявлению, D-02 ослаблено; 8–9 — отказ. Применён: SC4 → PASSED (override), пункты 1–9 → discharged.
 - **Q7 (новый, единственный открытый)** — как записать отказ от 8 и 9, чтобы штатный предикат закрытия фазы его принял. **Рекомендация:** (а) отложенная работа `Deferred follow-up:` с адресатом для UI WARNING 2/3; иначе (б) два значения сейчас; иначе (в) оставить отказ — вердикт `passed`, но фаза штатно не закроется.
 
-### Gaps Summary
+**[круг 5] Gaps Summary**
 
 **Изъянов, блокирующих достижение цели, не найдено** — ни в одном из пяти кругов.
 
@@ -818,6 +1210,9 @@ owner_questions:
 **Что `passed` здесь НЕ означает.** Это не «обход наблюдён». Ни одного наблюдённого признака в записи обхода нет, стенд этой машины запросов обхода не видел, проверки 8 и 9 не проводились по отказу, находки UI WARNING 2 и 3 открыты. Двадцать три запрета не засчитаны зелёным. Всё это названо выше. Вердикт держится на машинной половине и на подписи владельца, и каждая из двух опор записана под своим именем.
 
 **Что осталось за пределами вердикта.** Q7: штатный предикат не закроет фазу, пока отказ от 8 и 9 записан простым `skipped` (W-R5-01).
+
+Подпись круга 5: _Verified: 2026-10-08T06:16:48Z (круг 5; круг 4 — 2026-10-08T05:50:52Z; круг 3 — 2026-10-07T15:58:55Z; круг 2 — 2026-10-07T12:31:06Z; круг 1 — 2026-09-23T08:15:00Z)_
+_Verifier: Claude (gsd-verifier)_
 
 ## Приложение — запись круга 4 дословно
 
@@ -2216,5 +2611,5 @@ _Verifier: Claude (gsd-verifier)_
 
 ---
 
-_Verified: 2026-10-08T06:16:48Z (круг 5; круг 4 — 2026-10-08T05:50:52Z; круг 3 — 2026-10-07T15:58:55Z; круг 2 — 2026-10-07T12:31:06Z; круг 1 — 2026-09-23T08:15:00Z)_
+_Verified: 2026-10-08T06:33:16Z (круг 6; круг 5 — 2026-10-08T06:16:48Z; круг 4 — 2026-10-08T05:50:52Z; круг 3 — 2026-10-07T15:58:55Z; круг 2 — 2026-10-07T12:31:06Z; круг 1 — 2026-09-23T08:15:00Z)_
 _Verifier: Claude (gsd-verifier)_
