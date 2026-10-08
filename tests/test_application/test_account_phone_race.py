@@ -207,8 +207,24 @@ async def _outcomes(factory, writer, positions) -> list[RaceOutcome]:
 
 
 def race_violations(outcomes: list[RaceOutcome]) -> list[str]:
-    """Заготовка RED: нарушений не называет."""
-    return []
+    """Нарушения по позициям: по одной строке на позицию, начиная с «позиция k:».
+
+    Позиция без ручной записи — вакуум: защищать было нечего, и её итог ничего
+    не доказывает. Позиция, где ручная запись состоялась, а итог не ручной
+    номер с поднятым признаком, — потеря ручного номера.
+    """
+    violations = []
+    for outcome in outcomes:
+        if not outcome.manual_fired:
+            violations.append(
+                f"позиция {outcome.position}: ручная запись не состоялась — вакуум "
+                f"(итог {outcome.final}, операторов {outcome.statements})"
+            )
+        elif outcome.final != EXPECTED_FINAL:
+            violations.append(
+                f"позиция {outcome.position}: итог {outcome.final}, ручной номер затёрт"
+            )
+    return violations
 
 
 @pytest.mark.asyncio
