@@ -45,6 +45,37 @@
 обходом, что и живое дерево (`python_sources(root)`), а правило по живому дереву
 печатает число файлов и распознанных вызовов журнала по каждому дереву и требует,
 чтобы оба были больше нуля: обход пустого множества был бы зелёным всегда.
+
+JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глубине). JS-парсера в
+окружении нет, поэтому разбор — собственный токенизатор `_lex_js`: комментарии,
+строки и литералы регулярных выражений убираются из «кода», а выражения `${…}`
+шаблонных строк остаются кодом (Pitfall 6). Вызов журнала —
+`log`/`console`/`logger`/`baileysLogger` `.trace|debug|info|warn|error|fatal|log|child(`
+вне комментариев; аргументы — до парной скобки. Краснят (а) литерал, похожий на
+номер, в текстах строк; (б) идентификатор кода аргументов, содержащий `phone`, кроме
+`phone_set`/`phoneSet`, чьё значение булевой формы (`Boolean(…)`, `!!…`, сравнение с
+`null`/`undefined`); (в) носители JID с номером аккаунта — `sock.user` и `creds.me`
+(в том числе `state.creds.me`), где имени `phone` нет вовсе.
+
+РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_LOG_EXCEPTIONS` — ключ «`<путь>::<функция-владелец>`» и
+причина, только для Python; потолок `PHONE_LOG_EXCEPTIONS_CEILING = 0`. Исключения
+для JS гейт не принимает: их появление потребует правки самого гейта.
+
+СКВОЗНОЙ ГЕЙТ: называть поимённо в каждом плане фаз 17–20
+(`uv run pytest tests/test_phone_privacy_gate.py -q`) — исполнители не гоняют полную
+суиту, а этот гейт читает чужие исходники: писатель номера Фаз 17–20, положивший его
+в журнал, иначе узнает об этом только на сорокаминутном прогоне после слияния.
+
+ГРАНИЦА СРЕДСТВА, НАЗВАННАЯ ПРЯМО (чего гейт НЕ видит):
+* журналы сторонних библиотек — Baileys/pino на уровне `warn` (`baileysLogger`
+  внутри Baileys), pymax, Telethon: гейт читает только наши исходники;
+* номер аккаунта MAX в переменной окружения `PHONE` контейнера (виден в
+  `docker inspect`) и в файле `phone.txt` тома сессии (`max_worker/main.py:296-305`,
+  `app/services/max_container_manager.py:59-60`) — это не журнал; отложено
+  (CONTEXT §Deferred, кандидат в бэклог);
+* значение, пришедшее в журнал без имени `phone` и без носителя
+  (`logger.info("x", value=v)`, где `v` — номер), — вне охвата правила имён;
+* `wa_bridge/` — наследие вне D-09, под гейт не входит.
 """
 
 from __future__ import annotations
@@ -282,6 +313,8 @@ def python_log_offences(source: str, path: str) -> list[str]:
     in_scripts = PurePosixPath(path).parts[:1] == ("scripts",)
     offences: list[str] = []
     for call in python_log_calls(source):
+        if f"{path}::{_owner(ranges, call.lineno)}" in PHONE_LOG_EXCEPTIONS:
+            continue
         mask_for_a_reader = in_scripts and _is_print(call)
         for line, kind, subject in sorted(_judge_arguments(call, mask_for_a_reader=mask_for_a_reader)):
             offences.append(f"{path}:{line} — {kind} — {subject} (владелец {_owner(ranges, call.lineno)})")
@@ -325,14 +358,254 @@ class JsLogCall:
     strings: tuple[tuple[int, str], ...]
 
 
+JS_LOG_CALL = re.compile(
+    r"\b(?:log|console|logger|baileysLogger)\s*\.\s*(?:trace|debug|info|warn|error|fatal|log|child)\s*\("
+)
+JS_IDENTIFIER = re.compile(r"[A-Za-z_$][\w$]*")
+# Носители JID с номером аккаунта: имени `phone` в них нет (правило (в)).
+JS_CARRIER = re.compile(r"\bsock\s*\??\.\s*user\b|\bcreds\s*\??\.\s*me\b")
+JS_PRESENCE_FLAG_NAMES = frozenset({"phone_set", "phoneSet"})
+JS_PRESENCE_KEY = re.compile(r"\b(?:phone_set|phoneSet)\s*:")
+_JS_NULLISH_COMPARISON = re.compile(r"^(?:.+?\s*(?:!==?|===?)\s*(?:null|undefined)|(?:null|undefined)\s*(?:!==?|===?)\s*.+)$", re.S)
+# После этих слов `/` открывает литерал регулярного выражения, а не деление.
+_JS_KEYWORDS_BEFORE_EXPRESSION = frozenset(
+    {"return", "typeof", "case", "do", "else", "in", "of", "new", "delete", "void", "throw", "instanceof", "yield", "await"}
+)
+_JS_OPENERS = {"(": ")", "[": "]", "{": "}"}
+
+
+@dataclass(frozen=True)
+class _JsLexed:
+    code: str  # исходник, где комментарии, строки и регулярные выражения заменены пробелами
+    strings: tuple[tuple[int, str], ...]  # (смещение, текст) строк и кусков шаблонных строк
+
+
+def _lex_js(source: str) -> _JsLexed:
+    """Код и строки исходника JS без стороннего парсера (в окружении его нет).
+
+    Комментарии `//…`, `/*…*/`, строки `'…'`/`"…"` и литералы регулярных выражений
+    в «коде» заменяются пробелами (переводы строк сохраняются — номера строк те же).
+    В шаблонной строке `` `…` `` текст уходит в «строки», а выражения `${…}` остаются
+    «кодом» на любой глубине вложенности (Pitfall 6: первая версия вырезала их вместе
+    со строкой и пропускала ``log.info(`connected ${phone}`)``). Строка-ключ объекта
+    (`{ 'phone': x }`) возвращается в код своим содержимым: ключ — имя, а не текст.
+    """
+    out = list(source)
+    strings: list[tuple[int, str]] = []
+    keys: list[tuple[int, int]] = []
+    length = len(source)
+
+    def blank(start: int, end: int) -> None:
+        for index in range(start, min(end, length)):
+            if out[index] != "\n":
+                out[index] = " "
+
+    regions: list[int] = []  # открытые `${`: глубина фигурных скобок внутри каждого
+    in_template = False
+    expression_expected = True
+    index = 0
+    while index < length:
+        if in_template:
+            start = index
+            while index < length and source[index] != "`" and not source.startswith("${", index):
+                index += 2 if source[index] == "\\" else 1
+            index = min(index, length)
+            strings.append((start, source[start:index]))
+            blank(start, index)
+            if index >= length:
+                break
+            if source[index] == "`":
+                blank(index, index + 1)
+                index += 1
+                in_template = False
+                expression_expected = False
+            else:
+                blank(index, index + 2)
+                index += 2
+                regions.append(0)
+                in_template = False
+                expression_expected = True
+            continue
+        char = source[index]
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            end = length if end < 0 else end
+            blank(index, end)
+            index = end
+            continue
+        if source.startswith("/*", index):
+            end = source.find("*/", index + 2)
+            end = length if end < 0 else end + 2
+            blank(index, end)
+            index = end
+            continue
+        if char in "'\"":
+            end = index + 1
+            while end < length and source[end] != char and source[end] != "\n":
+                end += 2 if source[end] == "\\" else 1
+            end = min(end, length)
+            strings.append((index + 1, source[index + 1 : end]))
+            keys.append((index, end + 1))
+            blank(index, end + 1)
+            index = end + 1
+            expression_expected = False
+            continue
+        if char == "`":
+            blank(index, index + 1)
+            index += 1
+            in_template = True
+            continue
+        if char == "/" and expression_expected:
+            end = index + 1
+            in_class = False
+            while end < length and source[end] != "\n":
+                if source[end] == "\\":
+                    end += 2
+                    continue
+                if source[end] == "[":
+                    in_class = True
+                elif source[end] == "]":
+                    in_class = False
+                elif source[end] == "/" and not in_class:
+                    break
+                end += 1
+            if end < length and source[end] == "/":
+                end += 1
+                while end < length and source[end].isalpha():
+                    end += 1
+                blank(index, end)
+                index = end
+                expression_expected = False
+                continue
+        if char == "{" and regions:
+            regions[-1] += 1
+        elif char == "}" and regions:
+            if regions[-1] == 0:
+                regions.pop()
+                blank(index, index + 1)
+                index += 1
+                in_template = True
+                continue
+            regions[-1] -= 1
+        if char.isalpha() or char in "_$":
+            word = JS_IDENTIFIER.match(source, index)
+            assert word is not None
+            index = word.end()
+            expression_expected = word.group(0) in _JS_KEYWORDS_BEFORE_EXPRESSION
+            continue
+        if char.isdigit() or char in ")]":
+            expression_expected = False
+        elif not char.isspace():
+            expression_expected = True
+        index += 1
+
+    code = "".join(out)
+    for start, end in keys:
+        text = source[start + 1 : end - 1]
+        rest = code[end:].lstrip(" \t")
+        if JS_IDENTIFIER.fullmatch(text) and rest.startswith(":"):
+            code = code[: start + 1] + text + code[end - 1 :]
+    return _JsLexed(code=code, strings=tuple(strings))
+
+
+def _matching_close(code: str, open_index: int) -> int:
+    """Индекс парной закрывающей скобки (по балансу `(`/`[`/`{`) или конец текста."""
+    depth = 0
+    for index in range(open_index, len(code)):
+        char = code[index]
+        if char in _JS_OPENERS:
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return len(code)
+
+
 def js_log_calls(source: str) -> list[JsLogCall]:
-    """Вызовы журнала в исходнике JS (RED-заготовка)."""
-    return []
+    """Вызовы журнала в исходнике JS: строка, код аргументов, тексты строк."""
+    lexed = _lex_js(source)
+    calls: list[JsLogCall] = []
+    for match in JS_LOG_CALL.finditer(lexed.code):
+        open_index = match.end() - 1
+        close_index = _matching_close(lexed.code, open_index)
+        calls.append(
+            JsLogCall(
+                line=source.count("\n", 0, match.start()) + 1,
+                args_start=open_index + 1,
+                code=lexed.code[open_index + 1 : close_index],
+                strings=tuple(
+                    (offset, text) for offset, text in lexed.strings if open_index < offset < close_index
+                ),
+            )
+        )
+    return calls
+
+
+def _js_presence_flag(value: str) -> bool:
+    """Булева форма признака: `Boolean(…)`, `!!…`, сравнение с `null`/`undefined`."""
+    value = value.strip()
+    if not value or "?" in value or "||" in value or "&&" in value:
+        return False
+    if value.startswith("Boolean"):
+        open_index = value.find("(")
+        return (
+            open_index >= 0
+            and not value[len("Boolean") : open_index].strip()
+            and _matching_close(value, open_index) == len(value) - 1
+        )
+    return value.startswith("!!") or bool(_JS_NULLISH_COMPARISON.match(value))
+
+
+def _blank_presence_values(code: str) -> str:
+    """Значение `phone_set:`/`phoneSet:` булевой формы не судится; прочее — судится."""
+    for key in reversed(list(JS_PRESENCE_KEY.finditer(code))):
+        start = key.end()
+        depth = 0
+        end = start
+        while end < len(code):
+            char = code[end]
+            if char in _JS_OPENERS:
+                depth += 1
+            elif char in ")]}":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif char == "," and depth == 0:
+                break
+            end += 1
+        if _js_presence_flag(code[start:end]):
+            code = code[:start] + re.sub(r"[^\n]", " ", code[start:end]) + code[end:]
+    return code
 
 
 def js_log_offences(source: str, path: str) -> list[str]:
-    """Находки «`путь:строка` — вид — предмет» в вызовах журнала JS (RED-заготовка)."""
-    return []
+    """Находки «`путь:строка` — вид — предмет» в вызовах журнала JS исходника `path`.
+
+    Исключений JS гейт не принимает: реестр `PHONE_LOG_EXCEPTIONS` судит только
+    Python, и появление законного номера в журнале воркера потребует правки гейта.
+    """
+
+    def line_of(offset: int) -> int:
+        return source.count("\n", 0, offset) + 1
+
+    offences: list[str] = []
+    for call in js_log_calls(source):
+        code = _blank_presence_values(call.code)
+        found: list[tuple[int, str, str]] = []
+        for word in JS_IDENTIFIER.finditer(code):
+            name = word.group(0)
+            if "phone" in name.lower() and name not in JS_PRESENCE_FLAG_NAMES:
+                found.append((line_of(call.args_start + word.start()), "имя", name))
+        for carrier in JS_CARRIER.finditer(code):
+            subject = re.sub(r"[\s?]", "", carrier.group(0))
+            found.append((line_of(call.args_start + carrier.start()), "носитель", subject))
+        for offset, text in call.strings:
+            literal = phone_like(text)
+            if literal is not None:
+                found.append((line_of(offset), "литерал", literal))
+        offences.extend(f"{path}:{line} — {kind} — {subject}" for line, kind, subject in sorted(found))
+    return offences
 
 
 def scan_js_trees(root: Path) -> tuple[list[TreeScan], list[str]]:
@@ -359,8 +632,14 @@ def scan_gate(root: Path) -> tuple[list[TreeScan], list[str]]:
 
 
 def _ceiling_offence(registry: Mapping[str, str], ceiling: int) -> str | None:
-    """Текст нарушения, если реестр исключений вырос выше потолка (RED-заготовка)."""
-    return None
+    """`None`, если реестр исключений не вырос выше потолка; иначе текст нарушения."""
+    if len(registry) <= ceiling:
+        return None
+    return (
+        f"реестр исключений гейта приватности вырос до {len(registry)} при потолке {ceiling}: "
+        "номер в журнале исправляется, а не разрешается; подъём потолка — решение "
+        "владельца, а не исполнителя (D-17)"
+    )
 
 
 def _render(scans: list[TreeScan]) -> str:
