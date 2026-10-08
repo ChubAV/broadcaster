@@ -35,7 +35,7 @@ Fragment попадает в базу ТОЛЬКО автопутём (реше�
 """
 
 import phonenumbers
-from phonenumbers import NumberParseException, PhoneNumberFormat
+from phonenumbers import NumberParseException, PhoneNumberFormat, ValidationResult
 
 # Границы числа цифр автоисточника. Верхняя — предел E.164 (не больше 15
 # цифр вместе с кодом страны); нижняя — самый короткий номер, который ещё
@@ -81,9 +81,63 @@ class PhoneError(ValueError):
     """Ручной ввод не сводится к номеру; текст — один из `PHONE_ERROR_MESSAGES`."""
 
 
+def _parse_or_none(text: str, region: str | None) -> phonenumbers.PhoneNumber | None:
+    """Разбор без исключения: `None`, если библиотека не видит номера.
+
+    ЗАЧЕМ ОТДЕЛЬНО: отказ ручного ввода поднимается ВНЕ обработчика
+    `NumberParseException`, поэтому у `PhoneError` нет ни причины, ни контекста
+    чужого исключения — в трассировку, ушедшую в журнал, не попадает ничего,
+    кроме константного текста (D-18).
+    """
+    try:
+        return phonenumbers.parse(text, region)
+    except NumberParseException:
+        return None
+
+
 def normalize_manual(text: str) -> str:
-    """Ручной ввод → E.164 или `PhoneError` (заготовка RED)."""
-    return text
+    """Ручной ввод человека → E.164 или `PhoneError` с русским текстом (D-05, D-06).
+
+    Свободное написание (`8 999 123-45-67`, `+7 (999) 123-45-67`, полноширинные
+    цифры, `tel:`) разбирается с регионом `RU`: ведущая `8` и номер без кода
+    страны читаются как российские. Отказ — одним из `PHONE_ERROR_MESSAGES`, по
+    порядку проверок:
+
+    1. длиннее `MANUAL_INPUT_MAX_CHARS` символов КАК ПРИШЛО — до разбора (D-14);
+    2. пусто или одни пробелы — «Введите номер…» (очистку как действие решает
+       писатель ДО вызова нормализатора);
+    3. библиотека не видит номера;
+    4. есть добавочный (`доб.`, `ext`): E.164 молча отбросил бы его, и
+       сохранился бы не тот номер, что ввёл человек;
+    5. номер не строго «возможен»: требуется `IS_POSSIBLE`, а не голая проверка
+       «возможности», которая пропускает местный `IS_POSSIBLE_LOCAL_ONLY` —
+       `123-45-67` стал бы `+71234567` (Ф-1 RESEARCH);
+    6. в E.164 больше `E164_MAX_DIGITS` цифр (D-14).
+
+    ⚠️ FRAGMENT ПО РУЧНОМУ ПУТИ (решение владельца О-1, 2026-10-08, буква D-05).
+    Ручной `+888 0123 4567` отвергается: для библиотеки он слишком короткий
+    (`TOO_SHORT`). А `88801234567` без `+` становится РОССИЙСКИМ `+78801234567`:
+    при регионе `RU` ведущая `8` — междугородний префикс. Особого случая для
+    кода 888 нет и не будет — владелец его отверг; Fragment попадает в базу
+    только автопутём (`normalize_reported`).
+
+    Ввод не подставляется в текст отказа никогда (D-18, PHONE-21).
+    """
+    if len(text) > MANUAL_INPUT_MAX_CHARS:
+        raise PhoneError(PHONE_ERROR_TOO_LONG)
+    if not text.strip():
+        raise PhoneError(PHONE_ERROR_BLANK)
+    number = _parse_or_none(text, MANUAL_REGION)
+    if number is None:
+        raise PhoneError(PHONE_ERROR_NOT_A_NUMBER) from None
+    if number.extension:
+        raise PhoneError(PHONE_ERROR_EXTENSION)
+    if phonenumbers.is_possible_number_with_reason(number) != ValidationResult.IS_POSSIBLE:
+        raise PhoneError(PHONE_ERROR_NOT_A_NUMBER)
+    e164 = phonenumbers.format_number(number, PhoneNumberFormat.E164)
+    if len(e164) - 1 > E164_MAX_DIGITS:
+        raise PhoneError(PHONE_ERROR_TOO_LONG)
+    return e164
 
 
 def normalize_reported(raw: object) -> str | None:
@@ -135,5 +189,37 @@ def format_phone(stored: str) -> str:
 
 
 def mask_phone(stored: str) -> str:
-    """Сохранённый номер → маска для человека (заготовка RED)."""
-    return stored
+    """Сохранённый номер → маска: код страны и две последние цифры (D-10).
+
+    Маска — для вывода, который ЧИТАЕТ ЧЕЛОВЕК (скрипт Фазы 20): по ней
+    оператор узнаёт аккаунт, не видя номера целиком. `+79991234567` даёт
+    `+7 *** ***-**-67`: разбивка повторяет форму показа, остальные цифры
+    заменены `*`, разделители сохранены. Код страны берётся из разбора, а не
+    «до первого пробела».
+
+    Неразбираемое значение — код страны из него надёжно не извлекается — даёт
+    `+`, звёзды по числу цифр минус две и две последние цифры; меньше четырёх
+    цифр — сплошные `+***`, иначе маска раскрыла бы почти всё.
+
+    ⚠️ В ЖУРНАЛЫ НОМЕР НЕ ПОПАДАЕТ ДАЖЕ МАСКОЙ: событие журнала несёт только
+    признак `phone_set` (D-11, гейт приватности плана 16-04).
+    """
+    number = _parse_or_none(stored, None)
+    if number is None:
+        digits = [ch for ch in stored if "0" <= ch <= "9"]
+        if len(digits) < 4:
+            return "+***"
+        return "+" + "*" * (len(digits) - 2) + "".join(digits[-2:])
+    shown = phonenumbers.format_number(number, PhoneNumberFormat.INTERNATIONAL)
+    head_length = 1 + len(str(number.country_code))
+    head, tail = shown[:head_length], shown[head_length:]
+    tail_digits = sum(1 for ch in tail if "0" <= ch <= "9")
+    masked: list[str] = []
+    seen = 0
+    for ch in tail:
+        if "0" <= ch <= "9":
+            seen += 1
+            masked.append(ch if seen > tail_digits - 2 else "*")
+        else:
+            masked.append(ch)
+    return head + "".join(masked)
