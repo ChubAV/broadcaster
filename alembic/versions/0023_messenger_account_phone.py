@@ -32,6 +32,22 @@
 колонки в обход правила «пишет один модуль» — и её решение нельзя было бы
 откатить: откат снимает колонку, а не знание о том, откуда взялось значение.
 
+«РУЧНОЙ БЕЗ НОМЕРА» НЕВОЗМОЖЕН — В СХЕМЕ (D-03). Именованное ограничение
+`ck_messenger_accounts_manual_requires_phone` с условием
+`NOT (phone_is_manual AND phone IS NULL)` запрещает ровно одну пару из четырёх:
+признак «указан вручную» при неизвестном номере. Такая строка была бы мертва
+навсегда и молча — автоисточник не вправе писать поверх ручного (D-07), а
+показывать нечего. Прикладная проверка писателя делает состояние
+НЕДОСТИЖИМЫМ ЧЕРЕЗ ПРИЛОЖЕНИЕ, а не НЕВОЗМОЖНЫМ (довод `0021`/`0022`): прямой
+psql, ручной UPDATE и любой второй писатель обходят её разом. Запрет держится с
+обеих сторон UPDATE, поэтому очистка номера меняет обе колонки одним
+оператором.
+
+ДАННЫЕ ПЕРЕД СОЗДАНИЕМ ОГРАНИЧЕНИЯ НЕ ПРАВЯТСЯ — И ЭТО НЕ ПРОПУСК. Колонки
+новые: в момент создания ограничения у каждой строки `phone IS NULL` и
+`phone_is_manual = false`, то есть законная пара «неизвестен». Нарушителей
+нет по построению, зачистки, как у `0022`, не требуется.
+
 BATCH_ALTER_TABLE НА SQLITE И ПОЧЕМУ `copy_from`. На PostgreSQL колонки
 добавляются обычным `ALTER TABLE ... ADD COLUMN`, без пересоздания. На SQLite
 batch-режим ПЕРЕСОЗДАЁТ таблицу и переносит строки, а отражение SQLite в
@@ -70,6 +86,12 @@ revision = "0023"
 down_revision = "0022"
 
 TABLE = "messenger_accounts"
+CONSTRAINT_NAME = "ck_messenger_accounts_manual_requires_phone"
+
+# Условие выписано ОДНОЙ формулировкой. Дословно то же стоит в
+# `app/models/messenger_account.py` (MANUAL_REQUIRES_PHONE); совпадение сверяет
+# тест, потому что импортировать модель сюда нельзя.
+CONDITION = "NOT (phone_is_manual AND phone IS NULL)"
 
 
 def _new_columns() -> list[sa.Column]:
@@ -85,7 +107,7 @@ def _new_columns() -> list[sa.Column]:
     ]
 
 
-def _accounts(*, with_new: bool) -> sa.Table:
+def _accounts(*, with_new: bool, with_constraint: bool) -> sa.Table:
     """Состав таблицы, выписанный ЯВНО — для `copy_from` на SQLite.
 
     Собран по ревизиям, а не по сегодняшней модели: `0001_initial_schema.py`
@@ -95,8 +117,9 @@ def _accounts(*, with_new: bool) -> sa.Table:
     внешним ключом `schedules` и её колонок не меняют. Ровно это и есть схема
     на момент `0022`. Индексов у таблицы нет и не было — `0001` не заводит их.
 
-    `with_new=True` описывает её же ПОСЛЕ этой ревизии — состав нужен
-    обратному проходу.
+    `with_new=True, with_constraint=True` описывает её же ПОСЛЕ этой ревизии —
+    состав нужен обратному проходу, которому иначе нечего снимать: отражение
+    SQLite не показывает CHECK-ограничения вовсе.
     """
     args = [
         sa.Column("id", sa.Integer(), primary_key=True),
@@ -126,6 +149,8 @@ def _accounts(*, with_new: bool) -> sa.Table:
     ]
     if with_new:
         args.extend(_new_columns())
+    if with_constraint:
+        args.append(sa.CheckConstraint(CONDITION, name=CONSTRAINT_NAME))
     return sa.Table(TABLE, sa.MetaData(), *args)
 
 
@@ -135,28 +160,33 @@ def upgrade():
     if connection.dialect.name == "postgresql":
         for column in _new_columns():
             op.add_column(TABLE, column)
+        op.create_check_constraint(CONSTRAINT_NAME, TABLE, CONDITION)
     else:
         # SQLite: таблица пересоздаётся целиком. Состав передаётся ЯВНО — см.
         # абзац про `copy_from` в шапке: на отражении терялись правила ON DELETE.
         with op.batch_alter_table(
-            TABLE, copy_from=_accounts(with_new=False)
+            TABLE, copy_from=_accounts(with_new=False, with_constraint=False)
         ) as batch_op:
             for column in _new_columns():
                 batch_op.add_column(column)
+            batch_op.create_check_constraint(CONSTRAINT_NAME, CONDITION)
 
 
 def downgrade():
-    # Откат снимает ровно две колонки этой ревизии — и больше ничего (D-01).
-    # Значения номеров, если они успели появиться, теряются вместе с колонкой:
+    # Откат снимает ограничение и ровно две колонки этой ревизии — и больше
+    # ничего (D-01). Сначала ограничение: оно называет обе колонки. Значения
+    # номеров, если они успели появиться, теряются вместе с колонкой:
     # притворяться, что откат их сохраняет, нечем.
     connection = op.get_bind()
 
     if connection.dialect.name == "postgresql":
+        op.drop_constraint(CONSTRAINT_NAME, TABLE, type_="check")
         op.drop_column(TABLE, "phone_is_manual")
         op.drop_column(TABLE, "phone")
     else:
         with op.batch_alter_table(
-            TABLE, copy_from=_accounts(with_new=True)
+            TABLE, copy_from=_accounts(with_new=True, with_constraint=True)
         ) as batch_op:
+            batch_op.drop_constraint(CONSTRAINT_NAME, type_="check")
             batch_op.drop_column("phone_is_manual")
             batch_op.drop_column("phone")

@@ -1,13 +1,52 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, false, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    String,
+    Text,
+    false,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
+# ⚠️ «РУЧНОЙ БЕЗ НОМЕРА» НЕВОЗМОЖЕН — В СХЕМЕ, А НЕ ТОЛЬКО В ПРИЛОЖЕНИИ (D-03).
+#
+# Признак `phone_is_manual` существует ради одного правила: номер, указанный
+# пользователем, автоисточник не затирает (D-07). Признак без номера означал бы
+# «пользователь указал ничто»: автоисточник навсегда лишён права записать номер,
+# а показать нечего — строка молча и навсегда осталась бы «неизвестен».
+#
+# ЗАПРЕЩЕНА РОВНО ОДНА ПАРА ИЗ ЧЕТЫРЁХ. Законны: «неизвестен» (NULL, false),
+# номер от автоисточника (номер, false), номер от пользователя (номер, true).
+# Запрет держится с обеих сторон UPDATE, поэтому очистка номера обязана менять
+# обе колонки одним оператором.
+#
+# Модуль-писатель (`app/application/accounts/phone.py`) держит инвариант сам, но
+# прикладная проверка делает состояние НЕДОСТИЖИМЫМ ЧЕРЕЗ ПРИЛОЖЕНИЕ, а не
+# НЕВОЗМОЖНЫМ: прямой psql, ручной UPDATE на бою, миграция данных и любой второй
+# писатель обходят её разом. Довод тот же, что в шапках ревизий 0021 и 0022.
+#
+# Текст условия ДОСЛОВНО повторён в ревизии `0023` строкой — ревизия по правилу
+# проекта не импортирует из `app.*`. Совпадение двух половин проверяется тестом
+# tests/test_migrations/test_0023_messenger_account_phone.py, а модельная
+# половина — tests/test_models/test_messenger_account_phone_check.py.
+MANUAL_REQUIRES_PHONE = "NOT (phone_is_manual AND phone IS NULL)"
+MANUAL_REQUIRES_PHONE_NAME = "ck_messenger_accounts_manual_requires_phone"
+
 
 class MessengerAccount(Base):
     __tablename__ = "messenger_accounts"
+    __table_args__ = (
+        CheckConstraint(
+            MANUAL_REQUIRES_PHONE,
+            name=MANUAL_REQUIRES_PHONE_NAME,
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(
