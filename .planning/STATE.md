@@ -13,7 +13,7 @@ state_head: 36f01b393c384c72e45efa073ea86da09aa91139
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 0
+  total_plans: 6
   completed_plans: 0
   percent: 0
 ---
