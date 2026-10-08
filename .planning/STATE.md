@@ -1,20 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v2.1
-milestone_name: HTMX-first
 status: Awaiting next milestone
 stopped_at: Milestone v2.1 complete — awaiting next milestone
-last_updated: "2026-10-08T07:30:26.603Z"
+last_updated: "2026-10-08T09:18:22.248Z"
 last_activity: 2026-10-08
 last_activity_desc: Milestone v2.1 completed and archived
-state_head: f92f870a30c982919fa998d64a400c4ad7d8dd79
+state_head: 0e5573dbbe23fa79daf83b63d1ed03a2ddfecb74
+milestone_name: HTMX-first
+current_phase: 15
 progress:
   total_phases: 9
   completed_phases: 9
   total_plans: 175
   completed_plans: 175
   percent: 100
-current_phase: 15
 ---
 
 # Project State
@@ -41,7 +41,7 @@ See: .planning/PROJECT.md (updated 2026-10-08)
 Phase: Milestone v2.1 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-10-08 — Milestone v2.1 completed and archived
+Last activity: 2026-10-08 - Completed quick task 261008-bm0: исправлен issue #51 (каскад подтверждений удаления аккаунтов)
 
 ## Performance Metrics
 
@@ -690,6 +690,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 
 | # | Description | Date | Commit | Status | Directory |
 |---|-------------|------|--------|--------|-----------|
+| 261008-bm0 | Issue #51: подтверждение удаления аккаунта больше не всплывает панелями других аккаунтов (htmx attributesToSettle без style) | 2026-10-08 | 0e5573db | — | [261008-bm0-ispravit-issue-51-pri-udalenii-akkaunta-](./quick/261008-bm0-ispravit-issue-51-pri-udalenii-akkaunta-/) |
 
 ## Deferred Items
 
