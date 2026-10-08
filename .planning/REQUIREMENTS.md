@@ -81,12 +81,33 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| PHONE-01 | Phase 16 | Pending |
+| PHONE-02 | Phase 16 | Pending |
+| PHONE-03 | Phase 17 | Pending |
+| PHONE-04 | Phase 17 | Pending |
+| PHONE-05 | Phase 17 | Pending |
+| PHONE-06 | Phase 17 | Pending |
+| PHONE-07 | Phase 17 | Pending |
+| PHONE-08 | Phase 18 | Pending |
+| PHONE-09 | Phase 18 | Pending |
+| PHONE-10 | Phase 18 | Pending |
+| PHONE-11 | Phase 18 | Pending |
+| PHONE-12 | Phase 19 | Pending |
+| PHONE-13 | Phase 19 | Pending |
+| PHONE-14 | Phase 19 | Pending |
+| PHONE-15 | Phase 19 | Pending |
+| PHONE-16 | Phase 19 | Pending |
+| PHONE-17 | Phase 20 | Pending |
+| PHONE-18 | Phase 20 | Pending |
+| PHONE-19 | Phase 20 | Pending |
+| PHONE-20 | Phase 20 | Pending |
+| PHONE-21 | Phase 16 | Pending |
 
 **Coverage:**
 - v2.2 requirements: 21 total
-- Mapped to phases: 0
-- Unmapped: 21 ⚠️
+- Mapped to phases: 21 (Phase 16 — 3, Phase 17 — 5, Phase 18 — 4, Phase 19 — 5, Phase 20 — 4)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-10-08*
-*Last updated: 2026-10-08 after initial definition*
+*Last updated: 2026-10-08 after roadmap creation — 21/21 требование распределено по фазам 16…20*
