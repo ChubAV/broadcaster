@@ -164,9 +164,8 @@ def normalize_reported(raw: object) -> str | None:
         return None
     if not REPORTED_MIN_DIGITS <= len(digits) <= E164_MAX_DIGITS:
         return None
-    try:
-        number = phonenumbers.parse("+" + digits, None)
-    except NumberParseException:
+    number = _parse_or_none("+" + digits, None)
+    if number is None:
         return None
     return phonenumbers.format_number(number, PhoneNumberFormat.E164)
 
@@ -181,9 +180,8 @@ def format_phone(stored: str) -> str:
     значило бы солгать о состоянии аккаунта. Пустой номер (`None`) — забота
     подписи Фазы 17, а не этой функции.
     """
-    try:
-        number = phonenumbers.parse(stored, None)
-    except NumberParseException:
+    number = _parse_or_none(stored, None)
+    if number is None:
         return stored
     return phonenumbers.format_number(number, PhoneNumberFormat.INTERNATIONAL)
 
