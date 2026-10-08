@@ -29,7 +29,16 @@ UPDATE «записать, если номера нет и он не ручно�
 ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ:
 1. присваивание атрибуту `phone` / `phone_is_manual` (`=`, `+=`, аннотированное);
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
-   `update(...)`, `insert(...)` или `MessengerAccount(...)`.
+   `update(...)`, `insert(...)` или `MessengerAccount(...)`;
+3. ключ словаря-аргумента `values(...)` — строка `"phone"` / `"phone_is_manual"`
+   или атрибут `MessengerAccount.phone` (и словари внутри списка — многострочная
+   вставка);
+4. `setattr(obj, "phone", …)` / `set_committed_value(obj, "phone_is_manual", …)` —
+   запись атрибута по имени в обход присваивания;
+5. сырой SQL в строковой константе, НЕ являющейся докстрингом: `UPDATE … SET …
+   phone… =` (присваивание в `SET` до `WHERE`) либо `INSERT INTO messenger_accounts`.
+   Голое слово `phone_is_manual` в строке не судится — на нём покраснела бы
+   константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
 
 ЦЕНА СТРОГОСТИ ВТОРОГО ВИДА. Имя `update` берётся по последнему звену вызова,
 поэтому `some_dict.update(phone=x)` тоже покраснеет, хотя в колонку не пишет. Это
@@ -37,13 +46,26 @@ UPDATE «записать, если номера нет и он не ручно�
 нельзя, а ложное срабатывание здесь снимается переименованием ключа, тогда как
 пропущенный второй писатель снимается только потерей ручного номера у пользователя.
 
-ДО РЕЕСТРА ИСКЛЮЧЕНИЙ модуль-писатель пропускается обходом целиком — он и есть
-единственный законный писатель. Поимённый реестр с причиной заменит этот пропуск.
+ГРАНИЦА ПРЕДИКАТА, названная, чтобы её не приняли за покрытие: значение, собранное
+во время исполнения (`values(**fields)`, `setattr(obj, name, …)` с вычисленным
+именем, SQL из склейки переменных), гейт не видит — по исходнику оно не
+определимо. Такие формы в коде записи номера сами по себе повод для ревью.
+
+РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
+модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
+расширение реестра — решение владельца, а не правка ради зелени; состав реестра
+закреплён отдельным правилом. Исключение снимает виды 2–5 и НИКОГДА не снимает
+вид 1: писатель пишет только операторами UPDATE и зеркалит значение
+`set_committed_value`, а присваивание атрибуту сделало бы объект грязным, и ORM
+выдала бы на коммите второй, безусловный UPDATE мимо условной записи. Это строже
+буквы D-13 и проверяется контролем над исходником писателя с подложенным
+присваиванием.
 """
 
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -63,14 +85,33 @@ PHONE_COLUMNS = frozenset({"phone", "phone_is_manual"})
 # модели. Имя берётся по последнему звену (`func.id` или `func.attr`).
 WRITE_CALL_NAMES = frozenset({"values", "update", "insert", "MessengerAccount"})
 
+# Вызовы, пишущие атрибут по имени из второго позиционного аргумента.
+NAMED_ATTRIBUTE_WRITERS = frozenset({"setattr", "set_committed_value"})
+
+# Пишущий SQL: присваивание колонки номера в `SET` (до `WHERE` — фильтр по номеру
+# записью не является) либо любая вставка в таблицу аккаунтов.
+RAW_SQL_PHONE_WRITE = re.compile(
+    r"\bupdate\b[\s\S]*?\bset\b(?:(?!\bwhere\b)[\s\S])*?\bphone(?:_is_manual)?\b\s*="
+    r"|\binsert\s+into\s+messenger_accounts\b",
+    re.IGNORECASE,
+)
+
 KIND_ASSIGNMENT = "присваивание"
 KIND_KEYWORD = "именованный аргумент"
 KIND_DICT_KEY = "ключ словаря values"
 KIND_SETATTR = "запись атрибута по имени"
 KIND_RAW_SQL = "сырой SQL"
 
-# Реестр исключений: путь → причина.
-PHONE_WRITER_EXCEPTIONS: dict[str, str] = {}
+# Реестр исключений: путь → причина. РОВНО ОДНА ЗАПИСЬ; см. шапку модуля.
+PHONE_WRITER_EXCEPTIONS: dict[str, str] = {
+    PHONE_WRITER_MODULE: (
+        "единственный писатель номера (D-12, D-13): условные UPDATE автоисточника, "
+        "запись и очистка ручного номера, зеркало set_committed_value"
+    ),
+}
+
+# Виды, которые исключение реестра НЕ снимает никогда.
+NEVER_EXEMPT_KINDS = frozenset({KIND_ASSIGNMENT})
 
 
 def writer_sources(root: Path) -> list[Path]:
@@ -93,7 +134,31 @@ def phone_write_offences(source: str, path: str) -> list[str]:
     Чистая функция над текстом: исключения реестра здесь НЕ применяются, поэтому ею
     же доказывается, что в самом модуле-писателе запись видна.
     """
+    return [_format(path, write) for write in _phone_writes(source, path)]
+
+
+def judged_offences(source: str, path: str) -> list[str]:
+    """Находки, которые гейт судит: предикат плюс исключения реестра.
+
+    В пути из реестра отбрасываются виды 2–5; присваивание (вид 1) судится везде.
+    """
+    exempt = path in PHONE_WRITER_EXCEPTIONS
+    return [
+        _format(path, write)
+        for write in _phone_writes(source, path)
+        if not exempt or write[2] in NEVER_EXEMPT_KINDS
+    ]
+
+
+def _format(path: str, write: tuple[int, int, str, str]) -> str:
+    line, _column, kind, subject = write
+    return f"{path}:{line} — {kind} — {subject}"
+
+
+def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
+    """Записи номера пяти видов: (строка, столбец, вид, предмет), по порядку в файле."""
     tree = ast.parse(source, filename=path)
+    docstrings = _docstring_nodes(tree)
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -113,11 +178,61 @@ def phone_write_offences(source: str, path: str) -> list[str]:
                 for keyword in node.keywords:
                     if keyword.arg in PHONE_COLUMNS:
                         record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
+            if name == "values":
+                for key in _values_dict_keys(node):
+                    record(key, KIND_DICT_KEY, f"values({{{ast.unparse(key)}: …}})")
+            if name in NAMED_ATTRIBUTE_WRITERS and len(node.args) >= 2:
+                attribute = node.args[1]
+                if (
+                    isinstance(attribute, ast.Constant)
+                    and attribute.value in PHONE_COLUMNS
+                ):
+                    record(node, KIND_SETATTR, f"{name}(…, {attribute.value!r}, …)")
+        elif (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+            and RAW_SQL_PHONE_WRITE.search(node.value)
+        ):
+            snippet = " ".join(node.value.split())[:60]
+            record(node, KIND_RAW_SQL, f"«{snippet}»")
 
-    return [
-        f"{path}:{line} — {kind} — {subject}"
-        for line, _column, kind, subject in sorted(found)
-    ]
+    return sorted(found)
+
+
+def _docstring_nodes(tree: ast.AST) -> set[int]:
+    """Узлы-докстринги модуля, классов и функций: прозу о SQL гейт не судит."""
+    found: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ) and node.body:
+            first = node.body[0]
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                found.add(id(first.value))
+    return found
+
+
+def _values_dict_keys(call: ast.Call) -> list[ast.expr]:
+    """Ключи номера в словарях-аргументах `values(...)`, в том числе внутри списка."""
+    dicts: list[ast.Dict] = []
+    for argument in call.args:
+        if isinstance(argument, ast.Dict):
+            dicts.append(argument)
+        elif isinstance(argument, (ast.List, ast.Tuple)):
+            dicts.extend(item for item in argument.elts if isinstance(item, ast.Dict))
+    keys: list[ast.expr] = []
+    for mapping in dicts:
+        for key in mapping.keys:
+            if isinstance(key, ast.Constant) and key.value in PHONE_COLUMNS:
+                keys.append(key)
+            elif isinstance(key, ast.Attribute) and key.attr in PHONE_COLUMNS:
+                keys.append(key)
+    return keys
 
 
 def _assigned_attributes(target: ast.AST) -> list[ast.Attribute]:
@@ -144,20 +259,13 @@ def _call_name(call: ast.Call) -> str | None:
     return None
 
 
-def judged_offences(source: str, path: str) -> list[str]:
-    """Находки, которые гейт судит: предикат плюс исключения реестра."""
-    return []
-
-
 def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
-    """Обход дерева и находки по всем файлам, кроме модуля-писателя."""
+    """Обход дерева и судимые находки по каждому файлу, писатель включительно."""
     sources = writer_sources(root)
     offences: list[str] = []
     for file in sources:
         relative = file.relative_to(root).as_posix()
-        if relative == PHONE_WRITER_MODULE:
-            continue
-        offences.extend(phone_write_offences(file.read_text(encoding="utf-8"), relative))
+        offences.extend(judged_offences(file.read_text(encoding="utf-8"), relative))
     return sources, offences
 
 
