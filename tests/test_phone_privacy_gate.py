@@ -54,6 +54,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Mapping
 
 import pytest
 
@@ -64,6 +65,16 @@ GATE_TREES = ("app", "scripts", "wa_worker", "max_worker")
 
 # Python-половина гейта; `wa_worker/` — JS-половина.
 PYTHON_TREES = ("app", "scripts", "max_worker")
+JS_TREES = ("wa_worker",)
+JS_SUFFIXES = (".js", ".mjs", ".cjs")
+
+# Реестр исключений: "<путь>::<имя функции>" (функция-владелец вызова журнала или
+# `<module>`) → причина. Исключения принимаются только для Python; для JS гейт их не
+# принимает вовсе. Пустота — норма.
+PHONE_LOG_EXCEPTIONS: dict[str, str] = {}
+
+# Подъём потолка — решение владельца, а не исполнителя (D-17).
+PHONE_LOG_EXCEPTIONS_CEILING = 0
 
 # Каталоги, в которые обход не спускается: сторонний код и байткод. `node_modules`
 # в рабочей копии воркера — тысячи чужих файлов, и их журналы — граница гейта.
@@ -106,8 +117,13 @@ PHONE_LIKE_LITERAL = re.compile(
 PLUS_FORM_DIGITS = (7, 15)
 
 
-def _walk(base: Path, suffix: str) -> list[Path]:
-    """Файлы с окончанием `suffix` под `base` — ОБХОДОМ, а не перечнем."""
+def _walk(base: Path, suffix: str | tuple[str, ...]) -> list[Path]:
+    """Файлы с окончанием `suffix` под `base` — ОБХОДОМ, а не перечнем.
+
+    `os.walk` с отсечением каталогов `SKIPPED_DIR_NAMES` вместо `rglob`: тот же обход,
+    но в `node_modules` он не спускается вовсе, а не перебирает тысячи чужих файлов,
+    чтобы отбросить их после.
+    """
     if not base.is_dir():
         return []
     found: list[Path] = []
@@ -293,6 +309,60 @@ def scan_python_trees(root: Path) -> tuple[list[TreeScan], list[str]]:
     return scans, offences
 
 
+def js_sources(root: Path) -> list[Path]:
+    """Исходники JS дерева `wa_worker/` под `root`, без `node_modules` на любой глубине."""
+    found: list[Path] = []
+    for tree in JS_TREES:
+        found.extend(_walk(root / tree, JS_SUFFIXES))
+    return found
+
+
+@dataclass(frozen=True)
+class JsLogCall:
+    line: int
+    args_start: int
+    code: str
+    strings: tuple[tuple[int, str], ...]
+
+
+def js_log_calls(source: str) -> list[JsLogCall]:
+    """Вызовы журнала в исходнике JS (RED-заготовка)."""
+    return []
+
+
+def js_log_offences(source: str, path: str) -> list[str]:
+    """Находки «`путь:строка` — вид — предмет» в вызовах журнала JS (RED-заготовка)."""
+    return []
+
+
+def scan_js_trees(root: Path) -> tuple[list[TreeScan], list[str]]:
+    """Обход JS-дерева под `root`: число файлов и вызовов и находки."""
+    scans: list[TreeScan] = []
+    offences: list[str] = []
+    paths = js_sources(root)
+    for tree in JS_TREES:
+        calls = 0
+        files = [path for path in paths if path.relative_to(root).parts[0] == tree]
+        for path in files:
+            source = path.read_text(encoding="utf-8")
+            calls += len(js_log_calls(source))
+            offences.extend(js_log_offences(source, path.relative_to(root).as_posix()))
+        scans.append(TreeScan(tree=tree, files=len(files), calls=calls))
+    return scans, offences
+
+
+def scan_gate(root: Path) -> tuple[list[TreeScan], list[str]]:
+    """Обе половины гейта под `root` — тот же помощник для живого и синтетического дерева."""
+    python_scans, python_offences = scan_python_trees(root)
+    js_scans, js_offences = scan_js_trees(root)
+    return python_scans + js_scans, python_offences + js_offences
+
+
+def _ceiling_offence(registry: Mapping[str, str], ceiling: int) -> str | None:
+    """Текст нарушения, если реестр исключений вырос выше потолка (RED-заготовка)."""
+    return None
+
+
 def _render(scans: list[TreeScan]) -> str:
     return ", ".join(f"{scan.tree}: файлов {scan.files}, вызовов {scan.calls}" for scan in scans)
 
@@ -432,3 +502,178 @@ def test_no_number_reaches_a_python_log_call_in_the_live_trees():
     assert offences == [], (
         f"номер уходит в журнал ({summary}):\n" + "\n".join(f"  {offence}" for offence in offences)
     )
+
+
+# --- JS-половина: `wa_worker/` -----------------------------------------------------
+
+
+def test_a_template_string_carrying_a_number_reddens_the_js_half():
+    """Pitfall 6: выражение `${…}` шаблонной строки — код, а не текст сообщения."""
+    source = "log.info(`connected ${phone}`);\n"
+
+    offences = js_log_offences(source, "wa_worker/index.js")
+
+    assert offences, (
+        "шаблонная строка с номером не найдена: `${phone}` внутри "
+        f"``log.info(`connected ${{phone}}`)`` ушёл в текст, а не в код ({source!r})"
+    )
+    assert any(
+        offence.startswith("wa_worker/index.js:1 ") and "phone" in offence for offence in offences
+    ), f"находка не называет файл, строку и имя: {offences}"
+
+
+JS_NEGATIVE_CONTROLS = [
+    pytest.param("log.info({ phone }, 'connected');\n", 1, "phone", id="object-shorthand"),
+    pytest.param("log.info('connected ' + phone);\n", 1, "phone", id="string-concatenation"),
+    pytest.param("log.info('connected',\n    phone);\n", 2, "phone", id="multiline-second-line"),
+    pytest.param("console.log(`me ${sock.user.id}`);\n", 1, "sock.user", id="carrier-sock-user-in-template"),
+    pytest.param("log.info({ me: creds.me });\n", 1, "creds.me", id="carrier-creds-me"),
+    pytest.param("log.info({ me: state.creds.me });\n", 1, "creds.me", id="carrier-state-creds-me"),
+    pytest.param("log.info('+79991234567');\n", 1, "+79991234567", id="literal-plus-compact"),
+    pytest.param("console.error('8 999 123-45-67');\n", 1, "8 999 123-45-67", id="literal-russian-console"),
+    pytest.param("baileysLogger.warn({ phone });\n", 1, "phone", id="baileys-logger"),
+    pytest.param("log.info({ phone_set: phone });\n", 1, "phone", id="phone-set-carrying-the-number"),
+    pytest.param("log.info({ 'phone': value });\n", 1, "phone", id="quoted-object-key"),
+    pytest.param("const child = log.child({ phone });\n", 1, "phone", id="child-logger-binding"),
+]
+
+
+@pytest.mark.parametrize(("source", "line", "subject"), JS_NEGATIVE_CONTROLS)
+def test_a_number_handed_to_a_js_log_call_is_found(source, line, subject):
+    offences = js_log_offences(source, "wa_worker/index.js")
+
+    assert offences, f"номер в вызове журнала JS не найден: {source!r}"
+    assert any(
+        offence.startswith(f"wa_worker/index.js:{line} ") and subject in offence for offence in offences
+    ), f"находка не называет строку {line} и предмет {subject!r}: {offences}"
+
+
+JS_POSITIVE_CONTROLS = [
+    pytest.param("// log.info(phone)\n", False, id="commented-out-call"),
+    pytest.param("log.info('connected' /* phone */);\n", True, id="block-comment-inside-arguments"),
+    pytest.param("log.warn('phone required');\n", True, id="word-phone-inside-the-message"),
+    pytest.param("log.info({ phone_set: Boolean(phone) });\n", True, id="phone-set-boolean"),
+    pytest.param("log.info({ phoneSet: phone != null });\n", True, id="phone-set-compared-with-null"),
+    pytest.param("log.info({ phone_set: !!account.phone });\n", True, id="phone-set-double-negation"),
+    pytest.param("const phone = participant.id;\n", False, id="local-phone-outside-a-log-call"),
+    pytest.param(
+        "log.warn(err.message.replace(/'/g, ''), `groups ${groups.length}`);\n",
+        True,
+        id="regex-literal-with-a-quote",
+    ),
+    pytest.param("log.info('2026-10-08 14:54:23', '120363025246125888@g.us');\n", True, id="traps"),
+]
+
+
+@pytest.mark.parametrize(("source", "is_log_call"), JS_POSITIVE_CONTROLS)
+def test_a_recommended_form_does_not_redden_the_js_half(source, is_log_call):
+    calls = js_log_calls(source)
+
+    assert bool(calls) is is_log_call, (
+        f"распознаватель {'не увидел' if is_log_call else 'принял за журнал'} вызов: {source!r}"
+    )
+    assert js_log_offences(source, "wa_worker/index.js") == [], f"ложное срабатывание на {source!r}"
+
+
+def test_the_js_walk_skips_node_modules_and_finds_the_planted_file(tmp_path):
+    """Сторонний код в `node_modules` — граница гейта; подложенный свой файл — нет."""
+    planted = tmp_path / "wa_worker" / "index.js"
+    vendored = tmp_path / "wa_worker" / "node_modules" / "x" / "index.js"
+    vendored.parent.mkdir(parents=True)
+    planted.write_text("log.info({ phone });\n", encoding="utf-8")
+    vendored.write_text("log.info({ phone });\n", encoding="utf-8")
+
+    sources = js_sources(tmp_path)
+    scans, offences = scan_js_trees(tmp_path)
+
+    assert planted in sources, "обход не нашёл подложенный `wa_worker/index.js`"
+    assert vendored not in sources, "обход спустился в `node_modules` — чужой код под гейтом"
+    assert len(offences) == 1 and offences[0].startswith("wa_worker/index.js:1 "), (
+        f"подложенная строка не найдена или найдена в `node_modules`: {offences} ({_render(scans)})"
+    )
+
+
+PLANTED_LINES = {
+    "app": ("app/planted.py", 'logger.info("connected", phone=account.phone)\n'),
+    "scripts": ("scripts/planted.py", "print(account.phone)\n"),
+    "max_worker": ("max_worker/planted.py", 'log.info("session_started %s", state.phone)\n'),
+    "wa_worker": ("wa_worker/planted.js", "log.info(`connected ${state.phone}`);\n"),
+}
+
+
+@pytest.mark.parametrize("tree", GATE_TREES)
+def test_a_planted_number_line_is_found_in_every_gate_tree(tmp_path, tree):
+    """Критерий 5: подложенная строка находится в КАЖДОМ из четырёх деревьев D-09."""
+    relative, line = PLANTED_LINES[tree]
+    planted = tmp_path / relative
+    planted.parent.mkdir(parents=True)
+    planted.write_text(line, encoding="utf-8")
+
+    scans, offences = scan_gate(tmp_path)
+
+    assert any(offence.startswith(f"{relative}:1 ") for offence in offences), (
+        f"подложенная строка в `{tree}/` не найдена ({_render(scans)}): {offences}"
+    )
+
+
+def test_no_number_reaches_a_js_log_call_in_the_live_tree():
+    """Ноль находок в `wa_worker/` без `node_modules` при ненулевом обходе."""
+    scans, offences = scan_js_trees(PROJECT_ROOT)
+    summary = _render(scans)
+    print(f"JS-половина гейта приватности: {summary}; находок {len(offences)}")
+
+    for scan in scans:
+        assert scan.files > 0 and scan.calls > 0, (
+            f"дерево `{scan.tree}` обойдено вакуумом ({summary}): гейт проверяет ничто"
+        )
+    assert offences == [], (
+        f"номер уходит в журнал воркера ({summary}):\n" + "\n".join(f"  {offence}" for offence in offences)
+    )
+
+
+# --- Реестр исключений и охват --------------------------------------------------
+
+
+def test_the_exception_registry_stays_under_its_ceiling():
+    """Реестр не растёт выше потолка; каждая запись — существующий файл и причина."""
+    assert _ceiling_offence(PHONE_LOG_EXCEPTIONS, PHONE_LOG_EXCEPTIONS_CEILING) is None, _ceiling_offence(
+        PHONE_LOG_EXCEPTIONS, PHONE_LOG_EXCEPTIONS_CEILING
+    )
+    for key, reason in PHONE_LOG_EXCEPTIONS.items():
+        path, separator, owner = key.partition("::")
+        assert separator and owner, f"ключ реестра {key!r} не в форме «путь::функция»"
+        assert reason.strip(), f"у исключения {key!r} нет причины"
+        assert (PROJECT_ROOT / path).is_file(), f"исключение {key!r} называет несуществующий файл"
+
+    synthetic = {"app/services/phone.py::<module>": "синтетическая запись контроля"}
+    assert _ceiling_offence(synthetic, 0) is not None, (
+        "реестр из одной записи при потолке 0 прошёл мимо гейта — потолок перестал держать"
+    )
+    assert _ceiling_offence({}, 0) is None, "пустой реестр при потолке 0 назван нарушением"
+
+
+def test_a_registered_exception_silences_only_its_own_function(monkeypatch):
+    """Ключ реестра — функция-владелец: соседняя функция того же файла судится как прежде."""
+    source = (
+        "def allowed(phone):\n"
+        '    logger.info("x", phone=phone)\n'
+        "\n"
+        "\n"
+        "def other(phone):\n"
+        '    logger.info("x", phone=phone)\n'
+    )
+    monkeypatch.setitem(PHONE_LOG_EXCEPTIONS, "app/x.py::allowed", "синтетическая причина контроля")
+
+    offences = python_log_offences(source, "app/x.py")
+
+    assert offences and all(offence.startswith("app/x.py:6 ") for offence in offences), (
+        f"исключение не сработало или погасило соседнюю функцию: {offences}"
+    )
+
+
+def test_every_gate_tree_is_walked():
+    """D-09: две половины гейта вместе обходят ровно `GATE_TREES`."""
+    walked = {tree for tree, paths in python_sources(PROJECT_ROOT).items() if paths}
+    walked |= {path.relative_to(PROJECT_ROOT).parts[0] for path in js_sources(PROJECT_ROOT)}
+
+    assert walked == set(GATE_TREES), f"обойдены {sorted(walked)}, объявлены {sorted(GATE_TREES)}"
