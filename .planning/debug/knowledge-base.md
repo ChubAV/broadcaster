@@ -23,3 +23,16 @@ Resolved debug sessions. Used by `gsd-debugger` to surface known-pattern hypothe
 - **Reusable pattern:** When a pinned third-party pydantic model over-declares a field as required and upstream data omits it, relax exactly that one field via a version-pinned, fail-closed, idempotent shim and rebuild every schema embedding the discriminated union — a tagged-union member failure surfaces as a confusing *two*-error message (the member's own missing-field error plus an `UnknownAttachment`-style "should be parsed by its own model" error), which points at the union, not at the fallback type.
 
 ---
+
+## max-photo-upload-no-photoids — every MAX send with images failed: "Photo upload URL does not contain photoIds"
+
+- **Date:** 2026-10-08
+- **Error patterns:** `Photo upload URL does not contain photoIds`, `KeyError: 'photoIds'`, `pymax/api/uploads/service.py:79`, `UploadError`, `upload_photo`, `Uploading photo` followed by failure within ~60ms, MAX photo ads fail while text-only ads succeed, `iu.oneme.ru/uploadImage?r=`, pymax, maxapi-python
+- **Root cause(s):** AND-gated. MAX changed the PHOTO_UPLOAD reply (staged from 2026-09-25, 100% from 2026-10-02) to a one-shot URL `https://iu.oneme.ru/uploadImage?r=<token>` with no `photoIds` query param; pymax (maxapi-python) 2.3.1 `UploadService.upload_photo` unconditionally does `parse_qs(...)["photoIds"][0]` — used only as the key into the POST result — and raises before uploading. 2.4.1 has the same code. Nothing changed on our side (image built 2026-08-26).
+- **Fix:** New version-scoped shim `apply_photo_upload_compatibility()` in max_worker/pymax_compat.py replaces `upload_photo` with a 2.3.1 copy differing only in token resolution: `photoIds` present -> keyed lookup as before; absent -> the single entry of the count=1 POST result, UploadError on 0 or >1 entries. Pinned to 2.3.1, fails closed, idempotent; applied at import in max_worker/main.py (log `pymax_photo_upload_compatibility_applied`). Commit 73b9bd98. Upstream: PyMax PR #107 (same approach, unmerged), issue MaxApiTeam/PyMax#108.
+- **Files changed:** max_worker/pymax_compat.py, max_worker/main.py, tests/test_worker/test_max_worker.py
+- **Why not caught:** External protocol change by MAX; no code or dependency change on our side. Tests fake the MAX socket and upload HTTP, so they cannot observe server-side URL shape changes.
+- **Recurrence guard:** `tests/test_worker/test_max_worker.py::test_photo_send_survives_upload_url_without_photo_ids` (drives real pymax send_message -> upload -> MSG_SEND), plus 0/2-entry refusal tests, old-URL keyed-lookup guards, and inverted guard `::test_unmodified_pymax_rejects_upload_url_without_photo_ids` (turns red when pymax is fixed — delete-the-shim signal). Verified live 2026-10-08: post-rebuild MAX photo sends status=ok.
+- **Reusable pattern:** When a sudden 100% failure of one MAX feature appears with no deploy on our side, suspect a MAX protocol change: compare send_logs step-change date against image build date, check upstream PyMax PRs/issues, and patch via the same fail-closed version-pinned shim in pymax_compat.py while keeping the old payload shape supported (rollouts are staged).
+
+---

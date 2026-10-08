@@ -1,5 +1,5 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: |
   DATA_START
   посмотри эти ошибку ВРЕМЯ: 08.10.2026 12:49:23
@@ -37,7 +37,7 @@ updated: 2026-10-08
 - hypothesis: CONFIRMED — since 2026-09-25 (fully from 2026-10-02) MAX answers PHOTO_UPLOAD with a one-shot URL without a `photoIds` query param (`https://iu.oneme.ru/uploadImage?r=<token>`); pymax 2.3.1 UploadService.upload_photo unconditionally does `parse_qs(urlparse(url).query)["photoIds"][0]` and raises UploadError("Photo upload URL does not contain photoIds") before uploading.
 - test: TDD red DONE — tests drive real pymax 2.3.1 MessageService.send_message -> _upload_attachments -> UploadService.upload_photo -> MSG_SEND (after importing max_worker.main via the `worker` fixture, i.e. with all worker shims applied); only MAX socket (`app.invoke`) and upload HTTP (`aiohttp.ClientSession`) are faked.
 - expecting: GREEN after shim: MSG_SEND attaches == [{"_type": PHOTO, "photoToken": <token>}]
-- next_action: (awaiting_human_verify) fix committed; guardrail accepted (targeted 44/44, full suite 4095 passed/2 skipped, mutation 8/8, revert-and-reconfirm, offline image check). Owner must rebuild the max-worker image (`just prod-build` / `just prod-deploy`, then recreate MAX worker containers) and send a photo ad to a MAX group; expect a delivered message with the photo and log line `pymax_photo_upload_compatibility_applied` on worker start. On "confirmed fixed" -> archive_session (move to resolved/, KB entry). On failure -> falsification_test fired: capture worker logs around "Uploading photo" (status/entry-count UploadError) and reopen investigation.
+- next_action: none — resolved 2026-10-08 (owner confirmed photos delivered after max-worker rebuild).
 - fix_plan:
     - "max_worker/pymax_compat.py: new apply_photo_upload_compatibility(). Idempotent via marker attr `_broadcaster_photo_upload_patched` on pymax.api.uploads.service.UploadService (return False if set). Fail closed: if PYMAX_VERSION != AUDITED_PYMAX_VERSION raise RuntimeError naming the found version (test sets pymax_compat.PYMAX_VERSION='2.4.1' and expects RuntimeError + '2.4.1' in stderr — so read the module-global PYMAX_VERSION at call time, as the existing shims do)."
     - "Replace UploadService.upload_photo with a reimplementation identical to 2.3.1 (same PHOTO_UPLOAD request UploadPayload(profile=...).model_dump(), same url/validate/read/FormData/POST/status/json/PhotoUploadResponse handling and UploadError messages, use module-level `aiohttp.ClientSession` attribute lookup so tests' monkeypatch applies) EXCEPT token resolution: if urlparse(url).query has photoIds -> keyed lookup model.photos[photoIds[0]] (miss -> UploadError(f'Photo upload response does not contain token for photo_id={photo_id}')); else -> exactly one entry required, else UploadError(f'Photo upload response holds {n} photo(s), expected exactly 1')."
@@ -171,6 +171,9 @@ updated: 2026-10-08
     adjacent_tests: { result: pass, suites_run: ["tests/ full suite: 4095 passed, 2 skipped, exit 0 (42m54s, uv run pytest tests/ -q)"] }
     revert_and_reconfirm: { result: pass, bug_returned_on_revert: true, fixed_on_reapply: true }
     image_offline_check: { result: pass, detail: "broadcaster-max-worker:latest libs (pymax 2.3.1, aiohttp 3.14.3), --network none, prod untouched" }
-    live_max_send: { result: not-run, reason: "prod read-only for this session; owner rebuilds max-worker image and sends a photo ad (human-verify)" }
+    live_max_send: { result: pass, detail: "2026-10-08 max-worker image rebuilt from 73b9bd98; max-worker-19 logs pymax_photo_upload_compatibility_applied; tasks 545fdf1c (1 image) and 3bee97f2 (2 images) -> send_logs status=ok; 0 MAX failures after container start 11:19:33 UTC (last photoIds failure 11:10:58 UTC on old image)" }
+    human_verify: { result: confirmed, owner_words: "фото дошли, закрывай сессию", at: 2026-10-08 }
     guardrail_verdict: accepted
 - files_changed: [max_worker/pymax_compat.py, max_worker/main.py, tests/test_worker/test_max_worker.py]
+- commit: 73b9bd98 "fix(max-worker): upload photos to MAX URLs that no longer carry photoIds" (pushed to origin/master 2026-10-08)
+- upstream: issue MaxApiTeam/PyMax#108 filed 2026-10-08 (links unmerged PR #107). Delete the shim when the pin moves to a fixed release — `test_unmodified_pymax_rejects_upload_url_without_photo_ids` turns red as the signal.
