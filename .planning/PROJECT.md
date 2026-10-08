@@ -210,7 +210,7 @@ htmx в проекте сегодня — это почти исключител
 
 ### Active
 
-Требования вехи v2.2 «Номера аккаунтов» — `.planning/REQUIREMENTS.md` (ACCT-*). Остальное ниже в состав v2.2 не входит.
+Требования вехи v2.2 «Номера аккаунтов» — `.planning/REQUIREMENTS.md` (PHONE-*). Остальное ниже в состав v2.2 не входит.
 Требования вех заархивированы: `.planning/milestones/v2.0-REQUIREMENTS.md`, `.planning/milestones/v2.1-REQUIREMENTS.md`.
 
 Перенесено из v2.1 незакрытым:
