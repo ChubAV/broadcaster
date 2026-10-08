@@ -699,6 +699,296 @@ async def test_all_failed_images_fall_back_to_text(worker, monkeypatch):
     clients[0].send_message.assert_awaited_once_with(chat_id=17, text="Fallback")
 
 
+# ---- PHOTO_UPLOAD: MAX dropped ``photoIds`` from the one-shot upload URL ----
+
+# The shape MAX has answered PHOTO_UPLOAD with since 2026-09-25 (for every request
+# since 2026-10-02): a one-shot URL that names no photo.
+UPLOAD_URL_WITHOUT_PHOTO_IDS = "https://iu.oneme.ru/uploadImage?r=one-shot-token"
+# The shape PyMax 2.3.1 was written against.
+UPLOAD_URL_WITH_PHOTO_IDS = "https://iu.oneme.ru/uploadImage?photoIds=777&r=one-shot-token"
+
+
+class FakeUploadPost:
+    status = 200
+
+    def __init__(self, body):
+        self.body = body
+
+    async def json(self):
+        return self.body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+
+class FakeUploadSession:
+    def __init__(self, results, posted):
+        self.results = results
+        self.posted = posted
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    def post(self, url, data):
+        self.posted.append(url)
+        return FakeUploadPost(self.results.pop(0))
+
+
+def pymax_photo_send_harness(monkeypatch, upload_urls, upload_results):
+    """Real PyMax 2.3.1 MessageService + UploadService; only MAX's socket and upload HTTP are faked.
+
+    Returns the message service, every (opcode, payload) sent over the socket, and every
+    URL the photo bytes were POSTed to.
+    """
+    import aiohttp
+    from pymax.api.messages.service import MessageService
+    from pymax.api.uploads.service import UploadService
+    from pymax.protocol import Opcode
+
+    urls = list(upload_urls)
+    results = list(upload_results)
+    invoked = []
+    posted = []
+
+    async def invoke(opcode, payload=None):
+        invoked.append((opcode, payload))
+        if opcode == Opcode.PHOTO_UPLOAD:
+            return SimpleNamespace(payload={"url": urls.pop(0)})
+        return SimpleNamespace(payload={"id": 9, "time": 100, "type": "USER"})
+
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda **kwargs: FakeUploadSession(results, posted))
+    app = SimpleNamespace(
+        invoke=invoke,
+        config=SimpleNamespace(proxy=None),
+        dispatcher=SimpleNamespace(on_internal=lambda event: (lambda handler: handler)),
+    )
+    app.api = SimpleNamespace(uploads=UploadService(app))
+    app.api.messages = MessageService(app)
+    return app.api.messages, invoked, posted
+
+
+def sent_opcodes(invoked):
+    return [opcode for opcode, _ in invoked]
+
+
+def sent_attaches(invoked):
+    from pymax.protocol import Opcode
+
+    [payload] = [payload for opcode, payload in invoked if opcode == Opcode.MSG_SEND]
+    return payload["message"]["attaches"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result_key", ["0", "4242"])
+async def test_photo_send_survives_upload_url_without_photo_ids(worker, monkeypatch, result_key):
+    """Every MAX photo send failed with "Photo upload URL does not contain photoIds".
+
+    MAX's upload URL no longer names the photo.  A ``count=1`` upload result holds
+    exactly one entry, and that entry is our photo whatever its key.
+    """
+    from pymax import Photo
+    from pymax.types import AttachmentType
+
+    messages, invoked, posted = pymax_photo_send_harness(
+        monkeypatch,
+        [UPLOAD_URL_WITHOUT_PHOTO_IDS],
+        [{"photos": {result_key: {"token": "tok-new"}}}],
+    )
+
+    await messages.send_message(
+        chat_id=17, text="Caption", attachments=[Photo(raw=b"png-data", name="a.png")]
+    )
+
+    assert posted == [UPLOAD_URL_WITHOUT_PHOTO_IDS]
+    assert sent_attaches(invoked) == [{"_type": AttachmentType.PHOTO, "photoToken": "tok-new"}]
+
+
+@pytest.mark.asyncio
+async def test_photo_album_without_photo_ids_uploads_each_photo_on_its_own_url(worker, monkeypatch):
+    """A multi-image ad is N independent ``count=1`` uploads; tokens keep the photo order."""
+    from pymax import Photo
+    from pymax.protocol import Opcode
+
+    first = "https://iu.oneme.ru/uploadImage?r=first"
+    second = "https://iu.oneme.ru/uploadImage?r=second"
+    messages, invoked, posted = pymax_photo_send_harness(
+        monkeypatch,
+        [first, second],
+        [{"photos": {"0": {"token": "tok-1"}}}, {"photos": {"0": {"token": "tok-2"}}}],
+    )
+
+    await messages.send_message(
+        chat_id=17,
+        text="Album",
+        attachments=[Photo(raw=b"1", name="1.png"), Photo(raw=b"2", name="2.jpg")],
+    )
+
+    assert posted == [first, second]
+    upload_requests = [payload for opcode, payload in invoked if opcode == Opcode.PHOTO_UPLOAD]
+    assert upload_requests == [{"count": 1, "profile": False}] * 2
+    assert [attach["photoToken"] for attach in sent_attaches(invoked)] == ["tok-1", "tok-2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "photos",
+    [{}, {"0": {"token": "tok-a"}, "1": {"token": "tok-b"}}],
+    ids=["no-entry", "two-entries"],
+)
+async def test_photo_upload_without_photo_ids_refuses_to_guess_the_token(worker, monkeypatch, photos):
+    """Without an id in the URL only a single-entry result is unambiguous; never attach a guess."""
+    from pymax import Photo
+    from pymax.exceptions import UploadError
+    from pymax.protocol import Opcode
+
+    messages, invoked, _ = pymax_photo_send_harness(
+        monkeypatch, [UPLOAD_URL_WITHOUT_PHOTO_IDS], [{"photos": photos}]
+    )
+
+    with pytest.raises(UploadError, match=r"expected exactly 1"):
+        await messages.send_message(
+            chat_id=17, text="Caption", attachments=[Photo(raw=b"png-data", name="a.png")]
+        )
+
+    assert Opcode.MSG_SEND not in sent_opcodes(invoked)
+
+
+@pytest.mark.asyncio
+async def test_photo_send_still_keys_token_by_photo_ids_when_url_carries_them(worker, monkeypatch):
+    """MAX rolled the change out gradually; the URL that still names the photo keeps the exact lookup."""
+    from pymax import Photo
+    from pymax.types import AttachmentType
+
+    messages, invoked, _ = pymax_photo_send_harness(
+        monkeypatch,
+        [UPLOAD_URL_WITH_PHOTO_IDS],
+        [{"photos": {"111": {"token": "someone-else"}, "777": {"token": "tok-777"}}}],
+    )
+
+    await messages.send_message(
+        chat_id=17, text="Caption", attachments=[Photo(raw=b"png-data", name="a.png")]
+    )
+
+    assert sent_attaches(invoked) == [{"_type": AttachmentType.PHOTO, "photoToken": "tok-777"}]
+
+
+@pytest.mark.asyncio
+async def test_photo_ids_url_whose_id_is_missing_from_the_result_still_fails(worker, monkeypatch):
+    """When MAX does name the photo, a result without that id is an error, not a positional pick."""
+    from pymax import Photo
+    from pymax.exceptions import UploadError
+    from pymax.protocol import Opcode
+
+    messages, invoked, _ = pymax_photo_send_harness(
+        monkeypatch, [UPLOAD_URL_WITH_PHOTO_IDS], [{"photos": {"111": {"token": "someone-else"}}}]
+    )
+
+    with pytest.raises(UploadError, match=r"does not contain token for photo_id=777"):
+        await messages.send_message(
+            chat_id=17, text="Caption", attachments=[Photo(raw=b"png-data", name="a.png")]
+        )
+
+    assert Opcode.MSG_SEND not in sent_opcodes(invoked)
+
+
+def test_unmodified_pymax_rejects_upload_url_without_photo_ids():
+    """Pristine PyMax 2.3.1 is why every MAX photo send fails — keep that reproducible.
+
+    Runs in a clean interpreter that never imports the worker.  The day the pin moves
+    to a release that no longer needs ``photoIds``, this fails: drop the shim then.
+    """
+    script = (
+        "import asyncio, sys\n"
+        "from types import SimpleNamespace\n"
+        "from pymax import Photo\n"
+        "from pymax.api.uploads.service import UploadService\n"
+        "async def invoke(opcode, payload=None):\n"
+        "    return SimpleNamespace(payload={'url': sys.argv[1]})\n"
+        "app = SimpleNamespace(invoke=invoke, config=SimpleNamespace(proxy=None),\n"
+        "    dispatcher=SimpleNamespace(on_internal=lambda event: (lambda handler: handler)))\n"
+        "asyncio.run(UploadService(app).upload_photo(Photo(raw=b'png-data', name='a.png')))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, UPLOAD_URL_WITHOUT_PHOTO_IDS],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "UploadError: Photo upload URL does not contain photoIds" in result.stderr
+
+
+def test_worker_applies_photo_upload_compatibility_on_import(tmp_path):
+    """Importing the worker must fix photo uploads before any client exists, and say so in the log.
+
+    Clean interpreter: in-process an earlier test may already have applied the shim,
+    which would make the module-level flag ``False`` and the assertion vacuous.
+    """
+    env = {
+        **os.environ,
+        "ACCOUNT_ID": "42",
+        "SESSIONS_DIR": str(tmp_path / "sessions"),
+        "PYTHONPATH": str(REPO_ROOT),
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import max_worker.main as worker; "
+            "assert worker.PHOTO_UPLOAD_COMPATIBILITY_APPLIED is True",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        cwd=str(REPO_ROOT),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "pymax_photo_upload_compatibility_applied" in result.stdout
+
+
+def test_photo_upload_compatibility_is_idempotent_and_fails_closed_on_unaudited_pymax():
+    applied = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from max_worker import pymax_compat; "
+            "assert pymax_compat.apply_photo_upload_compatibility() is True; "
+            "assert pymax_compat.apply_photo_upload_compatibility() is False",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(REPO_ROOT),
+    )
+    assert applied.returncode == 0, applied.stderr
+
+    unaudited = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from max_worker import pymax_compat; "
+            "pymax_compat.PYMAX_VERSION = '2.4.1'; "
+            "pymax_compat.apply_photo_upload_compatibility()",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=str(REPO_ROOT),
+    )
+    assert unaudited.returncode != 0
+    assert "RuntimeError" in unaudited.stderr
+    assert "2.4.1" in unaudited.stderr
+
+
 def test_websocket_frame_size_compatibility_lifts_the_1mib_cap():
     """A clean interpreter proves the shim alone removes the frame-size cap.
 

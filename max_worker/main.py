@@ -33,6 +33,7 @@ from pymax.types.domain.enums import ChatType
 
 from max_worker.pymax_compat import (
     apply_contact_attachment_compatibility,
+    apply_photo_upload_compatibility,
     apply_sticker_attachment_compatibility,
     apply_websocket_frame_size_compatibility,
 )
@@ -41,6 +42,7 @@ from max_worker.pymax_compat import (
 CONTACT_ATTACHMENT_COMPATIBILITY_APPLIED = apply_contact_attachment_compatibility()
 STICKER_ATTACHMENT_COMPATIBILITY_APPLIED = apply_sticker_attachment_compatibility()
 WEBSOCKET_FRAME_SIZE_COMPATIBILITY_APPLIED = apply_websocket_frame_size_compatibility()
+PHOTO_UPLOAD_COMPATIBILITY_APPLIED = apply_photo_upload_compatibility()
 
 
 # ---- 1. Config (env vars) ----
@@ -105,6 +107,8 @@ if STICKER_ATTACHMENT_COMPATIBILITY_APPLIED:
     log.info("pymax_sticker_attachment_compatibility_applied")
 if WEBSOCKET_FRAME_SIZE_COMPATIBILITY_APPLIED:
     log.info("pymax_websocket_frame_size_compatibility_applied")
+if PHOTO_UPLOAD_COMPATIBILITY_APPLIED:
+    log.info("pymax_photo_upload_compatibility_applied")
 
 # Force all loggers through our JSON formatter (no duplicate plain-text lines)
 for _ln in ("uvicorn", "uvicorn.access", "uvicorn.error", "pymax", "pymax.core"):
