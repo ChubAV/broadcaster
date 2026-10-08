@@ -4,12 +4,12 @@ milestone: v2.2
 milestone_name: Номера аккаунтов
 current_phase: 16
 current_phase_name: Хранение номера, нормализация и единый писатель
-status: planning
-stopped_at: Phase 16 context gathered
-last_updated: "2026-10-08T13:54:02.987Z"
+status: executing
+stopped_at: Phase 16 planned
+last_updated: "2026-10-08T15:53:30.896Z"
 last_activity: 2026-10-08
-last_activity_desc: "Роадмап вехи v2.2 создан: 5 фаз (16…20), 21/21 требование отображено"
-state_head: 36f01b393c384c72e45efa073ea86da09aa91139
+last_activity_desc: "Фаза 16 спланирована: 6 планов в 3 волнах, проверка планов пройдена (0 блокеров, 0 предупреждений)"
+state_head: 7313b54343ce9a0018a21f121e335b7742f050ee
 progress:
   total_phases: 5
   completed_phases: 0
@@ -39,10 +39,11 @@ See: .planning/PROJECT.md (updated 2026-10-08)
 
 ## Current Position
 
-Phase: 16 (Хранение номера, нормализация и единый писатель) — READY TO PLAN
+Phase: 16 (Хранение номера, нормализация и единый писатель) — READY TO EXECUTE
 Plan: —
-Status: Ready to plan
-Last activity: 2026-10-08 — Роадмап вехи v2.2 создан: 5 фаз (16…20), 21/21 требование отображено
+Status: Ready to execute
+Last activity: 2026-10-08 — Фаза 16 спланирована: 6 планов в 3 волнах (16-01…16-06), проверка планов пройдена
+(устарело, предмет — создание роадмапа) 2026-10-08 — Роадмап вехи v2.2 создан: 5 фаз (16…20), 21/21 требование отображено
 
 Progress: [░░░░░░░░░░] 0%
 

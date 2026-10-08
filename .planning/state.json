@@ -1,12 +1,38 @@
 {
   "contract": "1.0.0",
   "flavor": "core",
-  "milestone": "v2.2",
-  "phases": [],
+  "milestone": "v2.2 — Номера аккаунтов",
+  "phases": [
+    {
+      "number": "16",
+      "name": "Хранение номера, нормализация и единый писатель",
+      "status": "pending"
+    },
+    {
+      "number": "17",
+      "name": "Показ номера на всех экранах",
+      "status": "pending"
+    },
+    {
+      "number": "18",
+      "name": "Ручная правка номера",
+      "status": "pending"
+    },
+    {
+      "number": "19",
+      "name": "Захват номера при подключении",
+      "status": "pending"
+    },
+    {
+      "number": "20",
+      "name": "Дозаполнение номеров существующих аккаунтов",
+      "status": "pending"
+    }
+  ],
   "next": {
-    "command": "/gsd:discuss-phase",
-    "label": "Discuss the first phase",
-    "reason": "Project initialized — plan your first phase"
+    "command": "/gsd:progress --next",
+    "label": "Advance to the next step",
+    "reason": "Phase 16 of 5 · 0% · executing"
   },
-  "updated_at": "2026-10-08T11:46:29.970Z"
+  "updated_at": "2026-10-08T15:53:40.250Z"
 }
