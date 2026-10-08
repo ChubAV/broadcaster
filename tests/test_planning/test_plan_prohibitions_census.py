@@ -931,9 +931,16 @@ def decision_distribution(decisions) -> str:
     )
 
 
+# ЛЕТОПИСЬ ОТБОРА (план 16-01, 2026-10-08): до плана 16-01 отбор был "все, кроме Фазы 15"
+# (`tool.phase_of(path) != PHASE_15`) — верно, пока Фаза 15 была последней; планы фазы 16
+# вошли бы в "до Фазы 15" и сдвинули числа (`148 == 142`, `663 != 650`); отбор теперь по
+# номеру, как у `through_fixed_set`. Числа 142 / 650 / 745 не менялись — сменился отбор,
+# которому они принадлежат.
 def _before_phase_15(plan_texts):
     return {
-        path: text for path, text in plan_texts.items() if tool.phase_of(path) != PHASE_15
+        path: text
+        for path, text in plan_texts.items()
+        if tool._phase_number_of(path) < int(PHASE_15)
     }
 
 
@@ -1020,6 +1027,39 @@ def test_the_census_reproduces_the_measurement_taken_before_phase_15_plans(live_
         if phase != PHASE_15
     }
     assert tool.phase_breakdown(records) == expected
+
+
+def test_control_a_plan_after_phase_15_stays_out_of_the_before_set(live_sources):
+    """ЗУБЫ ОТБОРА ПО НОМЕРУ (план 16-01): план фазы 17 не входит в «до Фазы 15».
+
+    Копия живой вселенной с синтетическим `17-01-PLAN.md` (один запрет): множество
+    `_before_phase_15` и строки «веха без планов Фазы 15» таблицы сличения прибора — те же,
+    что без него; во вселенную целиком синтетика при этом входит (контроль не вакуумен).
+    Прежний отбор «все, кроме Фазы 15» её бы взял — это показано тут же.
+    """
+    synthetic = ".planning/phases/17-sintetika/17-01-PLAN.md"
+    assert synthetic not in live_sources
+    doctored = dict(live_sources)
+    doctored[synthetic] = SYNTHETIC_PLAN_SOURCE
+
+    assert _before_phase_15(doctored) == _before_phase_15(live_sources)
+    assert synthetic not in _before_phase_15(doctored)
+    assert synthetic in {
+        path for path in doctored if tool.phase_of(path) != PHASE_15
+    }, "прежний отбор «все, кроме Фазы 15» обязан был взять синтетику — иначе контроль пуст"
+    assert len(tool.census(doctored)) == len(tool.census(live_sources)) + 1
+
+    label = "веха без планов Фазы 15"
+
+    def before_rows(sources):
+        return [line for line in tool.reconcile_lines(sources) if label in line]
+
+    assert before_rows(doctored) == before_rows(live_sources), before_rows(doctored)
+    assert len(before_rows(doctored)) == 2
+    assert all(
+        f"планов {PLAN_FILES_BEFORE_PHASE_15} |" in line for line in before_rows(doctored)
+    ), before_rows(doctored)
+    assert f"| {PROHIBITIONS_BEFORE_PHASE_15_PLANS} |" in before_rows(doctored)[0]
 
 
 def test_the_decision_scope_of_phase_10_is_declared_apart_from_the_milestone(
