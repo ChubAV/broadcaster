@@ -1258,7 +1258,7 @@ HTMX_VERSION = "2.0.10"
 HTMX_SHA384 = "H5SrcfygHmAuTDZphMHqBJLc3FhssKjG7w/CeCpFReSfwBWDTKpkzPP8c+cLsK+V"
 HTMX_BYTES = 51238
 
-# Шесть ключей ВЕРХНЕГО уровня; responseHandling — ОДИН ключ, а не пять.
+# Семь ключей ВЕРХНЕГО уровня; responseHandling — ОДИН ключ, а не пять.
 # Источник — .planning/research/SUMMARY.md §«Обязательный блок конфигурации»,
 # где у каждой строки выписано последствие её пропуска.
 #
@@ -1277,7 +1277,8 @@ HTMX_BYTES = 51238
 # авторского тела у 422 нет, своп делал целью подмены DOM тело, состав которого
 # приложение не выбирает и которое дословно повторяет присланное пользователем
 # значение, — при allowScriptTags и allowEval, оставленных умолчаниями артефакта
-# (оба true) и шестиключевым составом НЕ переопределяемых.
+# (оба true) и шестиключевым (с issue #51 — семиключевым) составом НЕ
+# переопределяемых.
 #
 # ЭТО ОЖИДАНИЕ — ГЕЙТ НА ВОЗВРАТ СВОПА. Оно краснеет в тот момент, когда своп
 # вернут в разметку, и вернуть его ПРАВОМЕРНО только одновременно с появлением
@@ -1310,12 +1311,23 @@ HTMX_BYTES = 51238
 # этой строки, дословно: «base.html: у ключа responseHandling значение [...
 # {'code': '422', 'swap': True, 'error': True} ...], ожидалось [...
 # {'code': '422', 'swap': False, 'error': True} ...]».
+#
+# СЕДЬМОЙ КЛЮЧ — attributesToSettle БЕЗ style (issue #51, задача
+# 261008-bm0). Умолчание вендоренного рантайма осаждает style: при подмене тела
+# по HX-Location узлу с совпавшим id возвращаются серверные атрибуты, и style,
+# которого у корня панели подтверждения в разметке нет, удаляется — вместе с
+# display: none, записанным Alpine по x-show. Панели оставшихся аккаунтов после
+# подтверждённого удаления всплывали стопкой. Ключ оставляет у style одного
+# владельца — Alpine. Значение сверяется посимвольно, как в шаблоне: съехавший
+# обратно в умолчание список вернул бы дефект без единого красного в разметке.
+# Механизм и предпосылки стережёт tests/test_pages/test_confirmation_panel_settle.py.
 HTMX_CONFIG = {
     "historyRestoreAsHxRequest": False,
     "allowNestedOobSwaps": False,
     "reportValidityOfForms": True,
     "historyCacheSize": 0,
     "selfRequestsOnly": True,
+    "attributesToSettle": ["class", "width", "height"],
     "responseHandling": [
         {"code": "204", "swap": False},
         {"code": "[23]..", "swap": True},
@@ -1420,7 +1432,7 @@ def _htmx_config_of(html: str, shell: str) -> dict:
 
     Разбор идёт по ответу, а не по исходнику шаблона, и это несущее решение
     (D-05). Сломанное экранирование кавычек внутри значения атрибута отбросило
-    бы ВСЕ шесть ключей в умолчания, оставив греп исходника зелёным: htmx не
+    бы ВСЕ семь ключей в умолчания, оставив греп исходника зелёным: htmx не
     сообщает о нечитаемой конфигурации ничем. Ловит это только json.loads
     разобранного ответа.
     """
@@ -1434,12 +1446,12 @@ def _htmx_config_of(html: str, shell: str) -> dict:
     except json.JSONDecodeError as exc:
         raise AssertionError(
             f"{shell}: значение content= не разбирается как JSON ({exc}) — "
-            "все шесть ключей молча ушли бы в умолчания:\n" + match.group(1)
+            "все семь ключей молча ушли бы в умолчания:\n" + match.group(1)
         ) from exc
 
 
 def _assert_config_contract(config: dict, shell: str) -> None:
-    """Шесть ключей с их значениями и ПОРЯДОК пяти правил responseHandling."""
+    """Семь ключей с их значениями и ПОРЯДОК пяти правил responseHandling."""
     assert set(config) == set(HTMX_CONFIG), (
         f"{shell}: состав ключей верхнего уровня разошёлся — "
         f"лишние {sorted(set(config) - set(HTMX_CONFIG))}, "
@@ -1535,7 +1547,7 @@ def test_vendored_htmx_is_the_declared_artifact():
 
 @pytest.mark.asyncio
 async def test_auth_shell_carries_htmx_config(client: AsyncClient):
-    """auth_base.html: блок из шести ключей приезжает на /login разобранным.
+    """auth_base.html: блок из семи ключей приезжает на /login разобранным.
 
     Подпись называет ШЕЛЛ, а не адрес: предмет — второй шелл проекта, а /login
     лишь одна из семи его страниц. Забытый {% include %} в ОДНОМ из двух шеллов
@@ -1608,7 +1620,7 @@ async def test_auth_shell_purges_the_legacy_history_cache_once(client: AsyncClie
 
     QUAL-05, машинная половина. Считается ЧИСЛО вхождений, а не признак
     наличия: снятие строки будущим планом обязано ронять тест ровно так же, как
-    снятие любого из шести ключей конфигурации (D-13), а вторая копия — так же,
+    снятие любого из семи ключей конфигурации (D-13), а вторая копия — так же,
     как второй литеральный блок.
 
     ЧЕГО ЭТОТ ГЕЙТ НЕ ДОКАЗЫВАЕТ. Суита не исполняет ни строчки JS: httpx
@@ -2048,7 +2060,7 @@ def test_notice_area_has_single_source():
 # --- G-23: плашки отказа сервера и обрыва связи (QUAL-03) --------------------
 #
 # ЧТО ЭТА ГРУППА ДОБАВЛЯЕТ К УЖЕ НАПИСАННОМУ В ЭТОМ ФАЙЛЕ. Версия вендоренного
-# рантайма, шесть ключей блока конфигурации и порядок пяти правил
+# рантайма, семь ключей блока конфигурации и порядок пяти правил
 # responseHandling УЖЕ утверждены выше — test_vendored_htmx_is_the_declared_artifact,
 # test_auth_shell_carries_htmx_config, test_main_shell_carries_htmx_config. Здесь
 # они НЕ дублируются: второе утверждение о том же предмете не строже первого, а
