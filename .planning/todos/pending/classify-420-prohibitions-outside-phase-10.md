@@ -5,6 +5,9 @@ source: 15-VERIFICATION.md H5 (4); решение владельца `chubav` 20
 area: planning / реестр запретов
 severity: low
 addressee: бэклог следующей вехи (после v2.1)
+audit_acknowledged:
+  milestone: v2.1
+  at: 2026-10-08
 ---
 
 # Разобрать 420 запретов вне области решений Фазы 15

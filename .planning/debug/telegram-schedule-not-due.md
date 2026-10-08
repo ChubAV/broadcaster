@@ -4,9 +4,9 @@ trigger: "Расписание для Telegram не сработало в 17:30 
 created: 2026-08-03
 updated: 2026-09-11T13:05:00Z
 audit_acknowledged:
-  milestone: v2.0
-  at: 2026-08-25
-  status: investigating
+  milestone: v2.1
+  at: 2026-10-08
+  status: awaiting_human_verify
 ---
 
 # Debug Session: Telegram schedule not due
@@ -209,7 +209,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
 - timestamp: 2026-08-03T14:31:05Z
   observation: check_schedules logs now=2026-08-03T14:31:05+00:00 and due_count=0.
   implication: Failure occurs before dispatch to the Telegram queue.
-
 
 - timestamp: 2026-09-11T06:26:15Z
   checked: >-
@@ -448,7 +447,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
     application guard) and it does not repair the one row already in that state. Both remaining
     steps require the owner, and are raised as a checkpoint rather than taken.
 
-
 - timestamp: 2026-09-11T09:05:00Z
   checked: >-
     Following the created_at correction above, the orchestrator queried created_at across all 104
@@ -466,7 +464,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
     the schema has no creation stamp was FALSE, and the conclusion it supported — that the 17:3x
     rows cannot be dated — was therefore unearned even though it happened to be right. The
     conclusion now rests on the correct measurement instead of on the wrong premise.
-
 
 - timestamp: 2026-09-11T09:40:00Z
   checked: >-
@@ -578,7 +575,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
     `next_run_at`, which is the minimal change that preserves each test's own subject — not by
     weakening the constraint. This cost is recorded BEFORE the work so the size of the diff is a
     decision and not a surprise.
-
 
 - timestamp: 2026-09-11T10:40:00Z
   checked: >-
@@ -705,7 +701,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
     run, and hit the new constraint as a 500 IntegrityError on a user's toggle click. There is no
     such row. Had there been one, the constraint would have needed to wait.
 
-
 - timestamp: 2026-09-11T12:45:00Z
   checked: >-
     CYCLE 3. Four ERRORS that appeared at ~13% of the full-suite run and were NOT present when the
@@ -721,7 +716,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
     produced under a flag that changes which fixtures exist is not the figure the project's gate
     produces, and reporting the first one as "the suite" would have been wrong in the same way the
     relayed 3034/37m24s figure was wrong — asserted rather than reproduced.
-
 
 - timestamp: 2026-09-11T09:22:34Z
   checked: >-
@@ -739,7 +733,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
     3034 + 129 = 3163 EXACTLY. That does not turn the earlier figure into a verified one — it was
     never reproduced and its status stands — but the two are arithmetically consistent, which is
     weak corroboration rather than none.
-
 
 - timestamp: 2026-09-11T13:10:00Z
   checked: >-
@@ -759,8 +752,6 @@ The ACTIVE subject is now: `is_active = true` persisted together with `next_run_
     docstring is corrected to the measurement; the two older docstrings are NOT rewritten (D-30/
     D-32 — they are the record of their own moment, and what was wrong was carrying their number
     forward into today, not the number itself).
-
-
 
 - timestamp: 2026-09-11T10:15:00Z
   checked: >-
