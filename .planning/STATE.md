@@ -1,20 +1,16 @@
 ---
 gsd_state_version: "1.0"
-milestone: v2.1
-status: Awaiting next milestone
-stopped_at: Milestone v2.1 complete — awaiting next milestone
-last_updated: "2026-10-08T09:18:22.248Z"
+milestone: v2.2
+milestone_name: Номера аккаунтов
+status: planning
+last_updated: "2026-10-08T11:46:29.957Z"
 last_activity: 2026-10-08
-last_activity_desc: Milestone v2.1 completed and archived
-state_head: 0e5573dbbe23fa79daf83b63d1ed03a2ddfecb74
-milestone_name: HTMX-first
-current_phase: 15
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 175
-  completed_plans: 175
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -38,10 +34,10 @@ See: .planning/PROJECT.md (updated 2026-10-08)
 
 ## Current Position
 
-Phase: Milestone v2.1 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-10-08 - Completed quick task 261008-bm0: исправлен issue #51 (каскад подтверждений удаления аккаунтов)
+Status: Defining requirements
+Last activity: 2026-10-08 — Milestone v2.2 started
 
 ## Performance Metrics
 
