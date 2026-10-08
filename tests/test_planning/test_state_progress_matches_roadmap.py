@@ -52,6 +52,7 @@ pytestmark = pytest.mark.planning
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ROADMAP_PATH = PROJECT_ROOT / ".planning" / "ROADMAP.md"
 STATE_PATH = PROJECT_ROOT / ".planning" / "STATE.md"
+MILESTONES_DIR = PROJECT_ROOT / ".planning" / "milestones"
 
 FRONTMATTER_FENCE = "---"
 PHASE_SECTION_PREFIX = "### Phase "
@@ -275,6 +276,20 @@ def _report(divergences: list[Divergence]) -> str:
     return "\n".join(str(item) for item in divergences)
 
 
+def governing_roadmap_path(state_text: str) -> Path:
+    """Роадмап ВЕХИ, которую называет `milestone` во frontmatter STATE.
+
+    Пока веха открыта, это живой `.planning/ROADMAP.md`. Закрытие вехи сворачивает живой
+    роадмап до строки и переносит детали фаз в `.planning/milestones/<веха>-ROADMAP.md`, а блок
+    `progress` STATE до `/gsd-new-milestone` по-прежнему описывает закрытую веху — источник
+    его счёта переезжает в архив вместе с отметками. Архив вехи существует ⇔ веха закрыта.
+    """
+    data = yaml.safe_load(_frontmatter(state_text)) or {}
+    milestone = str(data.get("milestone") or "")
+    archived = MILESTONES_DIR / f"{milestone}-ROADMAP.md"
+    return archived if milestone and archived.is_file() else ROADMAP_PATH
+
+
 # --- сам гейт ----------------------------------------------------------------------
 
 
@@ -286,9 +301,10 @@ def test_the_machine_readable_progress_is_derived_from_the_roadmap():
     следующего плана требовало бы правки теста, а тест, требующий правки при
     каждом плане, отключают.
     """
+    state_text = STATE_PATH.read_text(encoding="utf-8")
     divergences = progress_divergence(
-        ROADMAP_PATH.read_text(encoding="utf-8"),
-        STATE_PATH.read_text(encoding="utf-8"),
+        governing_roadmap_path(state_text).read_text(encoding="utf-8"),
+        state_text,
     )
     assert not divergences, _report(divergences)
 
@@ -309,7 +325,9 @@ def test_the_prose_plan_counts_agree_with_the_marks():
     на роадмапе, где форма прозы сменилась целиком, — то есть ровно тогда, когда
     оно нужнее всего.
     """
-    roadmap_text = ROADMAP_PATH.read_text(encoding="utf-8")
+    roadmap_text = governing_roadmap_path(STATE_PATH.read_text(encoding="utf-8")).read_text(
+        encoding="utf-8"
+    )
 
     sections = roadmap_plan_counts(roadmap_text)
     assert sections, (

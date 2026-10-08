@@ -165,6 +165,22 @@ def anchor_is_required(path: Path) -> bool:
     )
 
 
+def _require_live_phases() -> None:
+    """Между вехами живых фаз нет — правило о ЖИВЫХ файлах пропускается С ИМЕНЕМ ПРИЧИНЫ.
+
+    Закрытие вехи переносит каталоги фаз в `.planning/milestones/<веха>-phases/`, и до первой
+    фазы следующей вехи `.planning/phases/` пуст. Это замер, а не догадка: пропуск ставится,
+    только когда в живом каталоге нет НИ ОДНОГО каталога фазы; при любой живой фазе
+    антивакуумная половина ниже снова обязана найти живой файл отложенного.
+    """
+    phases_root = PLANNING_ROOT / "phases"
+    if not phases_root.is_dir() or not any(p.is_dir() for p in phases_root.iterdir()):
+        pytest.skip(
+            "в `.planning/phases/` нет ни одного каталога фазы (веха закрыта, следующая не "
+            "начата) — живых файлов отложенного нет по построению"
+        )
+
+
 def _report(path: Path, findings: list[Finding]) -> str:
     listed = "\n".join(f"  — {item}" for item in findings)
     return f"{path.relative_to(PROJECT_ROOT)}:\n{listed}"
@@ -187,6 +203,8 @@ def test_every_deferred_items_file_stays_append_safe():
     )
 
     live = [path for path in files if anchor_is_required(path)]
+    if not live:
+        _require_live_phases()
     assert live, (
         f"файлов отложенного найдено {len(files)}, но ЖИВЫХ (под `.planning/phases/` "
         "и с разделами, именованными планами) — ни одного: требование якоря не "
@@ -212,6 +230,8 @@ def test_the_anchor_closes_every_live_deferred_file():
     означало бы для двух авторов два разных места.
     """
     live = [path for path in deferred_files() if anchor_is_required(path)]
+    if not live:
+        _require_live_phases()
     assert live, "живых файлов отложенного не найдено — сторожить нечего"
 
     for path in live:

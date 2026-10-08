@@ -87,8 +87,14 @@ import yaml
 
 TREE_ROOT = Path(__file__).resolve().parents[1]
 PLAN_GLOB = ".planning/phases/*/[0-9]*-PLAN.md"
+# ПЕРЕЕЗД В АРХИВ (закрытие вехи v2.1, 2026-10-08). Каталоги фаз 7…15 перенесены в
+# `.planning/milestones/v2.1-phases/`. Вселенная — объединение живого каталога и архива вехи;
+# тождество плана остаётся путём, под которым план исполнялся (`.planning/phases/<каталог>/…`),
+# поэтому 741 строка реестра не переписывается. Один каталог в обоих местах — `CensusError`.
+ARCHIVED_PHASES_DIR = ".planning/milestones/v2.1-phases"
+LIVE_PHASES_DIR = ".planning/phases"
 REGISTRY_RELATIVE_PATH = (
-    ".planning/phases/15-uprochnenie-i-svodnyy-obhod-47-form/15-prohibitions-registry.yaml"
+    f"{ARCHIVED_PHASES_DIR}/15-uprochnenie-i-svodnyy-obhod-47-form/15-prohibitions-registry.yaml"
 )
 
 FRONTMATTER_FENCE = "---"
@@ -407,11 +413,23 @@ def through_fixed_set(sources: Mapping[str, str]) -> dict[str, str]:
 
 
 def _plan_sources(root: Path) -> dict[str, str]:
-    """Отображение «путь плана относительно корня → текст файла», по `sorted(glob)`."""
-    return {
+    """Отображение «путь тождества плана → текст файла» по живому каталогу и архиву вехи.
+
+    Путь тождества — `.planning/phases/<каталог>/<файл>` для обоих источников: план архива
+    отвечает тем путём, под которым исполнялся. Каталог фазы, найденный и в живом каталоге,
+    и в архиве, — `CensusError`: вторая копия молча заместила бы первую.
+    """
+    sources = {
         path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted(root.glob(PLAN_GLOB))
     }
+    archived_glob = PLAN_GLOB.replace(LIVE_PHASES_DIR, ARCHIVED_PHASES_DIR, 1)
+    for path in sorted(root.glob(archived_glob)):
+        identity = f"{LIVE_PHASES_DIR}/{path.relative_to(root / ARCHIVED_PHASES_DIR).as_posix()}"
+        if identity in sources:
+            raise CensusError(f"`{identity}`: план найден и в живом каталоге, и в архиве вехи")
+        sources[identity] = path.read_text(encoding="utf-8")
+    return dict(sorted(sources.items()))
 
 
 def _frontmatter(text: str) -> dict:
