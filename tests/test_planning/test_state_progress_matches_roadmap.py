@@ -324,6 +324,14 @@ def test_the_prose_plan_counts_agree_with_the_marks():
     число пропущенных названо в тексте утверждения. Без этого правило зеленело бы
     на роадмапе, где форма прозы сменилась целиком, — то есть ровно тогда, когда
     оно нужнее всего.
+
+    ЛЕТОПИСЬ (план 16-01, 2026-10-08): до плана 16-01 антивакуум требовал опознанной
+    прозы безусловно; старт вехи v2.2 (все разделы `**Plans**: TBD`) краснил его на
+    законной пустоте. На дереве планирования фазы 16 её раздел несёт прозу "6 планов,
+    из них 0 исполнено", и правило зелено по существу; развилка — для следующего старта
+    вехи. Различитель — ОТМЕТКИ: ни у одного раздела нет перечня планов — пропуск с
+    причиной (`PROSE_NO_MARKS`); отметки есть, а опознанной прозы нет — красное прежним
+    текстом (`PROSE_VACUUM`); иначе — прежнее сличение (`PROSE_READY`).
     """
     roadmap_text = governing_roadmap_path(STATE_PATH.read_text(encoding="utf-8")).read_text(
         encoding="utf-8"
@@ -336,9 +344,16 @@ def test_the_prose_plan_counts_agree_with_the_marks():
         "бы ВАКУУМОМ"
     )
 
+    state = prose_rule_state(roadmap_text)
+    if state == PROSE_NO_MARKS:
+        pytest.skip(
+            f"ни у одного раздела `{PHASE_SECTION_PREFIX}` нет перечня планов — старт "
+            "вехи, прозе сличать не с чем; правило вернётся с первым перечнем"
+        )
+
     prose = roadmap_plan_prose(roadmap_text)
     skipped = len(sections) - len(prose)
-    assert prose, (
+    assert state != PROSE_VACUUM, (
         f"разделов фаз найдено {len(sections)}, из них с прозой опознаваемой формы "
         f"«N планов, из них M исполнено» — 0, пропущено {skipped}: форма прозы "
         "сменилась целиком, и сличать стало нечего. Правило обязано покраснеть "
@@ -350,6 +365,29 @@ def test_the_prose_plan_counts_agree_with_the_marks():
         f"опознано разделов с прозой: {len(prose)}, пропущено: {skipped}.\n"
         + "\n".join(str(item) for item in divergences)
     )
+    assert state == PROSE_READY, state
+
+
+# Три состояния правила прозы (план 16-01). Значения — русские слова; вердиктами
+# отчётов они не являются и с ними не совпадают.
+PROSE_NO_MARKS = "отметок нет нигде"
+PROSE_VACUUM = "отметки без опознанной прозы"
+PROSE_READY = "проза к сличению готова"
+
+
+def prose_rule_state(roadmap_text: str) -> str:
+    """Состояние правила прозы для ПОДАННОГО роадмапа — чистая функция.
+
+    `PROSE_NO_MARKS` — ни у одного раздела `roadmap_plan_counts` нет `total > 0`
+    (старт вехи: перечней планов ещё нет нигде). `PROSE_VACUUM` — отметки есть, а
+    `roadmap_plan_prose` пуст (форма прозы сменилась целиком либо проза не вписана).
+    Иначе — `PROSE_READY`.
+    """
+    if not any(total > 0 for _, total in roadmap_plan_counts(roadmap_text).values()):
+        return PROSE_NO_MARKS
+    if not roadmap_plan_prose(roadmap_text):
+        return PROSE_VACUUM
+    return PROSE_READY
 
 
 # --- зубы: синтетические пары, а не правка настоящих файлов -------------------------
@@ -549,3 +587,92 @@ def test_the_prose_helper_finds_nothing_when_no_prose_is_recognised():
         "пустая карта прозы обязана краснить антивакуумную половину гейта, а не "
         "проходить его зелёной"
     )
+
+
+# --- зубы развилки старта вехи (план 16-01): три состояния на литеральных роадмапах --
+
+# ⚠️ НЕЦИКЛИЧНОСТЬ — та же: роадмапы выписаны литералами и из живого не строятся.
+
+_SYNTHETIC_ROADMAP_OF_A_MILESTONE_START = """# Синтетический roadmap старта вехи
+
+### Phase 91: Первая фаза вехи
+
+**Plans**: TBD
+
+### Phase 92: Вторая фаза вехи
+
+**Plans**: TBD
+"""
+
+_SYNTHETIC_ROADMAP_WITH_MARKS_AND_ENGLISH_PROSE = """# Синтетический roadmap
+
+### Phase 91: Фаза с прозой формы GSD по умолчанию
+
+**Plans**: 2 plans
+
+- [ ] 91-01-PLAN.md — запланированный план
+- [ ] 91-02-PLAN.md — запланированный план
+
+### Phase 92: Фаза без перечня
+
+**Plans**: TBD
+"""
+
+# Форма роадмапа после исполнения волны: отметки части планов поставлены, проза
+# раздела опознаваемой формы — правило обязано СУДИТЬ их, а не пропускать.
+_SYNTHETIC_ROADMAP_AFTER_A_WAVE = """# Синтетический roadmap после волны
+
+### Phase 91: Фаза после первой волны
+
+**Plans**: 6 планов, из них 4 исполнено
+
+- [x] 91-01-PLAN.md — исполненный план
+- [x] 91-02-PLAN.md — исполненный план
+- [x] 91-03-PLAN.md — исполненный план
+- [x] 91-04-PLAN.md — исполненный план
+- [ ] 91-05-PLAN.md — запланированный план
+- [ ] 91-06-PLAN.md — запланированный план
+
+### Phase 92: Следующая фаза
+
+**Plans**: TBD
+"""
+
+
+def test_control_a_roadmap_of_only_tbd_sections_has_no_marks():
+    """Законная пустота: все разделы `TBD` — `PROSE_NO_MARKS`, разделы при этом найдены."""
+    text = _SYNTHETIC_ROADMAP_OF_A_MILESTONE_START
+    assert len(roadmap_plan_counts(text)) == 2, "разбор обязан найти оба раздела"
+    assert prose_rule_state(text) == PROSE_NO_MARKS
+
+
+def test_control_marks_with_english_prose_are_the_vacuum():
+    """ЗУБЫ РАЗВИЛКИ: отметки есть, проза формы `2 plans` не опознана — `PROSE_VACUUM`.
+
+    Ровно тот случай, который пропуск старта вехи НЕ имеет права закрыть: перечень
+    планов вписан, а проза написана формой, которой правило не читает.
+    """
+    text = _SYNTHETIC_ROADMAP_WITH_MARKS_AND_ENGLISH_PROSE
+    assert roadmap_totals(text) == (0, 2), roadmap_totals(text)
+    assert roadmap_plan_prose(text) == {}
+    assert prose_rule_state(text) == PROSE_VACUUM
+
+
+def test_control_marks_with_recognised_prose_are_ready_and_judged():
+    """Позитивная пара: отметки и опознанная проза — `PROSE_READY`, и сличение СУДИТ их.
+
+    Форма роадмапа после волны (4 из 6 отмечены): согласная проза — ноль расхождений;
+    та же проза при одной снятой отметке — ровно одно расхождение исполненных.
+    """
+    text = _SYNTHETIC_ROADMAP_AFTER_A_WAVE
+    assert prose_rule_state(text) == PROSE_READY
+    assert prose_divergence(text) == [], "\n".join(map(str, prose_divergence(text)))
+
+    one_mark_lost = text.replace(
+        "- [x] 91-04-PLAN.md", "- [ ] 91-04-PLAN.md", 1
+    )
+    assert prose_rule_state(one_mark_lost) == PROSE_READY
+    divergences = prose_divergence(one_mark_lost)
+    assert [(item.quantity, item.prose, item.marks) for item in divergences] == [
+        ("исполнено планов", 4, 3)
+    ], "\n".join(map(str, divergences))

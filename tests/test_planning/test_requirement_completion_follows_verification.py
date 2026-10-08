@@ -96,7 +96,17 @@ PASSED_VERDICT = "passed"
 # (`EDIT-01`, `UPLD-01`, `E2E-01`), — их клетка фазы имени фазы не несёт. Ориентир не
 # был ошибкой: он верно называл вселенную действующей вехи, но не число СТРОК
 # таблицы, а стережётся здесь именно число строк.
-REQUIREMENT_ROWS_DECLARED = 44
+# ЛЕТОПИСЬ (план 16-01, 2026-10-08): до старта вехи v2.2 здесь стояло ОДНО число 44,
+# верное для записи v2.1; живая запись сменилась на v2.2 (коммит `d46514cd`), и правило
+# покраснело "найдено 21, а объявлено 44". 44 НЕ СТЁРТО, а отнесено к своей вехе: между
+# вехами `_requirements_record_path` читает архив v2.1, и правило по-прежнему судит его.
+# 21 — замер 2026-10-08 разборщиком `_requirement_rows` на живой записи (PHONE-01…PHONE-21).
+# Ключ карты — веха записи, выведенная `_record_milestone` из её собственного заголовка;
+# веха, которой в карте нет, — громкий отказ `requirement_rows_offence`, а не зелень.
+REQUIREMENT_ROWS_DECLARED: dict[str, int] = {
+    "v2.1": 44,
+    "v2.2": 21,
+}
 
 _ROW_RE = re.compile(
     r"^\|\s*(?P<name>[A-Z0-9]+-\d+)\s*\|(?P<phase>[^|]*)\|(?P<status>[^|]*)\|\s*$",
@@ -437,12 +447,66 @@ def test_the_number_of_requirement_rows_is_declared():
     Без этого правила требование можно было бы «привести в согласие», просто сняв
     его строку: несущее правило судит только те строки, которые видит.
     """
-    rows = _requirement_rows(REQUIREMENTS_PATH.read_text(encoding="utf-8"))
-    assert len(rows) == REQUIREMENT_ROWS_DECLARED, (
-        f"строк таблицы состояний в `.planning/REQUIREMENTS.md` найдено {len(rows)}, "
-        f"а объявлено {REQUIREMENT_ROWS_DECLARED} — если строка добавлена или снята "
-        f"осознанно, привести надо ОБЪЯВЛЕННОЕ ЧИСЛО и записать летопись; если нет "
-        f"— привести надо таблицу"
+    offence = requirement_rows_offence(REQUIREMENTS_PATH.read_text(encoding="utf-8"))
+    assert not offence, offence
+
+
+def requirement_rows_offence(text: str) -> str | None:
+    """Отказ правила счёта строк для ПОДАННОЙ записи; `None` — число сходится.
+
+    Число берётся из `REQUIREMENT_ROWS_DECLARED` по вехе записи (`_record_milestone`).
+    Веха, не объявленная в карте, — отказ, а не пропуск: иначе смена вехи молча
+    выключала бы правило вместо того, чтобы потребовать объявить число.
+    """
+    milestone = _record_milestone(text)
+    declared = REQUIREMENT_ROWS_DECLARED.get(milestone)
+    if declared is None:
+        return (
+            f"веха записи `{milestone}` не объявлена в `REQUIREMENT_ROWS_DECLARED` — "
+            f"объявить число и записать летопись"
+        )
+    rows = _requirement_rows(text)
+    if len(rows) != declared:
+        return (
+            f"строк таблицы состояний записи вехи `{milestone}` найдено {len(rows)}, "
+            f"а объявлено {declared} — если строка добавлена или снята осознанно, "
+            f"привести надо ОБЪЯВЛЕННОЕ ЧИСЛО и записать летопись; если нет — привести "
+            f"надо таблицу"
+        )
+    return None
+
+
+ARCHIVED_V2_1_REQUIREMENTS_PATH = PLANNING_ROOT / MILESTONES_DIR_NAME / "v2.1-REQUIREMENTS.md"
+
+
+def test_control_a_record_of_an_undeclared_milestone_is_named():
+    """ЗУБЫ КАРТЫ ПО ВЕХЕ: запись вехи, которой в карте нет, краснит с названной вехой.
+
+    Синтетическая запись несёт заголовок той же формы, что у живой, и веху `v9.8`,
+    которой у проекта нет. Без этого контроля карта могла бы молча пропускать
+    незнакомую веху — и смена вехи выключала бы правило, ничего не показав.
+    """
+    text = _synthetic_requirements([("SYN-01", "Phase 91", "Pending")], milestone="v9.8")
+    assert _record_milestone(text) == "v9.8"
+
+    offence = requirement_rows_offence(text)
+
+    assert offence is not None, "незнакомая веха прошла правило счёта строк молча"
+    assert "v9.8" in offence and "не объявлена" in offence, offence
+
+
+def test_control_the_archived_v2_1_record_still_meets_its_number():
+    """Позитивная пара: архивная запись v2.1 по-прежнему сходится со своим числом 44.
+
+    Именно её `_requirements_record_path` читает между вехами; число 44 не стёрто, а
+    отнесено к ней, и этот контроль это показывает прогоном.
+    """
+    text = ARCHIVED_V2_1_REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    assert _record_milestone(text) == "v2.1"
+    assert requirement_rows_offence(text) is None, requirement_rows_offence(text)
+    one_row_short = _without_row(text, _requirement_rows(text)[0].name)
+    assert requirement_rows_offence(one_row_short) is not None, (
+        "запись v2.1 без одной строки прошла правило — число не сторожится"
     )
 
 
@@ -783,21 +847,90 @@ def test_the_milestone_of_the_record_is_derived_and_non_empty():
     ВАКУУМОМ: разобранная, но ни с чем не совпавшая метка даёт индексу ноль
     попаданий, несущее правило не находит НИ ОДНОГО нарушения — и не находит его
     потому, что не сверяет НИЧЕГО.
+
+    ЛЕТОПИСЬ (план 16-01, 2026-10-08): до плана 16-01 третье утверждение было
+    безусловным; старт вехи v2.2 (запись `v2.2`, метка `«действующая веха»`, отчётов
+    `*-VERIFICATION.md` в `.planning/phases/` ещё нет) краснил его на законной пустоте.
+    Различитель — строка `Complete`: отчётов нет И ни одна строка не завершена —
+    несущему правилу нечего сверять по построению, пропуск с причиной; отчётов нет, а
+    завершённая строка есть — это и есть вакуум, красное прежним текстом. Ветвление
+    идёт на пропуск, а не утверждением об отсутствии отчёта (мета-гейт, признак B).
     """
     text = REQUIREMENTS_PATH.read_text(encoding="utf-8")
 
     milestone = _record_milestone(text)
     assert milestone, "веха записи разобралась в ПУСТУЮ метку"
 
-    index = _verification_status_by_milestone_and_phase(PLANNING_ROOT)
-    label = _lookup_milestone_label(milestone, index)
-    found = [key for key in index if key[0] == label]
-    assert found, (
-        f"веха записи `{milestone}` привела к метке расположения `{label}`, а "
-        f"отчётов с этой меткой в индексе живого дерева НЕТ НИ ОДНОГО — несущее "
-        f"правило зеленело бы ВАКУУМОМ: завершённые строки сверялись бы не с чем. "
-        f"Ключи индекса: {sorted(index)}"
+    state = milestone_reports_state(text, PLANNING_ROOT)
+    if state == NOTHING_COMPLETED_YET:
+        pytest.skip(
+            f"у вехи записи `{milestone}` нет ни одного отчёта верификации и ни одной "
+            f"строки `{COMPLETED_STATUS}` — несущему правилу нечего сверять по "
+            f"построению (старт вехи); правило вернётся с первым отчётом фазы этой вехи"
+        )
+    if state == REPORTS_VACUUM:
+        index = _verification_status_by_milestone_and_phase(PLANNING_ROOT)
+        label = _lookup_milestone_label(milestone, index)
+        pytest.fail(
+            f"веха записи `{milestone}` привела к метке расположения `{label}`, а "
+            f"отчётов с этой меткой в индексе живого дерева НЕТ НИ ОДНОГО — несущее "
+            f"правило зеленело бы ВАКУУМОМ: завершённые строки сверялись бы не с чем. "
+            f"Ключи индекса: {sorted(index)}"
+        )
+    assert state == REPORTS_FOUND, state
+
+
+# Три состояния вывода вехи (план 16-01). ⚠️ Значения — русские слова, НЕ совпадающие
+# ни с одним вердиктом отчёта: мета-гейт ловит вердиктные литералы (признак A).
+REPORTS_FOUND = "отчёты вехи найдены"
+NOTHING_COMPLETED_YET = "вехе нечего предъявить"
+REPORTS_VACUUM = "завершено без отчётов"
+
+
+def milestone_reports_state(text: str, root: Path) -> str:
+    """Состояние вывода вехи для ПОДАННОЙ записи и ПОДАННОГО корня — чистая функция.
+
+    Отчёты с меткой вехи записи в индексе корня есть — `REPORTS_FOUND`. Отчётов нет и
+    ни одна строка `_requirement_rows(text)` не `is_completed` — `NOTHING_COMPLETED_YET`
+    (законная пустота старта вехи). Отчётов нет, а строка `Complete` есть —
+    `REPORTS_VACUUM`: завершённые строки сверялись бы не с чем.
+    """
+    index = _verification_status_by_milestone_and_phase(root)
+    label = _lookup_milestone_label(_record_milestone(text), index)
+    if any(key[0] == label for key in index):
+        return REPORTS_FOUND
+    if not any(row.is_completed for row in _requirement_rows(text)):
+        return NOTHING_COMPLETED_YET
+    return REPORTS_VACUUM
+
+
+def test_control_a_completed_row_without_reports_is_the_vacuum(tmp_path):
+    """ЗУБЫ РАЗВИЛКИ: строка `Complete` при пустом корне — `REPORTS_VACUUM`, а не пропуск."""
+    text = _synthetic_requirements(
+        [("SYN-01", "Phase 91", COMPLETED_STATUS), ("SYN-02", "Phase 92", "Pending")]
     )
+    assert len(_requirement_rows(text)) == 2
+    root = tmp_path / "pusto"
+    root.mkdir()
+
+    assert milestone_reports_state(text, root) == REPORTS_VACUUM
+
+
+def test_control_a_record_without_completions_or_reports_is_milestone_start(tmp_path):
+    """Законная пустота: ни строки `Complete`, ни отчётов — `NOTHING_COMPLETED_YET`.
+
+    Вторая половина — тот же вход с отчётом действующей вехи в корне даёт
+    `REPORTS_FOUND`: состояние рождено корнем, а не формой записи.
+    """
+    text = _synthetic_requirements([("SYN-01", "Phase 91", "Pending")])
+    assert len(_requirement_rows(text)) == 1
+    empty_root = tmp_path / "pusto"
+    empty_root.mkdir()
+
+    assert milestone_reports_state(text, empty_root) == NOTHING_COMPLETED_YET
+
+    with_report = _fake_planning_root(tmp_path / "s-otchyotom", {"91": PASSED_VERDICT})
+    assert milestone_reports_state(text, with_report) == REPORTS_FOUND
 
 
 def test_control_a_record_of_another_milestone_looks_up_another_report(tmp_path):
@@ -973,6 +1106,32 @@ def _without_row(text: str, requirement: str) -> str:
     return doctored
 
 
+def _control_subjects(text: str) -> tuple[str, str]:
+    """Два субъекта контролей-отрицаний, ВЫВЕДЕННЫЕ из поданной записи.
+
+    Первые два требования таблицы (в её порядке), у которых клетка несёт фазу и есть
+    флажок в теле записи. Антивакуум: таких меньше двух — громкий отказ с найденным
+    числом, а не контроль, молча потерявший предмет.
+
+    ЛЕТОПИСЬ (план 16-01, 2026-10-08): до плана 16-01 субъекты были литералами
+    `FORM-01` и `QUAL-04`, требованиями вехи v2.1; старт вехи v2.2 снял их из живой
+    записи (найдено 0), и контроли покраснели, хотя правило не сломалось, — тот же
+    класс, что поправка `_flipped_flag` 2026-10-06; субъект теперь выводится из
+    поданной записи.
+    """
+    flags = _requirement_flags(text)
+    subjects = [
+        row.name
+        for row in _requirement_rows(text)
+        if row.phase is not None and row.name in flags
+    ]
+    assert len(subjects) >= 2, (
+        f"в записи требований с клеткой фазы и флажком найдено {len(subjects)}, "
+        f"а контролям-отрицаниям нужно не меньше двух — контроль остался бы без предмета"
+    )
+    return subjects[0], subjects[1]
+
+
 
 def test_the_flag_and_the_status_cell_of_every_requirement_agree():
     """ДВА МЕСТА ОДНОГО ФАКТА ГОВОРЯТ ОДНО.
@@ -999,25 +1158,31 @@ def test_the_flag_and_the_status_cell_of_every_requirement_agree():
 def test_control_negative_a_disagreeing_flag_reddens_the_agreement_rule():
     """ОТРИЦАТЕЛЬНЫЙ КОНТРОЛЬ: флажок заполнен, клетка — нет.
 
-    `FORM-01` на дереве читается согласно ОБОИМИ местами. Копия, в которой
-    перевёрнут только флажок, обязана покраснеть с названным требованием.
-    (До 2026-10-06 контроль ставил флажок в `[x]` и опирался на незавершённость
-    требования — основание переворота у `_flipped_flag`.)
+    Первый выведенный субъект (`_control_subjects`) на дереве читается согласно
+    ОБОИМИ местами. Копия, в которой перевёрнут только флажок, обязана покраснеть с
+    названным требованием. (До 2026-10-06 контроль ставил флажок в `[x]` и опирался
+    на незавершённость требования — основание переворота у `_flipped_flag`.)
+
+    ЛЕТОПИСЬ (план 16-01, 2026-10-08): до плана 16-01 субъектом был литерал `FORM-01`,
+    требование вехи v2.1; старт вехи v2.2 снял его из живой записи (найдено 0), и
+    контроль покраснел, хотя правило не сломалось, — тот же класс, что поправка
+    `_flipped_flag` 2026-10-06; субъект теперь выводится из поданной записи.
     """
     original = REQUIREMENTS_PATH.read_text(encoding="utf-8")
     assert not any(flag_cell_disagreements(original).values()), (
         "положительный контроль: на непрáвленой записи правило обязано быть зелено"
     )
 
-    doctored = _flipped_flag(original, "FORM-01")
+    subject, _ = _control_subjects(original)
+    doctored = _flipped_flag(original, subject)
     disagreements = flag_cell_disagreements(doctored)
 
     assert {item.requirement for item in disagreements[VALUES_DIVERGE]} == {
-        "FORM-01"
+        subject
     }, _disagreement_report(disagreements)
     assert not disagreements[NO_CELL] and not disagreements[NO_FLAG]
     message = _disagreement_report(disagreements)
-    assert "FORM-01" in message, message
+    assert subject in message, message
 
 
 def test_control_negative_the_three_kinds_of_disagreement_are_named_apart():
@@ -1025,16 +1190,21 @@ def test_control_negative_the_three_kinds_of_disagreement_are_named_apart():
 
     «нет клетки», «нет флажка» и «значения разошлись» — РАЗНЫЕ события, и слитый
     отказ заставил бы следующего читателя разбирать, какое из трёх случилось.
+
+    ЛЕТОПИСЬ (план 16-01, 2026-10-08): до плана 16-01 субъекты были литералами
+    `FORM-01` (переворот) и `QUAL-04` (снятие строки), требованиями вехи v2.1; старт
+    вехи v2.2 снял их из живой записи (найдено 0), и контроль покраснел, хотя правило
+    не сломалось, — тот же класс, что поправка `_flipped_flag` 2026-10-06; субъекты
+    теперь выводятся из поданной записи: первый — для переворота, второй — для снятия.
     """
-    doctored = _without_row(
-        _flipped_flag(REQUIREMENTS_PATH.read_text(encoding="utf-8"), "FORM-01"),
-        "QUAL-04",
-    )
+    original = REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    flipped, removed = _control_subjects(original)
+    doctored = _without_row(_flipped_flag(original, flipped), removed)
     disagreements = flag_cell_disagreements(doctored)
 
-    assert {item.requirement for item in disagreements[NO_CELL]} == {"QUAL-04"}
+    assert {item.requirement for item in disagreements[NO_CELL]} == {removed}
     assert {item.requirement for item in disagreements[VALUES_DIVERGE]} == {
-        "FORM-01"
+        flipped
     }
     assert not disagreements[NO_FLAG]
 
@@ -1044,3 +1214,31 @@ def test_control_negative_the_three_kinds_of_disagreement_are_named_apart():
         "пустое множество в отказ не печатается — иначе читатель ищет событие, "
         f"которого не было: {message}"
     )
+
+
+def test_control_the_subjects_refuse_a_record_with_fewer_than_two():
+    """ЗУБЫ АНТИВАКУУМА СУБЪЕКТОВ (план 16-01): одна годная строка — отказ с числом, а не субъект.
+
+    Запись выписана литералом: одна строка с клеткой фазы и флажком, одна — с флажком,
+    но без клетки фазы (отложенная). Годных субъектов один, контролям нужно два.
+    """
+    text = "\n".join(
+        [
+            "# Синтетическая запись требований — milestone v9.8",
+            "",
+            "- [ ] **SYN-01**: первое синтетическое требование",
+            "- [ ] **SYN-02**: второе, отложенное",
+            "",
+            "| Требование | Фаза | Состояние |",
+            "|---|---|---|",
+            "| SYN-01 | Phase 91 | Pending |",
+            "| SYN-02 | — (v9.9) | Deferred |",
+            "",
+        ]
+    )
+    assert len(_requirement_rows(text)) == 2 and len(_requirement_flags(text)) == 2
+
+    with pytest.raises(AssertionError) as raised:
+        _control_subjects(text)
+
+    assert "найдено 1" in str(raised.value), str(raised.value)
