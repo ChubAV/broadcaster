@@ -27,6 +27,7 @@ from sqlalchemy.sql.dml import Update
 from sqlalchemy.sql.selectable import Select
 
 from app.application.accounts.phone import (
+    ACCOUNT_NOT_IN_SESSION,
     PhoneWrite,
     fill_reported_phone,
     record_reported_phone,
@@ -331,6 +332,29 @@ async def test_the_existence_probe_runs_only_after_an_update_that_touched_no_row
     assert paths["written"] == (PhoneWrite.WRITTEN, [Update]), paths
     assert paths["kept"] == (PhoneWrite.KEPT, [Update, Select]), paths
     assert paths["missing"] == (PhoneWrite.MISSING, [Update, Select]), paths
+
+
+@pytest.mark.asyncio
+async def test_recording_an_account_never_added_to_the_session_raises(
+    db_session: AsyncSession, monkeypatch
+):
+    """Мастер забыл `session.add`: громкий `ValueError`, ни одного оператора (WR-05).
+
+    `flush` такой объект не вставляет, и `id` остаётся `None`. Прежде писатель
+    исполнял UPDATE `WHERE id IS NULL` и молча возвращал `KEPT`.
+    """
+    seeded = await _seed_account(db_session)
+    account = MessengerAccount(
+        user_id=seeded.user_id, type="wa", credentials="creds", status="active"
+    )
+    calls = _count_executes(db_session, monkeypatch)
+
+    with pytest.raises(ValueError) as raised:
+        await record_reported_phone(db_session, account, "79991234567")
+
+    assert str(raised.value) == ACCOUNT_NOT_IN_SESSION
+    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов без id"
+    assert account.id is None
 
 
 @pytest.mark.asyncio

@@ -67,6 +67,8 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.models.messenger_account import MessengerAccount
 from app.services.phone import normalize_manual, normalize_reported
 
+ACCOUNT_NOT_IN_SESSION = "аккаунт не добавлен в сессию: после flush у него нет id"
+
 
 class PhoneWrite(enum.Enum):
     """Исход записи автоисточника.
