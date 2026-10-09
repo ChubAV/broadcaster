@@ -21,6 +21,13 @@
 - решение владельца О-1 закреплено строками явно: ручной `+888 0123 4567`
   отвергается, ручной `88801234567` без `+` становится российским
   `+78801234567`; Fragment попадает в базу только автопутём;
+- строки `cr01_*` (план 16-07, ревью CR-01; решение владельца О-3 (а),
+  2026-10-09, прогон `/gsd-plan-phase 16 --gaps`): ввод с префиксом `00` и
+  местный номер чужой страны с ведущим нулём разбираются под `RU` в код 7 с
+  национальной частью на 0 и ОТВЕРГАЮТСЯ, а не сохраняются несуществующим
+  `+7 0…`; вариант «понимать `00` как `+`» владелец отверг. Строка
+  `italian_leading_zero_is_not_plus_seven` — положительный контроль области
+  отказа: у Италии `+39 06 …` ведущий ноль законен;
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
 - разбор `ast` модуля — модуль чист (D-12) и не спрашивает «действительность»
   номера (D-05).
@@ -188,6 +195,7 @@ MANUAL_ACCEPTED = [
     pytest.param("8-800-555-35-35", "+78005553535", id="toll_free_800"),
     pytest.param("88801234567", "+78801234567", id="o1_fragment_without_plus_becomes_russian"),
     pytest.param(AT_INPUT_LIMIT, "+79991234567", id="exactly_32_chars"),
+    pytest.param("+39 06 1234 5678", "+390612345678", id="italian_leading_zero_is_not_plus_seven"),
 ]
 
 
@@ -199,8 +207,29 @@ def test_a_number_typed_by_hand_is_normalized_to_e164(text, expected):
     решение владельца О-1 (2026-10-08): буква D-05 разбирает ручной ввод с
     регионом `RU`, и `888…` без `+` читается как российский номер с ведущей `8`.
     Строка закрепляет это поведение, чтобы оно было решением, а не случайностью.
+
+    Строка `italian_leading_zero_is_not_plus_seven` держит область отказа CR-01
+    (план 16-07): признак разбора «ведущий ноль» законен у Италии, поэтому отказ
+    ограничен кодом страны 7, и итальянский номер обязан пройти.
     """
     assert normalize_manual(text) == expected, f"ручной ввод {text!r}"
+
+
+def test_a_number_typed_with_the_00_prefix_is_refused_not_saved_as_plus_seven_zero():
+    """⚠️ ТРАСЕР ПЛАНА 16-07: `00 44 7911 123456` — отказ, а не `+700447911123456`.
+
+    Под регионом `RU` международный префикс — `810`, а не `00`, и разбор читает
+    ведущие `00` как начало российской национальной части. RU-метаданные
+    допускают 14 цифр, поэтому строгая «возможность» такой ввод пропускала, и
+    сохранялся несуществующий `+7 0…` под признаком «ручной», закрытый для
+    автоисправления (D-07). Решение владельца О-3 (а), 2026-10-09: отказ текстом
+    `PHONE_ERROR_NOT_A_NUMBER`; вариант «понимать `00` как `+`» отвергнут.
+    """
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual("00 44 7911 123456")
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        "ввод с префиксом 00 обязан получить отказ «Не похоже на номер телефона»"
+    )
 
 
 MANUAL_REJECTED = [
@@ -213,6 +242,15 @@ MANUAL_REJECTED = [
     pytest.param("1234567890123456", PHONE_ERROR_NOT_A_NUMBER, id="sixteen_digits_no_plus"),
     pytest.param("12", PHONE_ERROR_NOT_A_NUMBER, id="two_digits"),
     pytest.param("+888 0123 4567", PHONE_ERROR_NOT_A_NUMBER, id="o1_fragment_by_hand_refused"),
+    pytest.param("00 44 7911 123456", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_uk"),
+    pytest.param("00 380 50 123 4567", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_ukraine"),
+    pytest.param("00 90 532 123 4567", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_turkey"),
+    pytest.param("00 1 202 555 01234", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_usa"),
+    pytest.param("050 123 4567", PHONE_ERROR_NOT_A_NUMBER, id="cr01_ukrainian_local_leading_zero"),
+    pytest.param(
+        "8 029 123 45 67", PHONE_ERROR_NOT_A_NUMBER, id="cr01_belarus_long_distance_eight_zero"
+    ),
+    pytest.param("+7 012 345 67 89", PHONE_ERROR_NOT_A_NUMBER, id="cr01_plus_seven_then_zero"),
     pytest.param("+7 999 123 45 67 доб 5", PHONE_ERROR_EXTENSION, id="extension_russian"),
     pytest.param("+7 999 123 45 67 ext 12", PHONE_ERROR_EXTENSION, id="extension_ext"),
     pytest.param("abc", PHONE_ERROR_NOT_A_NUMBER, id="latin_letters"),
@@ -240,6 +278,13 @@ def test_a_number_typed_by_hand_is_refused_with_an_explanation(text, message):
       отвергается, Fragment попадает в базу только автопутём.
     - `valid_number_padded_to_33_chars`: тот же верный номер, но на символ
       длиннее предела D-14 — отказ до разбора.
+
+    Строки `cr01_*` (план 16-07, ревью CR-01, решение владельца О-3 (а),
+    2026-10-09): префикс `00` и местный номер чужой страны с ведущим нулём
+    (`050 …`, `8 029 …`) разбираются под `RU` в код 7 с национальной частью на
+    0. Такого номера не бывает, а строгая «возможность» его пропускала, потому
+    что RU-метаданные допускают 10 и 14 цифр. До плана 16-07 эти вводы
+    сохранялись как `+700…` / `+70…`; теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
     """
     with pytest.raises(PhoneError) as excinfo:
         normalize_manual(text)
