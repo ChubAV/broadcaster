@@ -101,6 +101,7 @@ KIND_KEYWORD = "именованный аргумент"
 KIND_DICT_KEY = "ключ словаря values"
 KIND_SETATTR = "запись атрибута по имени"
 KIND_RAW_SQL = "сырой SQL"
+KIND_ROW_MAPPING = "ключ словаря строк"
 
 # Реестр исключений: путь → причина. РОВНО ОДНА ЗАПИСЬ; см. шапку модуля.
 PHONE_WRITER_EXCEPTIONS: dict[str, str] = {
@@ -302,6 +303,40 @@ def test_a_planted_phone_write_outside_the_writer_reddens_the_gate(tmp_path):
         offence.startswith(f"app/pages/planted.py:2 — {KIND_ASSIGNMENT}")
         for offence in offences
     ), f"находка не называет файл, строку и вид: {offences}"
+
+
+def test_a_planted_bulk_update_by_primary_key_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-01: executemany по первичному ключу в синтетическом `scripts/`.
+
+    ORM bulk UPDATE списком словарей — естественная форма скрипта дозаполнения
+    Фазы 20, то есть ровно тот второй писатель, ради которого гейт существует (D-13).
+    Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_planted.py",
+        "async def backfill(session, p):\n"
+        '    await session.execute(update(MessengerAccount), [{"id": 1, "phone": p}])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_planted.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_planted.py:2 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "executemany по первичному ключу не найден: "
+        "`session.execute(update(MessengerAccount), [{'phone': p}])` в "
+        f"scripts/backfill_planted.py гейт пропустил: {offences}"
+    )
+    assert all("execute" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет вызов `execute` и колонку `phone`: {found}"
+    )
 
 
 ASSIGNMENT_CASES = [
