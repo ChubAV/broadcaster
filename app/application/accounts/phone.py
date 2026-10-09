@@ -140,12 +140,20 @@ async def record_reported_phone(
     Строка без `id` сначала сбрасывается в базу, затем пишется тем же условным
     оператором. При `WRITTEN` значение кладётся на объект как уже сохранённое:
     вызывающий видит номер без `refresh`, а объект не становится грязным.
+
+    Объект, не добавленный в сессию, `flush` не вставляет, и `id` у него
+    остаётся `None`. Прежде писатель исполнял UPDATE по `id IS NULL` и молча
+    возвращал `KEPT` (ревью WR-05); теперь это громкий `ValueError` с текстом
+    `ACCOUNT_NOT_IN_SESSION` до любого оператора — мастер Фазы 19 с забытым
+    `session.add` узнаёт об ошибке сразу. Это ошибка вызывающего, а не исход.
     """
     e164 = normalize_reported(raw)
     if e164 is None:
         return PhoneWrite.UNPARSEABLE
     if account.id is None:
         await session.flush()
+    if account.id is None:
+        raise ValueError(ACCOUNT_NOT_IN_SESSION)
     outcome = await _fill_if_unknown(session, account.id, e164)
     if outcome is PhoneWrite.WRITTEN:
         set_committed_value(account, "phone", e164)
