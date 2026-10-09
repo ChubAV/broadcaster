@@ -29,10 +29,11 @@ UPDATE «записать, если номера нет и он не ручно�
 ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ:
 1. присваивание атрибуту `phone` / `phone_is_manual` (`=`, `+=`, аннотированное);
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
-   `update(...)`, `insert(...)` или `MessengerAccount(...)`;
+   `update(...)`, `insert(...)` или `MessengerAccount(...)` — в том числе
+   распаковкой литерала: `values(**{"phone": x})`, `MessengerAccount(**{…})`;
 3. ключ словаря-аргумента `values(...)` — строка `"phone"` / `"phone_is_manual"`
    или атрибут `MessengerAccount.phone` (и словари внутри списка — многострочная
-   вставка);
+   вставка); отображение — `{…}` или вызов `dict(phone=…)`;
 4. `setattr(obj, "phone", …)` / `set_committed_value(obj, "phone_is_manual", …)` —
    запись атрибута по имени в обход присваивания;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом: `UPDATE … SET …
@@ -40,9 +41,12 @@ UPDATE «записать, если номера нет и он не ручно�
    Голое слово `phone_is_manual` в строке не судится — на нём покраснела бы
    константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
 6. ключ номера в строках `execute` / `bulk_update_mappings` /
-   `bulk_insert_mappings` — словарь или `dict(...)`, поданный позиционно, прямо
-   или внутри списка/кортежа: executemany по первичному ключу, естественная форма
-   скрипта дозаполнения Фазы 20 (ревью WR-01).
+   `bulk_insert_mappings` — словарь или `dict(...)`, поданный позиционно или
+   аргументом `params=` / `mappings=`, прямо или внутри списка/кортежа:
+   executemany по первичному ключу, естественная форма скрипта дозаполнения
+   Фазы 20 (ревью WR-01);
+7. ключ номера в литеральном отображении `set_` у `on_conflict_do_update` —
+   upsert пишет колонку при конфликте (ревью WR-01).
 
 ЦЕНА СТРОГОСТИ ВТОРОГО ВИДА. Имя `update` берётся по последнему звену вызова,
 поэтому `some_dict.update(phone=x)` тоже покраснеет, хотя в колонку не пишет. Это
@@ -50,10 +54,24 @@ UPDATE «записать, если номера нет и он не ручно�
 нельзя, а ложное срабатывание здесь снимается переименованием ключа, тогда как
 пропущенный второй писатель снимается только потерей ручного номера у пользователя.
 
-ГРАНИЦА ПРЕДИКАТА, названная, чтобы её не приняли за покрытие: значение, собранное
-во время исполнения (`values(**fields)`, `setattr(obj, name, …)` с вычисленным
-именем, SQL из склейки переменных), гейт не видит — по исходнику оно не
-определимо. Такие формы в коде записи номера сами по себе повод для ревью.
+ЦЕНА СТРОГОСТИ ШЕСТОГО ВИДА — та же по природе. `execute` судится по ключам строк,
+а не по первому аргументу: иначе `stmt = update(MessengerAccount);
+session.execute(stmt, rows)` прошёл бы. Поэтому параметр привязки `:phone` в
+словаре у `execute` для ЧТЕНИЯ — `execute(text("… WHERE phone = :phone"),
+{"phone": p})` — тоже краснеет; снимается переименованием параметра (`:number`).
+
+ГРАНИЦА ПРЕДИКАТА, названная, чтобы её не приняли за покрытие: вне охвата только
+значения, собранные во время исполнения, — `values(**fields)` и
+`MessengerAccount(**fields)` с ИМЕНЕМ, `execute(stmt, rows)`, где строки собраны в
+переменную, `setattr(obj, name, …)` с вычисленным именем, SQL из склейки
+переменных. По исходнику они не определимы, и такие формы в коде записи номера
+сами по себе повод для ревью. Всё, что видно литералом в исходнике, ловится.
+
+Летопись границы: до плана 16-09 граница называлась теми же словами —
+«значение, собранное во время исполнения», — но пять литеральных форм
+(executemany по первичному ключу, `dict(...)`, `**{…}`, `set_` при конфликте,
+`bulk_*_mappings`) проходили молча, хотя видны в исходнике; это была слепота
+предиката, а не граница средства (ревью WR-01, 2026-10-08).
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -98,6 +116,13 @@ NAMED_ATTRIBUTE_WRITERS = frozenset({"setattr", "set_committed_value"})
 ROW_MAPPING_CALL_NAMES = frozenset(
     {"execute", "bulk_update_mappings", "bulk_insert_mappings"}
 )
+
+# Именованные аргументы тех же вызовов, несущие строки: `execute(stmt, params=…)`,
+# `bulk_update_mappings(mapper, mappings=…)` — та же литеральная форма, что позиционно.
+ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings"})
+
+# Upsert: именованный аргумент `set_` пишет колонки при конфликте (ревью WR-01).
+UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update"})
 
 # Пишущий SQL: присваивание колонки номера в `SET` (до `WHERE` — фильтр по номеру
 # записью не является) либо любая вставка в таблицу аккаунтов.
@@ -192,17 +217,36 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                 for keyword in node.keywords:
                     if keyword.arg in PHONE_COLUMNS:
                         record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
+                    elif keyword.arg is None:
+                        # `values(**{"phone": x})`, `MessengerAccount(**dict(phone=x))`
+                        for mapping in _literal_mappings(keyword.value):
+                            for key, column in _mapping_phone_keys(mapping):
+                                text = _mapping_key_text(key, column)
+                                record(key, KIND_KEYWORD, f"{name}(**{text})")
             if name == "values":
-                for key in _values_dict_keys(node):
-                    record(key, KIND_DICT_KEY, f"values({{{ast.unparse(key)}: …}})")
+                for key, column in _values_dict_keys(node):
+                    record(key, KIND_DICT_KEY, f"values({_mapping_key_text(key, column)})")
             if name in ROW_MAPPING_CALL_NAMES:
-                for argument in node.args:
+                arguments = list(node.args) + [
+                    keyword.value
+                    for keyword in node.keywords
+                    if keyword.arg in ROW_MAPPING_KEYWORDS
+                ]
+                for argument in arguments:
                     rows = isinstance(argument, (ast.List, ast.Tuple))
                     for mapping in _literal_mappings(argument):
                         for key, column in _mapping_phone_keys(mapping):
                             text = _mapping_key_text(key, column)
                             subject = f"{name}([{text}])" if rows else f"{name}({text})"
                             record(key, KIND_ROW_MAPPING, subject)
+            if name in UPSERT_CALL_NAMES:
+                for keyword in node.keywords:
+                    if keyword.arg != "set_":
+                        continue
+                    for mapping in _literal_mappings(keyword.value):
+                        for key, column in _mapping_phone_keys(mapping):
+                            text = _mapping_key_text(key, column)
+                            record(key, KIND_UPSERT_SET, f"{name}(set_={text})")
             if name in NAMED_ATTRIBUTE_WRITERS and len(node.args) >= 2:
                 attribute = node.args[1]
                 if (
@@ -239,22 +283,17 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return found
 
 
-def _values_dict_keys(call: ast.Call) -> list[ast.expr]:
-    """Ключи номера в словарях-аргументах `values(...)`, в том числе внутри списка."""
-    dicts: list[ast.Dict] = []
-    for argument in call.args:
-        if isinstance(argument, ast.Dict):
-            dicts.append(argument)
-        elif isinstance(argument, (ast.List, ast.Tuple)):
-            dicts.extend(item for item in argument.elts if isinstance(item, ast.Dict))
-    keys: list[ast.expr] = []
-    for mapping in dicts:
-        for key in mapping.keys:
-            if isinstance(key, ast.Constant) and key.value in PHONE_COLUMNS:
-                keys.append(key)
-            elif isinstance(key, ast.Attribute) and key.attr in PHONE_COLUMNS:
-                keys.append(key)
-    return keys
+def _values_dict_keys(call: ast.Call) -> list[tuple[ast.AST, str]]:
+    """Ключи номера в позиционных отображениях `values(...)`, в том числе в списке.
+
+    Отображение — `{...}` или `dict(...)`; список — многострочная вставка.
+    """
+    return [
+        found
+        for argument in call.args
+        for mapping in _literal_mappings(argument)
+        for found in _mapping_phone_keys(mapping)
+    ]
 
 
 def _literal_mappings(node: ast.expr) -> list[ast.expr]:
