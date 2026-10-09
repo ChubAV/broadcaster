@@ -6,7 +6,7 @@
     {
       "number": "16",
       "name": "Хранение номера, нормализация и единый писатель",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "17",
@@ -32,7 +32,7 @@
   "next": {
     "command": "/gsd:progress --next",
     "label": "Advance to the next step",
-    "reason": "Phase 16 of 5 · 0% · executing"
+    "reason": "Phase 16 of 5 · 60% · executing"
   },
-  "updated_at": "2026-10-08T16:09:01.951Z"
+  "updated_at": "2026-10-09T03:57:12.495Z"
 }

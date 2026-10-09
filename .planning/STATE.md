@@ -5,17 +5,17 @@ milestone_name: Номера аккаунтов
 current_phase: 16
 current_phase_name: Хранение номера, нормализация и единый писатель
 status: executing
-stopped_at: Phase 16 planned
-last_updated: "2026-10-08T16:09:01.891Z"
-last_activity: 2026-10-08
-last_activity_desc: Phase 16 execution started
-state_head: decf568e5caa28474bf17775b5bd5447bad3726c
+stopped_at: Phase 16 gap-closure planned (16-07…16-10)
+last_updated: "2026-10-09T03:56:58.425Z"
+last_activity: 2026-10-09
+last_activity_desc: Phase 16 gap-closure plans 16-07…16-10 created
+state_head: 225fd3c75b5733adc236e2cdcf9d24cb7f0755e7
 progress:
   total_phases: 5
   completed_phases: 0
-  total_plans: 6
+  total_plans: 10
   completed_plans: 6
-  percent: 100
+  percent: 60
 ---
 
 # Project State
@@ -39,10 +39,11 @@ See: .planning/PROJECT.md (updated 2026-10-08)
 
 ## Current Position
 
-Phase: 16 (Хранение номера, нормализация и единый писатель) — EXECUTING
-Plan: 6 of 6
-Status: Executing Phase 16
-Last activity: 2026-10-08 — Phase 16 execution started
+Phase: 16 (Хранение номера, нормализация и единый писатель) — READY TO EXECUTE
+Plan: 6 of 10 (исполнены 16-01…16-06; к исполнению — партия закрытия гэпа 16-07…16-10)
+Status: Ready to execute (до 2026-10-09: «Executing Phase 16» — исполнение первой партии)
+Last activity: 2026-10-09 — Закрытие гэпа фазы 16 спланировано: 4 плана (16-07…16-10) в 2 волнах, проверка планов пройдена с первого круга; решения владельца О-3 (префикс 00 — отказ) и О-4 (гэп + WR-01/02/05)
+(устарело, предмет — начало исполнения фазы 16) 2026-10-08 — Phase 16 execution started
 (устарело, предмет — планирование фазы 16) 2026-10-08 — Фаза 16 спланирована: 6 планов в 3 волнах (16-01…16-06), проверка планов пройдена
 (устарело, предмет — создание роадмапа) 2026-10-08 — Роадмап вехи v2.2 создан: 5 фаз (16…20), 21/21 требование отображено
 
