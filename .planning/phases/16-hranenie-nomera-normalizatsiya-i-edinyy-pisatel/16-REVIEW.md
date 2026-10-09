@@ -1,171 +1,204 @@
 ---
 phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel
-reviewed: 2026-10-08T00:00:00Z
+reviewed: 2026-10-09T00:00:00Z
 depth: standard
-files_reviewed: 18
+review_kind: incremental
+diff_base: c3b0b232ce64ff22c5fbfc06f467b6cc522f27e0
+files_reviewed: 6
 files_reviewed_list:
-  - alembic/versions/0023_messenger_account_phone.py
   - app/application/accounts/phone.py
-  - app/models/messenger_account.py
   - app/services/phone.py
-  - pyproject.toml
-  - scripts/prohibitions_census.py
-  - tests/test_application/test_account_phone_race.py
   - tests/test_application/test_account_phone_writer.py
   - tests/test_application/test_phone_single_writer_gate.py
-  - tests/test_migrations/test_0023_messenger_account_phone.py
-  - tests/test_migrations/test_model_matches_head.py
-  - tests/test_models/test_messenger_account_phone_check.py
   - tests/test_phone_privacy_gate.py
-  - tests/test_planning/test_deferred_items_are_idempotent.py
-  - tests/test_planning/test_plan_prohibitions_census.py
-  - tests/test_planning/test_requirement_completion_follows_verification.py
-  - tests/test_planning/test_state_progress_matches_roadmap.py
   - tests/test_services/test_phone.py
 findings:
-  critical: 1
-  warning: 5
-  info: 5
-  total: 11
+  critical: 0
+  warning: 3
+  info: 7
+  total: 10
+carried_forward: 5
+closed_prior: 6
 status: issues_found
 ---
 
-# Phase 16: Code Review Report
+# Phase 16: Code Review Report (incremental re-review after gap batch 16-07…16-09)
 
-**Reviewed:** 2026-10-08
+**Reviewed:** 2026-10-09
 **Depth:** standard
-**Files Reviewed:** 18
+**Files Reviewed:** 6
 **Status:** issues_found
 
 ## Summary
 
-I reviewed the diff from `41e2396f` to HEAD for the 18 listed files. The phase's own tests (246 of them) pass. I also ran probes against the live functions and the two gate predicates. Every finding below was reproduced, not inferred.
+This is an incremental re-review. The diff base is `c3b0b232`, the commit of the prior review. It covers the six files that the gap-closure batch 16-07…16-09 changed. This report replaces the prior 11-finding `16-REVIEW.md`. Every prior finding is accounted for below, either as `closed` with evidence re-derived on the current tree or as `still open`.
 
-Parts that hold up:
-- The schema half (revision 0023, the model CHECK, `copy_from` keeping `ON DELETE`) is sound.
-- The single-statement conditional UPDATE in the writer is correct on PostgreSQL. Under READ COMMITTED, a blocked UPDATE re-checks its WHERE against the committed row version, so a manual write that commits first wins. On asyncpg, `rowcount` for UPDATE is reliable.
+I re-derived each claim against the current tree:
+- The six files plus `test_account_phone_race.py` pass: 274 passed.
+- All eight GREEN commits named in `16-REVIEW-DISPOSITION.md` are ancestors of `HEAD`.
+- I probed the live functions and both gate predicates directly with `uv run python` scripts. Every new finding below was reproduced, not inferred.
 
-Main problems:
-- **The manual normalizer invents Russian numbers.** It turns several common real-world ways of writing a foreign or local number into a made-up `+7 0…` number. Examples: the `00` international prefix, and a Ukrainian or Belarusian local number with a leading 0.
-- **Both cross-cutting gates have blind spots.** Each misses forms that can be seen directly in the source code, and the privacy gate misses one form that this project already uses (`structlog.contextvars.bind_contextvars`).
+What the batch got right:
+- The CR-01 refusal is limited to country code 7, as promised. Italy (`+39 06 1234 5678` → `+390612345678`), UK with a typed trunk zero (`+44 020 7946 0958` → `+442079460958`) and the RU IDD form `8 10 44 7911 123456` → `+447911123456` are unaffected.
+- The WR-05 existence probe can never run before the write, or instead of it. `_fill_if_unknown` always issues the conditional UPDATE first (`app/application/accounts/phone.py:105-114`). The probe is reached only when `rowcount != 1` (`:115-120`), and the order rule pins `[Update]` / `[Update, Select]`.
+- `ACCOUNT_NOT_IN_SESSION` is a closed constant (`:70`) and carries no number.
 
-Pre-existing defects: I found no defect in the touched production files that predates the phase. One pre-existing fragility in `scripts/prohibitions_census.py` was copied into a second place (IN-04).
+New problems:
+- **16-07 closed only half of the CR-01 class.** The RU metadata's 14-digit national length still lets a valid `+7` number with four extra digits be saved as an invented 15-digit "manual" number (WR-06).
+- **The P-1 boundary in the module header understates what the auto path accepts.** It names only a 7-digit `TOO_SHORT` fragment. In fact every `TOO_LONG` and `INVALID_LENGTH` input is accepted, `TOO_SHORT` inputs longer than 7 digits are accepted, and so are `+7 0…` numbers (WR-07).
+- **The single-writer gate's header again claims full literal coverage ("Всё, что видно литералом в исходнике, ловится" — "everything visible as a literal in the source is caught"), and that claim is again false.** Among the forms that still pass are `Connection.execute(..., parameters=[…])` and a list comprehension of literal dicts. Both are natural shapes for the Phase 20 backfill (WR-08).
 
-The new tests pin one questionable behaviour as correct: `five_digits_lower_bound` (`"12345"` → `"+12345"`), see WR-04.
+## Prior findings — disposition
+
+| ID | State | Evidence (current tree) |
+|----|-------|-------------------------|
+| CR-01 | **closed** (fix `97e62918`) | `app/services/phone.py:172-173` refuses `country_code == 7 and italian_leading_zero` with `PHONE_ERROR_NOT_A_NUMBER`. Probed: `00 44 7911 123456`, `0079991234567`, `7 0123456789`, `+70123456789`, `0 999 123 45 67` are all refused. The table rows `cr01_*` are at `tests/test_services/test_phone.py:275-283`, and the positive control `italian_leading_zero_is_not_plus_seven` is at `:228`. The scope is exactly the leading-zero subset. The sibling 14-digit invention is reported separately as new **WR-06**. |
+| WR-01 | **closed** (fixes `a97179ab`, `78495634`) | All five forms named in WR-01 now produce an offence. Executemany by PK: `test_phone_single_writer_gate.py:229-241`, row `orm-bulk-update-by-pk` at `:659-666`. `dict(...)`: `:286-296` + `:316-321`, row `values-dict-call`. Literal `**{…}`: `:220-225`, row `values-double-star-dict`. `set_` of `on_conflict_do_update`: `:242-249`, row `upsert-set-dict`. `bulk_update_mappings`: row `bulk-update-mappings`. Other literal forms still pass; see new **WR-08**. |
+| WR-02 | **closed** (fix `6ed63a95`) | `tests/test_phone_privacy_gate.py:149` `CONTEXT_BINDERS`, `:237-239` `_is_context_binding`, `:253` wired into `python_log_calls`. Probed: `structlog.contextvars.bind_contextvars(phone=…)` and `bind_contextvars(**{'phone': x})` both produce an offence. Remaining name-based gaps are in new **IN-06**. |
+| WR-03 | **closed** (fix `fdb12dd5`) | `app/services/phone.py:266-268`: `tail_digits <= 2` → `head + " ***"`. `mask_phone("+88812") == "+888 ***"`, `mask_phone("+712") == "+7 ***"`. The leak rule (`test_phone.py:395-417`) now derives the national digit count and covers the short rows. |
+| WR-04 | **closed** (fix `ae44c1d0`) | `app/services/phone.py:63` `REPORTED_MIN_DIGITS = 7`. `:213-215` refuses `IS_POSSIBLE_LOCAL_ONLY`. The pinned row moved to `REPORTED_REFUSED` as `five_digits_fragment_was_the_lower_bound` (`test_phone.py:115`). Probed: `12345`, `123456`, `88812`, `4412345`, `71234567` → `None`. The header's statement of what remains accepted is inaccurate; see new **WR-07**. |
+| WR-05 | **closed** (fixes `67a25113`, `bee23ee2`) | `app/application/accounts/phone.py:89` `PhoneWrite.MISSING`. `:115-120`: probe only after a zero-row UPDATE. `:153-156`: `ValueError(ACCOUNT_NOT_IN_SESSION)` after flush. Tests are at `test_account_phone_writer.py:290-357`. The refusal is skipped on the unparseable path; see new **IN-07**. |
+| IN-01 | **still open** (deferred per 16-REVIEW-DISPOSITION.md) | Unchanged: `app/application/accounts/phone.py:172-174` treats `None`/blank as "clear". `PHONE_ERROR_BLANK` is still reachable only through `normalize_manual` directly (`app/services/phone.py:165-166`). Addressee: Phase 18 form. |
+| IN-02 | **still open** (deferred per 16-REVIEW-DISPOSITION.md) | Unchanged: `pyproject.toml:21` `"phonenumberslite==9.0.41"`. The new 16-07 bounds (`REPORTED_MIN_DIGITS` comment, `app/services/phone.py:54-59`) now cite measurements against this exact metadata version, which raises the cost of a silent bump. Addressee: owner / backlog. |
+| IN-03 | **still open** (deferred per 16-REVIEW-DISPOSITION.md) | The predicate `MessengerAccount.phone_is_manual.is_(False)` is now at `app/application/accounts/phone.py:110`. `tests/test_application/test_account_phone_race.py` is byte-identical since `225fd3c7` (per 16-08 SUMMARY; no diff since `c3b0b232`). Dropping the predicate still keeps every test green. |
+| IN-04 | **still open** (deferred per 16-REVIEW-DISPOSITION.md) | Unchanged since `c3b0b232`: `scripts/prohibitions_census.py:398-402` `_phase_number_of` raises `CensusError` for a non-integer phase. It is called at `:418` (`through_fixed_set`) and `:1337` (`reconcile_lines`). Addressee: backlog, census owner. |
+| IN-05 | **still open** (deferred per 16-REVIEW-DISPOSITION.md) | Unchanged since `c3b0b232`: `tests/test_migrations/test_0023_messenger_account_phone.py:377-399` asserts child rows survive. There is no `PRAGMA foreign_keys` in `alembic/env.py` or `alembic/versions/0023_messenger_account_phone.py`. Addressee: backlog. |
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
-
-### CR-01: Manual input with the `00` prefix or a leading-0 local number is saved as a made-up `+7 0…` number
-
-**File:** `app/services/phone.py:130-140`
-**Issue:** `normalize_manual` parses with region `RU`. The RU international dialling prefix is `810`, not `00`. The RU metadata also allows a 14-digit national number (`possible_length == (10, 14)`). So any input whose national significant number begins with `0` and has 10 or 14 digits passes the `IS_POSSIBLE` check and is saved as a Russian number that cannot exist (no Russian number starts with 0). Measured results:
-
-| Typed by the user | Saved |
-|---|---|
-| `00 44 7911 123456` (UK mobile) | `+700447911123456` |
-| `00 380 50 123 4567` (Ukraine) | `+700380501234567` |
-| `00 90 532 123 4567` (Turkey) | `+700905321234567` |
-| `00 1 202 555 01234` | `+700120255501234` |
-| `050 123 4567` (Ukrainian local) | `+70501234567` |
-| `8 029 123 45 67` (Belarus long-distance) | `+70291234567` |
-
-No error is raised. Phase 18's form would show "saved". Because `phone_is_manual=true`, the auto source then **can never correct it** (D-07). This contradicts D-06: "garbage … is rejected, not turned into a 'number'". `MANUAL_ACCEPTED` and `MANUAL_REJECTED` have no rows for `00…` or for a leading-0 national number, so the suite does not see this.
-
-D-05 says only "`parse(text, "RU")` → `is_possible_number` → E.164". The defect follows from applying that wording literally. The fix below does **not** need `is_valid_number`, which D-05 forbids, so it stays inside the owner's decision.
-
-**Fix:**
-```python
-number = _parse_or_none(text, MANUAL_REGION)
-if number is None:
-    raise PhoneError(PHONE_ERROR_NOT_A_NUMBER) from None
-if number.extension:
-    raise PhoneError(PHONE_ERROR_EXTENSION)
-# A +7 national number never starts with 0: a leading zero means "00"/IDD or a
-# foreign local number misread under RU, never a real Russian/Kazakh number.
-if number.country_code == 7 and number.italian_leading_zero:
-    raise PhoneError(PHONE_ERROR_NOT_A_NUMBER)
-```
-Optionally, first rewrite a leading `00` (after stripping) to `+`, so that `00 44 …` is accepted as `+44 …`. Add rows for `00 44 7911 123456`, `050 123 4567` and `8 029 123 45 67` to `MANUAL_REJECTED` (or to `MANUAL_ACCEPTED` if you add the `00`→`+` rewrite).
-
 ## Warnings
 
-### WR-01: The single-writer gate misses five write forms that are visible in the source
+### WR-06: Manual input of a valid `+7` number plus four extra digits is saved as an invented 15-digit "manual" number
 
-**File:** `tests/test_application/test_phone_single_writer_gate.py:86-89, 175-190`
-**Issue:** `phone_write_offences` returns `[]` for each of the following. I fed them to the predicate to confirm:
+**File:** `app/services/phone.py:172-179` (also the docstring at `:137-148`)
+**Issue:** This is the sibling of CR-01 that 16-07 left open.
+
+16-07's own docstring (`:140-141`) names the cause: "RU-метаданные допускают национальную часть из 10 и 14 цифр" ("RU metadata allows a national part of 10 and 14 digits"). But the fix closes only the leading-zero subset. In `phonenumberslite==9.0.41`, the 14-digit RU length exists only for the toll-free pattern `8\d{13}` (`toll_free` `8(?:0[04]|108\d{3})\d{7}`). Every other `+7` national part of 14 digits is a typed number with extra digits.
+
+Measured:
+
+| Typed by the user | Saved (manual, locked by D-07) | Shown by `format_phone` |
+|---|---|---|
+| `+7 999 123-45-67 1234` (extension typed without `доб`/`ext`) | `+799912345671234` | `+7 99912345671234` |
+| `8 999 123 45 67 8901` | `+799912345678901` | `+7 99912345678901` |
+| `89991234567 8901` | `+799912345678901` | — |
+
+Each is saved with `phone_is_manual=true`, so the auto source can never correct it (D-07). This is the same harm CR-01 was raised for. The extension path refuses `+7 999 123 45 67 доб 5` with `PHONE_ERROR_EXTENSION`, but the same input without the marker is saved. The table pins `one_digit_long` (`+7 999 123-45-678`, refused) but has no row at +4 digits, so the suite cannot see this.
+
+**Fix:** The fix uses a parse attribute and does not call validity (D-05), like the CR-01 fix. A `+7` national part of 14 digits is legitimate only in the `8…` toll-free form, which can never be a messenger account. Owner choice:
 ```python
-await session.execute(update(MessengerAccount), [{"id": 1, "phone": p}])   # ORM bulk UPDATE by PK
-stmt = update(MessengerAccount).values(dict(phone=x))                      # dict(...) call
-stmt = update(MessengerAccount).values(**{"phone": x})                     # literal ** dict
-insert(MessengerAccount).values(...).on_conflict_do_update(set_={"phone": x})
-session.bulk_update_mappings(MessengerAccount, [{"id": 1, "phone_is_manual": True}])
+RU_KZ_NATIONAL_DIGITS = 10
+...
+if number.country_code == RU_KZ_COUNTRY_CODE and (
+    number.italian_leading_zero
+    or len(str(number.national_number)) != RU_KZ_NATIONAL_DIGITS
+):
+    raise PhoneError(PHONE_ERROR_NOT_A_NUMBER)
 ```
-The header lists "a value assembled at runtime" as the gate's boundary. These five forms are not runtime values: each is a literal you can read in the source. The first form, an executemany of a list of dicts by primary key, is the natural shape for the Phase 20 backfill script. That script is exactly the "second writer" D-13 exists to catch.
-**Fix:** Do all of the following:
-- In `_values_dict_keys`, also inspect `**`-keywords whose value is an `ast.Dict`, and `dict(...)` calls with `phone*` keywords.
-- Treat `set_` of `on_conflict_do_update` as a write call.
-- For `execute` and `bulk_update_mappings`/`bulk_insert_mappings`, scan list/dict arguments for `phone*` string keys.
-- Add each form as a planted case in the test file.
+Add `MANUAL_REJECTED` rows `+7 999 123-45-67 1234` and `8 999 123 45 67 8901`. Update the docstring item 5 so it no longer reads as if the 14-digit admission were closed.
 
-### WR-02: The privacy gate misses `structlog.contextvars.bind_contextvars(phone=…)`, a pattern the project uses
+### WR-07: The P-1 boundary in the module header understates the auto path; `TOO_LONG`, `INVALID_LENGTH`, longer `TOO_SHORT` and `+7 0…` are all stored
 
-**File:** `tests/test_phone_privacy_gate.py:114-132, 213-215`
-**Issue:** The gate's header gives a reason for including `bind`: "a bound value goes into every following line". `bind_contextvars` binds into the global structlog context in exactly the same way. The project already calls it in `app/middleware.py:19` and `app/worker/tasks.py:260`. Its callee name is not in `LOG_METHODS`, and its receiver `structlog.contextvars` does not match `_LOGGER_NAME`. Confirmed: `structlog.contextvars.bind_contextvars(phone=account.phone)` produces no offence.
-**Fix:** In `_is_log_method_call`/`python_log_calls`, treat any call whose callee name is `bind_contextvars` as a log call, whatever the receiver. Add a planted row to the Python half.
+**File:** `app/services/phone.py:33-37` (P-1 paragraph), `:190-196` (docstring), `:208-216`
+**Issue:** The header names the remaining auto-path boundary as one case: "Семизначный обрывок с вердиктом `TOO_SHORT` (`1234567` → `+1234567`)" ("a 7-digit fragment with verdict `TOO_SHORT`"). The 16-07 SUMMARY repeats this ("a 7-digit `TOO_SHORT` fragment … is still stored").
 
-### WR-03: `mask_phone` shows the whole number when the national part has 2 digits or fewer
+The code refuses only `IS_POSSIBLE_LOCAL_ONLY` (`:213-215`). Every other verdict is stored. Measured with `normalize_reported`:
 
-**File:** `app/services/phone.py:211-223`
-**Issue:** The branch for parseable values masks all but the last two digits of the national part, with no minimum. `normalize_reported("88812")` stores `+88812`, and `mask_phone("+88812")` returns `"+888 12"`: nothing is masked. The branch for unparseable values has a guard (`< 4 digits → "+***"`); the parseable branch does not. The leak check `test_a_mask_shows_only_the_country_code_and_two_last_digits` only uses numbers with 8 or more national digits, so it never reaches this case.
-**Fix:** Apply the same floor in the parseable branch. If `tail_digits <= 2`, return `head + " ***"`, or mask everything except the country code. Add `"+88812"` to `MASKED`.
+| Raw from source | Stored | Verdict |
+|---|---|---|
+| `799912345678` (Russian mobile + 1 digit) | `+799912345678` | `INVALID_LENGTH` |
+| `79991234567890` | `+79991234567890` | `INVALID_LENGTH` |
+| `1234567890123` | `+1234567890123` | `TOO_LONG` |
+| `441234567890123` | `+441234567890123` | `TOO_LONG` |
+| `123456789` (9 digits) | `+123456789` | `TOO_SHORT` |
+| `70123456789` | `+70123456789` | `IS_POSSIBLE` |
 
-### WR-04: The auto-path lower bound of 5 digits saves source junk as a "number"; a test pins this
+Two of these contradict the module itself:
+- The manual table refuses `+799912345678` as `twelve_digits` (`test_phone.py:270`), while the auto path stores the same digits.
+- `RU_KZ_COUNTRY_CODE`'s comment (`:70-73`) says a `+7` national part "НИКОГДА не начинается с нуля" ("never starts with zero"), yet the auto path stores `+70123456789`.
 
-**File:** `app/services/phone.py:44, 165`; `tests/test_services/test_phone.py:81`
-**Issue:** `REPORTED_MIN_DIGITS = 5` was a discretion choice, not a locked decision. With it, `"12345"` → `"+12345"` (a "US" number with a 4-digit national part), `"4412345"` → `"+4412345"`, and `"88812"` → `"+88812"`. D-06 requires that garbage be rejected. Real Telegram, WhatsApp, MAX and Fragment numbers all have at least 7 digits (Fragment `+888` numbers have 11). The new row `five_digits_lower_bound` asserts the junk-acceptance as correct. Raising the bound later will turn that test red and look like a regression.
-**Fix:** Raise `REPORTED_MIN_DIGITS` to 7, or 8. Move `"12345"` to `REPORTED_REFUSED` and keep a 7- or 8-digit row as the boundary.
+The cost argument for P-1 (Fragment) does not cover these. Fragment `+888` has possible length `(11,)` in 9.0.41, so real Fragment numbers with 8–9 national digits give `TOO_SHORT`, not `TOO_LONG` or `INVALID_LENGTH`.
 
-### WR-05: Auto writers return `KEPT` when no row was updated at all
+Stating the boundary honestly is what the owner's O-1 decision relies on. As written, a later fix that refuses `TOO_LONG` would look like a new restriction rather than closing a known gap.
 
-**File:** `app/application/accounts/phone.py:86, 113-115`
-**Issue:**
-- `_fill_if_unknown` maps any `rowcount != 1` to `KEPT`, whose docstring says it means "the row already has a number, or the user was first". Confirmed: `fill_reported_phone(session, 9999, "79991234567")` on a missing account returns `KEPT`.
-- `record_reported_phone` with an account that was never `session.add`-ed: `flush()` does not insert it, `account.id` stays `None`, and the UPDATE runs `WHERE id IS NULL`. Result: `KEPT` with `account.id is None` (confirmed).
+**Fix:** Pick one:
+- (a) Also refuse `TOO_LONG` and `INVALID_LENGTH`, and the code-7 leading zero, on the auto path. None of these is a Fragment shape. Add the measured rows above to `REPORTED_REFUSED`.
+- (b) If the owner keeps them, rewrite the P-1 paragraph to state the real accepted set: "any parseable 7…15-digit value except `IS_POSSIBLE_LOCAL_ONLY`". Add a named table of rows accepted by that boundary, so the boundary is stated rather than presented as coverage.
 
-The Phase 20 backfill would count deleted accounts as "user was first", and a Phase 19 wizard bug that forgets `session.add` would fail silently. This is also inconsistent with `set_manual_phone`, which raises `LookupError` on the same condition.
-**Fix:** In `record_reported_phone`, after the flush, `if account.id is None: raise ValueError("account is not in the session")`. In `_fill_if_unknown`, either add `PhoneWrite.MISSING`, chosen with a `select(exists())` when `rowcount == 0`, or document that `KEPT` includes "row absent" and rename it.
+### WR-08: The single-writer gate's header claims "Всё, что видно литералом в исходнике, ловится" ("everything visible as a literal in the source is caught"), but literal write forms still pass
+
+**File:** `tests/test_application/test_phone_single_writer_gate.py:63-68` (claim), `:122` (`ROW_MAPPING_KEYWORDS`), `:299-313` (`_literal_mappings`), `:129-133` (`RAW_SQL_PHONE_WRITE`), `:108-111`
+**Issue:** I fed each form below to `phone_write_offences`. Each returned `[]`:
+```python
+await conn.execute(update(MessengerAccount), parameters=[{"id": 1, "phone": p}])         # Connection/AsyncConnection kwarg
+await s.execute(update(MessengerAccount), [{"id": a.id, "phone": n} for a, n in rows])    # comprehension of literal dicts
+stmt = insert(MessengerAccount).values([{"user_id": u, "phone": n} for u, n in rows])
+SQL = 'UPDATE messenger_accounts SET "phone" = :p WHERE id = :id'                        # quoted identifier
+SQL = 'INSERT INTO "messenger_accounts" (user_id, phone) VALUES (1, :p)'                  # quoted table
+SQL = "INSERT INTO public.messenger_accounts (user_id, phone) VALUES (1, :p)"            # schema-qualified
+stmt = update(MessengerAccount).ordered_values((MessengerAccount.phone, x))
+object.__setattr__(account, "phone", x)
+```
+- **`parameters=`:** 16-09 added `params=` deliberately (SUMMARY deviation 1) to close a keyword gap. But in SQLAlchemy 2.0.46, `Connection.execute` and `AsyncConnection.execute` name the argument `parameters` (verified by `inspect.signature`). Only `Session.execute` uses `params`.
+- **Comprehensions:** a list comprehension whose element is a dict literal with a `"phone"` key is the natural shape for a Phase 20 backfill. The key is a literal in the source, and the gate can see it directly in the call's argument. It is not "a value assembled at runtime" in the sense the header's boundary uses for a variable.
+- **Raw SQL:** the regex requires `\bphone\b\s*=` and a bare `messenger_accounts`, so quoting the identifier or qualifying the schema defeats it.
+
+This is the WR-01 pattern again: the header names a boundary, and the predicate's real boundary is narrower.
+
+**Fix:**
+- Add `"parameters"` to `ROW_MAPPING_KEYWORDS`.
+- In `_literal_mappings`, also return `node.elt` for `ast.ListComp`/`ast.GeneratorExp`/`ast.SetComp` when the element is a dict literal or a `dict(...)` call.
+- Widen `RAW_SQL_PHONE_WRITE` to allow an optional quote around `phone(_is_manual)?` and an optional `"?\w+"?\.` schema prefix plus optional quotes on `messenger_accounts`.
+- Add `ordered_values` to `WRITE_CALL_NAMES` (judge positional tuples whose first element is a `phone*` key) and `__setattr__` to `NAMED_ATTRIBUTE_WRITERS`.
+- Plant each form as a row in `LITERAL_FORM_CASES`.
+
+Alternatively, narrow the claim at `:68` to the forms actually judged.
 
 ## Info
 
-### IN-01: Blank manual input clears a manual number with no confirmation; `PHONE_ERROR_BLANK` cannot be reached through the writer
+### IN-06: The privacy gate's binder match misses an aliased import and the threadlocal binders
 
-**File:** `app/application/accounts/phone.py:130-132`; `app/services/phone.py:63, 128-129`
-**Issue:** `set_manual_phone("")` clears the number. An accidental empty submit in the Phase 18 form wipes a manual number. The "Введите номер телефона" ("Enter a phone number") text is only reachable if a caller uses `normalize_manual` directly. This is mandated by D-07/PHONE-10. I flag it so that Phase 18 decides between an explicit "clear" action and showing `PHONE_ERROR_BLANK`.
+**File:** `tests/test_phone_privacy_gate.py:19-21, 149, 237-239`
+**Issue:** `_is_context_binding` matches the callee's last name only. The header says the bare name after import is covered. These forms produce no offence:
+- `from structlog.contextvars import bind_contextvars as bind_ctx; bind_ctx(phone=account.phone)`
+- `structlog.threadlocal.bind_threadlocal(phone=account.phone)`
 
-### IN-02: The exact pin `phonenumberslite==9.0.41` freezes the metadata the manual path depends on
+The second is deprecated but still shipped, along with `tmp_bind`. Neither form is in the live tree today.
+**Fix:** Add `bind_threadlocal` and `tmp_bind` to `CONTEXT_BINDERS`. Resolve `ImportFrom` aliases of `structlog.contextvars`/`structlog.threadlocal` names in `python_log_calls`, or name the alias case in "ГРАНИЦА СРЕДСТВА" (the gate's stated boundary).
+
+### IN-07: `record_reported_phone` still answers a forgotten `session.add` silently whenever the source sends no number
+
+**File:** `app/application/accounts/phone.py:144-156`
+**Issue:** The docstring says a Phase 19 wizard that forgot `session.add` "узнаёт об ошибке сразу" ("learns about the error at once"). But `normalize_reported` runs first (`:150-152`) and returns `UNPARSEABLE` before the id check. With an old worker that reports no number (PHONE-15), the commonest auto-source case, the caller error still produces a normal-looking outcome.
+**Fix:** Check membership before normalizing, without issuing a statement: `if sqlalchemy.inspect(account).session is not session.sync_session: raise ValueError(ACCOUNT_NOT_IN_SESSION)`. Alternatively, narrow the docstring to "when the source reports a parseable number".
+
+### IN-01: Blank manual input clears a manual number with no confirmation; `PHONE_ERROR_BLANK` cannot be reached through the writer — still open (deferred per 16-REVIEW-DISPOSITION.md)
+
+**File:** `app/application/accounts/phone.py:172-174`; `app/services/phone.py:88, 165-166`
+**Issue:** `set_manual_phone("")` clears the number, so an accidental empty submit in the Phase 18 form wipes a manual number. "Введите номер телефона" ("Enter a phone number") is reachable only through `normalize_manual` directly. D-07/PHONE-10 mandate this behaviour. Deferred to Phase 18 (owner decision O-4), which chooses between an explicit "clear" action and showing `PHONE_ERROR_BLANK`.
+
+### IN-02: The exact pin `phonenumberslite==9.0.41` freezes the metadata the manual path depends on — still open (deferred per 16-REVIEW-DISPOSITION.md)
 
 **File:** `pyproject.toml:21`
-**Issue:** Every other dependency uses `>=`. The manual path's `IS_POSSIBLE` check and all display formatting come from library metadata. With an exact pin, a newly issued number range or length is refused or misformatted until someone bumps the pin by hand. If the pin is intentional, write down the bump procedure; otherwise use `>=9.0.41,<10`.
+**Issue:** Every other dependency uses `>=`. The `IS_POSSIBLE` check and all display formatting come from library metadata. With an exact pin, newly issued ranges or lengths are refused or misformatted until someone bumps the pin by hand. The new bounds in `app/services/phone.py:54-59` are measured against this exact version. Addressee: owner / backlog (O-4). Either write down the bump procedure, or use `>=9.0.41,<10`.
 
-### IN-03: The race test cannot detect dropping the `phone_is_manual` predicate
+### IN-03: The race test cannot detect dropping the `phone_is_manual` predicate — still open (deferred per 16-REVIEW-DISPOSITION.md)
 
-**File:** `tests/test_application/test_account_phone_race.py:252-264`; `app/application/accounts/phone.py:81`
-**Issue:** The CHECK constraint guarantees that `phone_is_manual` implies `phone IS NOT NULL`, so `WHERE phone IS NULL` alone is enough. The predicate `phone_is_manual IS false` is redundant, and removing it keeps every test green. This is not a bug. Note it so nobody reads that predicate as tested. PostgreSQL's READ COMMITTED re-check is also not tested; that limit is stated honestly in the revision header.
+**File:** `tests/test_application/test_account_phone_race.py:252-264`; `app/application/accounts/phone.py:110`
+**Issue:** The CHECK `ck_messenger_accounts_manual_requires_phone` makes `phone IS NULL` sufficient on its own. `phone_is_manual IS false` is redundant, and removing it keeps every test green. Do not read it as tested. PostgreSQL's READ COMMITTED re-check is also untested; the revision header states that limit.
 
-### IN-04: `reconcile_lines` now crashes on decimal phase directories (copied from Phase 15)
+### IN-04: `reconcile_lines` crashes on decimal phase directories (copied from Phase 15) — still open (deferred per 16-REVIEW-DISPOSITION.md)
 
-**File:** `scripts/prohibitions_census.py:1334-1338`; `tests/test_planning/test_plan_prohibitions_census.py:939-944`
-**Issue:** `_phase_number_of` raises `CensusError` for a directory such as `16.1-…`, which GSD's inserted phases use. The old filter `phase_of(path) != "15"` did not raise. This is pre-existing in `through_fixed_set`, introduced in `49ca9ddf` (15-15, 2026-09-25); the phase copies it into a second function. Parse the major number with `int(phase.split(".")[0])`, or decide explicitly that decimal phases are out of scope.
+**File:** `scripts/prohibitions_census.py:398-402, 1334-1338`
+**Issue:** `_phase_number_of` raises `CensusError` for a directory such as `16.1-…`, which GSD's inserted phases use. The defect predates this phase: it was introduced in `49ca9ddf` (15-15), and this phase copied it into `reconcile_lines`. Addressee: backlog, owner of `scripts/prohibitions_census.py`. Parse the major number with `int(phase.split(".")[0])`, or decide explicitly that decimal phases are out of scope.
 
-### IN-05: The migration test's claim that "children survive the recreate" is only proven with SQLite foreign keys off
+### IN-05: The migration test's claim that "children survive the recreate" is only proven with SQLite foreign keys off — still open (deferred per 16-REVIEW-DISPOSITION.md)
 
 **File:** `tests/test_migrations/test_0023_messenger_account_phone.py:377-399`; `alembic/versions/0023_messenger_account_phone.py:167-172`
-**Issue:** In batch mode, `DROP TABLE messenger_accounts` deletes rows implicitly. With `PRAGMA foreign_keys=ON` it would cascade-delete `groups` and null out `schedules.account_id`. `alembic/env.py` does not turn the pragma on, so the test passes, but the header presents preserved child rows as a property of the revision. Production is PostgreSQL and is not affected. Either name the precondition (FK enforcement off during batch) in the header, or have the revision execute `PRAGMA foreign_keys=OFF` on the SQLite branch.
+**Issue:** In batch mode, `DROP TABLE messenger_accounts` would cascade-delete `groups` and null out `schedules.account_id` under `PRAGMA foreign_keys=ON`. `alembic/env.py` does not enable it, so the test passes. Production PostgreSQL is not affected. Addressee: backlog. Name the precondition in the header, or execute `PRAGMA foreign_keys=OFF` on the SQLite branch.
 
 ---
 
-_Reviewed: 2026-10-08_
+_Reviewed: 2026-10-09_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: standard_
+_Depth: standard (incremental, diff base `c3b0b232`)_
