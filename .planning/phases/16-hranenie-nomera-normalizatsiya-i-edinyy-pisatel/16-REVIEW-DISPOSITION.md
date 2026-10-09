@@ -29,7 +29,7 @@ findings:
     title: "Auto writers return `KEPT` when no row was updated at all"
   - id: IN-01
     severity: info
-    disposition: open
+    disposition: deferred
     title: "Blank manual input clears a manual number with no confirmation; `PHONE_ERROR_BLANK` cannot be reached through the writer"
   - id: IN-02
     severity: info
@@ -47,7 +47,7 @@ findings:
     severity: info
     disposition: open
     title: "The migration test's claim that \"children survive the recreate\" is only proven with SQLite foreign keys off"
-open: 11
+open: 10
 total: 11
 recorded: 2026-10-08T20:49:45.192Z
 ---
@@ -62,7 +62,7 @@ recorded: 2026-10-08T20:49:45.192Z
 | WR-03 | warning | open | - |
 | WR-04 | warning | open | - |
 | WR-05 | warning | open | - |
-| IN-01 | info | open | - |
+| IN-01 | info | deferred | отложено на Фазу 18 (решение владельца О-4, 2026-10-09): её форма выбирает между явным действием «очистить» и показом `PHONE_ERROR_BLANK`; поведение сегодня предписано D-07 / PHONE-10; записано в `.planning/STATE.md` §Deferred Items |
 | IN-02 | info | open | - |
 | IN-03 | info | open | - |
 | IN-04 | info | open | - |
