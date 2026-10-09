@@ -75,16 +75,16 @@ created: "2026-10-08"
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 16-07-01 | 07 | 1 | PHONE-01 | T-16-22 | ручной `00…` и местный номер с ведущим нулём — `PhoneError(PHONE_ERROR_NOT_A_NUMBER)`, а не `+7 0…`; отказ ограничен кодом 7 (`+39 06 …` принят); вариант (б) «`00` как `+`» не реализован (О-3) | tracer (unit, табличный, TDD) | `uv run pytest tests/test_services/test_phone.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-07-02 | 07 | 1 | PHONE-01 | T-16-23 | автопуть: 7…15 цифр и отказ `IS_POSSIBLE_LOCAL_ONLY`; `12345`, `88812`, `4412345` → `None`; Fragment и `+683 1234` приняты; прежняя граница 5 названа летописью | unit (табличный, TDD) | `uv run pytest tests/test_services/test_phone.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-07-03 | 07 | 1 | PHONE-21 | T-16-24 | маска короткой национальной части прячет все её цифры (`+88812` → `+888 ***`); формы D-10 прежние | unit (табличный, TDD) | `uv run pytest tests/test_services/test_phone.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-08-01 | 08 | 1 | PHONE-02 | T-16-25, T-16-26 | отсутствующая строка — `PhoneWrite.MISSING`, а не `KEPT`; проба `select(exists())` только после условного UPDATE с 0 строк (D-07) | tracer (unit, `db_session`, TDD) | `uv run pytest tests/test_application/test_account_phone_writer.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-08-02 | 08 | 1 | PHONE-02 | T-16-25, T-16-26 | объект вне сессии — `ValueError` без операторов; тест гонки не правится, отрицание краснит позицию 2 (D-08) | unit + integration (TDD) | `uv run pytest tests/test_application/test_account_phone_writer.py tests/test_application/test_account_phone_race.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-09-01 | 09 | 1 | PHONE-02 | T-16-27 | ORM bulk UPDATE по первичному ключу в синтетическом `scripts/` краснит гейт писателя; живое дерево — ноль (D-13) | tracer (gate, AST, TDD) | `uv run pytest tests/test_application/test_phone_single_writer_gate.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-09-02 | 09 | 1 | PHONE-02 | T-16-27, T-16-29 | `dict(...)`, `**{…}`, `set_` при конфликте, `bulk_*_mappings` краснят; законные словари с ключом `phone` — нет; реестр — ровно модуль-писатель | gate (AST, TDD) | `uv run pytest tests/test_application/test_phone_single_writer_gate.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-09-03 | 09 | 1 | PHONE-21 | T-16-28, T-16-29 | `bind_contextvars` / `bound_contextvars` с номером краснят при любом получателе; живые привязки без номера — нет; реестр пуст, потолок 0 (D-17) | gate (AST, TDD) | `uv run pytest tests/test_phone_privacy_gate.py -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-10-01 | 10 | 2 | диспозиция-ревью-16 (О-4) | T-16-30 | IN-01 — `deferred` с адресатом Фаза 18 в диспозиции и строкой STATE.md §Deferred Items | tracer (records) | `uv run pytest tests/test_planning -q -p no:randomly` | ✅ | ⬜ pending |
-| 16-10-02 | 10 | 2 | диспозиция-ревью-16 (О-4) | T-16-30, T-16-31 | 11/11 находок с диспозицией; `fixed` только с существующим коммитом; реестр пересеян, `--check` с кодом 0 | records | `uv run python scripts/prohibitions_census.py --check` и `uv run pytest tests/test_planning -q -p no:randomly` | ✅ | ⬜ pending |
+| 16-07-01 | 07 | 1 | PHONE-01 | T-16-22 | ручной `00…` и местный номер с ведущим нулём — `PhoneError(PHONE_ERROR_NOT_A_NUMBER)`, а не `+7 0…`; отказ ограничен кодом 7 (`+39 06 …` принят); вариант (б) «`00` как `+`» не реализован (О-3) | tracer (unit, табличный, TDD) | `uv run pytest tests/test_services/test_phone.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-07-02 | 07 | 1 | PHONE-01 | T-16-23 | автопуть: 7…15 цифр и отказ `IS_POSSIBLE_LOCAL_ONLY`; `12345`, `88812`, `4412345` → `None`; Fragment и `+683 1234` приняты; прежняя граница 5 названа летописью | unit (табличный, TDD) | `uv run pytest tests/test_services/test_phone.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-07-03 | 07 | 1 | PHONE-21 | T-16-24 | маска короткой национальной части прячет все её цифры (`+88812` → `+888 ***`); формы D-10 прежние | unit (табличный, TDD) | `uv run pytest tests/test_services/test_phone.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-08-01 | 08 | 1 | PHONE-02 | T-16-25, T-16-26 | отсутствующая строка — `PhoneWrite.MISSING`, а не `KEPT`; проба `select(exists())` только после условного UPDATE с 0 строк (D-07) | tracer (unit, `db_session`, TDD) | `uv run pytest tests/test_application/test_account_phone_writer.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-08-02 | 08 | 1 | PHONE-02 | T-16-25, T-16-26 | объект вне сессии — `ValueError` без операторов; тест гонки не правится, отрицание краснит позицию 2 (D-08) | unit + integration (TDD) | `uv run pytest tests/test_application/test_account_phone_writer.py tests/test_application/test_account_phone_race.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-09-01 | 09 | 1 | PHONE-02 | T-16-27 | ORM bulk UPDATE по первичному ключу в синтетическом `scripts/` краснит гейт писателя; живое дерево — ноль (D-13) | tracer (gate, AST, TDD) | `uv run pytest tests/test_application/test_phone_single_writer_gate.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-09-02 | 09 | 1 | PHONE-02 | T-16-27, T-16-29 | `dict(...)`, `**{…}`, `set_` при конфликте, `bulk_*_mappings` краснят; законные словари с ключом `phone` — нет; реестр — ровно модуль-писатель | gate (AST, TDD) | `uv run pytest tests/test_application/test_phone_single_writer_gate.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-09-03 | 09 | 1 | PHONE-21 | T-16-28, T-16-29 | `bind_contextvars` / `bound_contextvars` с номером краснят при любом получателе; живые привязки без номера — нет; реестр пуст, потолок 0 (D-17) | gate (AST, TDD) | `uv run pytest tests/test_phone_privacy_gate.py -q -p no:randomly` | ✅ | ✅ green |
+| 16-10-01 | 10 | 2 | диспозиция-ревью-16 (О-4) | T-16-30 | IN-01 — `deferred` с адресатом Фаза 18 в диспозиции и строкой STATE.md §Deferred Items | tracer (records) | `uv run pytest tests/test_planning -q -p no:randomly` | ✅ | ✅ green |
+| 16-10-02 | 10 | 2 | диспозиция-ревью-16 (О-4) | T-16-30, T-16-31 | 11/11 находок с диспозицией; `fixed` только с существующим коммитом; реестр пересеян, `--check` с кодом 0 | records | `uv run python scripts/prohibitions_census.py --check` и `uv run pytest tests/test_planning -q -p no:randomly` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -144,7 +144,7 @@ created: "2026-10-08"
 
 **Approval:** validated 2026-10-08 (`/gsd-validate-phase 16` из `/gsd-execute-phase 16`): все 14 строк карты зелёные на дереве `85d65afd` — команды карты `582 passed, 3 skipped`, `prohibitions_census.py --check` rc 0, полная суита `4349 passed, 3 skipped, 0 failed`. Пробелов 0; ручными остаются две строки таблицы Manual-Only.
 
-**Партия закрытия гэпа 16-07…16-10: pending** (строки добавлены планированием 2026-10-09, прогон
+**Партия закрытия гэпа 16-07…16-10: validated 2026-10-09** (`/gsd-validate-phase 16` из `/gsd-execute-phase 16 --gaps-only`): все 10 строк партии зелёные на дереве `b72c32cd` — `test_phone.py` 133 passed; `test_account_phone_writer.py` 17 passed, с тестом гонки 21 passed; `test_phone_single_writer_gate.py` 48 passed; `test_phone_privacy_gate.py` 72 passed; `tests/test_planning` 218 passed, 2 skipped; `prohibitions_census.py --check` rc 0. Полная суита на слитом коде волны 1 партии (`49347f53`; после него менялись только файлы `.planning/`) — `4406 passed, 2 skipped, 0 failed`. Пробелов 0; frontmatter (`status: validated`, `nyquist_compliant: true`) остаётся верным для всех 24 строк. До этой подписи абзац гласил: «**Партия закрытия гэпа 16-07…16-10: pending**» (строки добавлены планированием 2026-10-09, прогон
 `/gsd-plan-phase 16 --gaps`). Подпись и отметки выше относятся к ПЕРВОЙ партии — 14 задачам. Партия
 добавляет десять задач: у каждой есть `<automated>` с парным `<fails_when>` (22 из 22), трёх подряд
 задач без машинной проверки нет, новых тестовых модулей нет. Что планирование изменило в этом файле и
@@ -159,3 +159,16 @@ created: "2026-10-08"
 | Gaps found | 0 |
 | Resolved | 0 |
 | Escalated | 0 |
+
+## Validation Audit 2026-10-09 (партия закрытия гэпа 16-07…16-10)
+
+| Metric | Count |
+|---|---|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Таблица дописана рукой: `verification.append-audit` пропустил запись (`appended: false`), потому что
+последний блок аудита тоже 0/0/0. Предмет аудита другой — десять строк партии 16-07…16-10, измеренные
+на `b72c32cd` (числа — в подписи выше); без этого раздела аудит партии читался бы как часть аудита
+первой партии от 2026-10-08.
