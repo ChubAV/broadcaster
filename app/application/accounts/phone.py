@@ -68,6 +68,7 @@ class PhoneWrite(enum.Enum):
 
     WRITTEN = "written"
     KEPT = "kept"
+    MISSING = "missing"
     UNPARSEABLE = "unparseable"
 
 
