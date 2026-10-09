@@ -76,6 +76,13 @@ def test_an_automatic_number_lands_in_e164_and_shows_in_the_display_form():
     assert "\xa0" not in shown, "в показе обычные пробелы, а не неразрывные"
 
 
+# Летопись (план 16-07, 2026-10-09): до плана здесь стояла строка
+# `five_digits_lower_bound` ("12345" → "+12345") — она утверждала границу 5 как
+# верную, а это был дефект (ревью WR-04, верификация 2026-10-08: обрывок
+# источника хранился как номер); строка перенесена в `REPORTED_REFUSED` под
+# именем `five_digits_fragment_was_the_lower_bound`, граница теперь 7 — самый
+# короткий настоящий номер с кодом страны (Ниуэ +683, Токелау +690; замер
+# метаданных 9.0.41 оркестратором 2026-10-09).
 REPORTED_ACCEPTED = [
     pytest.param("79991234567", "+79991234567", id="digits_string"),
     pytest.param(79991234567, "+79991234567", id="digits_int"),
@@ -85,7 +92,8 @@ REPORTED_ACCEPTED = [
     pytest.param(888012345678, "+888012345678", id="fragment_int_12_digits"),
     pytest.param("77011234567", "+77011234567", id="kazakhstan"),
     pytest.param("998901234567", "+998901234567", id="uzbekistan"),
-    pytest.param("12345", "+12345", id="five_digits_lower_bound"),
+    pytest.param("6831234", "+6831234", id="seven_digits_lower_bound_niue"),
+    pytest.param("6901234", "+6901234", id="seven_digits_tokelau"),
 ]
 
 
@@ -102,6 +110,11 @@ def test_a_reported_number_is_normalized_to_e164(raw, expected):
 
 REPORTED_REFUSED = [
     pytest.param("1234", id="four_digits"),
+    pytest.param("12345", id="five_digits_fragment_was_the_lower_bound"),
+    pytest.param("123456", id="six_digits_below_the_floor"),
+    pytest.param("88812", id="fragment_cut_to_five_digits"),
+    pytest.param("4412345", id="uk_fragment_local_only"),
+    pytest.param("71234567", id="russian_number_without_area_code_local_only"),
     pytest.param("7999123456789012", id="sixteen_digits"),
     pytest.param("7(999)1234567", id="not_only_digits"),
     pytest.param("79991234567:12", id="raw_jid"),
@@ -121,8 +134,23 @@ def test_garbage_from_a_source_leaves_the_number_unknown(raw):
     Автопуть не объясняет отказ — объяснять некому, а исключение уронило бы
     вход аккаунта из-за сбоя источника. Скобки и сырой JID — именно сбой:
     автоисточник отдаёт одни цифры.
+
+    Строки плана 16-07 (ревью WR-04): пять и шесть цифр отвергает граница 7;
+    `4412345` (`+44 12345`) и `71234567` — номер без кода зоны
+    (`IS_POSSIBLE_LOCAL_ONLY`), который автопуть отвергает тем же правилом, что
+    ручной путь (Ф-1).
     """
     assert normalize_reported(raw) is None, f"мусор {raw!r} не должен стать номером"
+
+
+def test_a_short_fragment_from_a_source_is_not_stored_as_a_number():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 2 ПЛАНА 16-07: обрывок `12345` — не номер (WR-04).
+
+    До плана граница автопути была 5 цифр, и обрывок источника хранился как
+    `+12345` — «номер», которого не бывает. Самый короткий настоящий номер с
+    кодом страны — 7 цифр (Ниуэ `+683 1234`).
+    """
+    assert normalize_reported("12345") is None, "обрывок из пяти цифр не должен стать номером"
 
 
 DISPLAYED = [
