@@ -189,6 +189,15 @@ None. No external service configuration is needed.
 - When the code-review gate runs again, it will keep these table rows, because the table, not the frontmatter, is what it re-reads.
 - The Phase 18 planner should read the new STATE.md Deferred Items row about IN-01 before planning the form.
 
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-10-SUMMARY.md`
+- FOUND: `fb490e3e` and `14e60e75` are both ancestors of HEAD, and so are all 8 fixing commits named in the disposition table.
+- After the SUMMARY commit `9fe44e0c`:
+  - `tests/test_planning`: 218 passed, 2 skipped.
+  - `prohibitions_census.py --check`: 764 rows, bijection agreement.
+  - The working tree is clean.
+
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-09*
