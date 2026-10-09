@@ -15,8 +15,20 @@
 `_log`/`_logger`), атрибут с тем же окончанием (`self.log`), вызов фабрики
 `get_logger(...)`/`getLogger(...)` или сам вызов журнала (`logger.bind(...).info`).
 `bind` включён НАМЕРЕННО: `logger.bind(phone=x)` кладёт номер в каждую следующую
-строку этого журнала. `parser.error(...)` у argparse, `log.status` у записи
-`SendLog` и `logging.getLogger(...).setLevel(...)` вызовом журнала не считаются.
+строку этого журнала. По той же причине вызовом журнала считается любой вызов с
+именем `bind_contextvars` или `bound_contextvars` (`CONTEXT_BINDERS`) ПРИ ЛЮБОМ
+получателе — `structlog.contextvars.bind_contextvars(...)`, голое имя после ввоза,
+менеджер `with structlog.contextvars.bound_contextvars(...)`: привязанное значение
+уходит в каждую следующую строку журнала запроса или задачи. `unbind_contextvars` и
+`clear_contextvars` — нет: номера они не кладут. `parser.error(...)` у argparse,
+`log.status` у записи `SendLog` и `logging.getLogger(...).setLevel(...)` вызовом
+журнала не считаются.
+
+Летопись: до плана 16-09 `structlog.contextvars.bind_contextvars(phone=…)` вызовом
+журнала не считался — имени нет в `LOG_METHODS`, а получатель `structlog.contextvars`
+не похож на журнал (ревью WR-02); проект при этом зовёт привязку в
+`app/middleware.py` и `app/worker/tasks.py` — с ключами без номера, и они теперь
+распознаются и не краснят.
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -129,6 +141,13 @@ LOG_METHODS = frozenset(
     }
 )
 
+# Привязка к контексту structlog: значение уходит в КАЖДУЮ следующую строку журнала
+# запроса или задачи — тот же довод, по которому в `LOG_METHODS` стоит `bind`. Судится
+# по имени при любом получателе (`structlog.contextvars.…` или голое имя после ввоза):
+# получатель `structlog.contextvars` на журнал не похож (ревью WR-02).
+# `unbind_contextvars` / `clear_contextvars` номера не кладут и вызовом журнала не считаются.
+CONTEXT_BINDERS = frozenset({"bind_contextvars", "bound_contextvars"})
+
 LOG_RECEIVERS = frozenset({"logger", "log", "logging", "_log", "_logger"})
 
 LOGGER_FACTORIES = frozenset({"get_logger", "getLogger"})
@@ -215,6 +234,11 @@ def _is_log_method_call(call: ast.Call) -> bool:
     return isinstance(func, ast.Attribute) and func.attr in LOG_METHODS and _is_log_receiver(func.value)
 
 
+def _is_context_binding(call: ast.Call) -> bool:
+    """Привязка к контексту structlog — по имени вызова, при любом получателе."""
+    return _callee_name(call.func) in CONTEXT_BINDERS
+
+
 def _is_print(call: ast.Call) -> bool:
     return isinstance(call.func, ast.Name) and call.func.id == "print"
 
@@ -225,7 +249,8 @@ def python_log_calls(source: str) -> list[ast.Call]:
     calls = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and (_is_print(node) or _is_log_method_call(node))
+        if isinstance(node, ast.Call)
+        and (_is_print(node) or _is_log_method_call(node) or _is_context_binding(node))
     ]
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
