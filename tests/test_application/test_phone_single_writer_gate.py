@@ -113,6 +113,7 @@ KIND_DICT_KEY = "ключ словаря values"
 KIND_SETATTR = "запись атрибута по имени"
 KIND_RAW_SQL = "сырой SQL"
 KIND_ROW_MAPPING = "ключ словаря строк"
+KIND_UPSERT_SET = "set_ при конфликте"
 
 # Реестр исключений: путь → причина. РОВНО ОДНА ЗАПИСЬ; см. шапку модуля.
 PHONE_WRITER_EXCEPTIONS: dict[str, str] = {
@@ -594,6 +595,113 @@ def test_a_raw_sql_phone_write_in_a_string_constant_is_a_write(source):
     ), f"сырой SQL с номером в строковой константе гейт не нашёл: {offences}"
 
 
+def test_an_upsert_set_of_a_phone_column_is_a_write():
+    """`set_` у `on_conflict_do_update` пишет колонку при конфликте — это запись (WR-01)."""
+    source = (
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'index_elements=["id"], set_={"phone": x})\n'
+    )
+
+    offences = phone_write_offences(source, "app/x.py")
+    upserts = [offence for offence in offences if f" — {KIND_UPSERT_SET} — " in offence]
+
+    assert upserts, f"set_ при конфликте с номером не найден: {offences}"
+    assert len(offences) == 1 and offences[0].startswith(
+        f"app/x.py:1 — {KIND_UPSERT_SET} — "
+    ), f"upsert дал не ровно одну находку вида «{KIND_UPSERT_SET}»: {offences}"
+    assert "on_conflict_do_update" in offences[0] and "phone" in offences[0], (
+        f"предмет находки не называет `on_conflict_do_update` и `phone`: {offences}"
+    )
+
+
+# Литеральные формы записи из ревью WR-01: (исходник, вид, имя вызова, колонка).
+# Каждая видна в исходнике, а до плана 16-09 проходила гейт молча.
+LITERAL_FORM_CASES = [
+    pytest.param(
+        "async def f(session, p):\n"
+        '    await session.execute(update(MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="orm-bulk-update-by-pk",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values(dict(phone=x))\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-dict-call",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(**{"phone": x})\n',
+        KIND_KEYWORD,
+        "values",
+        "phone",
+        id="values-double-star-dict",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'index_elements=["id"], set_={"phone": x})\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone",
+        id="upsert-set-dict",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'index_elements=["id"], set_=dict(phone_is_manual=True))\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone_is_manual",
+        id="upsert-set-dict-call",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(MessengerAccount, [{"id": 1, "phone_is_manual": True}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone_is_manual",
+        id="bulk-update-mappings",
+    ),
+    pytest.param(
+        "session.bulk_insert_mappings(MessengerAccount, [dict(user_id=1, phone=p)])\n",
+        KIND_ROW_MAPPING,
+        "bulk_insert_mappings",
+        "phone",
+        id="bulk-insert-mappings",
+    ),
+    pytest.param(
+        'account = MessengerAccount(**{"phone": x})\n',
+        KIND_KEYWORD,
+        "MessengerAccount",
+        "phone",
+        id="model-constructor-double-star",
+    ),
+    pytest.param(
+        "async def f(session, stmt, p):\n"
+        '    await session.execute(stmt, params=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-params-keyword",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "kind", "call", "column"), LITERAL_FORM_CASES)
+def test_a_literal_write_form_is_a_write(source, kind, call, column):
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert len(offences) == 1, (
+        f"литеральная форма записи `{call}(… {column} …)` дала {len(offences)} "
+        f"находок вместо одной: {offences}"
+    )
+    _location, found_kind, subject = offences[0].split(" — ", 2)
+    assert found_kind == kind, f"вид находки «{found_kind}», ожидался «{kind}»: {offences}"
+    assert call in subject and column in subject, (
+        f"предмет находки не называет вызов `{call}` и колонку `{column}`: {offences}"
+    )
+
+
 LEGITIMATE_CASES = [
     pytest.param(
         'return render(request, "x.html", phone=phone)\n', id="render-phone-kwarg"
@@ -637,6 +745,39 @@ LEGITIMATE_CASES = [
     pytest.param(
         'SQL = "UPDATE groups SET title = :t WHERE phone = :p"\n',
         id="update-filtering-by-phone-in-where",
+    ),
+    pytest.param(
+        'templates.TemplateResponse("accounts/connect_max.html", '
+        '{"request": request, "phone": submitted})\n',
+        id="templates-response-context-phone",
+    ),
+    pytest.param(
+        "async def f(session):\n"
+        "    await session.execute(\n"
+        "        select(MessengerAccount).where(MessengerAccount.phone.is_(None))\n"
+        "    )\n",
+        id="execute-select-filter-by-phone",
+    ),
+    pytest.param(
+        'render(request, "x.html", **{"phone": phone})\n',
+        id="render-double-star-phone",
+    ),
+    pytest.param(
+        "stmt = insert(Group).values(title=t).on_conflict_do_update(\n"
+        '    index_elements=["id"], set_={"title": t}\n'
+        ")\n",
+        id="upsert-set-other-columns",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(Group, [{"id": 1, "title": t}])\n',
+        id="bulk-update-mappings-other-columns",
+    ),
+    pytest.param(
+        "async def f(session):\n"
+        "    await session.execute(\n"
+        '        update(MessengerAccount), [{"id": 1, "status": "active"}]\n'
+        "    )\n",
+        id="execute-rows-without-phone",
     ),
 ]
 
