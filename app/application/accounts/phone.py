@@ -30,6 +30,15 @@ Python, записать» оставляла бы ровно такой про�
   `ck_messenger_accounts_manual_requires_phone` отвергает признак без номера,
   так что очистка одной колонки упала бы на нём.
 
+ОТСУТСТВИЕ СТРОКИ НАЗЫВАЕТСЯ, А НЕ СКРЫВАЕТСЯ (ревью WR-05). Автоисточник
+называет его исходом `PhoneWrite.MISSING`, ручная запись — `LookupError`.
+Формы разные, потому что разные вызывающие: автоисточник зовут пакетом мастер
+Фазы 19 и скрипт Фазы 20, и «строки нет» там — исход в счёте итогов
+(«заполнено / ручной / номера нет / …»), а не авария; ручную запись зовёт
+форма Фазы 18 для ОДНОЙ строки, и отсутствие там отвечает так же, как
+несуществующий аккаунт. Общее у них одно: ни один писатель не выдаёт
+отсутствие строки за другой исход.
+
 ЧЕГО МОДУЛЬ НЕ ДЕЛАЕТ:
 - не присваивает номер атрибуту ORM-объекта: запись идёт только операторами
   UPDATE, а на новый объект мастера значение кладётся как уже сохранённое
@@ -51,7 +60,7 @@ from __future__ import annotations
 
 import enum
 
-from sqlalchemy import update
+from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -62,8 +71,14 @@ from app.services.phone import normalize_manual, normalize_reported
 class PhoneWrite(enum.Enum):
     """Исход записи автоисточника.
 
-    `KEPT` — не ошибка: у строки уже есть номер или он указан вручную. В гонке
-    это и есть «пользователь успел первым».
+    `WRITTEN` — номер записан. `KEPT` — не ошибка: строка есть, номер в ней уже
+    есть или он указан вручную; в гонке это и есть «пользователь успел первым».
+    `MISSING` — строки с таким id нет (аккаунт удалён): отдельный исход в итоге
+    скрипта дозаполнения Фазы 20, а не «оставлено». `UNPARSEABLE` — источник
+    прислал мусор, к базе писатель не обращался.
+
+    До плана 16-08 `KEPT` покрывал и отсутствие строки (ревью WR-05: Фаза 20
+    посчитала бы удалённый аккаунт ручным).
     """
 
     WRITTEN = "written"
@@ -73,7 +88,18 @@ class PhoneWrite(enum.Enum):
 
 
 async def _fill_if_unknown(session: AsyncSession, account_id: int, e164: str) -> PhoneWrite:
-    """Один условный UPDATE: номер пишется, только если его нет и он не ручной."""
+    """Один условный UPDATE: номер пишется, только если его нет и он не ручной.
+
+    Если оператор не тронул ни одной строки, второй оператор — проба
+    существования строки — ТОЛЬКО классифицирует этот нулевой исход: `KEPT`
+    (строка есть) или `MISSING` (строки нет, ревью WR-05). Проба идёт ПОСЛЕ
+    записи и запись от неё не зависит, поэтому промежутка «прочитать — решить —
+    записать» не появляется (D-07): на пути записи оператор по-прежнему один, и
+    тест гонки этого изменения не замечает. Проба идёт через `session.execute`,
+    а не `session.scalar`: стенд гонки и счётчики теста писателя видят
+    операторы через `execute`, и проба мимо него стала бы им невидимой.
+    Строку, удалённую между записью и пробой, проба честно называет `MISSING`.
+    """
     result = await session.execute(
         update(MessengerAccount)
         .where(
@@ -84,7 +110,12 @@ async def _fill_if_unknown(session: AsyncSession, account_id: int, e164: str) ->
         .values(phone=e164)
         .execution_options(synchronize_session=False)
     )
-    return PhoneWrite.WRITTEN if result.rowcount == 1 else PhoneWrite.KEPT
+    if result.rowcount == 1:
+        return PhoneWrite.WRITTEN
+    probe = await session.execute(
+        select(exists().where(MessengerAccount.id == account_id))
+    )
+    return PhoneWrite.KEPT if probe.scalar() else PhoneWrite.MISSING
 
 
 async def fill_reported_phone(session: AsyncSession, account_id: int, raw: object) -> PhoneWrite:
