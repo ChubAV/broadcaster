@@ -29,16 +29,24 @@ UPDATE «записать, если номера нет и он не ручно�
 ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ:
 1. присваивание атрибуту `phone` / `phone_is_manual` (`=`, `+=`, аннотированное);
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
-   `update(...)`, `insert(...)` или `MessengerAccount(...)`;
+   `update(...)`, `insert(...)` или `MessengerAccount(...)` — в том числе
+   распаковкой литерала: `values(**{"phone": x})`, `MessengerAccount(**{…})`;
 3. ключ словаря-аргумента `values(...)` — строка `"phone"` / `"phone_is_manual"`
    или атрибут `MessengerAccount.phone` (и словари внутри списка — многострочная
-   вставка);
+   вставка); отображение — `{…}` или вызов `dict(phone=…)`;
 4. `setattr(obj, "phone", …)` / `set_committed_value(obj, "phone_is_manual", …)` —
    запись атрибута по имени в обход присваивания;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом: `UPDATE … SET …
    phone… =` (присваивание в `SET` до `WHERE`) либо `INSERT INTO messenger_accounts`.
    Голое слово `phone_is_manual` в строке не судится — на нём покраснела бы
    константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
+6. ключ номера в строках `execute` / `bulk_update_mappings` /
+   `bulk_insert_mappings` — словарь или `dict(...)`, поданный позиционно или
+   аргументом `params=` / `mappings=`, прямо или внутри списка/кортежа:
+   executemany по первичному ключу, естественная форма скрипта дозаполнения
+   Фазы 20 (ревью WR-01);
+7. ключ номера в литеральном отображении `set_` у `on_conflict_do_update` —
+   upsert пишет колонку при конфликте (ревью WR-01).
 
 ЦЕНА СТРОГОСТИ ВТОРОГО ВИДА. Имя `update` берётся по последнему звену вызова,
 поэтому `some_dict.update(phone=x)` тоже покраснеет, хотя в колонку не пишет. Это
@@ -46,16 +54,30 @@ UPDATE «записать, если номера нет и он не ручно�
 нельзя, а ложное срабатывание здесь снимается переименованием ключа, тогда как
 пропущенный второй писатель снимается только потерей ручного номера у пользователя.
 
-ГРАНИЦА ПРЕДИКАТА, названная, чтобы её не приняли за покрытие: значение, собранное
-во время исполнения (`values(**fields)`, `setattr(obj, name, …)` с вычисленным
-именем, SQL из склейки переменных), гейт не видит — по исходнику оно не
-определимо. Такие формы в коде записи номера сами по себе повод для ревью.
+ЦЕНА СТРОГОСТИ ШЕСТОГО ВИДА — та же по природе. `execute` судится по ключам строк,
+а не по первому аргументу: иначе `stmt = update(MessengerAccount);
+session.execute(stmt, rows)` прошёл бы. Поэтому параметр привязки `:phone` в
+словаре у `execute` для ЧТЕНИЯ — `execute(text("… WHERE phone = :phone"),
+{"phone": p})` — тоже краснеет; снимается переименованием параметра (`:number`).
+
+ГРАНИЦА ПРЕДИКАТА, названная, чтобы её не приняли за покрытие: вне охвата только
+значения, собранные во время исполнения, — `values(**fields)` и
+`MessengerAccount(**fields)` с ИМЕНЕМ, `execute(stmt, rows)`, где строки собраны в
+переменную, `setattr(obj, name, …)` с вычисленным именем, SQL из склейки
+переменных. По исходнику они не определимы, и такие формы в коде записи номера
+сами по себе повод для ревью. Всё, что видно литералом в исходнике, ловится.
+
+Летопись границы: до плана 16-09 граница называлась теми же словами —
+«значение, собранное во время исполнения», — но пять литеральных форм
+(executemany по первичному ключу, `dict(...)`, `**{…}`, `set_` при конфликте,
+`bulk_*_mappings`) проходили молча, хотя видны в исходнике; это была слепота
+предиката, а не граница средства (ревью WR-01, 2026-10-08).
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
 расширение реестра — решение владельца, а не правка ради зелени; состав реестра
-закреплён отдельным правилом. Исключение снимает виды 2–5 и НИКОГДА не снимает
-вид 1: писатель пишет только операторами UPDATE и зеркалит значение
+закреплён отдельным правилом. Исключение снимает все виды, кроме первого, и
+НИКОГДА не снимает вид 1: писатель пишет только операторами UPDATE и зеркалит значение
 `set_committed_value`, а присваивание атрибуту сделало бы объект грязным, и ORM
 выдала бы на коммите второй, безусловный UPDATE мимо условной записи. Это строже
 буквы D-13 и проверяется контролем над исходником писателя с подложенным
@@ -88,6 +110,20 @@ WRITE_CALL_NAMES = frozenset({"values", "update", "insert", "MessengerAccount"})
 # Вызовы, пишущие атрибут по имени из второго позиционного аргумента.
 NAMED_ATTRIBUTE_WRITERS = frozenset({"setattr", "set_committed_value"})
 
+# Вызовы, чьи позиционные аргументы несут строки для executemany: словарь или
+# список словарей по первичному ключу (ревью WR-01). Судятся ключи строк, а не
+# первый аргумент: `stmt = update(...); session.execute(stmt, rows)` иначе прошёл бы.
+ROW_MAPPING_CALL_NAMES = frozenset(
+    {"execute", "bulk_update_mappings", "bulk_insert_mappings"}
+)
+
+# Именованные аргументы тех же вызовов, несущие строки: `execute(stmt, params=…)`,
+# `bulk_update_mappings(mapper, mappings=…)` — та же литеральная форма, что позиционно.
+ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings"})
+
+# Upsert: именованный аргумент `set_` пишет колонки при конфликте (ревью WR-01).
+UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update"})
+
 # Пишущий SQL: присваивание колонки номера в `SET` (до `WHERE` — фильтр по номеру
 # записью не является) либо любая вставка в таблицу аккаунтов.
 RAW_SQL_PHONE_WRITE = re.compile(
@@ -101,6 +137,8 @@ KIND_KEYWORD = "именованный аргумент"
 KIND_DICT_KEY = "ключ словаря values"
 KIND_SETATTR = "запись атрибута по имени"
 KIND_RAW_SQL = "сырой SQL"
+KIND_ROW_MAPPING = "ключ словаря строк"
+KIND_UPSERT_SET = "set_ при конфликте"
 
 # Реестр исключений: путь → причина. РОВНО ОДНА ЗАПИСЬ; см. шапку модуля.
 PHONE_WRITER_EXCEPTIONS: dict[str, str] = {
@@ -140,7 +178,8 @@ def phone_write_offences(source: str, path: str) -> list[str]:
 def judged_offences(source: str, path: str) -> list[str]:
     """Находки, которые гейт судит: предикат плюс исключения реестра.
 
-    В пути из реестра отбрасываются виды 2–5; присваивание (вид 1) судится везде.
+    В пути из реестра отбрасываются все виды, кроме присваивания; присваивание
+    (вид 1) судится везде.
     """
     exempt = path in PHONE_WRITER_EXCEPTIONS
     return [
@@ -156,7 +195,7 @@ def _format(path: str, write: tuple[int, int, str, str]) -> str:
 
 
 def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
-    """Записи номера пяти видов: (строка, столбец, вид, предмет), по порядку в файле."""
+    """Записи номера видов шапки: (строка, столбец, вид, предмет), по порядку в файле."""
     tree = ast.parse(source, filename=path)
     docstrings = _docstring_nodes(tree)
     found: list[tuple[int, int, str, str]] = []
@@ -178,9 +217,36 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                 for keyword in node.keywords:
                     if keyword.arg in PHONE_COLUMNS:
                         record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
+                    elif keyword.arg is None:
+                        # `values(**{"phone": x})`, `MessengerAccount(**dict(phone=x))`
+                        for mapping in _literal_mappings(keyword.value):
+                            for key, column in _mapping_phone_keys(mapping):
+                                text = _mapping_key_text(key, column)
+                                record(key, KIND_KEYWORD, f"{name}(**{text})")
             if name == "values":
-                for key in _values_dict_keys(node):
-                    record(key, KIND_DICT_KEY, f"values({{{ast.unparse(key)}: …}})")
+                for key, column in _values_dict_keys(node):
+                    record(key, KIND_DICT_KEY, f"values({_mapping_key_text(key, column)})")
+            if name in ROW_MAPPING_CALL_NAMES:
+                arguments = list(node.args) + [
+                    keyword.value
+                    for keyword in node.keywords
+                    if keyword.arg in ROW_MAPPING_KEYWORDS
+                ]
+                for argument in arguments:
+                    rows = isinstance(argument, (ast.List, ast.Tuple))
+                    for mapping in _literal_mappings(argument):
+                        for key, column in _mapping_phone_keys(mapping):
+                            text = _mapping_key_text(key, column)
+                            subject = f"{name}([{text}])" if rows else f"{name}({text})"
+                            record(key, KIND_ROW_MAPPING, subject)
+            if name in UPSERT_CALL_NAMES:
+                for keyword in node.keywords:
+                    if keyword.arg != "set_":
+                        continue
+                    for mapping in _literal_mappings(keyword.value):
+                        for key, column in _mapping_phone_keys(mapping):
+                            text = _mapping_key_text(key, column)
+                            record(key, KIND_UPSERT_SET, f"{name}(set_={text})")
             if name in NAMED_ATTRIBUTE_WRITERS and len(node.args) >= 2:
                 attribute = node.args[1]
                 if (
@@ -217,22 +283,71 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return found
 
 
-def _values_dict_keys(call: ast.Call) -> list[ast.expr]:
-    """Ключи номера в словарях-аргументах `values(...)`, в том числе внутри списка."""
-    dicts: list[ast.Dict] = []
-    for argument in call.args:
-        if isinstance(argument, ast.Dict):
-            dicts.append(argument)
-        elif isinstance(argument, (ast.List, ast.Tuple)):
-            dicts.extend(item for item in argument.elts if isinstance(item, ast.Dict))
-    keys: list[ast.expr] = []
-    for mapping in dicts:
+def _values_dict_keys(call: ast.Call) -> list[tuple[ast.AST, str]]:
+    """Ключи номера в позиционных отображениях `values(...)`, в том числе в списке.
+
+    Отображение — `{...}` или `dict(...)`; список — многострочная вставка.
+    """
+    return [
+        found
+        for argument in call.args
+        for mapping in _literal_mappings(argument)
+        for found in _mapping_phone_keys(mapping)
+    ]
+
+
+def _literal_mappings(node: ast.expr) -> list[ast.expr]:
+    """Литеральные отображения в узле: `{...}`, `dict(...)` и они же в списке/кортеже.
+
+    Переменная, вызов другого имени, генератор — не литерал: такие строки собраны
+    во время исполнения и лежат за объявленной границей предиката.
+    """
+    if isinstance(node, ast.Dict) or _is_dict_call(node):
+        return [node]
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [
+            item
+            for item in node.elts
+            if isinstance(item, ast.Dict) or _is_dict_call(item)
+        ]
+    return []
+
+
+def _is_dict_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "dict"
+    )
+
+
+def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
+    """Ключи номера в литеральном отображении: (узел для строки находки, колонка).
+
+    У `{...}` — строковая константа или атрибут (`MessengerAccount.phone`) из
+    `PHONE_COLUMNS`; у `dict(...)` — именованный аргумент из `PHONE_COLUMNS`.
+    """
+    found: list[tuple[ast.AST, str]] = []
+    if isinstance(mapping, ast.Dict):
         for key in mapping.keys:
             if isinstance(key, ast.Constant) and key.value in PHONE_COLUMNS:
-                keys.append(key)
+                found.append((key, key.value))
             elif isinstance(key, ast.Attribute) and key.attr in PHONE_COLUMNS:
-                keys.append(key)
-    return keys
+                found.append((key, key.attr))
+    elif _is_dict_call(mapping):
+        for keyword in mapping.keywords:
+            if keyword.arg in PHONE_COLUMNS:
+                found.append((keyword, keyword.arg))
+    return found
+
+
+def _mapping_key_text(key: ast.AST, column: str) -> str:
+    """Ключ номера в предмете находки: `{'phone': …}`, `{X.phone: …}`, `dict(phone=…)`."""
+    if isinstance(key, ast.keyword):
+        return f"dict({column}=…)"
+    if isinstance(key, ast.Attribute):
+        return f"{{{ast.unparse(key)}: …}}"
+    return f"{{{column!r}: …}}"
 
 
 def _assigned_attributes(target: ast.AST) -> list[ast.Attribute]:
@@ -302,6 +417,40 @@ def test_a_planted_phone_write_outside_the_writer_reddens_the_gate(tmp_path):
         offence.startswith(f"app/pages/planted.py:2 — {KIND_ASSIGNMENT}")
         for offence in offences
     ), f"находка не называет файл, строку и вид: {offences}"
+
+
+def test_a_planted_bulk_update_by_primary_key_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-01: executemany по первичному ключу в синтетическом `scripts/`.
+
+    ORM bulk UPDATE списком словарей — естественная форма скрипта дозаполнения
+    Фазы 20, то есть ровно тот второй писатель, ради которого гейт существует (D-13).
+    Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_planted.py",
+        "async def backfill(session, p):\n"
+        '    await session.execute(update(MessengerAccount), [{"id": 1, "phone": p}])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_planted.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_planted.py:2 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "executemany по первичному ключу не найден: "
+        "`session.execute(update(MessengerAccount), [{'phone': p}])` в "
+        f"scripts/backfill_planted.py гейт пропустил: {offences}"
+    )
+    assert all("execute" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет вызов `execute` и колонку `phone`: {found}"
+    )
 
 
 ASSIGNMENT_CASES = [
@@ -485,6 +634,113 @@ def test_a_raw_sql_phone_write_in_a_string_constant_is_a_write(source):
     ), f"сырой SQL с номером в строковой константе гейт не нашёл: {offences}"
 
 
+def test_an_upsert_set_of_a_phone_column_is_a_write():
+    """`set_` у `on_conflict_do_update` пишет колонку при конфликте — это запись (WR-01)."""
+    source = (
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'index_elements=["id"], set_={"phone": x})\n'
+    )
+
+    offences = phone_write_offences(source, "app/x.py")
+    upserts = [offence for offence in offences if f" — {KIND_UPSERT_SET} — " in offence]
+
+    assert upserts, f"set_ при конфликте с номером не найден: {offences}"
+    assert len(offences) == 1 and offences[0].startswith(
+        f"app/x.py:1 — {KIND_UPSERT_SET} — "
+    ), f"upsert дал не ровно одну находку вида «{KIND_UPSERT_SET}»: {offences}"
+    assert "on_conflict_do_update" in offences[0] and "phone" in offences[0], (
+        f"предмет находки не называет `on_conflict_do_update` и `phone`: {offences}"
+    )
+
+
+# Литеральные формы записи из ревью WR-01: (исходник, вид, имя вызова, колонка).
+# Каждая видна в исходнике, а до плана 16-09 проходила гейт молча.
+LITERAL_FORM_CASES = [
+    pytest.param(
+        "async def f(session, p):\n"
+        '    await session.execute(update(MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="orm-bulk-update-by-pk",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values(dict(phone=x))\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-dict-call",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(**{"phone": x})\n',
+        KIND_KEYWORD,
+        "values",
+        "phone",
+        id="values-double-star-dict",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'index_elements=["id"], set_={"phone": x})\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone",
+        id="upsert-set-dict",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'index_elements=["id"], set_=dict(phone_is_manual=True))\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone_is_manual",
+        id="upsert-set-dict-call",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(MessengerAccount, [{"id": 1, "phone_is_manual": True}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone_is_manual",
+        id="bulk-update-mappings",
+    ),
+    pytest.param(
+        "session.bulk_insert_mappings(MessengerAccount, [dict(user_id=1, phone=p)])\n",
+        KIND_ROW_MAPPING,
+        "bulk_insert_mappings",
+        "phone",
+        id="bulk-insert-mappings",
+    ),
+    pytest.param(
+        'account = MessengerAccount(**{"phone": x})\n',
+        KIND_KEYWORD,
+        "MessengerAccount",
+        "phone",
+        id="model-constructor-double-star",
+    ),
+    pytest.param(
+        "async def f(session, stmt, p):\n"
+        '    await session.execute(stmt, params=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-params-keyword",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "kind", "call", "column"), LITERAL_FORM_CASES)
+def test_a_literal_write_form_is_a_write(source, kind, call, column):
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert len(offences) == 1, (
+        f"литеральная форма записи `{call}(… {column} …)` дала {len(offences)} "
+        f"находок вместо одной: {offences}"
+    )
+    _location, found_kind, subject = offences[0].split(" — ", 2)
+    assert found_kind == kind, f"вид находки «{found_kind}», ожидался «{kind}»: {offences}"
+    assert call in subject and column in subject, (
+        f"предмет находки не называет вызов `{call}` и колонку `{column}`: {offences}"
+    )
+
+
 LEGITIMATE_CASES = [
     pytest.param(
         'return render(request, "x.html", phone=phone)\n', id="render-phone-kwarg"
@@ -529,6 +785,39 @@ LEGITIMATE_CASES = [
         'SQL = "UPDATE groups SET title = :t WHERE phone = :p"\n',
         id="update-filtering-by-phone-in-where",
     ),
+    pytest.param(
+        'templates.TemplateResponse("accounts/connect_max.html", '
+        '{"request": request, "phone": submitted})\n',
+        id="templates-response-context-phone",
+    ),
+    pytest.param(
+        "async def f(session):\n"
+        "    await session.execute(\n"
+        "        select(MessengerAccount).where(MessengerAccount.phone.is_(None))\n"
+        "    )\n",
+        id="execute-select-filter-by-phone",
+    ),
+    pytest.param(
+        'render(request, "x.html", **{"phone": phone})\n',
+        id="render-double-star-phone",
+    ),
+    pytest.param(
+        "stmt = insert(Group).values(title=t).on_conflict_do_update(\n"
+        '    index_elements=["id"], set_={"title": t}\n'
+        ")\n",
+        id="upsert-set-other-columns",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(Group, [{"id": 1, "title": t}])\n',
+        id="bulk-update-mappings-other-columns",
+    ),
+    pytest.param(
+        "async def f(session):\n"
+        "    await session.execute(\n"
+        '        update(MessengerAccount), [{"id": 1, "status": "active"}]\n'
+        "    )\n",
+        id="execute-rows-without-phone",
+    ),
 ]
 
 
@@ -558,7 +847,7 @@ def test_the_walk_leaves_max_worker_alembic_and_tests_outside(tmp_path):
 
 
 def test_the_exception_registry_names_only_the_writer_module():
-    """Реестр — ровно модуль-писатель с причиной; его записи видов 2–5 не судятся.
+    """Реестр — ровно модуль-писатель с причиной; его записи не судятся, кроме присваивания.
 
     Второй исключённый модуль есть второй писатель: расширение реестра — решение
     владельца, а не правка ради зелени.
@@ -581,7 +870,7 @@ def test_the_exception_registry_names_only_the_writer_module():
         "условный UPDATE и зеркало set_committed_value обязаны быть видны"
     )
     assert judged_offences(writer_source, PHONE_WRITER_MODULE) == [], (
-        "записи модуля-писателя видов 2–5 судятся, хотя он в реестре"
+        "записи модуля-писателя, кроме присваивания, судятся, хотя он в реестре"
     )
 
 

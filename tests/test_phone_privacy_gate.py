@@ -15,8 +15,20 @@
 `_log`/`_logger`), атрибут с тем же окончанием (`self.log`), вызов фабрики
 `get_logger(...)`/`getLogger(...)` или сам вызов журнала (`logger.bind(...).info`).
 `bind` включён НАМЕРЕННО: `logger.bind(phone=x)` кладёт номер в каждую следующую
-строку этого журнала. `parser.error(...)` у argparse, `log.status` у записи
-`SendLog` и `logging.getLogger(...).setLevel(...)` вызовом журнала не считаются.
+строку этого журнала. По той же причине вызовом журнала считается любой вызов с
+именем `bind_contextvars` или `bound_contextvars` (`CONTEXT_BINDERS`) ПРИ ЛЮБОМ
+получателе — `structlog.contextvars.bind_contextvars(...)`, голое имя после ввоза,
+менеджер `with structlog.contextvars.bound_contextvars(...)`: привязанное значение
+уходит в каждую следующую строку журнала запроса или задачи. `unbind_contextvars` и
+`clear_contextvars` — нет: номера они не кладут. `parser.error(...)` у argparse,
+`log.status` у записи `SendLog` и `logging.getLogger(...).setLevel(...)` вызовом
+журнала не считаются.
+
+Летопись: до плана 16-09 `structlog.contextvars.bind_contextvars(phone=…)` вызовом
+журнала не считался — имени нет в `LOG_METHODS`, а получатель `structlog.contextvars`
+не похож на журнал (ревью WR-02); проект при этом зовёт привязку в
+`app/middleware.py` и `app/worker/tasks.py` — с ключами без номера, и они теперь
+распознаются и не краснят.
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -129,6 +141,13 @@ LOG_METHODS = frozenset(
     }
 )
 
+# Привязка к контексту structlog: значение уходит в КАЖДУЮ следующую строку журнала
+# запроса или задачи — тот же довод, по которому в `LOG_METHODS` стоит `bind`. Судится
+# по имени при любом получателе (`structlog.contextvars.…` или голое имя после ввоза):
+# получатель `structlog.contextvars` на журнал не похож (ревью WR-02).
+# `unbind_contextvars` / `clear_contextvars` номера не кладут и вызовом журнала не считаются.
+CONTEXT_BINDERS = frozenset({"bind_contextvars", "bound_contextvars"})
+
 LOG_RECEIVERS = frozenset({"logger", "log", "logging", "_log", "_logger"})
 
 LOGGER_FACTORIES = frozenset({"get_logger", "getLogger"})
@@ -215,6 +234,11 @@ def _is_log_method_call(call: ast.Call) -> bool:
     return isinstance(func, ast.Attribute) and func.attr in LOG_METHODS and _is_log_receiver(func.value)
 
 
+def _is_context_binding(call: ast.Call) -> bool:
+    """Привязка к контексту structlog — по имени вызова, при любом получателе."""
+    return _callee_name(call.func) in CONTEXT_BINDERS
+
+
 def _is_print(call: ast.Call) -> bool:
     return isinstance(call.func, ast.Name) and call.func.id == "print"
 
@@ -225,7 +249,8 @@ def python_log_calls(source: str) -> list[ast.Call]:
     calls = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and (_is_print(node) or _is_log_method_call(node))
+        if isinstance(node, ast.Call)
+        and (_is_print(node) or _is_log_method_call(node) or _is_context_binding(node))
     ]
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
@@ -679,6 +704,38 @@ def test_a_planted_number_line_in_a_synthetic_tree_reddens_the_gate(tmp_path):
     ), f"находка не называет файл, строку и имя: {offences}"
 
 
+def test_a_planted_context_binding_in_app_reddens_the_gate(tmp_path):
+    """WR-02: номер, привязанный к контексту structlog, уходит в каждую следующую строку.
+
+    `structlog.contextvars.bind_contextvars(phone=…)` — тот же довод, что у `bind`:
+    получатель `structlog.contextvars` на журнал не похож, поэтому вызов судится по
+    имени. Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "planted_binding.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import structlog\n"
+        "\n"
+        "\n"
+        "def bind_account(account):\n"
+        "    account_id = account.id\n"
+        "    structlog.contextvars.bind_contextvars(phone=account.phone)\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert any(
+        offence.startswith("app/planted_binding.py:6 — имя — phone=") for offence in offences
+    ), (
+        "привязка номера к контексту structlog не найдена: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о `bind_contextvars(phone=…)`: {offences}"
+    )
+
+
 # --- Отрицательные контроли: каждый краснит чистую функцию ----------------------
 
 NEGATIVE_CONTROLS = [
@@ -714,6 +771,19 @@ NEGATIVE_CONTROLS = [
         "max_worker/x.py", "print(mask_phone(phone))\n", "mask_phone", id="print-mask-in-max-worker"
     ),
     pytest.param("scripts/x.py", "print(account.phone)\n", "phone", id="print-unmasked-number-in-scripts"),
+    pytest.param(
+        "app/x.py",
+        "structlog.contextvars.bind_contextvars(phone=account.phone)\n",
+        "phone=",
+        id="structlog-bind-contextvars-phone",
+    ),
+    pytest.param("app/x.py", "bind_contextvars(phone=value)\n", "phone=", id="bare-bind-contextvars-phone"),
+    pytest.param(
+        "app/x.py",
+        "with structlog.contextvars.bound_contextvars(phone=value):\n    pass\n",
+        "phone=",
+        id="bound-contextvars-context-manager",
+    ),
 ]
 
 
@@ -750,6 +820,26 @@ POSITIVE_CONTROLS = [
     ),
     pytest.param(
         "app/x.py", 'logging.getLogger("x").setLevel(logging.WARNING)\n', False, id="set-level-is-not-a-log"
+    ),
+    pytest.param(
+        "app/x.py",
+        "structlog.contextvars.bind_contextvars(\n"
+        "    request_id=request_id, method=request.method, path=request.url.path\n"
+        ")\n",
+        True,
+        id="middleware-binding-without-phone",
+    ),
+    pytest.param(
+        "app/x.py", "structlog.contextvars.bind_contextvars(task_id=task_id)\n", True, id="task-binding-without-phone"
+    ),
+    pytest.param(
+        "app/x.py",
+        "structlog.contextvars.bind_contextvars(phone_set=account.phone is not None)\n",
+        True,
+        id="binding-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py", 'structlog.contextvars.unbind_contextvars("task_id")\n', False, id="unbinding-is-not-a-log"
     ),
 ]
 
