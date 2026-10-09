@@ -23,8 +23,11 @@
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.dml import Update
+from sqlalchemy.sql.selectable import Select
 
 from app.application.accounts.phone import (
+    ACCOUNT_NOT_IN_SESSION,
     PhoneWrite,
     fill_reported_phone,
     record_reported_phone,
@@ -73,6 +76,35 @@ def _count_executes(db_session: AsyncSession, monkeypatch) -> dict:
 
     monkeypatch.setattr(db_session, "execute", counting)
     return calls
+
+
+def _record_statements(db_session: AsyncSession, monkeypatch) -> list:
+    """Обёртка-запись над `execute` сессии: КАКИЕ операторы и в каком порядке.
+
+    Складывает первый позиционный аргумент каждого вызова. Счётчика мало там,
+    где важен порядок: проба существования строки законна только ПОСЛЕ
+    условного UPDATE, а не перед ним (D-07).
+    """
+    original = db_session.execute
+    statements: list = []
+
+    async def recording(*args, **kwargs):
+        statements.append(args[0] if args else kwargs.get("statement"))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(db_session, "execute", recording)
+    return statements
+
+
+async def _add_account(db_session: AsyncSession, user_id: int) -> MessengerAccount:
+    """Ещё одна строка с неизвестным номером у уже посеянного пользователя."""
+    account = MessengerAccount(
+        user_id=user_id, type="tg_user", credentials="creds", status="active"
+    )
+    db_session.add(account)
+    await db_session.commit()
+    await db_session.refresh(account)
+    return account
 
 
 @pytest.mark.asyncio
@@ -253,6 +285,76 @@ async def test_setting_a_manual_number_on_a_missing_account_raises(db_session: A
 
     with pytest.raises(LookupError, match=str(account.id + 1000)):
         await set_manual_phone(db_session, account.id + 1000, "8 999 000-00-01")
+
+
+@pytest.mark.asyncio
+async def test_an_automatic_write_to_a_missing_account_is_named_missing(db_session: AsyncSession):
+    """ТРАСЕР WR-05: строки с таким id нет — исход `MISSING`, а не `KEPT`.
+
+    `KEPT` значит «строка есть, номер в ней уже есть или он ручной». Скрипт
+    дозаполнения Фазы 20 подводит итог по исходам, и удалённый аккаунт,
+    названный `KEPT`, посчитался бы как «пользователь успел первым».
+    """
+    account = await _seed_account(db_session)
+
+    outcome = await fill_reported_phone(db_session, account.id + 1000, "79991234567")
+
+    assert outcome is PhoneWrite.MISSING, f"отсутствующая строка названа {outcome} (WR-05)"
+    assert await _row(db_session, account.id) == UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_the_existence_probe_runs_only_after_an_update_that_touched_no_row(
+    db_session: AsyncSession, monkeypatch
+):
+    """Проба существования — только классификация нулевого исхода, ПОСЛЕ записи.
+
+    Путь `WRITTEN` — ровно один оператор, условный `Update`: промежутка
+    «прочитать — решить — записать» нет (D-07). Пути `KEPT` и `MISSING` — два
+    оператора, первым `Update`, вторым `Select` пробы. Проба перед записью
+    вернула бы запрещённую пару чтение-проверка-запись.
+    """
+    seeded = await _seed_account(db_session)
+    kept = await _add_account(db_session, seeded.user_id)
+    await set_manual_phone(db_session, kept.id, "8 999 000-00-01")
+
+    paths = {}
+    for name, account_id in (
+        ("written", seeded.id),
+        ("kept", kept.id),
+        ("missing", seeded.id + 1000),
+    ):
+        statements = _record_statements(db_session, monkeypatch)
+        outcome = await fill_reported_phone(db_session, account_id, "79991234567")
+        monkeypatch.undo()
+        paths[name] = (outcome, [type(s) for s in statements])
+
+    assert paths["written"] == (PhoneWrite.WRITTEN, [Update]), paths
+    assert paths["kept"] == (PhoneWrite.KEPT, [Update, Select]), paths
+    assert paths["missing"] == (PhoneWrite.MISSING, [Update, Select]), paths
+
+
+@pytest.mark.asyncio
+async def test_recording_an_account_never_added_to_the_session_raises(
+    db_session: AsyncSession, monkeypatch
+):
+    """Мастер забыл `session.add`: громкий `ValueError`, ни одного оператора (WR-05).
+
+    `flush` такой объект не вставляет, и `id` остаётся `None`. Прежде писатель
+    исполнял UPDATE `WHERE id IS NULL` и молча возвращал `KEPT`.
+    """
+    seeded = await _seed_account(db_session)
+    account = MessengerAccount(
+        user_id=seeded.user_id, type="wa", credentials="creds", status="active"
+    )
+    calls = _count_executes(db_session, monkeypatch)
+
+    with pytest.raises(ValueError) as raised:
+        await record_reported_phone(db_session, account, "79991234567")
+
+    assert str(raised.value) == ACCOUNT_NOT_IN_SESSION
+    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов без id"
+    assert account.id is None
 
 
 @pytest.mark.asyncio
