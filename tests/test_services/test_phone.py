@@ -29,6 +29,8 @@
   `italian_leading_zero_is_not_plus_seven` — положительный контроль области
   отказа: у Италии `+39 06 …` ведущий ноль законен;
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
+  у национальной части не длиннее двух цифр не видна ни одна её цифра (план
+  16-07, ревью WR-03);
 - разбор `ast` модуля — модуль чист (D-12) и не спрашивает «действительность»
   номера (D-05).
 """
@@ -355,6 +357,8 @@ MASKED = [
     pytest.param("+88801234567", "+888 ******67", id="fragment"),
     pytest.param("+998901234567", "+998 ** *** ** 67", id="uzbekistan"),
     pytest.param("+12025550123", "+1 ***-***-**23", id="usa"),
+    pytest.param("+88812", "+888 ***", id="short_national_part_two_digits"),
+    pytest.param("+712", "+7 ***", id="short_national_part_russia"),
     pytest.param("+999123456", "+*******56", id="unparseable_with_digits"),
     pytest.param("garbage", "+***", id="unparseable_without_digits"),
 ]
@@ -365,9 +369,20 @@ def test_a_stored_number_is_masked_for_a_human(stored, expected):
     """Маска D-10 повторяет форму показа: код страны и две последние цифры.
 
     Неразбираемое значение — `+`, звёзды по числу цифр минус две и две
-    последние цифры; меньше четырёх цифр — сплошные `+***`.
+    последние цифры; меньше четырёх цифр — сплошные `+***`. Разбираемый номер
+    с национальной частью не длиннее двух цифр — код страны и `***` (строки
+    `short_national_part_*`, план 16-07, ревью WR-03).
     """
     assert mask_phone(stored) == expected, f"маска {stored!r}"
+
+
+def test_a_short_national_part_is_masked_entirely():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 3 ПЛАНА 16-07: `+88812` → `+888 ***` (WR-03, PHONE-21).
+
+    До плана порог «сплошные звёзды» был только у неразбираемого значения, а
+    разбираемый `+88812` давал `+888 12`: маска не прятала ни одной цифры.
+    """
+    assert mask_phone("+88812") == "+888 ***", "маска короткого номера раскрыла его целиком"
 
 
 PARSEABLE_MASKED = [
@@ -379,14 +394,27 @@ PARSEABLE_MASKED = [
 
 @pytest.mark.parametrize("stored", PARSEABLE_MASKED)
 def test_a_mask_shows_only_the_country_code_and_two_last_digits(stored):
-    """В маске цифр ровно столько, сколько в коде страны, плюс две (D-10).
+    """В маске цифр — код страны плюс две, а у короткого номера — плюс ноль (D-10).
 
     Сравнение со строкой образца ловит разбивку, а этот счёт — утечку: маска,
     раскрывшая лишнюю цифру, выдала бы её при любой разбивке.
+
+    Если в национальной части больше двух цифр, видны код страны и две
+    последние; если не больше двух — ни одной цифры национальной части. Число
+    цифр национальной части берётся из формы показа `format_phone(stored)` за
+    вычетом цифр кода страны, а не из `national_number`: целое теряет ведущие
+    нули Fragment. Летопись (план 16-07, ревью WR-03): прежняя форма правила
+    проверяла только номера с 8 и более национальными цифрами и потому
+    короткий случай `+88812` → `+888 12` не видела.
     """
-    country_code = phonenumbers.parse(stored, None).country_code
+    country_code = str(phonenumbers.parse(stored, None).country_code)
+    shown_number_digits = sum(1 for ch in format_phone(stored) if ch.isdigit())
+    national_digits = shown_number_digits - len(country_code)
+    visible_national = 2 if national_digits > 2 else 0
     shown_digits = [ch for ch in mask_phone(stored) if ch.isdigit()]
-    assert len(shown_digits) == len(str(country_code)) + 2, f"маска {stored!r} раскрывает лишнее"
+    assert len(shown_digits) == len(country_code) + visible_national, (
+        f"маска {stored!r} раскрывает лишнее"
+    )
 
 
 FORBIDDEN_CALLS = {"is_valid_number", "is_possible_number"}
