@@ -21,7 +21,16 @@
 - решение владельца О-1 закреплено строками явно: ручной `+888 0123 4567`
   отвергается, ручной `88801234567` без `+` становится российским
   `+78801234567`; Fragment попадает в базу только автопутём;
+- строки `cr01_*` (план 16-07, ревью CR-01; решение владельца О-3 (а),
+  2026-10-09, прогон `/gsd-plan-phase 16 --gaps`): ввод с префиксом `00` и
+  местный номер чужой страны с ведущим нулём разбираются под `RU` в код 7 с
+  национальной частью на 0 и ОТВЕРГАЮТСЯ, а не сохраняются несуществующим
+  `+7 0…`; вариант «понимать `00` как `+`» владелец отверг. Строка
+  `italian_leading_zero_is_not_plus_seven` — положительный контроль области
+  отказа: у Италии `+39 06 …` ведущий ноль законен;
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
+  у национальной части не длиннее двух цифр не видна ни одна её цифра (план
+  16-07, ревью WR-03);
 - разбор `ast` модуля — модуль чист (D-12) и не спрашивает «действительность»
   номера (D-05).
 """
@@ -69,6 +78,13 @@ def test_an_automatic_number_lands_in_e164_and_shows_in_the_display_form():
     assert "\xa0" not in shown, "в показе обычные пробелы, а не неразрывные"
 
 
+# Летопись (план 16-07, 2026-10-09): до плана здесь стояла строка
+# `five_digits_lower_bound` ("12345" → "+12345") — она утверждала границу 5 как
+# верную, а это был дефект (ревью WR-04, верификация 2026-10-08: обрывок
+# источника хранился как номер); строка перенесена в `REPORTED_REFUSED` под
+# именем `five_digits_fragment_was_the_lower_bound`, граница теперь 7 — самый
+# короткий настоящий номер с кодом страны (Ниуэ +683, Токелау +690; замер
+# метаданных 9.0.41 оркестратором 2026-10-09).
 REPORTED_ACCEPTED = [
     pytest.param("79991234567", "+79991234567", id="digits_string"),
     pytest.param(79991234567, "+79991234567", id="digits_int"),
@@ -78,7 +94,8 @@ REPORTED_ACCEPTED = [
     pytest.param(888012345678, "+888012345678", id="fragment_int_12_digits"),
     pytest.param("77011234567", "+77011234567", id="kazakhstan"),
     pytest.param("998901234567", "+998901234567", id="uzbekistan"),
-    pytest.param("12345", "+12345", id="five_digits_lower_bound"),
+    pytest.param("6831234", "+6831234", id="seven_digits_lower_bound_niue"),
+    pytest.param("6901234", "+6901234", id="seven_digits_tokelau"),
 ]
 
 
@@ -95,6 +112,11 @@ def test_a_reported_number_is_normalized_to_e164(raw, expected):
 
 REPORTED_REFUSED = [
     pytest.param("1234", id="four_digits"),
+    pytest.param("12345", id="five_digits_fragment_was_the_lower_bound"),
+    pytest.param("123456", id="six_digits_below_the_floor"),
+    pytest.param("88812", id="fragment_cut_to_five_digits"),
+    pytest.param("4412345", id="uk_fragment_local_only"),
+    pytest.param("71234567", id="russian_number_without_area_code_local_only"),
     pytest.param("7999123456789012", id="sixteen_digits"),
     pytest.param("7(999)1234567", id="not_only_digits"),
     pytest.param("79991234567:12", id="raw_jid"),
@@ -114,8 +136,23 @@ def test_garbage_from_a_source_leaves_the_number_unknown(raw):
     Автопуть не объясняет отказ — объяснять некому, а исключение уронило бы
     вход аккаунта из-за сбоя источника. Скобки и сырой JID — именно сбой:
     автоисточник отдаёт одни цифры.
+
+    Строки плана 16-07 (ревью WR-04): пять и шесть цифр отвергает граница 7;
+    `4412345` (`+44 12345`) и `71234567` — номер без кода зоны
+    (`IS_POSSIBLE_LOCAL_ONLY`), который автопуть отвергает тем же правилом, что
+    ручной путь (Ф-1).
     """
     assert normalize_reported(raw) is None, f"мусор {raw!r} не должен стать номером"
+
+
+def test_a_short_fragment_from_a_source_is_not_stored_as_a_number():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 2 ПЛАНА 16-07: обрывок `12345` — не номер (WR-04).
+
+    До плана граница автопути была 5 цифр, и обрывок источника хранился как
+    `+12345` — «номер», которого не бывает. Самый короткий настоящий номер с
+    кодом страны — 7 цифр (Ниуэ `+683 1234`).
+    """
+    assert normalize_reported("12345") is None, "обрывок из пяти цифр не должен стать номером"
 
 
 DISPLAYED = [
@@ -188,6 +225,7 @@ MANUAL_ACCEPTED = [
     pytest.param("8-800-555-35-35", "+78005553535", id="toll_free_800"),
     pytest.param("88801234567", "+78801234567", id="o1_fragment_without_plus_becomes_russian"),
     pytest.param(AT_INPUT_LIMIT, "+79991234567", id="exactly_32_chars"),
+    pytest.param("+39 06 1234 5678", "+390612345678", id="italian_leading_zero_is_not_plus_seven"),
 ]
 
 
@@ -199,8 +237,29 @@ def test_a_number_typed_by_hand_is_normalized_to_e164(text, expected):
     решение владельца О-1 (2026-10-08): буква D-05 разбирает ручной ввод с
     регионом `RU`, и `888…` без `+` читается как российский номер с ведущей `8`.
     Строка закрепляет это поведение, чтобы оно было решением, а не случайностью.
+
+    Строка `italian_leading_zero_is_not_plus_seven` держит область отказа CR-01
+    (план 16-07): признак разбора «ведущий ноль» законен у Италии, поэтому отказ
+    ограничен кодом страны 7, и итальянский номер обязан пройти.
     """
     assert normalize_manual(text) == expected, f"ручной ввод {text!r}"
+
+
+def test_a_number_typed_with_the_00_prefix_is_refused_not_saved_as_plus_seven_zero():
+    """⚠️ ТРАСЕР ПЛАНА 16-07: `00 44 7911 123456` — отказ, а не `+700447911123456`.
+
+    Под регионом `RU` международный префикс — `810`, а не `00`, и разбор читает
+    ведущие `00` как начало российской национальной части. RU-метаданные
+    допускают 14 цифр, поэтому строгая «возможность» такой ввод пропускала, и
+    сохранялся несуществующий `+7 0…` под признаком «ручной», закрытый для
+    автоисправления (D-07). Решение владельца О-3 (а), 2026-10-09: отказ текстом
+    `PHONE_ERROR_NOT_A_NUMBER`; вариант «понимать `00` как `+`» отвергнут.
+    """
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual("00 44 7911 123456")
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        "ввод с префиксом 00 обязан получить отказ «Не похоже на номер телефона»"
+    )
 
 
 MANUAL_REJECTED = [
@@ -213,6 +272,15 @@ MANUAL_REJECTED = [
     pytest.param("1234567890123456", PHONE_ERROR_NOT_A_NUMBER, id="sixteen_digits_no_plus"),
     pytest.param("12", PHONE_ERROR_NOT_A_NUMBER, id="two_digits"),
     pytest.param("+888 0123 4567", PHONE_ERROR_NOT_A_NUMBER, id="o1_fragment_by_hand_refused"),
+    pytest.param("00 44 7911 123456", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_uk"),
+    pytest.param("00 380 50 123 4567", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_ukraine"),
+    pytest.param("00 90 532 123 4567", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_turkey"),
+    pytest.param("00 1 202 555 01234", PHONE_ERROR_NOT_A_NUMBER, id="cr01_00_prefix_usa"),
+    pytest.param("050 123 4567", PHONE_ERROR_NOT_A_NUMBER, id="cr01_ukrainian_local_leading_zero"),
+    pytest.param(
+        "8 029 123 45 67", PHONE_ERROR_NOT_A_NUMBER, id="cr01_belarus_long_distance_eight_zero"
+    ),
+    pytest.param("+7 012 345 67 89", PHONE_ERROR_NOT_A_NUMBER, id="cr01_plus_seven_then_zero"),
     pytest.param("+7 999 123 45 67 доб 5", PHONE_ERROR_EXTENSION, id="extension_russian"),
     pytest.param("+7 999 123 45 67 ext 12", PHONE_ERROR_EXTENSION, id="extension_ext"),
     pytest.param("abc", PHONE_ERROR_NOT_A_NUMBER, id="latin_letters"),
@@ -240,6 +308,13 @@ def test_a_number_typed_by_hand_is_refused_with_an_explanation(text, message):
       отвергается, Fragment попадает в базу только автопутём.
     - `valid_number_padded_to_33_chars`: тот же верный номер, но на символ
       длиннее предела D-14 — отказ до разбора.
+
+    Строки `cr01_*` (план 16-07, ревью CR-01, решение владельца О-3 (а),
+    2026-10-09): префикс `00` и местный номер чужой страны с ведущим нулём
+    (`050 …`, `8 029 …`) разбираются под `RU` в код 7 с национальной частью на
+    0. Такого номера не бывает, а строгая «возможность» его пропускала, потому
+    что RU-метаданные допускают 10 и 14 цифр. До плана 16-07 эти вводы
+    сохранялись как `+700…` / `+70…`; теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
     """
     with pytest.raises(PhoneError) as excinfo:
         normalize_manual(text)
@@ -282,6 +357,8 @@ MASKED = [
     pytest.param("+88801234567", "+888 ******67", id="fragment"),
     pytest.param("+998901234567", "+998 ** *** ** 67", id="uzbekistan"),
     pytest.param("+12025550123", "+1 ***-***-**23", id="usa"),
+    pytest.param("+88812", "+888 ***", id="short_national_part_two_digits"),
+    pytest.param("+712", "+7 ***", id="short_national_part_russia"),
     pytest.param("+999123456", "+*******56", id="unparseable_with_digits"),
     pytest.param("garbage", "+***", id="unparseable_without_digits"),
 ]
@@ -292,9 +369,20 @@ def test_a_stored_number_is_masked_for_a_human(stored, expected):
     """Маска D-10 повторяет форму показа: код страны и две последние цифры.
 
     Неразбираемое значение — `+`, звёзды по числу цифр минус две и две
-    последние цифры; меньше четырёх цифр — сплошные `+***`.
+    последние цифры; меньше четырёх цифр — сплошные `+***`. Разбираемый номер
+    с национальной частью не длиннее двух цифр — код страны и `***` (строки
+    `short_national_part_*`, план 16-07, ревью WR-03).
     """
     assert mask_phone(stored) == expected, f"маска {stored!r}"
+
+
+def test_a_short_national_part_is_masked_entirely():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 3 ПЛАНА 16-07: `+88812` → `+888 ***` (WR-03, PHONE-21).
+
+    До плана порог «сплошные звёзды» был только у неразбираемого значения, а
+    разбираемый `+88812` давал `+888 12`: маска не прятала ни одной цифры.
+    """
+    assert mask_phone("+88812") == "+888 ***", "маска короткого номера раскрыла его целиком"
 
 
 PARSEABLE_MASKED = [
@@ -306,14 +394,27 @@ PARSEABLE_MASKED = [
 
 @pytest.mark.parametrize("stored", PARSEABLE_MASKED)
 def test_a_mask_shows_only_the_country_code_and_two_last_digits(stored):
-    """В маске цифр ровно столько, сколько в коде страны, плюс две (D-10).
+    """В маске цифр — код страны плюс две, а у короткого номера — плюс ноль (D-10).
 
     Сравнение со строкой образца ловит разбивку, а этот счёт — утечку: маска,
     раскрывшая лишнюю цифру, выдала бы её при любой разбивке.
+
+    Если в национальной части больше двух цифр, видны код страны и две
+    последние; если не больше двух — ни одной цифры национальной части. Число
+    цифр национальной части берётся из формы показа `format_phone(stored)` за
+    вычетом цифр кода страны, а не из `national_number`: целое теряет ведущие
+    нули Fragment. Летопись (план 16-07, ревью WR-03): прежняя форма правила
+    проверяла только номера с 8 и более национальными цифрами и потому
+    короткий случай `+88812` → `+888 12` не видела.
     """
-    country_code = phonenumbers.parse(stored, None).country_code
+    country_code = str(phonenumbers.parse(stored, None).country_code)
+    shown_number_digits = sum(1 for ch in format_phone(stored) if ch.isdigit())
+    national_digits = shown_number_digits - len(country_code)
+    visible_national = 2 if national_digits > 2 else 0
     shown_digits = [ch for ch in mask_phone(stored) if ch.isdigit()]
-    assert len(shown_digits) == len(str(country_code)) + 2, f"маска {stored!r} раскрывает лишнее"
+    assert len(shown_digits) == len(country_code) + visible_national, (
+        f"маска {stored!r} раскрывает лишнее"
+    )
 
 
 FORBIDDEN_CALLS = {"is_valid_number", "is_possible_number"}
