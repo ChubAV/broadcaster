@@ -679,6 +679,38 @@ def test_a_planted_number_line_in_a_synthetic_tree_reddens_the_gate(tmp_path):
     ), f"находка не называет файл, строку и имя: {offences}"
 
 
+def test_a_planted_context_binding_in_app_reddens_the_gate(tmp_path):
+    """WR-02: номер, привязанный к контексту structlog, уходит в каждую следующую строку.
+
+    `structlog.contextvars.bind_contextvars(phone=…)` — тот же довод, что у `bind`:
+    получатель `structlog.contextvars` на журнал не похож, поэтому вызов судится по
+    имени. Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "planted_binding.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import structlog\n"
+        "\n"
+        "\n"
+        "def bind_account(account):\n"
+        "    account_id = account.id\n"
+        "    structlog.contextvars.bind_contextvars(phone=account.phone)\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert any(
+        offence.startswith("app/planted_binding.py:6 — имя — phone=") for offence in offences
+    ), (
+        "привязка номера к контексту structlog не найдена: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о `bind_contextvars(phone=…)`: {offences}"
+    )
+
+
 # --- Отрицательные контроли: каждый краснит чистую функцию ----------------------
 
 NEGATIVE_CONTROLS = [
@@ -714,6 +746,19 @@ NEGATIVE_CONTROLS = [
         "max_worker/x.py", "print(mask_phone(phone))\n", "mask_phone", id="print-mask-in-max-worker"
     ),
     pytest.param("scripts/x.py", "print(account.phone)\n", "phone", id="print-unmasked-number-in-scripts"),
+    pytest.param(
+        "app/x.py",
+        "structlog.contextvars.bind_contextvars(phone=account.phone)\n",
+        "phone=",
+        id="structlog-bind-contextvars-phone",
+    ),
+    pytest.param("app/x.py", "bind_contextvars(phone=value)\n", "phone=", id="bare-bind-contextvars-phone"),
+    pytest.param(
+        "app/x.py",
+        "with structlog.contextvars.bound_contextvars(phone=value):\n    pass\n",
+        "phone=",
+        id="bound-contextvars-context-manager",
+    ),
 ]
 
 
@@ -750,6 +795,26 @@ POSITIVE_CONTROLS = [
     ),
     pytest.param(
         "app/x.py", 'logging.getLogger("x").setLevel(logging.WARNING)\n', False, id="set-level-is-not-a-log"
+    ),
+    pytest.param(
+        "app/x.py",
+        "structlog.contextvars.bind_contextvars(\n"
+        "    request_id=request_id, method=request.method, path=request.url.path\n"
+        ")\n",
+        True,
+        id="middleware-binding-without-phone",
+    ),
+    pytest.param(
+        "app/x.py", "structlog.contextvars.bind_contextvars(task_id=task_id)\n", True, id="task-binding-without-phone"
+    ),
+    pytest.param(
+        "app/x.py",
+        "structlog.contextvars.bind_contextvars(phone_set=account.phone is not None)\n",
+        True,
+        id="binding-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py", 'structlog.contextvars.unbind_contextvars("task_id")\n', False, id="unbinding-is-not-a-log"
     ),
 ]
 
