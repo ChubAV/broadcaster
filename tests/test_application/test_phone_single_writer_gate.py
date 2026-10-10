@@ -1459,6 +1459,79 @@ LITERAL_FORM_CASES = [
         "phone",
         id="execute-walrus-rows",
     ),
+    # Самопроверка исполнителя 16-12 после задачи 3 (отклонение, Rule 2): формы,
+    # подпадающие под механизм шапки, которые предикат задачи 3 ещё не ловил.
+    pytest.param(
+        "stmt = update(MessengerAccount).ordered_values(*[(MessengerAccount.phone, x)])\n",
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone",
+        id="ordered-values-starred-pairs",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).on_duplicate_key_update("
+        '[("phone", v) for v in xs])\n',
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+        "phone",
+        id="mysql-upsert-pairs-comprehension",
+    ),
+    pytest.param(
+        'stmt = stmt.values(dict([("phone", v) for v in xs]))\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-dict-call-pairs-comprehension",
+    ),
+    pytest.param(
+        'stmt = update(accounts).values({accounts.c["phone"]: x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-c-subscript-key",
+    ),
+    pytest.param(
+        'stmt = update(accounts).ordered_values((accounts.c["phone"], x))\n',
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone",
+        id="ordered-values-table-c-subscript",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({getattr(MessengerAccount, "phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-getattr-column-key",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET `phone` = :p WHERE id = :i'\n",
+        KIND_RAW_SQL,
+        "UPDATE",
+        "messenger_accounts",
+        id="raw-sql-backtick-column",
+    ),
+    pytest.param(
+        "SQL = 'INSERT INTO `messenger_accounts` (id, phone) VALUES (:i, :p)'\n",
+        KIND_RAW_SQL,
+        "INSERT",
+        "messenger_accounts",
+        id="raw-sql-backtick-table",
+    ),
+    pytest.param(
+        "SQL = 'INSERT INTO [messenger_accounts] (id, phone) VALUES (:i, :p)'\n",
+        KIND_RAW_SQL,
+        "INSERT",
+        "messenger_accounts",
+        id="raw-sql-bracket-table",
+    ),
+    pytest.param(
+        "SQL = \"LOAD DATA INFILE 'x.csv' INTO TABLE messenger_accounts\"\n",
+        KIND_RAW_SQL,
+        "LOAD",
+        "messenger_accounts",
+        id="raw-sql-load-data",
+    ),
 ]
 
 
@@ -1608,6 +1681,22 @@ LEGITIMATE_CASES = [
     pytest.param(
         'object.__setattr__(account, "status", x)\n',
         id="dunder-setattr-other-attribute",
+    ),
+    pytest.param(
+        "SQL = 'SELECT id FROM `messenger_accounts` WHERE `phone` = :p'\n",
+        id="select-backtick-where-phone",
+    ),
+    pytest.param(
+        "SQL = \"LOAD DATA INFILE 'x.csv' INTO TABLE groups\"\n",
+        id="load-data-into-another-table",
+    ),
+    pytest.param(
+        'stmt = update(groups).values({groups.c["title"]: t})\n',
+        id="table-c-subscript-other-column",
+    ),
+    pytest.param(
+        'stmt = select(accounts).where(accounts.c["phone"] == p)\n',
+        id="where-table-c-subscript-phone",
     ),
 ]
 
