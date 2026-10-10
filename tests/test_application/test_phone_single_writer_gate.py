@@ -39,10 +39,19 @@ UPDATE «записать, если номера нет и он не ручно�
    слияние `{…} | base`, условное выражение;
 4. `setattr(obj, "phone", …)` / `set_committed_value(obj, "phone_is_manual", …)` —
    запись атрибута по имени в обход присваивания;
-5. сырой SQL в строковой константе, НЕ являющейся докстрингом: `UPDATE … SET …
-   phone… =` (присваивание в `SET` до `WHERE`) либо `INSERT INTO messenger_accounts`.
-   Голое слово `phone_is_manual` в строке не судится — на нём покраснела бы
-   константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
+5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
+   строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
+   (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
+   (б) строчный конструктор `SET (…, phone, …) =`; (в) голова пишущего оператора
+   перед таблицей аккаунтов — `INSERT [OR …] INTO`, `REPLACE INTO`, `UPSERT INTO`,
+   `MERGE INTO`, таблица в кавычках или без и с префиксом схемы; (г) `COPY
+   <таблица аккаунтов> … FROM` (загрузка; `COPY … TO` — выгрузка, чтение). Сюда же
+   COPY asyncpg в обход SQLAlchemy — `copy_records_to_table("messenger_accounts",
+   …)` / `copy_to_table`. Голое слово `phone_is_manual` в строке не судится — на нём
+   покраснела бы константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
+   Летопись: до плана 16-12 вид звучал «`UPDATE … SET … phone… =` либо `INSERT
+   INTO messenger_accounts`», и шаблон требовал голые идентификаторы — кавычки,
+   префикс схемы, `INSERT OR REPLACE`, `MERGE` и склейка проходили (ревью WR-08).
 6. ключ номера в строках `execute` / `bulk_update_mappings` /
    `bulk_insert_mappings` / Alembic `op.bulk_insert` — словарь или `dict(...)`,
    поданный позиционно или аргументом `params=` / `mappings=` / `parameters=`
@@ -140,13 +149,38 @@ LITERAL_CONTAINER_WRAPPERS = frozenset({"list", "tuple", "set", "iter"})
 # Upsert: именованный аргумент `set_` пишет колонки при конфликте (ревью WR-01).
 UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update"})
 
-# Пишущий SQL: присваивание колонки номера в `SET` (до `WHERE` — фильтр по номеру
-# записью не является) либо любая вставка в таблицу аккаунтов.
+# Таблица аккаунтов в SQL: в двойных кавычках или без, с необязательным префиксом
+# схемы (`public.messenger_accounts`, `"public"."messenger_accounts"`).
+_ACCOUNTS_TABLE_SQL = r'(?:"?\w+"?\s*\.\s*)?"?messenger_accounts\b"?'
+
+# Пишущий SQL — по МЕХАНИЗМУ записи, четырьмя альтернативами (без учёта регистра):
+# (а) присваивание колонки номера в `SET` до `WHERE` (фильтр по номеру записью не
+#     является) — имя `phone` / `phone_is_manual` в двойных кавычках или без;
+# (б) строчный конструктор `SET (…, phone, …) = (…)`;
+# (в) голова пишущего оператора перед таблицей аккаунтов — `INSERT [OR <конфликт>]
+#     INTO`, `INSERT IGNORE INTO`, `REPLACE INTO`, `UPSERT INTO`, `MERGE INTO`;
+# (г) `COPY <таблица аккаунтов> [(колонки)] FROM` — загрузка; `COPY … TO` — выгрузка,
+#     то есть чтение, и не судится.
+# Летопись: до плана 16-12 шаблон требовал голое `phone =` и голую
+# `messenger_accounts` после `INSERT INTO`, и кавычки у идентификатора, префикс
+# схемы, `INSERT OR REPLACE`, `REPLACE` / `MERGE INTO`, `COPY … FROM` и строчный
+# конструктор проводили запись мимо гейта (ревью WR-08, 2026-10-09).
 RAW_SQL_PHONE_WRITE = re.compile(
-    r"\bupdate\b[\s\S]*?\bset\b(?:(?!\bwhere\b)[\s\S])*?\bphone(?:_is_manual)?\b\s*="
-    r"|\binsert\s+into\s+messenger_accounts\b",
+    r'\bupdate\b[\s\S]*?\bset\b(?:(?!\bwhere\b)[\s\S])*?\bphone(?:_is_manual)?\b"?\s*='
+    r"|\bupdate\b[\s\S]*?\bset\s*\([^)]*\bphone(?:_is_manual)?\b[^)]*\)\s*="
+    r"|\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
+    + _ACCOUNTS_TABLE_SQL
+    + r"|\bcopy\s+"
+    + _ACCOUNTS_TABLE_SQL
+    + r"\s*(?:\([^)]*\)\s*)?from\b",
     re.IGNORECASE,
 )
+
+# COPY asyncpg в обход SQLAlchemy: `conn.copy_records_to_table("messenger_accounts",
+# records=…)` / `copy_to_table(…)` загружают строки в таблицу, названную первым
+# позиционным аргументом или аргументом `table_name` (план 16-12).
+ROW_COPY_CALL_NAMES = frozenset({"copy_records_to_table", "copy_to_table"})
+_ACCOUNTS_TABLE_NAME = re.compile(r'(?:"?\w+"?\.)?"?messenger_accounts"?')
 
 KIND_ASSIGNMENT = "присваивание"
 KIND_KEYWORD = "именованный аргумент"
@@ -214,6 +248,14 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     """Записи номера видов шапки: (строка, столбец, вид, предмет), по порядку в файле."""
     tree = ast.parse(source, filename=path)
     docstrings = _docstring_nodes(tree)
+    # Звенья склейки строк внутри более длинной склейки: судится только внешняя.
+    inner_concatenations = {
+        id(child)
+        for node in ast.walk(tree)
+        if _is_concatenation(node) and _folded_string(node) is not None
+        for child in (node.left, node.right)
+        if _is_concatenation(child)
+    }
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -272,6 +314,16 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                     and attribute.value in PHONE_COLUMNS
                 ):
                     record(node, KIND_SETATTR, f"{name}(…, {attribute.value!r}, …)")
+            if name in ROW_COPY_CALL_NAMES:
+                table = node.args[0] if node.args else next(
+                    (k.value for k in node.keywords if k.arg == "table_name"), None
+                )
+                if (
+                    isinstance(table, ast.Constant)
+                    and isinstance(table.value, str)
+                    and _ACCOUNTS_TABLE_NAME.fullmatch(table.value)
+                ):
+                    record(node, KIND_RAW_SQL, f"{name}({table.value!r}, …)")
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -280,8 +332,42 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         ):
             snippet = " ".join(node.value.split())[:60]
             record(node, KIND_RAW_SQL, f"«{snippet}»")
+        elif (
+            _is_concatenation(node)
+            and id(node) not in inner_concatenations
+            and (folded := _folded_string(node)) is not None
+            # Если константа склейки совпала сама, находка у неё уже есть.
+            and not any(
+                RAW_SQL_PHONE_WRITE.search(part.value)
+                for part in ast.walk(node)
+                if isinstance(part, ast.Constant)
+            )
+            and RAW_SQL_PHONE_WRITE.search(folded)
+        ):
+            snippet = " ".join(folded.split())[:60]
+            record(node, KIND_RAW_SQL, f"«{snippet}»")
 
     return sorted(found)
+
+
+def _is_concatenation(node: ast.AST) -> bool:
+    return isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+
+
+def _folded_string(node: ast.AST) -> str | None:
+    """Строка, если узел — строковая константа или склейка `+` из одних строковых констант.
+
+    Иначе `None`: переменная, f-строка, `.format(…)` в склейке — SQL, собранный во
+    время исполнения, лежит за объявленной границей предиката.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if _is_concatenation(node):
+        left = _folded_string(node.left)
+        right = _folded_string(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
 
 
 def _docstring_nodes(tree: ast.AST) -> set[int]:
