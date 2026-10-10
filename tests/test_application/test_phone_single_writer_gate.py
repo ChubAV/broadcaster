@@ -189,6 +189,7 @@ KIND_SETATTR = "запись атрибута по имени"
 KIND_RAW_SQL = "сырой SQL"
 KIND_ROW_MAPPING = "ключ словаря строк"
 KIND_UPSERT_SET = "set_ при конфликте"
+KIND_POSITIONAL_COLUMN = "колонка позицией"
 
 # Реестр исключений: путь → причина. РОВНО ОДНА ЗАПИСЬ; см. шапку модуля.
 PHONE_WRITER_EXCEPTIONS: dict[str, str] = {
@@ -846,6 +847,29 @@ def test_an_upsert_set_of_a_phone_column_is_a_write():
     )
 
 
+def test_an_ordered_values_pair_of_a_phone_column_is_a_write():
+    """Пара `(колонка, значение)` в `ordered_values` пишет колонку — это запись (WR-08).
+
+    Колонка названа позицией в кортеже, а не именованным аргументом или ключом
+    словаря, поэтому до плана 16-12 ни один вид её не видел.
+    """
+    source = "stmt = update(MessengerAccount).ordered_values((MessengerAccount.phone, x))\n"
+
+    offences = phone_write_offences(source, "app/x.py")
+    positional = [
+        offence for offence in offences if f" — {KIND_POSITIONAL_COLUMN} — " in offence
+    ]
+
+    assert positional, f"пара ordered_values с колонкой номера не найдена: {offences}"
+    assert len(offences) == 1, (
+        f"`ordered_values` дал не ровно одну находку вида «{KIND_POSITIONAL_COLUMN}»: "
+        f"{offences}"
+    )
+    assert "ordered_values" in offences[0] and "phone" in offences[0], (
+        f"предмет находки не называет `ordered_values` и `phone`: {offences}"
+    )
+
+
 # Литеральные формы записи из ревью WR-01: (исходник, вид, имя вызова, колонка).
 # Каждая видна в исходнике, а до плана 16-09 проходила гейт молча.
 LITERAL_FORM_CASES = [
@@ -1106,6 +1130,142 @@ LITERAL_FORM_CASES = [
         "messenger_accounts",
         id="asyncpg-copy-records",
     ),
+    # Колонка позицией, запись по имени, устаревший `Query.update`, MySQL upsert,
+    # псевдоним модели в том же модуле (WR-08 и перебор планирования 16-12).
+    pytest.param(
+        "stmt = update(MessengerAccount).ordered_values((MessengerAccount.phone, x))\n",
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone",
+        id="ordered-values",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).ordered_values(("phone_is_manual", True))\n',
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone_is_manual",
+        id="ordered-values-string-key",
+    ),
+    pytest.param(
+        'stmt = insert(MessengerAccount).from_select(["user_id", "phone"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names",
+    ),
+    pytest.param(
+        'object.__setattr__(account, "phone", x)\n',
+        KIND_SETATTR,
+        "__setattr__",
+        "phone",
+        id="object-setattr-dunder",
+    ),
+    pytest.param(
+        'account.__setattr__("phone_is_manual", True)\n',
+        KIND_SETATTR,
+        "__setattr__",
+        "phone_is_manual",
+        id="bound-dunder-setattr",
+    ),
+    pytest.param(
+        'set_attribute(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="set-attribute",
+    ),
+    pytest.param(
+        'session.query(MessengerAccount).filter_by(id=1).update({"phone": x})\n',
+        KIND_DICT_KEY,
+        "update",
+        "phone",
+        id="legacy-query-update-dict",
+    ),
+    pytest.param(
+        "session.query(MessengerAccount).filter(MessengerAccount.id == 1).update("
+        "{MessengerAccount.phone: x}, synchronize_session=False)\n",
+        KIND_DICT_KEY,
+        "update",
+        "phone",
+        id="legacy-query-update-column-key",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_duplicate_key_update(phone=x)\n",
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+        "phone",
+        id="mysql-upsert-keyword",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_duplicate_key_update("
+        '{"phone": x})\n',
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+        "phone",
+        id="mysql-upsert-dict",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_duplicate_key_update("
+        '[("phone_is_manual", True)])\n',
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+        "phone_is_manual",
+        id="mysql-upsert-pairs",
+    ),
+    pytest.param(
+        "from app.models.messenger_account import MessengerAccount as Account\n"
+        "account = Account(user_id=1, phone=x)\n",
+        KIND_KEYWORD,
+        "Account",
+        "phone",
+        id="model-import-alias",
+    ),
+    pytest.param(
+        "Model = MessengerAccount\naccount = Model(phone=x)\n",
+        KIND_KEYWORD,
+        "Model",
+        "phone",
+        id="model-assignment-alias",
+    ),
+    # Отображения внутри отображения (отклонение исполнения 16-12, Rule 2): ключ номера
+    # стоит литералом в аргументе пишущего вызова, только вложен на уровень глубже.
+    pytest.param(
+        'stmt = update(MessengerAccount).values({**{"phone": x}, "id": 1})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-dict-display-spread",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(dict(**{"phone": x}))\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-dict-call-spread",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(dict({"phone": x}, id=1))\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-dict-call-positional-dict",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(dict([("phone", x)]))\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-dict-call-pairs",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(update(MessengerAccount), "
+        'rows := [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-walrus-rows",
+    ),
 ]
 
 
@@ -1235,6 +1395,26 @@ LEGITIMATE_CASES = [
         "async def f(conn, rows):\n"
         '    await conn.copy_records_to_table("groups", records=rows, columns=["phone"])\n',
         id="asyncpg-copy-into-another-table",
+    ),
+    pytest.param(
+        "stmt = update(Group).ordered_values((Group.title, t))\n",
+        id="ordered-values-other-column",
+    ),
+    pytest.param(
+        'stmt = insert(Group).from_select(["title"], sel)\n',
+        id="from-select-other-columns",
+    ),
+    pytest.param(
+        'context.update({"title": t})\n',
+        id="dict-update-other-keys",
+    ),
+    pytest.param(
+        "from app.models.group import Group as G\ng = G(phone=x)\n",
+        id="alias-of-another-model-with-phone-kwarg",
+    ),
+    pytest.param(
+        'object.__setattr__(account, "status", x)\n',
+        id="dunder-setattr-other-attribute",
     ),
 ]
 
