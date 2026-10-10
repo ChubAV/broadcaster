@@ -13,22 +13,41 @@
 где метод — уровень журнала или `bind`/`new` (`LOG_METHODS`), а получатель `X` —
 имя `logger`/`log`/`logging`/`_log`/`_logger` (и любое имя, оканчивающееся на
 `_log`/`_logger`), атрибут с тем же окончанием (`self.log`), вызов фабрики
-`get_logger(...)`/`getLogger(...)` или сам вызов журнала (`logger.bind(...).info`).
+`get_logger(...)`/`getLogger(...)`/`get_task_logger(...)` (`LOGGER_FACTORIES`) или сам
+вызов журнала (`logger.bind(...).info`). Получатель — и имя или атрибут, связанные в
+модуле с фабрикой журнала или с привязанным журналом (`lg = logging.getLogger()`,
+`lg: Logger = logging.getLogger(__name__)`, `self.lg = structlog.get_logger()`,
+`lg = structlog.get_logger().bind(...)`), и псевдоним ввоза модуля `logging` или журнала
+`logger` (`import logging as L`, `from … import logger as lg`) — `module_log_names`. Это
+распознавание внутри рамки D-17: тот же журнал из фабрики, тот же `logging.*`, тот же
+`logger.*` под другим именем; журнал по любому имени с методом `.info` гейт НЕ угадывает.
+Псевдонимы разрешаются по всему модулю без учёта областей видимости — цена названа:
+имя, связанное с фабрикой где-либо в модуле, считается журналом во всём модуле (на живом
+дереве совпадений ноль: множества распознанных вызовов всех 106 файлов прежние). Настройка
+такого журнала (`_lg.handlers.clear()`, `_lg.propagate = True`, `lg.setLevel(...)`) вызовом
+журнала не считается — методов журнала она не зовёт.
 `bind` включён НАМЕРЕННО: `logger.bind(phone=x)` кладёт номер в каждую следующую
 строку этого журнала. По той же причине вызовом журнала считается любой вызов с
-именем `bind_contextvars` или `bound_contextvars` (`CONTEXT_BINDERS`) ПРИ ЛЮБОМ
-получателе — `structlog.contextvars.bind_contextvars(...)`, голое имя после ввоза,
-менеджер `with structlog.contextvars.bound_contextvars(...)`: привязанное значение
-уходит в каждую следующую строку журнала запроса или задачи. `unbind_contextvars` и
-`clear_contextvars` — нет: номера они не кладут. `parser.error(...)` у argparse,
-`log.status` у записи `SendLog` и `logging.getLogger(...).setLevel(...)` вызовом
-журнала не считаются.
+именем `bind_contextvars` или `bound_contextvars`, а также привязки устаревшего
+`structlog.threadlocal` — `bind_threadlocal`, `bound_threadlocal`, `tmp_bind`
+(`CONTEXT_BINDERS`) — ПРИ ЛЮБОМ получателе: `structlog.contextvars.bind_contextvars(...)`,
+голое имя после ввоза, менеджер `with structlog.contextvars.bound_contextvars(...)`,
+`with tmp_bind(logger, ...)`; и вызов любого имени, под которым привязка ввезена в
+модуль (`from structlog.contextvars import bind_contextvars as bind_ctx` → `bind_ctx(...)`,
+`module_log_names`): привязанное значение уходит в каждую следующую строку журнала
+запроса, задачи или потока. `unbind_*` и `clear_*` — нет, и под псевдонимом тоже: номера
+они не кладут. `parser.error(...)` у argparse, `log.status` у записи `SendLog` и
+`logging.getLogger(...).setLevel(...)` вызовом журнала не считаются.
 
 Летопись: до плана 16-09 `structlog.contextvars.bind_contextvars(phone=…)` вызовом
 журнала не считался — имени нет в `LOG_METHODS`, а получатель `structlog.contextvars`
 не похож на журнал (ревью WR-02); проект при этом зовёт привязку в
 `app/middleware.py` и `app/worker/tasks.py` — с ключами без номера, и они теперь
-распознаются и не краснят.
+распознаются и не краснят. До плана 16-13 привязка распознавалась только по последнему
+имени вызова: псевдоним ввоза и привязки `structlog.threadlocal` уходили мимо гейта
+(ревью IN-06, верификация 2026-10-09, advisory; решение владельца О-6 — закрыть в этом
+проходе). Тогда же: до плана 16-13 получатель с именем вне `LOG_RECEIVERS` и шаблона —
+`lg = logging.getLogger(); lg.info(…, account.phone)` — гейтом не читался (ревью IN-06).
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -88,6 +107,25 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
 * значение, пришедшее в журнал без имени `phone` и без носителя
   (`logger.info("x", value=v)`, где `v` — номер), — вне охвата правила имён;
 * `wa_bridge/` — наследие вне D-09, под гейт не входит.
+* журнал, который в этом модуле нельзя опознать ни по фабрике, ни по имени журнала, ни
+  по ввозу (ревью IN-06, решение владельца О-6). Довод один на все пункты ниже: опознать
+  такой журнал можно только угадыванием по любому имени, а угадывание расширило бы
+  список получателей D-17 — гейт краснел бы на чужих объектах с методом `.info`, и
+  следующий автор ослабил бы его:
+  - получатель, пришедший параметром функции (`def f(lg): lg.info(…)`) или из обёртки,
+    не являющейся фабрикой (`logging.LoggerAdapter(logger, …)`,
+    `functools.partial(logger.info, …)`);
+  - доступ к методу через `getattr(logger, "info")(…)`;
+  - второе связывание без вызова (`a = lg`; `a.info(…)`);
+  - журнал, взятый из контейнера (`loggers["x"].info(…)`) или из атрибута чужого объекта,
+    не связанного в этом модуле;
+  - фабрика, ввезённая под псевдонимом (`from logging import getLogger as gl`), —
+    фабрика опознаётся по последнему имени вызова;
+  - привязка, взятая через `getattr(structlog.contextvars, "bind_contextvars")` или
+    `importlib`;
+  - псевдонимы и связывания разрешаются по одной области видимости — модулю: имя,
+    связанное с фабрикой в одной функции, журналом считается и в другой (цена в сторону
+    лишней находки, а не пропуска; на живом дереве совпадений ноль).
 """
 
 from __future__ import annotations
@@ -146,11 +184,20 @@ LOG_METHODS = frozenset(
 # по имени при любом получателе (`structlog.contextvars.…` или голое имя после ввоза):
 # получатель `structlog.contextvars` на журнал не похож (ревью WR-02).
 # `unbind_contextvars` / `clear_contextvars` номера не кладут и вызовом журнала не считаются.
-CONTEXT_BINDERS = frozenset({"bind_contextvars", "bound_contextvars"})
+# Устаревший `structlog.threadlocal` structlog 25.5.0 по-прежнему поставляет, и его
+# привязки `bind_threadlocal` / `bound_threadlocal` / `tmp_bind` кладут значение в каждую
+# следующую строку журнала потока тем же механизмом (ревью IN-06). `unbind_*`, `clear_*`,
+# `merge_*`, `get_*`, `wrap_dict`, `as_immutable` значения не привязывают (замер `dir()`
+# планирования, 2026-10-09).
+CONTEXT_BINDERS = frozenset(
+    {"bind_contextvars", "bound_contextvars", "bind_threadlocal", "bound_threadlocal", "tmp_bind"}
+)
 
 LOG_RECEIVERS = frozenset({"logger", "log", "logging", "_log", "_logger"})
 
-LOGGER_FACTORIES = frozenset({"get_logger", "getLogger"})
+# Фабрики журнала (D-17). `get_task_logger` — фабрика журнала Celery: фабрика по смыслу
+# D-17, а не новый получатель (ревью IN-06); в живом дереве её нет.
+LOGGER_FACTORIES = frozenset({"get_logger", "getLogger", "get_task_logger"})
 
 # Имя признака наличия номера, разрешённое в журнале (D-11).
 PRESENCE_FLAG_NAMES = frozenset({"phone_set"})
@@ -218,25 +265,103 @@ def _callee_name(func: ast.expr) -> str | None:
 _LOGGER_NAME = re.compile(r"(?:^|_)(?:log|logger)$")
 
 
-def _is_log_receiver(node: ast.expr) -> bool:
+@dataclass(frozen=True)
+class ModuleLogNames:
+    """Имена журнала, связанные в одном модуле (IN-06).
+
+    `binders` — псевдонимы ввоза привязок `CONTEXT_BINDERS`
+    (`from structlog.contextvars import bind_contextvars as bind_ctx` → `bind_ctx`).
+    `receiver_names` — имена-получатели журнала вне `LOG_RECEIVERS` и шаблона
+    `_LOGGER_NAME`: псевдоним ввоза модуля `logging` или журнала (`import logging as L`,
+    `from … import logger as lg`) и имя, связанное с фабрикой или привязанным журналом
+    (`lg = logging.getLogger()`, `lg = structlog.get_logger().bind(...)`).
+    `receiver_attributes` — атрибуты, связанные так же (`self.lg = structlog.get_logger()`).
+    Область видимости — весь модуль.
+    """
+
+    binders: frozenset[str]
+    receiver_names: frozenset[str]
+    receiver_attributes: frozenset[str]
+
+
+NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
+
+
+def _is_logger_name(name: str) -> bool:
+    """Имя журнала по D-17: `LOG_RECEIVERS` или шаблон `_LOGGER_NAME`."""
+    return name in LOG_RECEIVERS or bool(_LOGGER_NAME.search(name))
+
+
+def module_log_names(tree: ast.AST) -> ModuleLogNames:
+    """Имена журнала, которые модуль `tree` связывает ввозом или присваиванием.
+
+    Присваивания разбираются до неподвижной точки: `lg = logging.getLogger()` делает
+    журналом `lg`, и тогда `bound = lg.bind(...)` — тоже журнал. Связывание без вызова
+    (`a = lg`) журналом не делает — это граница, названная в шапке.
+    """
+    binders: set[str] = set()
+    receiver_names: set[str] = set()
+    receiver_attributes: set[str] = set()
+    assignments: list[tuple[list[ast.expr], ast.Call]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if not alias.asname:
+                    continue
+                if alias.name in CONTEXT_BINDERS:
+                    binders.add(alias.asname)
+                elif _is_logger_name(alias.name):
+                    receiver_names.add(alias.asname)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "logging" and alias.asname:
+                    receiver_names.add(alias.asname)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            assignments.append((node.targets, node.value))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Call):
+            assignments.append(([node.target], node.value))
+
+    changed = True
+    while changed:
+        changed = False
+        known = ModuleLogNames(frozenset(binders), frozenset(receiver_names), frozenset(receiver_attributes))
+        for targets, value in assignments:
+            if not _is_log_receiver(value, known):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id not in receiver_names:
+                    receiver_names.add(target.id)
+                    changed = True
+                elif isinstance(target, ast.Attribute) and target.attr not in receiver_attributes:
+                    receiver_attributes.add(target.attr)
+                    changed = True
+    return ModuleLogNames(frozenset(binders), frozenset(receiver_names), frozenset(receiver_attributes))
+
+
+def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
     if isinstance(node, ast.Name):
-        return node.id in LOG_RECEIVERS or bool(_LOGGER_NAME.search(node.id))
+        return _is_logger_name(node.id) or node.id in names.receiver_names
     if isinstance(node, ast.Attribute):
-        return bool(_LOGGER_NAME.search(node.attr))
+        return bool(_LOGGER_NAME.search(node.attr)) or node.attr in names.receiver_attributes
     if isinstance(node, ast.Call):
         # `structlog.get_logger(__name__).info(...)` и `logger.bind(...).info(...)`.
-        return _callee_name(node.func) in LOGGER_FACTORIES or _is_log_method_call(node)
+        return _callee_name(node.func) in LOGGER_FACTORIES or _is_log_method_call(node, names)
     return False
 
 
-def _is_log_method_call(call: ast.Call) -> bool:
+def _is_log_method_call(call: ast.Call, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
     func = call.func
-    return isinstance(func, ast.Attribute) and func.attr in LOG_METHODS and _is_log_receiver(func.value)
+    return (
+        isinstance(func, ast.Attribute) and func.attr in LOG_METHODS and _is_log_receiver(func.value, names)
+    )
 
 
-def _is_context_binding(call: ast.Call) -> bool:
-    """Привязка к контексту structlog — по имени вызова, при любом получателе."""
-    return _callee_name(call.func) in CONTEXT_BINDERS
+def _is_context_binding(call: ast.Call, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
+    """Привязка к контексту structlog — по имени вызова при любом получателе или по
+    псевдониму, под которым привязка ввезена в модуль."""
+    if _callee_name(call.func) in CONTEXT_BINDERS:
+        return True
+    return isinstance(call.func, ast.Name) and call.func.id in names.binders
 
 
 def _is_print(call: ast.Call) -> bool:
@@ -246,11 +371,12 @@ def _is_print(call: ast.Call) -> bool:
 def python_log_calls(source: str) -> list[ast.Call]:
     """Вызовы журнала в исходнике Python, в порядке строк."""
     tree = ast.parse(source)
+    names = module_log_names(tree)
     calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and (_is_print(node) or _is_log_method_call(node) or _is_context_binding(node))
+        and (_is_print(node) or _is_log_method_call(node, names) or _is_context_binding(node, names))
     ]
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
@@ -736,6 +862,38 @@ def test_a_planted_context_binding_in_app_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_aliased_binding_in_app_reddens_the_gate(tmp_path):
+    """IN-06 (О-6): привязка, ввезённая под псевдонимом, — та же привязка.
+
+    `from structlog.contextvars import bind_contextvars as bind_ctx` прячет имя
+    `bind_contextvars` от распознавания по последнему имени вызова, а номер всё так же
+    уходит в каждую следующую строку журнала. Подложенный файл находится тем же
+    обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "planted_alias.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n"
+        "\n"
+        "\n"
+        "def bind_account(account):\n"
+        "    bind_ctx(phone=account.phone)\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert any(
+        offence.startswith("app/planted_alias.py:5 — имя — phone=") for offence in offences
+    ), (
+        "привязка номера под псевдонимом ввоза не найдена: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о `bind_ctx(phone=…)`: {offences}"
+    )
+
+
 # --- Отрицательные контроли: каждый краснит чистую функцию ----------------------
 
 NEGATIVE_CONTROLS = [
@@ -784,6 +942,86 @@ NEGATIVE_CONTROLS = [
         "phone=",
         id="bound-contextvars-context-manager",
     ),
+    # IN-06 (О-6): привязка под псевдонимом ввоза и привязки `structlog.threadlocal`.
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n\nbind_ctx(phone=account.phone)\n",
+        "phone=",
+        id="aliased-import-bind-contextvars",
+    ),
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bound_contextvars as bound\n\nwith bound(phone=value):\n    pass\n",
+        "phone=",
+        id="aliased-import-bound-contextvars",
+    ),
+    pytest.param(
+        "app/x.py", "structlog.threadlocal.bind_threadlocal(phone=account.phone)\n", "phone=", id="threadlocal-bind"
+    ),
+    pytest.param(
+        "app/x.py",
+        "with structlog.threadlocal.bound_threadlocal(phone=value):\n    pass\n",
+        "phone=",
+        id="threadlocal-bound-context-manager",
+    ),
+    pytest.param(
+        "app/x.py", "with tmp_bind(logger, phone=value):\n    pass\n", "phone=", id="tmp-bind-context-manager"
+    ),
+    pytest.param(
+        "app/x.py",
+        "from structlog.threadlocal import bind_threadlocal as bind_tl\n\nbind_tl(phone=value)\n",
+        "phone=",
+        id="aliased-import-bind-threadlocal",
+    ),
+    # IN-06 (D-17): получатель журнала, связанный в модуле с фабрикой или ввезённый под
+    # псевдонимом, — тот же `logger.*` / `logging.*`.
+    pytest.param(
+        "app/x.py",
+        'import logging\n\nlg = logging.getLogger()\nlg.info("x %s", account.phone)\n',
+        "phone",
+        id="factory-assigned-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg: Logger = logging.getLogger(__name__)\nlg.error("x %s", phone_number)\n',
+        "phone_number",
+        id="annotated-factory-assigned-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.lg = structlog.get_logger()\n"
+        "\n"
+        "    def f(self, a):\n"
+        '        self.lg.warning("x", phone=a.phone)\n',
+        "phone=",
+        id="factory-assigned-attribute-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger().bind(component="x")\nlg.info("x", phone=p)\n',
+        "phone=",
+        id="bound-logger-assigned-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'tl = get_task_logger(__name__)\ntl.warning("x", phone=p)\n',
+        "phone=",
+        id="task-logger-factory-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'import logging as L\n\nL.info("x %s", account.phone)\n',
+        "phone",
+        id="aliased-logging-module",
+    ),
+    pytest.param(
+        "app/x.py",
+        'from app.services.billing_service import logger as lg\n\nlg.info("x %s", account.phone)\n',
+        "phone",
+        id="aliased-logger-import",
+    ),
 ]
 
 
@@ -794,6 +1032,22 @@ def test_a_number_handed_to_a_python_log_call_is_found(path, source, subject):
     assert offences, f"номер в вызове журнала не найден: {source!r} ({path})"
     assert any(subject in offence and offence.startswith(f"{path}:") for offence in offences), (
         f"находка не называет предмет {subject!r}: {offences}"
+    )
+
+
+def test_a_number_handed_to_a_logger_bound_by_assignment_is_found():
+    """IN-06 (D-17): `lg = logging.getLogger()` — тот же журнал из фабрики под другим именем.
+
+    Получатель `lg` не входит в `LOG_RECEIVERS` и не подходит под шаблон имени журнала,
+    но связан в модуле с фабрикой `getLogger` — значит, `lg.info(...)` уходит в журнал.
+    """
+    source = 'import logging\n\nlg = logging.getLogger()\nlg.info("x %s", account.phone)\n'
+
+    offences = python_log_offences(source, "app/x.py")
+
+    assert any(offence.startswith("app/x.py:4 — имя — phone") for offence in offences), (
+        "получатель журнала из фабрики под нестандартным именем не распознан: "
+        f"`lg = logging.getLogger(); lg.info(…, account.phone)` прошёл мимо гейта: {offences}"
     )
 
 
@@ -840,6 +1094,50 @@ POSITIVE_CONTROLS = [
     ),
     pytest.param(
         "app/x.py", 'structlog.contextvars.unbind_contextvars("task_id")\n', False, id="unbinding-is-not-a-log"
+    ),
+    # IN-06 (О-6): псевдоним привязки распознан и без номера не краснит; снятие и очистка
+    # привязки `structlog.threadlocal` — не вызов журнала, и под псевдонимом тоже.
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n\nbind_ctx(request_id=request_id)\n",
+        True,
+        id="aliased-binding-without-phone",
+    ),
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n\n"
+        "bind_ctx(phone_set=account.phone is not None)\n",
+        True,
+        id="aliased-binding-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py", "structlog.threadlocal.clear_threadlocal()\n", False, id="threadlocal-clear-is-not-a-log"
+    ),
+    pytest.param(
+        "app/x.py",
+        'from structlog.threadlocal import unbind_threadlocal as unbind_tl\n\nunbind_tl("task_id")\n',
+        False,
+        id="aliased-threadlocal-unbind-is-not-a-log",
+    ),
+    # IN-06 (D-17): настройка журнала, связанного с фабрикой, — не вызов журнала (живая
+    # форма `max_worker/main.py`); признак наличия через такой журнал не краснит.
+    pytest.param(
+        "app/x.py",
+        "_lg = logging.getLogger(name)\n_lg.handlers.clear()\n_lg.propagate = True\n",
+        False,
+        id="factory-assigned-receiver-configuration-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = logging.getLogger("x")\nlg.setLevel(logging.WARNING)\n',
+        False,
+        id="factory-assigned-receiver-set-level-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger()\nlg.info("x", phone_set=account.phone is not None)\n',
+        True,
+        id="factory-assigned-receiver-presence-flag",
     ),
 ]
 
