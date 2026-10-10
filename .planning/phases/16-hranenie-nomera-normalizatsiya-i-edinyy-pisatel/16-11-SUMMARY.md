@@ -231,3 +231,9 @@ None. No external service configuration is required.
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-10*
+
+## Self-Check: PASSED
+
+- FOUND: `app/services/phone.py`, `tests/test_services/test_phone.py`, `.planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-11-SUMMARY.md`.
+- FOUND on this branch: `40aee1f9`, `02d73c93`, `2c6c3733`, `2565d515`, `021eb913`. `check evaluation-scope --plan 16-11 --commits-only` gave `status: resolved` with 5 commits.
+- TDD scope grep: 2 × `test(16-11)` and 2 × `feat(16-11)`, each RED before its GREEN; no `refactor(16-11)`, which is optional.
