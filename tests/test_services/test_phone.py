@@ -28,6 +28,12 @@
   `+7 0…`; вариант «понимать `00` как `+`» владелец отверг. Строка
   `italian_leading_zero_is_not_plus_seven` — положительный контроль области
   отказа: у Италии `+39 06 …` ведущий ноль законен;
+- строки `wr06_*` и правило-перебор над `EXTRA_DIGIT_BASES` (план 16-11, ревью
+  WR-06, верификация 2026-10-09): настоящий номер зоны +7 с лишними цифрами,
+  дописанными без маркера добавочного (`+7 999 123-45-67 1234`), разбирается в
+  код 7 с национальной частью не из 10 цифр и ОТВЕРГАЕТСЯ при любом числе
+  лишних цифр, а не сохраняется выдуманным `+799912345671234` под признаком
+  «ручной» (D-07);
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
   у национальной части не длиннее двух цифр не видна ни одна её цифра (план
   16-07, ревью WR-03);
@@ -262,6 +268,23 @@ def test_a_number_typed_with_the_00_prefix_is_refused_not_saved_as_plus_seven_ze
     )
 
 
+def test_a_russian_number_with_four_extra_digits_typed_by_hand_is_refused():
+    """⚠️ ТРАСЕР ПЛАНА 16-11: `+7 999 123-45-67 1234` — отказ, а не `+799912345671234`.
+
+    Человек дописал добавочный без маркера (`доб`, `ext`). Разбор под `RU`
+    читает 14 национальных цифр, а RU-метаданные допускают и 14 — но только у
+    бесплатного шаблона `8108…`, который аккаунтом мессенджера быть не может.
+    До плана 16-11 (ревью WR-06, верификация 2026-10-09) такой ввод сохранялся
+    выдуманным номером под признаком «ручной», закрытым для автоисправления
+    (D-07). Отказ — прежним текстом `PHONE_ERROR_NOT_A_NUMBER` (D-18).
+    """
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual("+7 999 123-45-67 1234")
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        "номер +7 с четырьмя лишними цифрами обязан получить отказ «Не похоже на номер телефона»"
+    )
+
+
 MANUAL_REJECTED = [
     pytest.param("123-45-67", PHONE_ERROR_NOT_A_NUMBER, id="local_only_dashed"),
     pytest.param("1234567", PHONE_ERROR_NOT_A_NUMBER, id="local_only_digits"),
@@ -281,6 +304,18 @@ MANUAL_REJECTED = [
         "8 029 123 45 67", PHONE_ERROR_NOT_A_NUMBER, id="cr01_belarus_long_distance_eight_zero"
     ),
     pytest.param("+7 012 345 67 89", PHONE_ERROR_NOT_A_NUMBER, id="cr01_plus_seven_then_zero"),
+    pytest.param(
+        "+7 999 123-45-67 1234", PHONE_ERROR_NOT_A_NUMBER, id="wr06_plus_seven_four_extra_digits"
+    ),
+    pytest.param(
+        "8 999 123 45 67 8901", PHONE_ERROR_NOT_A_NUMBER, id="wr06_eight_prefix_four_extra_digits"
+    ),
+    pytest.param(
+        "89991234567 8901", PHONE_ERROR_NOT_A_NUMBER, id="wr06_digits_then_unmarked_extension"
+    ),
+    pytest.param(
+        "8 800 123 45 67 890", PHONE_ERROR_NOT_A_NUMBER, id="wr06_toll_free_three_extra_digits"
+    ),
     pytest.param("+7 999 123 45 67 доб 5", PHONE_ERROR_EXTENSION, id="extension_russian"),
     pytest.param("+7 999 123 45 67 ext 12", PHONE_ERROR_EXTENSION, id="extension_ext"),
     pytest.param("abc", PHONE_ERROR_NOT_A_NUMBER, id="latin_letters"),
@@ -315,10 +350,61 @@ def test_a_number_typed_by_hand_is_refused_with_an_explanation(text, message):
     0. Такого номера не бывает, а строгая «возможность» его пропускала, потому
     что RU-метаданные допускают 10 и 14 цифр. До плана 16-07 эти вводы
     сохранялись как `+700…` / `+70…`; теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
+
+    Строки `wr06_*` (план 16-11, ревью WR-06, верификация 2026-10-09): настоящий
+    номер зоны +7 с лишними цифрами без маркера добавочного разбирается в код 7
+    с национальной частью не из 10 цифр. До плана 16-11 четыре такие строки
+    сохранялись выдуманными номерами (`+799912345671234`, `+788001234567890`);
+    теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
     """
     with pytest.raises(PhoneError) as excinfo:
         normalize_manual(text)
     assert str(excinfo.value) == message, f"текст отказа для {text!r}"
+
+
+# Настоящие номера зоны +7, к которым правило-перебор дописывает лишние цифры
+# (план 16-11, ревью WR-06): мобильный России в двух написаниях, бесплатный
+# 8-800 и Казахстан.
+EXTRA_DIGIT_BASES = [
+    pytest.param("+7 999 123-45-67", id="plus_seven_mobile"),
+    pytest.param("8 999 123-45-67", id="eight_prefix_mobile"),
+    pytest.param("8 800 555-35-35", id="eight_prefix_toll_free"),
+    pytest.param("+7 701 123 4567", id="kazakhstan"),
+]
+EXTRA_DIGITS = "12345"
+
+
+@pytest.mark.parametrize(
+    "extra_count",
+    [pytest.param(k, id=f"extra_{k}") for k in range(1, len(EXTRA_DIGITS) + 1)],
+)
+@pytest.mark.parametrize("base", EXTRA_DIGIT_BASES)
+def test_a_number_with_extra_digits_typed_by_hand_is_refused_whatever_their_count(
+    base, extra_count
+):
+    """Номер +7 с 1…5 лишними цифрами — отказ при ЛЮБОМ их числе (WR-06, D-06).
+
+    Зачем перебор, а не четыре строки: верификатор (2026-10-09) нашёл
+    немонотонность — у `+7 999 123-45-67` одна, две и три лишние цифры давали
+    отказ, а четыре давали «номер»; замер планирования нашёл ещё и три лишние
+    у баз с ведущей `8` (`8 999 123-45-67 123` → `+789991234567123`,
+    `8 800 555-35-35 123` → `+788005553535123`). Правило закрывает класс, а не
+    отдельные вводы.
+
+    Антивакуум: сначала сама база обязана приниматься и давать E.164 с ровно 10
+    национальными цифрами — отказ должен идти от лишних цифр, а не от базы.
+    """
+    stored = normalize_manual(base)
+    assert stored.startswith("+7") and len(stored) == len("+7") + 10, (
+        f"антивакуум: база {base!r} обязана приниматься как номер +7 с 10 национальными цифрами"
+    )
+
+    typed = f"{base} {EXTRA_DIGITS[:extra_count]}"
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual(typed)
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        f"номер +7 с {extra_count} лишними цифрами обязан получить отказ «Не похоже на номер телефона»"
+    )
 
 
 @pytest.mark.parametrize("text,message", MANUAL_REJECTED)
