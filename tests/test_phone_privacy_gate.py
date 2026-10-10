@@ -893,6 +893,55 @@ NEGATIVE_CONTROLS = [
         "phone=",
         id="aliased-import-bind-threadlocal",
     ),
+    # IN-06 (D-17): получатель журнала, связанный в модуле с фабрикой или ввезённый под
+    # псевдонимом, — тот же `logger.*` / `logging.*`.
+    pytest.param(
+        "app/x.py",
+        'import logging\n\nlg = logging.getLogger()\nlg.info("x %s", account.phone)\n',
+        "phone",
+        id="factory-assigned-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg: Logger = logging.getLogger(__name__)\nlg.error("x %s", phone_number)\n',
+        "phone_number",
+        id="annotated-factory-assigned-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.lg = structlog.get_logger()\n"
+        "\n"
+        "    def f(self, a):\n"
+        '        self.lg.warning("x", phone=a.phone)\n',
+        "phone=",
+        id="factory-assigned-attribute-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger().bind(component="x")\nlg.info("x", phone=p)\n',
+        "phone=",
+        id="bound-logger-assigned-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'tl = get_task_logger(__name__)\ntl.warning("x", phone=p)\n',
+        "phone=",
+        id="task-logger-factory-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'import logging as L\n\nL.info("x %s", account.phone)\n',
+        "phone",
+        id="aliased-logging-module",
+    ),
+    pytest.param(
+        "app/x.py",
+        'from app.services.billing_service import logger as lg\n\nlg.info("x %s", account.phone)\n',
+        "phone",
+        id="aliased-logger-import",
+    ),
 ]
 
 
@@ -903,6 +952,22 @@ def test_a_number_handed_to_a_python_log_call_is_found(path, source, subject):
     assert offences, f"номер в вызове журнала не найден: {source!r} ({path})"
     assert any(subject in offence and offence.startswith(f"{path}:") for offence in offences), (
         f"находка не называет предмет {subject!r}: {offences}"
+    )
+
+
+def test_a_number_handed_to_a_logger_bound_by_assignment_is_found():
+    """IN-06 (D-17): `lg = logging.getLogger()` — тот же журнал из фабрики под другим именем.
+
+    Получатель `lg` не входит в `LOG_RECEIVERS` и не подходит под шаблон имени журнала,
+    но связан в модуле с фабрикой `getLogger` — значит, `lg.info(...)` уходит в журнал.
+    """
+    source = 'import logging\n\nlg = logging.getLogger()\nlg.info("x %s", account.phone)\n'
+
+    offences = python_log_offences(source, "app/x.py")
+
+    assert any(offence.startswith("app/x.py:4 — имя — phone") for offence in offences), (
+        "получатель журнала из фабрики под нестандартным именем не распознан: "
+        f"`lg = logging.getLogger(); lg.info(…, account.phone)` прошёл мимо гейта: {offences}"
     )
 
 
@@ -973,6 +1038,26 @@ POSITIVE_CONTROLS = [
         'from structlog.threadlocal import unbind_threadlocal as unbind_tl\n\nunbind_tl("task_id")\n',
         False,
         id="aliased-threadlocal-unbind-is-not-a-log",
+    ),
+    # IN-06 (D-17): настройка журнала, связанного с фабрикой, — не вызов журнала (живая
+    # форма `max_worker/main.py`); признак наличия через такой журнал не краснит.
+    pytest.param(
+        "app/x.py",
+        "_lg = logging.getLogger(name)\n_lg.handlers.clear()\n_lg.propagate = True\n",
+        False,
+        id="factory-assigned-receiver-configuration-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = logging.getLogger("x")\nlg.setLevel(logging.WARNING)\n',
+        False,
+        id="factory-assigned-receiver-set-level-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger()\nlg.info("x", phone_set=account.phone is not None)\n',
+        True,
+        id="factory-assigned-receiver-presence-flag",
     ),
 ]
 
