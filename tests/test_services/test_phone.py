@@ -13,6 +13,12 @@
 - автопуть (`REPORTED_*`) — номер Fragment `+888…` обязан пройти, хотя проверка
   «возможности» библиотеки считает его слишком коротким; мусор источника (сырой
   JID, скобки, лишние цифры, `None`, `bool`) обязан дать `None`, а не «номер»;
+  строки `wr07_*`, правило-перебор «код страны × длина 7…15» и правило-сторож
+  номеров-образцов метаданных (план 16-11, ревью WR-07, решение владельца
+  О-5 (а), 2026-10-09): автопуть отвергает у кода 7 то же, что ручной путь
+  (ведущий ноль, национальная часть не из 10 цифр), и вердикты `TOO_LONG` /
+  `INVALID_LENGTH`, но не теряет ни Fragment, ни ни одного номера-образца
+  метаданных;
 - показ (`DISPLAYED`) — разбивка своя у каждой страны, а сохранённое, но
   неразбираемое значение показывается как есть, а не «неизвестен» (D-06);
 - ручной ввод (`MANUAL_*`) — свободное написание человека сводится к E.164,
@@ -28,6 +34,12 @@
   `+7 0…`; вариант «понимать `00` как `+`» владелец отверг. Строка
   `italian_leading_zero_is_not_plus_seven` — положительный контроль области
   отказа: у Италии `+39 06 …` ведущий ноль законен;
+- строки `wr06_*` и правило-перебор над `EXTRA_DIGIT_BASES` (план 16-11, ревью
+  WR-06, верификация 2026-10-09): настоящий номер зоны +7 с лишними цифрами,
+  дописанными без маркера добавочного (`+7 999 123-45-67 1234`), разбирается в
+  код 7 с национальной частью не из 10 цифр и ОТВЕРГАЕТСЯ при любом числе
+  лишних цифр, а не сохраняется выдуманным `+799912345671234` под признаком
+  «ручной» (D-07);
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
   у национальной части не длиннее двух цифр не видна ни одна её цифра (план
   16-07, ревью WR-03);
@@ -110,6 +122,11 @@ def test_a_reported_number_is_normalized_to_e164(raw, expected):
     assert normalize_reported(raw) == expected, f"автопуть обязан принять {raw!r}"
 
 
+# Летопись (план 16-11, решение владельца О-5 (а), 2026-10-09): строки `wr07_*`
+# до плана хранились как номера (замер верификатора, раунд 2, ревью WR-07) —
+# код 7 с ведущим нулём или с национальной частью не из 10 цифр и вердикты
+# `TOO_LONG` / `INVALID_LENGTH`. `7999123` план 16-07 называл примером
+# оставшейся границы (флаг П-1); теперь его отвергает правило кода 7.
 REPORTED_REFUSED = [
     pytest.param("1234", id="four_digits"),
     pytest.param("12345", id="five_digits_fragment_was_the_lower_bound"),
@@ -126,6 +143,14 @@ REPORTED_REFUSED = [
     pytest.param("", id="empty"),
     pytest.param(None, id="none"),
     pytest.param(True, id="bool"),
+    pytest.param("70123456789", id="wr07_plus_seven_then_zero"),
+    pytest.param("799912345678", id="wr07_russian_mobile_plus_one_digit"),
+    pytest.param("79991234567890", id="wr07_russian_mobile_plus_three_digits"),
+    pytest.param("1234567890123", id="wr07_too_long_code_one"),
+    pytest.param("441234567890123", id="wr07_too_long_code_forty_four"),
+    pytest.param("700447911123456", id="wr07_cr01_number_from_a_source"),
+    pytest.param("799912345671234", id="wr07_wr06_number_from_a_source"),
+    pytest.param("7999123", id="wr07_russian_six_national_digits"),
 ]
 
 
@@ -141,6 +166,10 @@ def test_garbage_from_a_source_leaves_the_number_unknown(raw):
     `4412345` (`+44 12345`) и `71234567` — номер без кода зоны
     (`IS_POSSIBLE_LOCAL_ONLY`), который автопуть отвергает тем же правилом, что
     ручной путь (Ф-1).
+
+    Строки `wr07_*` (план 16-11, ревью WR-07, решение владельца О-5 (а)): код 7
+    с ведущим нулём или с национальной частью не из 10 цифр — общее с ручным
+    путём правило; вердикты `TOO_LONG` и `INVALID_LENGTH` — Fragment их не даёт.
     """
     assert normalize_reported(raw) is None, f"мусор {raw!r} не должен стать номером"
 
@@ -153,6 +182,127 @@ def test_a_short_fragment_from_a_source_is_not_stored_as_a_number():
     кодом страны — 7 цифр (Ниуэ `+683 1234`).
     """
     assert normalize_reported("12345") is None, "обрывок из пяти цифр не должен стать номером"
+
+
+def test_the_auto_path_refuses_what_the_owner_named_before_execution():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 2 ПЛАНА 16-11: исход владельца О-5 (а), названный заранее.
+
+    Решение владельца О-5 (а) «отказ», 2026-10-09, второй прогон
+    `/gsd-plan-phase 16 --gaps`; исход `human_verification` 2 верификации
+    назван ДО исполнения: `70123456789` (`+7 0…`), `799912345678` (у кода 7
+    11 национальных цифр, `INVALID_LENGTH`) и `1234567890123` (`TOO_LONG`) —
+    `None`, а Fragment `88801234567` по-прежнему `+88801234567`. Вариант (б)
+    «принимать, как сейчас, и переписать шапку» владелец отверг.
+    """
+    got = [
+        normalize_reported(raw)
+        for raw in ("70123456789", "799912345678", "1234567890123", "88801234567")
+    ]
+    assert got == [None, None, None, "+88801234567"], (
+        "автопуть обязан отвергнуть три значения владельца и принять Fragment"
+    )
+
+
+# Отвергнутые владельцем вердикты (О-5 (а)); `TOO_SHORT` сюда НЕ входит — его
+# дают настоящие номера Fragment (О-1).
+OWNER_REFUSED_VERDICTS = {
+    phonenumbers.ValidationResult.IS_POSSIBLE_LOCAL_ONLY,
+    phonenumbers.ValidationResult.TOO_LONG,
+    phonenumbers.ValidationResult.INVALID_LENGTH,
+}
+VERDICT_NAMES = {
+    value: name
+    for name, value in vars(phonenumbers.ValidationResult).items()
+    if name.isupper() and isinstance(value, int)
+}
+ENUMERATION_FILLER = "2345678901234567"
+
+
+def test_the_auto_path_never_stores_a_verdict_the_owner_refused():
+    """Перебор «каждый код страны × длина 7…15»: отказ автопути держится на классе.
+
+    Входы — каждый код страны метаданных, дополненный цифрами до общей длины
+    7…15 (замер планирования 2026-10-09: 1935 входов, 215 кодов). Ни одно
+    принятое значение не несёт вердикта `IS_POSSIBLE_LOCAL_ONLY`, `TOO_LONG`
+    или `INVALID_LENGTH`, и ни одно значение кода 7 — национальной части не из
+    10 цифр или с ведущим нулём (план 16-11, ревью WR-07, решение владельца
+    О-5 (а)).
+
+    Сообщение печатает число принятых по вердиктам: оставшаяся граница —
+    `TOO_SHORT` у кода, отличного от 7, — называется, а не утверждается нормой.
+    """
+    inputs = [
+        str(code) + ENUMERATION_FILLER[: total - len(str(code))]
+        for code in phonenumbers.COUNTRY_CODE_TO_REGION_CODE
+        for total in range(7, 16)
+    ]
+    accepted_by_verdict: dict[str, int] = {}
+    refused_verdict_inputs = 0
+    offences: list[tuple[str, str, str]] = []
+    for raw in inputs:
+        number = phonenumbers.parse("+" + raw, None)
+        verdict = phonenumbers.is_possible_number_with_reason(number)
+        if verdict in OWNER_REFUSED_VERDICTS:
+            refused_verdict_inputs += 1
+        stored = normalize_reported(raw)
+        if stored is None:
+            continue
+        name = VERDICT_NAMES[verdict]
+        accepted_by_verdict[name] = accepted_by_verdict.get(name, 0) + 1
+        impossible_zone_seven = number.country_code == 7 and (
+            bool(number.italian_leading_zero) or len(str(number.national_number)) != 10
+        )
+        if verdict in OWNER_REFUSED_VERDICTS or impossible_zone_seven:
+            offences.append((raw, stored, name))
+
+    assert len(inputs) >= 1900, f"антивакуум: входов перебора {len(inputs)}, ждали не меньше 1900"
+    assert refused_verdict_inputs >= 700, (
+        f"антивакуум: входов с отвергнутым вердиктом {refused_verdict_inputs}, ждали не меньше 700"
+    )
+    assert sum(accepted_by_verdict.values()) > 0, "антивакуум: автопуть не принял ни одного входа"
+    assert offences == [], (
+        f"автопуть хранит отвергнутое владельцем: {len(offences)} значений, "
+        f"первые {offences[:5]}; принятые по вердиктам: {accepted_by_verdict}"
+    )
+
+
+EXAMPLE_NUMBER_TYPES = (
+    phonenumbers.PhoneNumberType.MOBILE,
+    phonenumbers.PhoneNumberType.FIXED_LINE,
+    phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE,
+    phonenumbers.PhoneNumberType.TOLL_FREE,
+    phonenumbers.PhoneNumberType.VOIP,
+)
+
+
+def test_every_example_number_of_the_metadata_is_still_accepted_from_a_source():
+    """⚠️ СТОРОЖ ЗАПРЕТА 16-07 №3: отказ автопути не теряет настоящий номер.
+
+    Каждый номер-образец метаданных (`phonenumberslite==9.0.41`: типы MOBILE,
+    FIXED_LINE, FIXED_LINE_OR_MOBILE, TOLL_FREE, VOIP по всем регионам, плюс
+    негеографические коды — замер планирования 1014 + 9) автопуть обязан
+    вернуть тем же E.164. Правило проходит и до, и после отказа плана 16-11:
+    оно доказывает, что отказ не режет ни одной формы номера, известной
+    метаданным, — но не больше: образцы не перечень всех настоящих номеров.
+    """
+    examples: list[str] = []
+    for region in sorted(phonenumbers.SUPPORTED_REGIONS):
+        for kind in EXAMPLE_NUMBER_TYPES:
+            example = phonenumbers.example_number_for_type(region, kind)
+            if example is not None:
+                examples.append(
+                    phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.E164)
+                )
+    for code in sorted(phonenumbers.COUNTRY_CODES_FOR_NON_GEO_REGIONS):
+        example = phonenumbers.example_number_for_non_geo_entity(code)
+        if example is not None:
+            examples.append(
+                phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.E164)
+            )
+
+    assert len(examples) >= 1000, f"антивакуум: образцов {len(examples)}, ждали не меньше 1000"
+    lost = [e164 for e164 in examples if normalize_reported(e164[1:]) != e164]
+    assert lost == [], f"автопуть потерял номера-образцы метаданных: {len(lost)}, первые {lost[:10]}"
 
 
 DISPLAYED = [
@@ -262,6 +412,23 @@ def test_a_number_typed_with_the_00_prefix_is_refused_not_saved_as_plus_seven_ze
     )
 
 
+def test_a_russian_number_with_four_extra_digits_typed_by_hand_is_refused():
+    """⚠️ ТРАСЕР ПЛАНА 16-11: `+7 999 123-45-67 1234` — отказ, а не `+799912345671234`.
+
+    Человек дописал добавочный без маркера (`доб`, `ext`). Разбор под `RU`
+    читает 14 национальных цифр, а RU-метаданные допускают и 14 — но только у
+    бесплатного шаблона `8108…`, который аккаунтом мессенджера быть не может.
+    До плана 16-11 (ревью WR-06, верификация 2026-10-09) такой ввод сохранялся
+    выдуманным номером под признаком «ручной», закрытым для автоисправления
+    (D-07). Отказ — прежним текстом `PHONE_ERROR_NOT_A_NUMBER` (D-18).
+    """
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual("+7 999 123-45-67 1234")
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        "номер +7 с четырьмя лишними цифрами обязан получить отказ «Не похоже на номер телефона»"
+    )
+
+
 MANUAL_REJECTED = [
     pytest.param("123-45-67", PHONE_ERROR_NOT_A_NUMBER, id="local_only_dashed"),
     pytest.param("1234567", PHONE_ERROR_NOT_A_NUMBER, id="local_only_digits"),
@@ -281,6 +448,18 @@ MANUAL_REJECTED = [
         "8 029 123 45 67", PHONE_ERROR_NOT_A_NUMBER, id="cr01_belarus_long_distance_eight_zero"
     ),
     pytest.param("+7 012 345 67 89", PHONE_ERROR_NOT_A_NUMBER, id="cr01_plus_seven_then_zero"),
+    pytest.param(
+        "+7 999 123-45-67 1234", PHONE_ERROR_NOT_A_NUMBER, id="wr06_plus_seven_four_extra_digits"
+    ),
+    pytest.param(
+        "8 999 123 45 67 8901", PHONE_ERROR_NOT_A_NUMBER, id="wr06_eight_prefix_four_extra_digits"
+    ),
+    pytest.param(
+        "89991234567 8901", PHONE_ERROR_NOT_A_NUMBER, id="wr06_digits_then_unmarked_extension"
+    ),
+    pytest.param(
+        "8 800 123 45 67 890", PHONE_ERROR_NOT_A_NUMBER, id="wr06_toll_free_three_extra_digits"
+    ),
     pytest.param("+7 999 123 45 67 доб 5", PHONE_ERROR_EXTENSION, id="extension_russian"),
     pytest.param("+7 999 123 45 67 ext 12", PHONE_ERROR_EXTENSION, id="extension_ext"),
     pytest.param("abc", PHONE_ERROR_NOT_A_NUMBER, id="latin_letters"),
@@ -315,10 +494,61 @@ def test_a_number_typed_by_hand_is_refused_with_an_explanation(text, message):
     0. Такого номера не бывает, а строгая «возможность» его пропускала, потому
     что RU-метаданные допускают 10 и 14 цифр. До плана 16-07 эти вводы
     сохранялись как `+700…` / `+70…`; теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
+
+    Строки `wr06_*` (план 16-11, ревью WR-06, верификация 2026-10-09): настоящий
+    номер зоны +7 с лишними цифрами без маркера добавочного разбирается в код 7
+    с национальной частью не из 10 цифр. До плана 16-11 четыре такие строки
+    сохранялись выдуманными номерами (`+799912345671234`, `+788001234567890`);
+    теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
     """
     with pytest.raises(PhoneError) as excinfo:
         normalize_manual(text)
     assert str(excinfo.value) == message, f"текст отказа для {text!r}"
+
+
+# Настоящие номера зоны +7, к которым правило-перебор дописывает лишние цифры
+# (план 16-11, ревью WR-06): мобильный России в двух написаниях, бесплатный
+# 8-800 и Казахстан.
+EXTRA_DIGIT_BASES = [
+    pytest.param("+7 999 123-45-67", id="plus_seven_mobile"),
+    pytest.param("8 999 123-45-67", id="eight_prefix_mobile"),
+    pytest.param("8 800 555-35-35", id="eight_prefix_toll_free"),
+    pytest.param("+7 701 123 4567", id="kazakhstan"),
+]
+EXTRA_DIGITS = "12345"
+
+
+@pytest.mark.parametrize(
+    "extra_count",
+    [pytest.param(k, id=f"extra_{k}") for k in range(1, len(EXTRA_DIGITS) + 1)],
+)
+@pytest.mark.parametrize("base", EXTRA_DIGIT_BASES)
+def test_a_number_with_extra_digits_typed_by_hand_is_refused_whatever_their_count(
+    base, extra_count
+):
+    """Номер +7 с 1…5 лишними цифрами — отказ при ЛЮБОМ их числе (WR-06, D-06).
+
+    Зачем перебор, а не четыре строки: верификатор (2026-10-09) нашёл
+    немонотонность — у `+7 999 123-45-67` одна, две и три лишние цифры давали
+    отказ, а четыре давали «номер»; замер планирования нашёл ещё и три лишние
+    у баз с ведущей `8` (`8 999 123-45-67 123` → `+789991234567123`,
+    `8 800 555-35-35 123` → `+788005553535123`). Правило закрывает класс, а не
+    отдельные вводы.
+
+    Антивакуум: сначала сама база обязана приниматься и давать E.164 с ровно 10
+    национальными цифрами — отказ должен идти от лишних цифр, а не от базы.
+    """
+    stored = normalize_manual(base)
+    assert stored.startswith("+7") and len(stored) == len("+7") + 10, (
+        f"антивакуум: база {base!r} обязана приниматься как номер +7 с 10 национальными цифрами"
+    )
+
+    typed = f"{base} {EXTRA_DIGITS[:extra_count]}"
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual(typed)
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        f"номер +7 с {extra_count} лишними цифрами обязан получить отказ «Не похоже на номер телефона»"
+    )
 
 
 @pytest.mark.parametrize("text,message", MANUAL_REJECTED)
