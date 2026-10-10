@@ -33,7 +33,10 @@ UPDATE «записать, если номера нет и он не ручно�
    распаковкой литерала: `values(**{"phone": x})`, `MessengerAccount(**{…})`;
 3. ключ словаря-аргумента `values(...)` — строка `"phone"` / `"phone_is_manual"`
    или атрибут `MessengerAccount.phone` (и словари внутри списка — многострочная
-   вставка); отображение — `{…}` или вызов `dict(phone=…)`;
+   вставка); отображение — `{…}` или вызов `dict(phone=…)`, взятое из
+   литерального контейнера по грамматике `_literal_mappings`: список, кортеж,
+   набор, comprehension и генератор (`values([{…} for …])`), обёртка `list(…)`,
+   слияние `{…} | base`, условное выражение;
 4. `setattr(obj, "phone", …)` / `set_committed_value(obj, "phone_is_manual", …)` —
    запись атрибута по имени в обход присваивания;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом: `UPDATE … SET …
@@ -41,10 +44,12 @@ UPDATE «записать, если номера нет и он не ручно�
    Голое слово `phone_is_manual` в строке не судится — на нём покраснела бы
    константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
 6. ключ номера в строках `execute` / `bulk_update_mappings` /
-   `bulk_insert_mappings` — словарь или `dict(...)`, поданный позиционно или
-   аргументом `params=` / `mappings=`, прямо или внутри списка/кортежа:
-   executemany по первичному ключу, естественная форма скрипта дозаполнения
-   Фазы 20 (ревью WR-01);
+   `bulk_insert_mappings` / Alembic `op.bulk_insert` — словарь или `dict(...)`,
+   поданный позиционно или аргументом `params=` / `mappings=` / `parameters=`
+   (так называется аргумент строк у `Connection.execute`), прямо или в
+   литеральном контейнере той же грамматики, что в виде 3 (comprehension строк из
+   пар «аккаунт — номер» включительно): executemany по первичному ключу,
+   естественная форма скрипта дозаполнения Фазы 20 (ревью WR-01, WR-08);
 7. ключ номера в литеральном отображении `set_` у `on_conflict_do_update` —
    upsert пишет колонку при конфликте (ревью WR-01).
 
@@ -113,13 +118,24 @@ NAMED_ATTRIBUTE_WRITERS = frozenset({"setattr", "set_committed_value"})
 # Вызовы, чьи позиционные аргументы несут строки для executemany: словарь или
 # список словарей по первичному ключу (ревью WR-01). Судятся ключи строк, а не
 # первый аргумент: `stmt = update(...); session.execute(stmt, rows)` иначе прошёл бы.
+#
+# `bulk_insert` — Alembic `op.bulk_insert(table, rows)`: строки вставки стоят вторым
+# позиционным аргументом, который правило и так обходит (план 16-12).
 ROW_MAPPING_CALL_NAMES = frozenset(
-    {"execute", "bulk_update_mappings", "bulk_insert_mappings"}
+    {"execute", "bulk_update_mappings", "bulk_insert_mappings", "bulk_insert"}
 )
 
 # Именованные аргументы тех же вызовов, несущие строки: `execute(stmt, params=…)`,
 # `bulk_update_mappings(mapper, mappings=…)` — та же литеральная форма, что позиционно.
-ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings"})
+# У `Connection.execute` / `AsyncConnection.execute` в SQLAlchemy 2.0.46 аргумент
+# строк называется `parameters` (замер верификатора через `inspect.signature`), у
+# `Session.execute` — `params`. До плана 16-12 имени `parameters` в наборе не было,
+# и естественная форма скрипта дозаполнения на соединении проходила (ревью WR-08).
+ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters"})
+
+# Обёртки литерального контейнера: `list(<генератор словарей>)` и подобные с ОДНИМ
+# позиционным аргументом и без именованных — разбираются по этому аргументу.
+LITERAL_CONTAINER_WRAPPERS = frozenset({"list", "tuple", "set", "iter"})
 
 # Upsert: именованный аргумент `set_` пишет колонки при конфликте (ревью WR-01).
 UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update"})
@@ -233,7 +249,9 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                     if keyword.arg in ROW_MAPPING_KEYWORDS
                 ]
                 for argument in arguments:
-                    rows = isinstance(argument, (ast.List, ast.Tuple))
+                    # Скобки — когда строки лежат в контейнере или comprehension,
+                    # а не голым отображением.
+                    rows = not (isinstance(argument, ast.Dict) or _is_dict_call(argument))
                     for mapping in _literal_mappings(argument):
                         for key, column in _mapping_phone_keys(mapping):
                             text = _mapping_key_text(key, column)
@@ -297,19 +315,43 @@ def _values_dict_keys(call: ast.Call) -> list[tuple[ast.AST, str]]:
 
 
 def _literal_mappings(node: ast.expr) -> list[ast.expr]:
-    """Литеральные отображения в узле: `{...}`, `dict(...)` и они же в списке/кортеже.
+    """Литеральные отображения в узле — по ГРАММАТИКЕ литерального контейнера.
 
-    Переменная, вызов другого имени, генератор — не литерал: такие строки собраны
-    во время исполнения и лежат за объявленной границей предиката.
+    Грамматика (план 16-12, ревью WR-08):
+    - `{…}` и вызов `dict(...)` — само отображение;
+    - `[…]`, `(…)`, `{…, …}` (список, кортеж, набор) — рекурсивно по элементам;
+    - `[… for …]`, `(… for …)`, `{… for …}` — рекурсивно по элементу comprehension:
+      ключ `"phone"` в его словаре стоит литералом в исходнике, хотя строк много;
+    - `a | b`, `a + b` (слияние словарей, склейка списков) — по обеим сторонам;
+    - `a if c else b` — по обеим ветвям;
+    - `*rows` — по распаковываемому значению;
+    - `list(…)`, `tuple(…)`, `set(…)`, `iter(…)` ровно с одним позиционным аргументом
+      и без именованных (`LITERAL_CONTAINER_WRAPPERS`) — по этому аргументу.
+
+    Граница грамматики: всё прочее — имя, атрибут, вызов другого имени, `{k: v for …}`
+    с вычисленными ключами — пустой список. Это значения, пришедшие в пишущий вызов
+    именем или результатом другого вызова: поток данных предикат не прослеживает.
     """
     if isinstance(node, ast.Dict) or _is_dict_call(node):
         return [node]
-    if isinstance(node, (ast.List, ast.Tuple)):
-        return [
-            item
-            for item in node.elts
-            if isinstance(item, ast.Dict) or _is_dict_call(item)
-        ]
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return [mapping for item in node.elts for mapping in _literal_mappings(item)]
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        return _literal_mappings(node.elt)
+    if isinstance(node, ast.BinOp):
+        return _literal_mappings(node.left) + _literal_mappings(node.right)
+    if isinstance(node, ast.IfExp):
+        return _literal_mappings(node.body) + _literal_mappings(node.orelse)
+    if isinstance(node, ast.Starred):
+        return _literal_mappings(node.value)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in LITERAL_CONTAINER_WRAPPERS
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return _literal_mappings(node.args[0])
     return []
 
 
