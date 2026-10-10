@@ -16,19 +16,25 @@
 `get_logger(...)`/`getLogger(...)` или сам вызов журнала (`logger.bind(...).info`).
 `bind` включён НАМЕРЕННО: `logger.bind(phone=x)` кладёт номер в каждую следующую
 строку этого журнала. По той же причине вызовом журнала считается любой вызов с
-именем `bind_contextvars` или `bound_contextvars` (`CONTEXT_BINDERS`) ПРИ ЛЮБОМ
-получателе — `structlog.contextvars.bind_contextvars(...)`, голое имя после ввоза,
-менеджер `with structlog.contextvars.bound_contextvars(...)`: привязанное значение
-уходит в каждую следующую строку журнала запроса или задачи. `unbind_contextvars` и
-`clear_contextvars` — нет: номера они не кладут. `parser.error(...)` у argparse,
-`log.status` у записи `SendLog` и `logging.getLogger(...).setLevel(...)` вызовом
-журнала не считаются.
+именем `bind_contextvars` или `bound_contextvars`, а также привязки устаревшего
+`structlog.threadlocal` — `bind_threadlocal`, `bound_threadlocal`, `tmp_bind`
+(`CONTEXT_BINDERS`) — ПРИ ЛЮБОМ получателе: `structlog.contextvars.bind_contextvars(...)`,
+голое имя после ввоза, менеджер `with structlog.contextvars.bound_contextvars(...)`,
+`with tmp_bind(logger, ...)`; и вызов любого имени, под которым привязка ввезена в
+модуль (`from structlog.contextvars import bind_contextvars as bind_ctx` → `bind_ctx(...)`,
+`module_log_names`): привязанное значение уходит в каждую следующую строку журнала
+запроса, задачи или потока. `unbind_*` и `clear_*` — нет, и под псевдонимом тоже: номера
+они не кладут. `parser.error(...)` у argparse, `log.status` у записи `SendLog` и
+`logging.getLogger(...).setLevel(...)` вызовом журнала не считаются.
 
 Летопись: до плана 16-09 `structlog.contextvars.bind_contextvars(phone=…)` вызовом
 журнала не считался — имени нет в `LOG_METHODS`, а получатель `structlog.contextvars`
 не похож на журнал (ревью WR-02); проект при этом зовёт привязку в
 `app/middleware.py` и `app/worker/tasks.py` — с ключами без номера, и они теперь
-распознаются и не краснят.
+распознаются и не краснят. До плана 16-13 привязка распознавалась только по последнему
+имени вызова: псевдоним ввоза и привязки `structlog.threadlocal` уходили мимо гейта
+(ревью IN-06, верификация 2026-10-09, advisory; решение владельца О-6 — закрыть в этом
+проходе).
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -146,7 +152,14 @@ LOG_METHODS = frozenset(
 # по имени при любом получателе (`structlog.contextvars.…` или голое имя после ввоза):
 # получатель `structlog.contextvars` на журнал не похож (ревью WR-02).
 # `unbind_contextvars` / `clear_contextvars` номера не кладут и вызовом журнала не считаются.
-CONTEXT_BINDERS = frozenset({"bind_contextvars", "bound_contextvars"})
+# Устаревший `structlog.threadlocal` structlog 25.5.0 по-прежнему поставляет, и его
+# привязки `bind_threadlocal` / `bound_threadlocal` / `tmp_bind` кладут значение в каждую
+# следующую строку журнала потока тем же механизмом (ревью IN-06). `unbind_*`, `clear_*`,
+# `merge_*`, `get_*`, `wrap_dict`, `as_immutable` значения не привязывают (замер `dir()`
+# планирования, 2026-10-09).
+CONTEXT_BINDERS = frozenset(
+    {"bind_contextvars", "bound_contextvars", "bind_threadlocal", "bound_threadlocal", "tmp_bind"}
+)
 
 LOG_RECEIVERS = frozenset({"logger", "log", "logging", "_log", "_logger"})
 
@@ -218,6 +231,35 @@ def _callee_name(func: ast.expr) -> str | None:
 _LOGGER_NAME = re.compile(r"(?:^|_)(?:log|logger)$")
 
 
+@dataclass(frozen=True)
+class ModuleLogNames:
+    """Имена журнала, связанные в одном модуле (IN-06).
+
+    `binders` — псевдонимы ввоза привязок `CONTEXT_BINDERS`
+    (`from structlog.contextvars import bind_contextvars as bind_ctx` → `bind_ctx`).
+    `receiver_names` / `receiver_attributes` — получатели журнала под именем вне
+    `LOG_RECEIVERS` и шаблона `_LOGGER_NAME`. Область видимости — весь модуль.
+    """
+
+    binders: frozenset[str]
+    receiver_names: frozenset[str]
+    receiver_attributes: frozenset[str]
+
+
+NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
+
+
+def module_log_names(tree: ast.AST) -> ModuleLogNames:
+    """Имена журнала, которые модуль `tree` связывает ввозом или присваиванием."""
+    binders: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name in CONTEXT_BINDERS and alias.asname:
+                    binders.add(alias.asname)
+    return ModuleLogNames(frozenset(binders), frozenset(), frozenset())
+
+
 def _is_log_receiver(node: ast.expr) -> bool:
     if isinstance(node, ast.Name):
         return node.id in LOG_RECEIVERS or bool(_LOGGER_NAME.search(node.id))
@@ -234,9 +276,12 @@ def _is_log_method_call(call: ast.Call) -> bool:
     return isinstance(func, ast.Attribute) and func.attr in LOG_METHODS and _is_log_receiver(func.value)
 
 
-def _is_context_binding(call: ast.Call) -> bool:
-    """Привязка к контексту structlog — по имени вызова, при любом получателе."""
-    return _callee_name(call.func) in CONTEXT_BINDERS
+def _is_context_binding(call: ast.Call, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
+    """Привязка к контексту structlog — по имени вызова при любом получателе или по
+    псевдониму, под которым привязка ввезена в модуль."""
+    if _callee_name(call.func) in CONTEXT_BINDERS:
+        return True
+    return isinstance(call.func, ast.Name) and call.func.id in names.binders
 
 
 def _is_print(call: ast.Call) -> bool:
@@ -246,11 +291,12 @@ def _is_print(call: ast.Call) -> bool:
 def python_log_calls(source: str) -> list[ast.Call]:
     """Вызовы журнала в исходнике Python, в порядке строк."""
     tree = ast.parse(source)
+    names = module_log_names(tree)
     calls = [
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and (_is_print(node) or _is_log_method_call(node) or _is_context_binding(node))
+        and (_is_print(node) or _is_log_method_call(node) or _is_context_binding(node, names))
     ]
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
