@@ -33,8 +33,9 @@ UPDATE «записать, если номера нет и он не ручно�
    заведённого в том же модуле (`from … import MessengerAccount as Account`,
    `Model = MessengerAccount`) — в том числе распаковкой литерала:
    `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`;
-3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"` или
-   атрибут `MessengerAccount.phone` — в позиционном аргументе `values(...)` и
+3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"`, атрибут
+   `MessengerAccount.phone`, индекс `table.c["phone"]` или `getattr(X, "phone")` —
+   в позиционном аргументе `values(...)` и
    устаревшего `Query.update({...})`. Отображение — `{…}` (и `{**{…}, …}`) или
    вызов `dict(phone=…)` (и `dict({…})`, `dict(**{…})`, `dict([("phone", …)])`),
    взятое из литерального контейнера по грамматике `_literal_mappings`: список,
@@ -48,8 +49,10 @@ UPDATE «записать, если номера нет и он не ручно�
    (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
    (б) строчный конструктор `SET (…, phone, …) =`; (в) голова пишущего оператора
    перед таблицей аккаунтов — `INSERT [OR …] INTO`, `REPLACE INTO`, `UPSERT INTO`,
-   `MERGE INTO`, таблица в кавычках или без и с префиксом схемы; (г) `COPY
-   <таблица аккаунтов> … FROM` (загрузка; `COPY … TO` — выгрузка, чтение). Сюда же
+   `MERGE INTO`, таблица в кавычках или без и с префиксом схемы; (г) загрузка —
+   `COPY <таблица аккаунтов> … FROM` и `LOAD DATA … INTO TABLE <таблица
+   аккаунтов>` (`COPY … TO` — выгрузка, чтение). Кавычки идентификатора — `"…"`,
+   `` `…` `` и `[…]`: SQLite принимает все три. Сюда же
    COPY asyncpg в обход SQLAlchemy — `copy_records_to_table("messenger_accounts",
    …)` / `copy_to_table`. Голое слово `phone_is_manual` в строке не судится — на нём
    покраснела бы константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
@@ -68,8 +71,12 @@ UPDATE «записать, если номера нет и он не ручно�
    `on_duplicate_key_update` — именованный аргумент номера, `**{…}`, позиционное
    отображение и позиционный перечень пар `[("phone", …)]` (план 16-12);
 8. колонка номера, названная ПОЗИЦИЕЙ: пара `(MessengerAccount.phone, x)` /
-   `("phone_is_manual", x)` в `ordered_values(...)` и имя колонки номера в перечне
-   `from_select([…, "phone"], select)` (план 16-12, ревью WR-08).
+   `("phone_is_manual", x)` / `(table.c["phone"], x)` в `ordered_values(...)` (и
+   `ordered_values(*[…])`) и имя колонки номера в перечне `from_select([…,
+   "phone"], select)` (план 16-12, ревью WR-08).
+Перечень пар (виды 3, 7, 8: `dict([…])`, `on_duplicate_key_update([…])`,
+`ordered_values(*[…])`) разбирается той же грамматикой контейнера, что
+отображения, — список, кортеж, `*`, comprehension, `+`, условное выражение.
 
 ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ. Имя `update` берётся по последнему звену
 вызова, поэтому `some_dict.update(phone=x)` и `some_dict.update({"phone": x})` тоже
@@ -203,30 +210,42 @@ LITERAL_CONTAINER_WRAPPERS = frozenset({"list", "tuple", "set", "iter"})
 # достижимую форму недостижимой.
 UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update", "on_duplicate_key_update"})
 
-# Таблица аккаунтов в SQL: в двойных кавычках или без, с необязательным префиксом
-# схемы (`public.messenger_accounts`, `"public"."messenger_accounts"`).
-_ACCOUNTS_TABLE_SQL = r'(?:"?\w+"?\s*\.\s*)?"?messenger_accounts\b"?'
+# Кавычки идентификатора SQL: двойные (стандарт, PostgreSQL), обратные (MySQL) и
+# квадратные скобки (SQL Server); SQLite, на которой гоняется суита, принимает все три.
+_SQL_QUOTE = r'["`\[\]]?'
+
+# Таблица аккаунтов в SQL: в кавычках или без, с необязательным префиксом схемы
+# (`public.messenger_accounts`, `"public"."messenger_accounts"`).
+_ACCOUNTS_TABLE_SQL = (
+    r"(?:" + _SQL_QUOTE + r"\w+" + _SQL_QUOTE + r"\s*\.\s*)?"
+    + _SQL_QUOTE + r"messenger_accounts\b" + _SQL_QUOTE
+)
 
 # Пишущий SQL — по МЕХАНИЗМУ записи, четырьмя альтернативами (без учёта регистра):
 # (а) присваивание колонки номера в `SET` до `WHERE` (фильтр по номеру записью не
-#     является) — имя `phone` / `phone_is_manual` в двойных кавычках или без;
+#     является) — имя `phone` / `phone_is_manual` в кавычках или без;
 # (б) строчный конструктор `SET (…, phone, …) = (…)`;
 # (в) голова пишущего оператора перед таблицей аккаунтов — `INSERT [OR <конфликт>]
 #     INTO`, `INSERT IGNORE INTO`, `REPLACE INTO`, `UPSERT INTO`, `MERGE INTO`;
-# (г) `COPY <таблица аккаунтов> [(колонки)] FROM` — загрузка; `COPY … TO` — выгрузка,
-#     то есть чтение, и не судится.
+# (г) загрузка в таблицу аккаунтов — `COPY <таблица> [(колонки)] FROM` и MySQL
+#     `LOAD DATA … INTO TABLE <таблица>`; `COPY … TO` — выгрузка, то есть чтение, и
+#     не судится.
 # Летопись: до плана 16-12 шаблон требовал голое `phone =` и голую
 # `messenger_accounts` после `INSERT INTO`, и кавычки у идентификатора, префикс
 # схемы, `INSERT OR REPLACE`, `REPLACE` / `MERGE INTO`, `COPY … FROM` и строчный
 # конструктор проводили запись мимо гейта (ревью WR-08, 2026-10-09).
 RAW_SQL_PHONE_WRITE = re.compile(
-    r'\bupdate\b[\s\S]*?\bset\b(?:(?!\bwhere\b)[\s\S])*?\bphone(?:_is_manual)?\b"?\s*='
-    r"|\bupdate\b[\s\S]*?\bset\s*\([^)]*\bphone(?:_is_manual)?\b[^)]*\)\s*="
-    r"|\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
+    r"\bupdate\b[\s\S]*?\bset\b(?:(?!\bwhere\b)[\s\S])*?\bphone(?:_is_manual)?\b"
+    + _SQL_QUOTE
+    + r"\s*="
+    + r"|\bupdate\b[\s\S]*?\bset\s*\([^)]*\bphone(?:_is_manual)?\b[^)]*\)\s*="
+    + r"|\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
     + _ACCOUNTS_TABLE_SQL
     + r"|\bcopy\s+"
     + _ACCOUNTS_TABLE_SQL
-    + r"\s*(?:\([^)]*\)\s*)?from\b",
+    + r"\s*(?:\([^)]*\)\s*)?from\b"
+    + r"|\bload\s+data\b[\s\S]*?\binto\s+table\s+"
+    + _ACCOUNTS_TABLE_SQL,
     re.IGNORECASE,
 )
 
@@ -572,10 +591,8 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
     found: list[tuple[ast.AST, str]] = []
     if isinstance(mapping, ast.Dict):
         for key in mapping.keys:
-            if isinstance(key, ast.Constant) and key.value in PHONE_COLUMNS:
-                found.append((key, key.value))
-            elif isinstance(key, ast.Attribute) and key.attr in PHONE_COLUMNS:
-                found.append((key, key.attr))
+            if key is not None and (column := _phone_column(key)) is not None:
+                found.append((key, column))
     elif _is_dict_call(mapping):
         for keyword in mapping.keywords:
             if keyword.arg in PHONE_COLUMNS:
@@ -587,25 +604,80 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
 
 
 def _phone_column(node: ast.AST) -> str | None:
-    """Колонка номера, названная узлом: строка `"phone"` или атрибут `X.phone`."""
+    """Колонка номера, названная узлом литералом.
+
+    Строка `"phone"`, атрибут `X.phone`, индекс `table.c["phone"]` и
+    `getattr(X, "phone")` с именем-константой.
+    """
     if isinstance(node, ast.Constant) and node.value in PHONE_COLUMNS:
         return node.value
     if isinstance(node, ast.Attribute) and node.attr in PHONE_COLUMNS:
         return node.attr
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.slice, ast.Constant)
+        and node.slice.value in PHONE_COLUMNS
+    ):
+        return node.slice.value
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value in PHONE_COLUMNS
+    ):
+        return node.args[1].value
     return None
 
 
-def _phone_pairs(node: ast.AST) -> list[tuple[ast.AST, str]]:
-    """Пары `(колонка номера, значение)` в литеральном перечне пар `[(…, …), …]`."""
-    if not isinstance(node, (ast.List, ast.Tuple)):
-        return []
+def _pair_candidates(node: ast.AST) -> list[ast.AST]:
+    """Элементы литерального перечня пар — по той же грамматике контейнера.
+
+    Список, кортеж, набор (с `*`-распаковкой внутри), comprehension и генератор (их
+    элемент), `+` / `|`, условное выражение, `:=` и обёртки `list(…)` и подобные.
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        found: list[ast.AST] = []
+        for item in node.elts:
+            if isinstance(item, ast.Starred):
+                found.extend(_pair_candidates(item.value))
+            else:
+                found.append(item)
+        return found
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        return [node.elt]
+    if isinstance(node, ast.BinOp):
+        return _pair_candidates(node.left) + _pair_candidates(node.right)
+    if isinstance(node, ast.IfExp):
+        return _pair_candidates(node.body) + _pair_candidates(node.orelse)
+    if isinstance(node, ast.NamedExpr):
+        return _pair_candidates(node.value)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in LITERAL_CONTAINER_WRAPPERS
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return _pair_candidates(node.args[0])
+    return []
+
+
+def _phone_pairs_among(candidates: list[ast.AST]) -> list[tuple[ast.AST, str]]:
+    """Пары `(колонка номера, значение)` среди кандидатов: первый элемент — колонка."""
     found: list[tuple[ast.AST, str]] = []
-    for pair in node.elts:
+    for pair in candidates:
         if isinstance(pair, (ast.Tuple, ast.List)) and pair.elts:
             column = _phone_column(pair.elts[0])
             if column is not None:
                 found.append((pair.elts[0], column))
     return found
+
+
+def _phone_pairs(node: ast.AST) -> list[tuple[ast.AST, str]]:
+    """Пары `(колонка номера, значение)` в литеральном перечне пар `[(…, …), …]`."""
+    return _phone_pairs_among(_pair_candidates(node))
 
 
 def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
@@ -617,7 +689,14 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
     """
     name = _call_name(call)
     if name == "ordered_values":
-        return _phone_pairs(ast.Tuple(elts=list(call.args)))
+        # Каждый позиционный аргумент — пара; `*pairs` — перечень пар.
+        candidates: list[ast.AST] = []
+        for argument in call.args:
+            if isinstance(argument, ast.Starred):
+                candidates.extend(_pair_candidates(argument.value))
+            else:
+                candidates.append(argument)
+        return _phone_pairs_among(candidates)
     if name == "from_select":
         names = call.args[0] if call.args else next(
             (k.value for k in call.keywords if k.arg == "names"), None
@@ -667,7 +746,7 @@ def _mapping_key_text(key: ast.AST, column: str) -> str:
     """Ключ номера в предмете находки: `{'phone': …}`, `{X.phone: …}`, `dict(phone=…)`."""
     if isinstance(key, ast.keyword):
         return f"dict({column}=…)"
-    if isinstance(key, ast.Attribute):
+    if isinstance(key, (ast.Attribute, ast.Subscript, ast.Call)):
         return f"{{{ast.unparse(key)}: …}}"
     return f"{{{column!r}: …}}"
 
