@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-06
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Manual input of a valid `+7` number plus four extra digits is saved as an invented 15-digit \"manual\" number"
   - id: WR-07
     severity: warning
@@ -67,7 +67,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 5
+open: 4
 total: 16
 recorded: 2026-10-09T16:55:55.664Z
 ---
@@ -76,7 +76,7 @@ recorded: 2026-10-09T16:55:55.664Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-06 | warning | open | - |
+| WR-06 | warning | fixed | `16-11` задача 1, GREEN `02d73c93` — отказ `PHONE_ERROR_NOT_A_NUMBER` у кода 7 с национальной частью не из 10 цифр или с ведущим нулём (`_is_impossible_zone_seven`): «+7 999 123-45-67 1234» и родственные вводы больше не сохраняются выдуманным «ручным» номером; класс «номер плюс лишние цифры» закреплён перебором (4 основы × 1–5 лишних цифр), а не четырьмя вводами |
 | WR-07 | warning | open | - |
 | WR-08 | warning | open | - |
 | IN-06 | info | open | - |
