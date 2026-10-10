@@ -60,14 +60,14 @@ from __future__ import annotations
 
 import enum
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, inspect, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.messenger_account import MessengerAccount
 from app.services.phone import normalize_manual, normalize_reported
 
-ACCOUNT_NOT_IN_SESSION = "аккаунт не добавлен в сессию: после flush у него нет id"
+ACCOUNT_NOT_IN_SESSION = "аккаунт не принадлежит сессии писателя: добавьте его через session.add"
 
 
 class PhoneWrite(enum.Enum):
@@ -141,12 +141,28 @@ async def record_reported_phone(
     оператором. При `WRITTEN` значение кладётся на объект как уже сохранённое:
     вызывающий видит номер без `refresh`, а объект не становится грязным.
 
-    Объект, не добавленный в сессию, `flush` не вставляет, и `id` у него
-    остаётся `None`. Прежде писатель исполнял UPDATE по `id IS NULL` и молча
-    возвращал `KEPT` (ревью WR-05); теперь это громкий `ValueError` с текстом
-    `ACCOUNT_NOT_IN_SESSION` до любого оператора — мастер Фазы 19 с забытым
-    `session.add` узнаёт об ошибке сразу. Это ошибка вызывающего, а не исход.
+    Объект должен принадлежать сессии писателя. Проверка членства идёт ПЕРВОЙ,
+    до нормализации, сравнением `inspect(account).session` с
+    `session.sync_session`: она не отдаёт ни одного оператора и не сбрасывает
+    сессию. Поэтому забытый `session.add` виден при любом ответе источника — в
+    том числе у старого воркера без номера (PHONE-15), самом частом пути, — и
+    мастер Фазы 19 узнаёт об ошибке сразу: громкий `ValueError` с текстом
+    `ACCOUNT_NOT_IN_SESSION`. Отсоединённый (`expunge`) объект и объект другой
+    сессии получают тот же отказ: прежде по их `id` исполнялся UPDATE в чужой
+    для объекта сессии с зеркалом на объект. Это ошибка вызывающего, а не исход.
+
+    Летопись. До плана 16-08 (ревью WR-05) писатель исполнял UPDATE по
+    `id IS NULL` и молча возвращал `KEPT`. До плана 16-14 (ревью IN-07,
+    верификация 2026-10-09) проверка `id` стояла после нормализации, и на
+    мусоре (`None`, `''`, `'garbage'`) писатель молча отвечал `UNPARSEABLE`,
+    хотя обещал «узнаёт об ошибке сразу». Механика без оператора выбрана вместо
+    «сбросить и проверить id»: сброс исполнил бы вставки других ожидающих
+    объектов раньше времени и сбросил бы сам объект на пути мусора, где
+    писатель базы не касается. Проверка `id` после сброса оставлена второй
+    линией: `UPDATE … WHERE id IS NULL` невозможен независимо от первой.
     """
+    if inspect(account).session is not session.sync_session:
+        raise ValueError(ACCOUNT_NOT_IN_SESSION)
     e164 = normalize_reported(raw)
     if e164 is None:
         return PhoneWrite.UNPARSEABLE
