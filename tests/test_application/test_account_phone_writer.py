@@ -395,6 +395,33 @@ async def test_recording_an_account_outside_this_session_raises(
 
 
 @pytest.mark.asyncio
+async def test_recording_garbage_for_a_pending_member_issues_nothing(
+    db_session: AsyncSession, monkeypatch
+):
+    """Член сессии, ожидающий вставки, с мусором от источника: базу не трогаем.
+
+    Правило закрепляет выбор механики плана 16-14: проверка членства в сессии
+    не отдаёт операторов и не сбрасывает сессию. Вариант «сбросить и проверить
+    id до нормализации» сбросил бы ожидающий объект на этом пути (и вставки
+    других ожидающих объектов сессии раньше времени) — и правило покраснело бы
+    на `account.id`. Путь мусора у члена сессии прежний: старый воркер без
+    номера оставляет номер неизвестным, вход не падает (PHONE-15).
+    """
+    seeded = await _seed_account(db_session)
+    account = MessengerAccount(
+        user_id=seeded.user_id, type="wa", credentials="creds", status="active"
+    )
+    db_session.add(account)
+    calls = _count_executes(db_session, monkeypatch)
+
+    outcome = await record_reported_phone(db_session, account, None)
+
+    assert outcome is PhoneWrite.UNPARSEABLE
+    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов на мусоре"
+    assert account.id is None, "сессия сброшена на пути мусора"
+
+
+@pytest.mark.asyncio
 async def test_the_writers_do_not_commit(db_session: AsyncSession):
     """Транзакцией владеет вызывающий: откат возвращает «неизвестен»."""
     account = await _seed_account(db_session)
