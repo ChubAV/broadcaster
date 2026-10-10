@@ -644,6 +644,30 @@ def test_a_raw_sql_phone_write_reddens_the_gate(tmp_path):
     ), f"сырой SQL с номером не найден: {offences}"
 
 
+def test_a_raw_sql_write_with_quoted_identifiers_reddens_the_gate(tmp_path):
+    """Вставка в таблицу аккаунтов с кавычками и префиксом схемы краснит гейт (WR-08).
+
+    До плана 16-12 шаблон требовал голое `phone =` и голую `messenger_accounts`, и
+    кавычки у идентификатора или префикс схемы проводили запись мимо гейта.
+    """
+    _plant(
+        tmp_path,
+        "app/planted_sql.py",
+        "SQL = 'INSERT INTO \"public\".\"messenger_accounts\" "
+        "(user_id, \"phone\") VALUES (1, :p)'\n",
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "app/planted_sql.py"
+    ], "обход синтетического дерева не нашёл подложенный файл"
+    assert any(
+        offence.startswith(f"app/planted_sql.py:1 — {KIND_RAW_SQL} — ")
+        for offence in offences
+    ), f"сырой SQL с кавычками и схемой не найден: {offences}"
+
+
 DICT_KEY_CASES = [
     pytest.param(
         'stmt = update(MessengerAccount).values({"phone": x})\n',
@@ -903,6 +927,99 @@ LITERAL_FORM_CASES = [
         "phone",
         id="values-double-star-merged-dict",
     ),
+    # Сырой SQL (WR-08 и перебор планирования 16-12): поле «вызов» — ключевое слово
+    # SQL, поле «колонка» — таблица; оба стоят в первых 60 символах предмета.
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET \"phone\" = :p WHERE id = :id'\n",
+        KIND_RAW_SQL,
+        "UPDATE",
+        "messenger_accounts",
+        id="raw-sql-quoted-column",
+    ),
+    pytest.param(
+        "SQL = 'INSERT INTO \"messenger_accounts\" (user_id, phone) VALUES (1, :p)'\n",
+        KIND_RAW_SQL,
+        "INSERT",
+        "messenger_accounts",
+        id="raw-sql-quoted-table",
+    ),
+    pytest.param(
+        'SQL = "INSERT INTO public.messenger_accounts (user_id, phone) VALUES (1, :p)"\n',
+        KIND_RAW_SQL,
+        "INSERT",
+        "messenger_accounts",
+        id="raw-sql-schema-qualified",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE \"public\".\"messenger_accounts\" SET \"phone_is_manual\" = true'\n",
+        KIND_RAW_SQL,
+        "UPDATE",
+        "messenger_accounts",
+        id="raw-sql-quoted-schema-update",
+    ),
+    pytest.param(
+        'SQL = "INSERT OR REPLACE INTO messenger_accounts (id, phone) VALUES (:i, :p)"\n',
+        KIND_RAW_SQL,
+        "REPLACE",
+        "messenger_accounts",
+        id="raw-sql-insert-or-replace",
+    ),
+    pytest.param(
+        'SQL = "REPLACE INTO messenger_accounts (id, phone) VALUES (:i, :p)"\n',
+        KIND_RAW_SQL,
+        "REPLACE",
+        "messenger_accounts",
+        id="raw-sql-replace-into",
+    ),
+    pytest.param(
+        'SQL = "MERGE INTO messenger_accounts AS t USING src AS s ON t.id = s.id '
+        'WHEN MATCHED THEN UPDATE SET phone = s.phone"\n',
+        KIND_RAW_SQL,
+        "MERGE",
+        "messenger_accounts",
+        id="raw-sql-merge-into",
+    ),
+    pytest.param(
+        # Ветка вставки слияния: колонка номера стоит в перечне `INSERT (…)`, а не
+        # в `SET`, поэтому её ловит только голова `MERGE INTO <таблица аккаунтов>`.
+        'SQL = "MERGE INTO messenger_accounts AS t USING src AS s ON t.id = s.id '
+        'WHEN NOT MATCHED THEN INSERT (id, phone) VALUES (s.id, s.phone)"\n',
+        KIND_RAW_SQL,
+        "MERGE",
+        "messenger_accounts",
+        id="raw-sql-merge-insert-branch",
+    ),
+    pytest.param(
+        'SQL = "COPY messenger_accounts (id, phone) FROM STDIN"\n',
+        KIND_RAW_SQL,
+        "COPY",
+        "messenger_accounts",
+        id="raw-sql-copy-from",
+    ),
+    pytest.param(
+        'SQL = "UPDATE messenger_accounts SET (phone, phone_is_manual) = (:p, true) '
+        'WHERE id = :i"\n',
+        KIND_RAW_SQL,
+        "SET",
+        "messenger_accounts",
+        id="raw-sql-row-constructor-set",
+    ),
+    pytest.param(
+        'SQL = "UPDATE messenger_accounts " + "SET phone = :p WHERE id = :i"\n',
+        KIND_RAW_SQL,
+        "UPDATE",
+        "messenger_accounts",
+        id="raw-sql-concatenated-literals",
+    ),
+    pytest.param(
+        "async def f(conn, rows):\n"
+        '    await conn.copy_records_to_table("messenger_accounts", '
+        'records=rows, columns=["id", "phone"])\n',
+        KIND_RAW_SQL,
+        "copy_records_to_table",
+        "messenger_accounts",
+        id="asyncpg-copy-records",
+    ),
 ]
 
 
@@ -1003,6 +1120,35 @@ LEGITIMATE_CASES = [
         "    await s.execute(update(MessengerAccount), "
         '[{"id": a, "status": st} for a, st in rows])\n',
         id="execute-comprehension-rows-without-phone",
+    ),
+    pytest.param(
+        "SQL = 'SELECT id FROM messenger_accounts WHERE \"phone\" = :p'\n",
+        id="select-where-quoted-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE groups SET title = :t WHERE \"phone\" = :p'\n",
+        id="update-other-table-where-quoted-phone",
+    ),
+    pytest.param(
+        'SQL = "UPDATE groups SET title = \'phone\' WHERE id = 1"\n',
+        id="update-set-string-mentioning-phone",
+    ),
+    pytest.param(
+        'SQL = "COPY messenger_accounts (id, phone) TO STDOUT"\n',
+        id="copy-to-stdout-is-a-read",
+    ),
+    pytest.param(
+        'SQL = "INSERT INTO groups (title) SELECT phone FROM messenger_accounts"\n',
+        id="insert-into-another-table-selecting-phone",
+    ),
+    pytest.param(
+        'SQL = "UPDATE groups " + "SET title = :t"\n',
+        id="concatenation-without-phone",
+    ),
+    pytest.param(
+        "async def f(conn, rows):\n"
+        '    await conn.copy_records_to_table("groups", records=rows, columns=["phone"])\n',
+        id="asyncpg-copy-into-another-table",
     ),
 ]
 
