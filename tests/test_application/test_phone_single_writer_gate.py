@@ -453,6 +453,47 @@ def test_a_planted_bulk_update_by_primary_key_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_backfill_with_parameters_and_a_comprehension_reddens_the_gate(
+    tmp_path,
+):
+    """ТРАСЕР WR-08: строки executemany в comprehension под `parameters=`.
+
+    У `Connection.execute` / `AsyncConnection.execute` аргумент строк называется
+    `parameters`, а список словарей, собранный comprehension из пар «аккаунт —
+    номер», — естественная форма скрипта дозаполнения Фазы 20 (D-13). Ключ
+    `"phone"` стоит литералом прямо в аргументе пишущего вызова. Подложенный файл
+    находится тем же обходом `writer_sources(root)`, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_planted_rows.py",
+        "async def backfill(conn, rows):\n"
+        "    await conn.execute(update(MessengerAccount), "
+        'parameters=[{"id": a.id, "phone": n} for a, n in rows])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_planted_rows.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(
+            f"scripts/backfill_planted_rows.py:2 — {KIND_ROW_MAPPING} — "
+        )
+    ]
+    assert found, (
+        "строки executemany в comprehension под parameters= не найдены: "
+        "`conn.execute(update(MessengerAccount), parameters=[{'phone': n} for …])` "
+        f"в scripts/backfill_planted_rows.py гейт пропустил: {offences}"
+    )
+    assert all("execute" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет вызов `execute` и колонку `phone`: {found}"
+    )
+
+
 ASSIGNMENT_CASES = [
     pytest.param("account.phone = x\n", "account.phone", id="assign-phone"),
     pytest.param(
@@ -723,6 +764,103 @@ LITERAL_FORM_CASES = [
         "phone",
         id="execute-params-keyword",
     ),
+    # Ревью WR-08 (2026-10-09) и перебор планирования 16-12: строки executemany и
+    # отображения `values` в литеральном контейнере — comprehension, генератор,
+    # обёртка `list(…)`, условное выражение, слияние `|`, аргумент `parameters=`.
+    pytest.param(
+        "async def f(conn, p):\n"
+        "    await conn.execute(update(MessengerAccount), "
+        'parameters=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="conn-execute-parameters",
+    ),
+    pytest.param(
+        "async def f(s, rows):\n"
+        "    await s.execute(update(MessengerAccount), "
+        '[{"id": a.id, "phone": n} for a, n in rows])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-list-comprehension",
+    ),
+    pytest.param(
+        "async def f(s, rows):\n"
+        "    await s.execute(update(MessengerAccount), "
+        '({"id": a.id, "phone": n} for a, n in rows))\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-generator-expression",
+    ),
+    pytest.param(
+        # Синтаксически литеральна; во время исполнения набор словарей упал бы
+        # (словарь не хешируется), но гэп 3 называет `SetComp` прямо.
+        "async def f(s, rows):\n"
+        "    await s.execute(update(MessengerAccount), "
+        "{dict(id=a, phone=n) for a, n in rows})\n",
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-set-comprehension-of-dict-calls",
+    ),
+    pytest.param(
+        "async def f(s, rows):\n"
+        "    await s.execute(update(MessengerAccount), "
+        "[dict(id=a, phone=n) for a, n in rows])\n",
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-comprehension-of-dict-calls",
+    ),
+    pytest.param(
+        "async def f(s, rows):\n"
+        "    await s.execute(update(MessengerAccount), "
+        'list({"id": a, "phone": n} for a, n in rows))\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-list-wrapped-generator",
+    ),
+    pytest.param(
+        "async def f(s, p, c):\n"
+        "    await s.execute(update(MessengerAccount), "
+        '[{"id": 1, "phone": p}] if c else [])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-conditional-rows",
+    ),
+    pytest.param(
+        'op.bulk_insert(accounts_table, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_insert",
+        "phone",
+        id="alembic-bulk-insert",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values("
+        '[{"user_id": u, "phone": n} for u, n in rows])\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="insert-values-list-comprehension",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({"phone": x} | base)\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-merged-dict",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(**({"phone": x} | base))\n',
+        KIND_KEYWORD,
+        "values",
+        "phone",
+        id="values-double-star-merged-dict",
+    ),
 ]
 
 
@@ -817,6 +955,12 @@ LEGITIMATE_CASES = [
         '        update(MessengerAccount), [{"id": 1, "status": "active"}]\n'
         "    )\n",
         id="execute-rows-without-phone",
+    ),
+    pytest.param(
+        "async def f(s, rows):\n"
+        "    await s.execute(update(MessengerAccount), "
+        '[{"id": a, "status": st} for a, st in rows])\n',
+        id="execute-comprehension-rows-without-phone",
     ),
 ]
 
