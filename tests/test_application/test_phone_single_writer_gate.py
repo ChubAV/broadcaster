@@ -26,19 +26,23 @@ UPDATE «записать, если номера нет и он не ручно�
 (замер разведки), и автор следующего плана снял бы гейт как шумный. Предикат судит
 только формы, которые действительно пишут в колонку.
 
-ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ:
+ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ (восемь):
 1. присваивание атрибуту `phone` / `phone_is_manual` (`=`, `+=`, аннотированное);
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
-   `update(...)`, `insert(...)` или `MessengerAccount(...)` — в том числе
-   распаковкой литерала: `values(**{"phone": x})`, `MessengerAccount(**{…})`;
-3. ключ словаря-аргумента `values(...)` — строка `"phone"` / `"phone_is_manual"`
-   или атрибут `MessengerAccount.phone` (и словари внутри списка — многострочная
-   вставка); отображение — `{…}` или вызов `dict(phone=…)`, взятое из
-   литерального контейнера по грамматике `_literal_mappings`: список, кортеж,
-   набор, comprehension и генератор (`values([{…} for …])`), обёртка `list(…)`,
-   слияние `{…} | base`, условное выражение;
-4. `setattr(obj, "phone", …)` / `set_committed_value(obj, "phone_is_manual", …)` —
-   запись атрибута по имени в обход присваивания;
+   `update(...)`, `insert(...)`, `MessengerAccount(...)` или псевдонима модели,
+   заведённого в том же модуле (`from … import MessengerAccount as Account`,
+   `Model = MessengerAccount`) — в том числе распаковкой литерала:
+   `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`;
+3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"` или
+   атрибут `MessengerAccount.phone` — в позиционном аргументе `values(...)` и
+   устаревшего `Query.update({...})`. Отображение — `{…}` (и `{**{…}, …}`) или
+   вызов `dict(phone=…)` (и `dict({…})`, `dict(**{…})`, `dict([("phone", …)])`),
+   взятое из литерального контейнера по грамматике `_literal_mappings`: список,
+   кортеж, набор, comprehension и генератор (`values([{…} for …])`), обёртка
+   `list(…)`, слияние `{…} | base`, склейка `+`, условное выражение, `*` и `:=`;
+4. запись атрибута по имени в обход присваивания: `setattr(obj, "phone", …)`,
+   `set_committed_value(obj, "phone_is_manual", …)`, `set_attribute(obj, "phone",
+   …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)`;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
    строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
    (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
@@ -59,14 +63,22 @@ UPDATE «записать, если номера нет и он не ручно�
    литеральном контейнере той же грамматики, что в виде 3 (comprehension строк из
    пар «аккаунт — номер» включительно): executemany по первичному ключу,
    естественная форма скрипта дозаполнения Фазы 20 (ревью WR-01, WR-08);
-7. ключ номера в литеральном отображении `set_` у `on_conflict_do_update` —
-   upsert пишет колонку при конфликте (ревью WR-01).
+7. upsert пишет колонку при конфликте: ключ номера в литеральном отображении
+   `set_` у `on_conflict_do_update` (ревью WR-01); у MySQL
+   `on_duplicate_key_update` — именованный аргумент номера, `**{…}`, позиционное
+   отображение и позиционный перечень пар `[("phone", …)]` (план 16-12);
+8. колонка номера, названная ПОЗИЦИЕЙ: пара `(MessengerAccount.phone, x)` /
+   `("phone_is_manual", x)` в `ordered_values(...)` и имя колонки номера в перечне
+   `from_select([…, "phone"], select)` (план 16-12, ревью WR-08).
 
-ЦЕНА СТРОГОСТИ ВТОРОГО ВИДА. Имя `update` берётся по последнему звену вызова,
-поэтому `some_dict.update(phone=x)` тоже покраснеет, хотя в колонку не пишет. Это
-осознанно: отличить `dict.update` от `sqlalchemy.update` по исходнику без типов
-нельзя, а ложное срабатывание здесь снимается переименованием ключа, тогда как
-пропущенный второй писатель снимается только потерей ручного номера у пользователя.
+ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ. Имя `update` берётся по последнему звену
+вызова, поэтому `some_dict.update(phone=x)` и `some_dict.update({"phone": x})` тоже
+покраснеют, хотя в колонку не пишут. Это осознанно: отличить `dict.update` от
+`sqlalchemy.update` и `Query.update` по исходнику без типов нельзя, а ложное
+срабатывание здесь снимается переименованием ключа, тогда как пропущенный второй
+писатель снимается только потерей ручного номера у пользователя. Псевдоним модели
+разрешается по всему модулю, без учёта областей видимости: имя, однажды связанное
+с `MessengerAccount`, считается моделью в любой функции того же файла.
 
 ЦЕНА СТРОГОСТИ ШЕСТОГО ВИДА — та же по природе. `execute` судится по ключам строк,
 а не по первому аргументу: иначе `stmt = update(MessengerAccount);
@@ -74,18 +86,40 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 словаре у `execute` для ЧТЕНИЯ — `execute(text("… WHERE phone = :phone"),
 {"phone": p})` — тоже краснеет; снимается переименованием параметра (`:number`).
 
-ГРАНИЦА ПРЕДИКАТА, названная, чтобы её не приняли за покрытие: вне охвата только
-значения, собранные во время исполнения, — `values(**fields)` и
-`MessengerAccount(**fields)` с ИМЕНЕМ, `execute(stmt, rows)`, где строки собраны в
-переменную, `setattr(obj, name, …)` с вычисленным именем, SQL из склейки
-переменных. По исходнику они не определимы, и такие формы в коде записи номера
-сами по себе повод для ревью. Всё, что видно литералом в исходнике, ловится.
+ГРАНИЦА ПРЕДИКАТА — через механизм, а не через «всё». Ловится всякая запись, в
+которой колонка номера — или таблица аккаунтов во вставке, загрузке и слиянии —
+названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика
+`_literal_mappings`) или в строковой константе SQL (и в склейке `+` констант).
+Вне охвата, каждая форма с причиной, по которой синтаксическому предикату она
+недостижима:
+(1) значение, пришедшее в пишущий вызов ИМЕНЕМ или результатом другого вызова, —
+    переменная, параметр, `build_rows()`, `values(**fields)`, `{k: v for …}` с
+    вычисленными ключами: поток данных предикат не прослеживает, даже когда
+    литерал стоит строкой выше в том же файле;
+(2) имя колонки или SQL, вычисленные во время исполнения, — `setattr(obj, name,
+    …)`, f-строка с колонкой в подстановке, `.format(col)`, склейка с переменной;
+(3) вставка позиционным кортежем значений без имён колонок —
+    `insert(MessengerAccount).values((…))`: колонку по исходнику не назвать,
+    порядок колонок живёт в модели;
+(4) пишущий API без имени или под псевдонимом из другого модуля —
+    `type(account)(phone=…)`, псевдоним модели, заведённый в чужом файле: без
+    типов он неотличим от законного `render(…, phone=…)`;
+(5) НЕ запись в колонку — `account.__dict__["phone"] = …`, `vars(account)[…] = …`:
+    обход инструментовки ORM, оператора UPDATE не порождает и в базу не уходит.
+Такие формы в коде записи номера сами по себе повод для ревью. Форма, которая
+под механизм подпадает, но предикатом не ловится, — слепота предиката, а не
+граница средства: повод дописать строку `LITERAL_FORM_CASES` и предикат.
 
-Летопись границы: до плана 16-09 граница называлась теми же словами —
-«значение, собранное во время исполнения», — но пять литеральных форм
-(executemany по первичному ключу, `dict(...)`, `**{…}`, `set_` при конфликте,
-`bulk_*_mappings`) проходили молча, хотя видны в исходнике; это была слепота
-предиката, а не граница средства (ревью WR-01, 2026-10-08).
+Летопись границы. До плана 16-09 граница называлась словами «значение, собранное
+во время исполнения», но пять литеральных форм (executemany по первичному ключу,
+`dict(...)`, `**{…}`, `set_` при конфликте, `bulk_*_mappings`) проходили молча,
+хотя видны в исходнике (ревью WR-01, 2026-10-08). До плана 16-12 абзац
+заканчивался заявлением «Всё, что видно литералом в исходнике, ловится», и оно
+было неверно дважды: ревью WR-01 (2026-10-08) нашло пять литеральных форм, ревью
+WR-08 (2026-10-09) — ещё девять (`parameters=`, comprehension и генератор строк,
+`values([…for…])`, кавычки у колонки и у таблицы, префикс схемы, `ordered_values`,
+`object.__setattr__`). План 16-12 чинит их и формы тех же семейств, найденные
+перебором, и заменяет заявление «всё» заявлением через механизм.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -118,11 +152,27 @@ PHONE_WRITER_MODULE = "app/application/accounts/phone.py"
 PHONE_COLUMNS = frozenset({"phone", "phone_is_manual"})
 
 # Вызовы, именованный аргумент которых пишет колонку: Core-операторы и конструктор
-# модели. Имя берётся по последнему звену (`func.id` или `func.attr`).
+# модели. Имя берётся по последнему звену (`func.id` или `func.attr`). Псевдонимы
+# модели, заведённые в том же модуле, добавляются к набору при разборе исходника
+# (`_module_model_aliases`).
 WRITE_CALL_NAMES = frozenset({"values", "update", "insert", "MessengerAccount"})
 
-# Вызовы, пишущие атрибут по имени из второго позиционного аргумента.
-NAMED_ATTRIBUTE_WRITERS = frozenset({"setattr", "set_committed_value"})
+# Имя модели аккаунта: его псевдонимы в модуле — тоже пишущие вызовы.
+MODEL_NAME = "MessengerAccount"
+
+# Вызовы, пишущие атрибут по имени из второго позиционного аргумента. `__setattr__`
+# (`object.__setattr__(account, "phone", x)`) и `set_attribute`
+# (`sqlalchemy.orm.attributes.set_attribute`) добавлены планом 16-12 (ревью WR-08);
+# у `__setattr__` судится и ПЕРВЫЙ позиционный аргумент — форма вызова через объект
+# `account.__setattr__("phone", x)`, где имени атрибута предшествует только он сам.
+NAMED_ATTRIBUTE_WRITERS = frozenset(
+    {"setattr", "set_committed_value", "__setattr__", "set_attribute"}
+)
+
+# Вызовы, называющие колонку ПОЗИЦИЕЙ, а не именованным аргументом или ключом
+# словаря: `ordered_values((колонка, значение), …)` и `from_select([имена колонок],
+# select)` (план 16-12, ревью WR-08).
+POSITIONAL_COLUMN_CALL_NAMES = frozenset({"ordered_values", "from_select"})
 
 # Вызовы, чьи позиционные аргументы несут строки для executemany: словарь или
 # список словарей по первичному ключу (ревью WR-01). Судятся ключи строк, а не
@@ -146,8 +196,12 @@ ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters"})
 # позиционным аргументом и без именованных — разбираются по этому аргументу.
 LITERAL_CONTAINER_WRAPPERS = frozenset({"list", "tuple", "set", "iter"})
 
-# Upsert: именованный аргумент `set_` пишет колонки при конфликте (ревью WR-01).
-UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update"})
+# Upsert: именованный аргумент `set_` у `on_conflict_do_update` пишет колонки при
+# конфликте (ревью WR-01). MySQL `on_duplicate_key_update` (план 16-12) несёт
+# колонки именованными аргументами, позиционным отображением или перечнем пар; диалекта
+# в проекте нет, но форма литеральна, и оставить её в границе значило бы назвать
+# достижимую форму недостижимой.
+UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update", "on_duplicate_key_update"})
 
 # Таблица аккаунтов в SQL: в двойных кавычках или без, с необязательным префиксом
 # схемы (`public.messenger_accounts`, `"public"."messenger_accounts"`).
@@ -257,6 +311,8 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for child in (node.left, node.right)
         if _is_concatenation(child)
     }
+    # Пишущие вызовы этого исходника: общий набор плюс псевдонимы модели в модуле.
+    write_names = WRITE_CALL_NAMES | _module_model_aliases(tree)
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -272,7 +328,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                 record(attribute, KIND_ASSIGNMENT, ast.unparse(attribute))
         elif isinstance(node, ast.Call):
             name = _call_name(node)
-            if name in WRITE_CALL_NAMES:
+            if name in write_names:
                 for keyword in node.keywords:
                     if keyword.arg in PHONE_COLUMNS:
                         record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
@@ -282,9 +338,18 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                             for key, column in _mapping_phone_keys(mapping):
                                 text = _mapping_key_text(key, column)
                                 record(key, KIND_KEYWORD, f"{name}(**{text})")
-            if name == "values":
+            if name in ("values", "update"):
+                # `update({...})` — устаревший `Query.update({"phone": x})`.
                 for key, column in _values_dict_keys(node):
-                    record(key, KIND_DICT_KEY, f"values({_mapping_key_text(key, column)})")
+                    record(key, KIND_DICT_KEY, f"{name}({_mapping_key_text(key, column)})")
+            if name in POSITIONAL_COLUMN_CALL_NAMES:
+                for column_node, column in _positional_phone_columns(node):
+                    subject = (
+                        f"ordered_values(({column}, …))"
+                        if name == "ordered_values"
+                        else f"from_select([{column!r}, …])"
+                    )
+                    record(column_node, KIND_POSITIONAL_COLUMN, subject)
             if name in ROW_MAPPING_CALL_NAMES:
                 arguments = list(node.args) + [
                     keyword.value
@@ -300,7 +365,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                             text = _mapping_key_text(key, column)
                             subject = f"{name}([{text}])" if rows else f"{name}({text})"
                             record(key, KIND_ROW_MAPPING, subject)
-            if name in UPSERT_CALL_NAMES:
+            if name in UPSERT_CALL_NAMES and name == "on_conflict_do_update":
                 for keyword in node.keywords:
                     if keyword.arg != "set_":
                         continue
@@ -308,13 +373,43 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                         for key, column in _mapping_phone_keys(mapping):
                             text = _mapping_key_text(key, column)
                             record(key, KIND_UPSERT_SET, f"{name}(set_={text})")
-            if name in NAMED_ATTRIBUTE_WRITERS and len(node.args) >= 2:
-                attribute = node.args[1]
-                if (
-                    isinstance(attribute, ast.Constant)
-                    and attribute.value in PHONE_COLUMNS
-                ):
-                    record(node, KIND_SETATTR, f"{name}(…, {attribute.value!r}, …)")
+            elif name in UPSERT_CALL_NAMES:
+                # MySQL `on_duplicate_key_update`: именованные аргументы, `**{…}`,
+                # позиционное отображение и позиционный перечень пар.
+                for keyword in node.keywords:
+                    if keyword.arg in PHONE_COLUMNS:
+                        record(keyword, KIND_UPSERT_SET, f"{name}({keyword.arg}=…)")
+                    elif keyword.arg is None:
+                        for mapping in _literal_mappings(keyword.value):
+                            for key, column in _mapping_phone_keys(mapping):
+                                text = _mapping_key_text(key, column)
+                                record(key, KIND_UPSERT_SET, f"{name}(**{text})")
+                for argument in node.args:
+                    for mapping in _literal_mappings(argument):
+                        for key, column in _mapping_phone_keys(mapping):
+                            text = _mapping_key_text(key, column)
+                            record(key, KIND_UPSERT_SET, f"{name}({text})")
+                    for key, column in _phone_pairs(argument):
+                        record(key, KIND_UPSERT_SET, f"{name}([({column!r}, …)])")
+            if name in NAMED_ATTRIBUTE_WRITERS:
+                # Имя атрибута — второй позиционный аргумент; у `__setattr__` ещё и
+                # первый (`account.__setattr__("phone", x)`).
+                positions = (0, 1) if name == "__setattr__" else (1,)
+                for position in positions:
+                    if position >= len(node.args):
+                        break
+                    attribute = node.args[position]
+                    if (
+                        isinstance(attribute, ast.Constant)
+                        and attribute.value in PHONE_COLUMNS
+                    ):
+                        shown = (
+                            f"{name}({attribute.value!r}, …)"
+                            if position == 0
+                            else f"{name}(…, {attribute.value!r}, …)"
+                        )
+                        record(node, KIND_SETATTR, shown)
+                        break
             if name in ROW_COPY_CALL_NAMES:
                 table = node.args[0] if node.args else next(
                     (k.value for k in node.keywords if k.arg == "table_name"), None
@@ -389,9 +484,11 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
 
 
 def _values_dict_keys(call: ast.Call) -> list[tuple[ast.AST, str]]:
-    """Ключи номера в позиционных отображениях `values(...)`, в том числе в списке.
+    """Ключи номера в позиционных отображениях `values(...)` / `update(...)`.
 
-    Отображение — `{...}` или `dict(...)`; список — многострочная вставка.
+    Отображение — `{...}` или `dict(...)` в литеральном контейнере грамматики
+    `_literal_mappings`; список — многострочная вставка; у `update` — устаревший
+    `Query.update({"phone": x})`.
     """
     return [
         found
@@ -405,7 +502,9 @@ def _literal_mappings(node: ast.expr) -> list[ast.expr]:
     """Литеральные отображения в узле — по ГРАММАТИКЕ литерального контейнера.
 
     Грамматика (план 16-12, ревью WR-08):
-    - `{…}` и вызов `dict(...)` — само отображение;
+    - `{…}` и вызов `dict(...)` — само отображение, а с ним отображения, вложенные
+      в него: `{**{…}, …}`, `dict({…})`, `dict(**{…})`;
+    - `rows := …` — по присваиваемому значению;
     - `[…]`, `(…)`, `{…, …}` (список, кортеж, набор) — рекурсивно по элементам;
     - `[… for …]`, `(… for …)`, `{… for …}` — рекурсивно по элементу comprehension:
       ключ `"phone"` в его словаре стоит литералом в исходнике, хотя строк много;
@@ -419,8 +518,22 @@ def _literal_mappings(node: ast.expr) -> list[ast.expr]:
     с вычисленными ключами — пустой список. Это значения, пришедшие в пишущий вызов
     именем или результатом другого вызова: поток данных предикат не прослеживает.
     """
-    if isinstance(node, ast.Dict) or _is_dict_call(node):
-        return [node]
+    if isinstance(node, ast.Dict):
+        # `{**{"phone": x}, …}` — отображение внутри отображения.
+        return [node] + [
+            mapping
+            for key, value in zip(node.keys, node.values)
+            if key is None
+            for mapping in _literal_mappings(value)
+        ]
+    if _is_dict_call(node):
+        # `dict({"phone": x})`, `dict(**{"phone": x})` — отображение-аргумент.
+        nested = list(node.args) + [k.value for k in node.keywords if k.arg is None]
+        return [node] + [
+            mapping for argument in nested for mapping in _literal_mappings(argument)
+        ]
+    if isinstance(node, ast.NamedExpr):
+        return _literal_mappings(node.value)
     if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
         return [mapping for item in node.elts for mapping in _literal_mappings(item)]
     if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
@@ -467,7 +580,87 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
         for keyword in mapping.keywords:
             if keyword.arg in PHONE_COLUMNS:
                 found.append((keyword, keyword.arg))
+        # `dict([("phone", x)])` — перечень пар.
+        for argument in mapping.args:
+            found.extend(_phone_pairs(argument))
     return found
+
+
+def _phone_column(node: ast.AST) -> str | None:
+    """Колонка номера, названная узлом: строка `"phone"` или атрибут `X.phone`."""
+    if isinstance(node, ast.Constant) and node.value in PHONE_COLUMNS:
+        return node.value
+    if isinstance(node, ast.Attribute) and node.attr in PHONE_COLUMNS:
+        return node.attr
+    return None
+
+
+def _phone_pairs(node: ast.AST) -> list[tuple[ast.AST, str]]:
+    """Пары `(колонка номера, значение)` в литеральном перечне пар `[(…, …), …]`."""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return []
+    found: list[tuple[ast.AST, str]] = []
+    for pair in node.elts:
+        if isinstance(pair, (ast.Tuple, ast.List)) and pair.elts:
+            column = _phone_column(pair.elts[0])
+            if column is not None:
+                found.append((pair.elts[0], column))
+    return found
+
+
+def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
+    """Колонки номера, названные ПОЗИЦИЕЙ: (узел для строки находки, колонка).
+
+    У `ordered_values` — каждый позиционный аргумент-пара, чей первый элемент —
+    колонка номера; у `from_select` — элементы первого позиционного аргумента
+    (или `names=`), являющиеся колонкой номера.
+    """
+    name = _call_name(call)
+    if name == "ordered_values":
+        return _phone_pairs(ast.Tuple(elts=list(call.args)))
+    if name == "from_select":
+        names = call.args[0] if call.args else next(
+            (k.value for k in call.keywords if k.arg == "names"), None
+        )
+        if isinstance(names, (ast.List, ast.Tuple)):
+            return [
+                (item, column)
+                for item in names.elts
+                if (column := _phone_column(item)) is not None
+            ]
+    return []
+
+
+def _module_model_aliases(tree: ast.AST) -> frozenset[str]:
+    """Псевдонимы модели аккаунта в ТОМ ЖЕ модуле.
+
+    `from … import MessengerAccount as X` и присваивание `X = MessengerAccount` (и
+    цепочкой `Y = X`). Область видимости плоская — весь модуль, без учёта функций и
+    классов; псевдоним, заведённый в другом модуле, — поток данных между модулями,
+    и это названная граница предиката.
+    """
+    known = {MODEL_NAME}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == MODEL_NAME and alias.asname:
+                    known.add(alias.asname)
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets, value = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, value = [node.target], node.value
+            else:
+                continue
+            if isinstance(value, ast.Name) and value.id in known:
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id not in known:
+                        known.add(target.id)
+                        changed = True
+    return frozenset(known - {MODEL_NAME})
 
 
 def _mapping_key_text(key: ast.AST, column: str) -> str:
