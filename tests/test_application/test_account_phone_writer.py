@@ -335,13 +335,22 @@ async def test_the_existence_probe_runs_only_after_an_update_that_touched_no_row
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [None, "", "garbage", "79991234567"],
+    ids=["none", "empty", "garbage", "parseable"],
+)
 async def test_recording_an_account_never_added_to_the_session_raises(
-    db_session: AsyncSession, monkeypatch
+    db_session: AsyncSession, monkeypatch, raw
 ):
-    """Мастер забыл `session.add`: громкий `ValueError`, ни одного оператора (WR-05).
+    """Мастер забыл `session.add`: громкий `ValueError` при ЛЮБОМ ответе источника.
 
-    `flush` такой объект не вставляет, и `id` остаётся `None`. Прежде писатель
-    исполнял UPDATE `WHERE id IS NULL` и молча возвращал `KEPT`.
+    Ни одного оператора, `id` остаётся `None` (WR-05, IN-07). До плана 16-08
+    писатель исполнял UPDATE `WHERE id IS NULL` и молча возвращал `KEPT`; до
+    плана 16-14 проверка стояла после нормализации, и на мусоре (`None`, `''`,
+    `'garbage'`) — самом частом пути старого воркера без номера (PHONE-15) —
+    писатель молча отвечал `UNPARSEABLE`. Поэтому правило параметризовано и
+    неразбираемыми входами, а не только разбираемым номером.
     """
     seeded = await _seed_account(db_session)
     account = MessengerAccount(
@@ -350,11 +359,39 @@ async def test_recording_an_account_never_added_to_the_session_raises(
     calls = _count_executes(db_session, monkeypatch)
 
     with pytest.raises(ValueError) as raised:
+        await record_reported_phone(db_session, account, raw)
+
+    assert str(raised.value) == ACCOUNT_NOT_IN_SESSION
+    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов вне сессии"
+    assert account.id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("detach", ["detached"])
+async def test_recording_an_account_outside_this_session_raises(
+    db_session: AsyncSession, monkeypatch, detach
+):
+    """Объект, отсоединённый от сессии писателя: тот же отказ, строка цела (IN-07).
+
+    У отсоединённого (`expunge`) объекта `id` есть, и прежде писатель исполнял
+    по нему условный UPDATE в чужой для объекта сессии и зеркалил значение на
+    отсоединённый объект. Признак «объект этой сессии» — `inspect(...).session`;
+    у объекта другой сессии он равен той, другой сессии и даёт тот же отказ
+    (замер планирования 16-14; вторая сессия к базе `:memory:` в фикстуре не
+    гарантирована, поэтому здесь закреплён отсоединённый объект).
+    """
+    account = await _seed_account(db_session)
+    account_id = account.id
+    db_session.expunge(account)
+    calls = _count_executes(db_session, monkeypatch)
+
+    with pytest.raises(ValueError) as raised:
         await record_reported_phone(db_session, account, "79991234567")
 
     assert str(raised.value) == ACCOUNT_NOT_IN_SESSION
-    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов без id"
-    assert account.id is None
+    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов вне сессии ({detach})"
+    monkeypatch.undo()
+    assert await _row(db_session, account_id) == UNKNOWN
 
 
 @pytest.mark.asyncio
