@@ -736,6 +736,38 @@ def test_a_planted_context_binding_in_app_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_aliased_binding_in_app_reddens_the_gate(tmp_path):
+    """IN-06 (О-6): привязка, ввезённая под псевдонимом, — та же привязка.
+
+    `from structlog.contextvars import bind_contextvars as bind_ctx` прячет имя
+    `bind_contextvars` от распознавания по последнему имени вызова, а номер всё так же
+    уходит в каждую следующую строку журнала. Подложенный файл находится тем же
+    обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "planted_alias.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n"
+        "\n"
+        "\n"
+        "def bind_account(account):\n"
+        "    bind_ctx(phone=account.phone)\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert any(
+        offence.startswith("app/planted_alias.py:5 — имя — phone=") for offence in offences
+    ), (
+        "привязка номера под псевдонимом ввоза не найдена: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о `bind_ctx(phone=…)`: {offences}"
+    )
+
+
 # --- Отрицательные контроли: каждый краснит чистую функцию ----------------------
 
 NEGATIVE_CONTROLS = [
@@ -783,6 +815,37 @@ NEGATIVE_CONTROLS = [
         "with structlog.contextvars.bound_contextvars(phone=value):\n    pass\n",
         "phone=",
         id="bound-contextvars-context-manager",
+    ),
+    # IN-06 (О-6): привязка под псевдонимом ввоза и привязки `structlog.threadlocal`.
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n\nbind_ctx(phone=account.phone)\n",
+        "phone=",
+        id="aliased-import-bind-contextvars",
+    ),
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bound_contextvars as bound\n\nwith bound(phone=value):\n    pass\n",
+        "phone=",
+        id="aliased-import-bound-contextvars",
+    ),
+    pytest.param(
+        "app/x.py", "structlog.threadlocal.bind_threadlocal(phone=account.phone)\n", "phone=", id="threadlocal-bind"
+    ),
+    pytest.param(
+        "app/x.py",
+        "with structlog.threadlocal.bound_threadlocal(phone=value):\n    pass\n",
+        "phone=",
+        id="threadlocal-bound-context-manager",
+    ),
+    pytest.param(
+        "app/x.py", "with tmp_bind(logger, phone=value):\n    pass\n", "phone=", id="tmp-bind-context-manager"
+    ),
+    pytest.param(
+        "app/x.py",
+        "from structlog.threadlocal import bind_threadlocal as bind_tl\n\nbind_tl(phone=value)\n",
+        "phone=",
+        id="aliased-import-bind-threadlocal",
     ),
 ]
 
@@ -840,6 +903,30 @@ POSITIVE_CONTROLS = [
     ),
     pytest.param(
         "app/x.py", 'structlog.contextvars.unbind_contextvars("task_id")\n', False, id="unbinding-is-not-a-log"
+    ),
+    # IN-06 (О-6): псевдоним привязки распознан и без номера не краснит; снятие и очистка
+    # привязки `structlog.threadlocal` — не вызов журнала, и под псевдонимом тоже.
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n\nbind_ctx(request_id=request_id)\n",
+        True,
+        id="aliased-binding-without-phone",
+    ),
+    pytest.param(
+        "app/x.py",
+        "from structlog.contextvars import bind_contextvars as bind_ctx\n\n"
+        "bind_ctx(phone_set=account.phone is not None)\n",
+        True,
+        id="aliased-binding-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py", "structlog.threadlocal.clear_threadlocal()\n", False, id="threadlocal-clear-is-not-a-log"
+    ),
+    pytest.param(
+        "app/x.py",
+        'from structlog.threadlocal import unbind_threadlocal as unbind_tl\n\nunbind_tl("task_id")\n',
+        False,
+        id="aliased-threadlocal-unbind-is-not-a-log",
     ),
 ]
 
