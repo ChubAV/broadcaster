@@ -40,15 +40,22 @@ UPDATE «записать, если номера нет и он не ручно�
 позицией, именем, литеральной распаковкой `*[…]` / `*(…)` и `**{"имя": …}` /
 `**dict(имя=…)` (таблица `JUDGED_PARAMETERS`, сверена с установленными
 сигнатурами правилом-сторожем и с каждой формой связывания — правилом-матрицей).
-1. присваивание атрибуту `phone` / `phone_is_manual` (`=`, `+=`, аннотированное);
+1. присваивание атрибуту `phone` / `phone_is_manual` — по грамматике Python: узел
+   `Attribute` в контексте `Store`, то есть атрибут номера в любой позиции цели
+   присваивания: `=`, `+=`, аннотированное, распаковка кортежа, цель `for` /
+   `async for`, `with … as account.phone`, цель comprehension (`[… for
+   account.phone in numbers]` реально пишет колонку — замер, план 16-17, ревью
+   WR-10); `del account.phone` (контекст `Del`) — не запись, см. границу (5);
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
    `update(...)`, `insert(...)`, `MessengerAccount(...)` или псевдонима модели,
    заведённого в том же модуле (`from … import MessengerAccount as Account`,
    `Model = MessengerAccount`) — в том числе распаковкой литерала:
    `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`,
-   `values(**{"phone": n for n in …})`;
+   `values(**{"phone": n for n in …})`; и повторный конструктор модели или её
+   псевдонима в модуле — `MessengerAccount.__init__(account, phone=x)`;
 3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"`, атрибут
-   `MessengerAccount.phone`, индекс `table.c["phone"]` или `getattr(X, "phone")` —
+   `MessengerAccount.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")` или
+   конструктор колонки `column("phone")` / `literal_column(…)` —
    в позиционном аргументе `values(...)` и
    устаревшего `Query.update({...})` (у него — и в параметре `values=`, сигнатура
    `Query.update(self, values, …)`). Отображение — `{…}` (и `{**{…}, …}`),
@@ -62,6 +69,8 @@ UPDATE «записать, если номера нет и он не ручно�
    …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)` —
    имя атрибута позицией или именем `key=` / `name=`
    (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`);
+   и дескриптор колонки номера `MessengerAccount.phone.__set__(account, x)` /
+   `type(account).phone_is_manual.__set__(…)`;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
    строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
    (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
@@ -126,28 +135,44 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 {"phone": p})` — тоже краснеет; снимается переименованием параметра (`:number`).
 Те же вызовы для чтения краснеют так же, как `execute`:
 `scalars(select(…).where(… == bindparam("phone")), {"phone": p})`, `scalar(…)`,
-`stream(…)`, `exec_driver_sql("… = :phone", {"phone": p})`.
+`stream(…)`, `exec_driver_sql("… = :phone", {"phone": p})`. Так же судится ключ-
+конструктор колонки в строках executemany (`[{"id": 1, column("phone"): p}]`),
+хотя на SQLite с SQLAlchemy 2.0.46 такая строка колонку не пишет (замер исполнителя
+плана 16-17): ключ называет колонку номера литералом в аргументе пишущего вызова.
 
 ГРАНИЦА ПРЕДИКАТА — через механизм, а не через «всё». Ловится всякая запись, в
 которой колонка номера — или таблица аккаунтов во вставке, загрузке и слиянии —
 названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика
-`_literal_mappings`) или в строковой константе SQL (и в склейке `+` констант).
-Вне охвата, каждая форма с причиной, по которой синтаксическому предикату она
-недостижима:
-(1) значение, пришедшее в пишущий вызов ИМЕНЕМ или результатом другого вызова, —
-    переменная, параметр, `build_rows()`, `values(**fields)`, `{k: v for …}` с
-    вычисленными ключами: поток данных предикат не прослеживает, даже когда
+`_literal_mappings`, включая `{"phone": v for …}` с постоянным ключом и
+`column("phone")`) или в строковой константе SQL (и в склейке `+` констант);
+пишущий вызов опознаётся по имени, названному литералом (последнее звено,
+`getattr`-строка, ссылка с аргументами, `methodcaller`); судимый параметр — при
+любом литеральном связывании (`JUDGED_PARAMETERS`); атрибут номера — в любой
+позиции цели присваивания. Вне охвата, каждая форма с правдивой причиной:
+(1) значение или ссылка, пришедшие в пишущий вызов ИМЕНЕМ или результатом
+    другого вызова, — переменная, параметр, `build_rows()`, `values(**fields)`,
+    распаковка не-литерала `*args` / `**kw`, `{k: v for …}` с вычисленным ключом,
+    ссылка на пишущий API в переменной (`fn = s.bulk_update_mappings; fn(…)`,
+    `w = partial(…); w(rows)`): поток данных предикат не прослеживает, даже когда
     литерал стоит строкой выше в том же файле;
-(2) имя колонки или SQL, вычисленные во время исполнения, — `setattr(obj, name,
-    …)`, f-строка с колонкой в подстановке, `.format(col)`, склейка с переменной;
+(2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
+    name, …)`, `getattr(s, name)(…)`, f-строка с колонкой в подстановке,
+    `.format(col)`, склейка с переменной;
 (3) вставка позиционным кортежем значений без имён колонок —
     `insert(MessengerAccount).values((…))`: колонку по исходнику не назвать,
     порядок колонок живёт в модели;
-(4) пишущий API без имени или под псевдонимом из другого модуля —
-    `type(account)(phone=…)`, псевдоним модели, заведённый в чужом файле: без
-    типов он неотличим от законного `render(…, phone=…)`;
-(5) НЕ запись в колонку — `account.__dict__["phone"] = …`, `vars(account)[…] = …`:
-    обход инструментовки ORM, оператора UPDATE не порождает и в базу не уходит.
+(4) пишущий API без имени или неизвестного типа — `type(account)(phone=…)`,
+    `obj.__init__(phone=…)` у объекта, тип которого по исходнику не назван (без
+    типов неотличим от `super().__init__(phone=…)` любого класса с параметром
+    `phone`), псевдоним модели, заведённый в чужом файле: без типов он неотличим от
+    законного `render(…, phone=…)`;
+(5) НЕ запись в колонку — `account.__dict__["phone"] = …`, `vars(account)[…] = …`,
+    `instance_dict(account)[…] = …` сами по себе: обход инструментовки ORM,
+    оператора UPDATE не порождает (и с `flag_dirty(account)` — тоже); а также
+    `del account.phone`, `delattr(account, "phone")`, `del_attribute(account,
+    "phone")` — на SQLAlchemy 2.0.46 flush падает `KeyError` и строку не меняет
+    (замер планирования 2026-10-12, перепроверен исполнителем плана 16-17 на SQLite
+    в памяти).
 Такие формы в коде записи номера сами по себе повод для ревью. Форма, которая
 под механизм подпадает, но предикатом не ловится, — слепота предиката, а не
 граница средства: повод дописать строку `LITERAL_FORM_CASES` и предикат.
@@ -161,7 +186,14 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 WR-08 (2026-10-09) — ещё девять (`parameters=`, comprehension и генератор строк,
 `values([…for…])`, кавычки у колонки и у таблицы, префикс схемы, `ordered_values`,
 `object.__setattr__`). План 16-12 чинит их и формы тех же семейств, найденные
-перебором, и заменяет заявление «всё» заявлением через механизм.
+перебором, и заменяет заявление «всё» заявлением через механизм. До плана 16-17
+заявление «через механизм» снова было шире предиката: ревью WR-10 (2026-10-10)
+нашло пять форм — `Query.update(values=…)`, `set_attribute(…, key=…)`,
+`set_committed_value(…, key=…)`, `run_sync(Session.bulk_update_mappings, …)`,
+`values(**{"phone": n for …})`; это третий круг одного класса (WR-01 → WR-08 →
+WR-10). План 16-17 перебрал сигнатуры каждого судимого API (`JUDGED_PARAMETERS`,
+сторож и матрица), научил предикат опознавать API по ссылке и по строке и судить
+вид 1 по грамматике, а заявление расширил ровно на то, что предикат видит.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -271,6 +303,17 @@ ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters", "rows"})
 # замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
 # (план 16-17, ревью WR-10).
 REFERENCE_KEYWORDS = frozenset({"fn"})
+
+# Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
+# отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
+COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
+
+# Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
+# `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
+# в обход присваивания; `MessengerAccount.__init__(account, phone=x)` — повторный
+# конструктор модели пишет колонку именованным аргументом.
+DESCRIPTOR_SET = "__set__"
+MODEL_INIT = "__init__"
 
 # Обёртки литерального контейнера: `list(<генератор словарей>)` и подобные с ОДНИМ
 # позиционным аргументом и без именованных — разбираются по этому аргументу.
@@ -600,13 +643,19 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         found.append((node.lineno, node.col_offset, kind, subject))
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                for attribute in _assigned_attributes(target):
-                    record(attribute, KIND_ASSIGNMENT, ast.unparse(attribute))
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
-            for attribute in _assigned_attributes(node.target):
-                record(attribute, KIND_ASSIGNMENT, ast.unparse(attribute))
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Store)
+            and node.attr in PHONE_COLUMNS
+        ):
+            # Вид 1 — по грамматике Python: атрибут номера в контексте `Store` —
+            # цель `=`, `+=`, аннотированного присваивания, распаковки, `for` /
+            # `async for`, `with … as`, comprehension (план 16-17, ревью WR-10).
+            # `del account.phone` (контекст `Del`) — не запись: flush падает
+            # `KeyError` и строку не меняет (замер планирования, SQLAlchemy 2.0.46).
+            # Цель-имя (`phone: Mapped[...] = mapped_column(...)` в теле модели) —
+            # объявление колонки, а не запись в неё: узел `Name`, не `Attribute`.
+            record(node, KIND_ASSIGNMENT, ast.unparse(node))
         elif isinstance(node, ast.Call):
             name = _call_name(node)
             if name is not None:
@@ -754,6 +803,31 @@ def _judge_call(
             if isinstance(attribute, ast.Constant) and attribute.value in PHONE_COLUMNS:
                 record(node, KIND_SETATTR, f"{name}({prefix}{attribute.value!r}, …)")
                 break
+    receiver = _callee_receiver(node.func)
+    if name == DESCRIPTOR_SET and receiver is not None:
+        # `MessengerAccount.phone.__set__(account, x)`,
+        # `type(account).phone_is_manual.__set__(account, True)`: дескриптор колонки
+        # номера пишет атрибут в обход присваивания.
+        if _phone_column(receiver) is not None:
+            record(node, KIND_SETATTR, f"{ast.unparse(receiver)}.__set__(…)")
+    if (
+        name == MODEL_INIT
+        and isinstance(receiver, ast.Name)
+        and receiver.id in (write_names - WRITE_CALL_NAMES) | {MODEL_NAME}
+    ):
+        # `MessengerAccount.__init__(account, phone=x)` — повторный конструктор
+        # модели (или её псевдонима в модуле). `obj.__init__(phone=…)` у объекта,
+        # тип которого по исходнику не назван, сюда не попадает: без типов он
+        # неотличим от `super().__init__(phone=…)` любого класса.
+        shown = f"{receiver.id}.__init__"
+        for keyword in node.keywords:
+            if keyword.arg in PHONE_COLUMNS:
+                record(keyword, KIND_KEYWORD, f"{shown}({keyword.arg}=…)")
+            elif keyword.arg is None:
+                for mapping in _literal_mappings(keyword.value):
+                    for key, column in _mapping_phone_keys(mapping):
+                        text = _mapping_key_text(key, column)
+                        record(key, KIND_KEYWORD, f"{shown}(**{text})")
     if name in ROW_COPY_CALL_NAMES:
         # Таблица — позицией или `table_name=` (`JUDGED_PARAMETERS`).
         for table in _bound_arguments(node, min(indices, default=0), names):
@@ -876,7 +950,21 @@ def _judged_call_names(write_names: frozenset[str]) -> frozenset[str]:
         | ROW_MAPPING_CALL_NAMES
         | UPSERT_CALL_NAMES
         | ROW_COPY_CALL_NAMES
+        | {DESCRIPTOR_SET, MODEL_INIT}
     )
+
+
+def _callee_receiver(func: ast.expr) -> ast.expr | None:
+    """Получатель вызываемого: `X` у `X.attr(…)` и у `getattr(X, "attr")(…)`.
+
+    У имени, вызова и прочих узлов — `None`: получателя по исходнику нет.
+    """
+    if isinstance(func, ast.Attribute):
+        return func.value
+    if _getattr_literal(func) is not None:
+        assert isinstance(func, ast.Call)
+        return func.args[0]
+    return None
 
 
 def _getattr_literal(node: ast.AST) -> str | None:
@@ -1129,9 +1217,20 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
 def _phone_column(node: ast.AST) -> str | None:
     """Колонка номера, названная узлом литералом.
 
-    Строка `"phone"`, атрибут `X.phone`, индекс `table.c["phone"]` и
-    `getattr(X, "phone")` с именем-константой.
+    Строка `"phone"`, атрибут `X.phone`, индекс `table.c["phone"]`,
+    `getattr(X, "phone")` с именем-константой и конструктор колонки
+    `column("phone")` / `sa.literal_column("phone_is_manual")`
+    (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
+    строках executemany пишет колонку — замер на SQLite в памяти).
     """
+    if (
+        isinstance(node, ast.Call)
+        and _call_name(node) in COLUMN_CONSTRUCTORS
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value in PHONE_COLUMNS
+    ):
+        return node.args[0].value
     if isinstance(node, ast.Constant) and node.value in PHONE_COLUMNS:
         return node.value
     if isinstance(node, ast.Attribute) and node.attr in PHONE_COLUMNS:
@@ -1274,21 +1373,6 @@ def _mapping_key_text(key: ast.AST, column: str) -> str:
     if isinstance(key, (ast.Attribute, ast.Subscript, ast.Call)):
         return f"{{{ast.unparse(key)}: …}}"
     return f"{{{column!r}: …}}"
-
-
-def _assigned_attributes(target: ast.AST) -> list[ast.Attribute]:
-    """Атрибуты номера среди целей присваивания, включая распаковку кортежа.
-
-    Цель-имя (`phone: Mapped[...] = mapped_column(...)` в теле класса модели) не
-    судится: это объявление колонки, а не запись в неё.
-    """
-    if isinstance(target, ast.Attribute):
-        return [target] if target.attr in PHONE_COLUMNS else []
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return [item for element in target.elts for item in _assigned_attributes(element)]
-    if isinstance(target, ast.Starred):
-        return _assigned_attributes(target.value)
-    return []
 
 
 def _call_name(call: ast.Call) -> str | None:
