@@ -18,7 +18,9 @@
   О-5 (а), 2026-10-09): автопуть отвергает у кода 7 то же, что ручной путь
   (ведущий ноль, национальная часть не из 10 цифр), и вердикты `TOO_LONG` /
   `INVALID_LENGTH`, но не теряет ни Fragment, ни ни одного номера-образца
-  метаданных;
+  метаданных; правило-сверка шапки (план 16-16, ревью IN-08, решение
+  владельца О-8): абзац границы автопути в шапке модуля называет оба
+  принимаемых класса с числами того же перебора, посчитанными вживую;
 - показ (`DISPLAYED`) — разбивка своя у каждой страны, а сохранённое, но
   неразбираемое значение показывается как есть, а не «неизвестен» (D-06);
 - ручной ввод (`MANUAL_*`) — свободное написание человека сводится к E.164,
@@ -40,6 +42,19 @@
   код 7 с национальной частью не из 10 цифр и ОТВЕРГАЕТСЯ при любом числе
   лишних цифр, а не сохраняется выдуманным `+799912345671234` под признаком
   «ручной» (D-07);
+- строки `wr09_*`, контроли `*_mobile` и правило-перебор над
+  `FOREIGN_EXTRA_DIGIT_BASES` (план 16-16, ревью WR-09, верификация раунда 3
+  2026-10-10; решение владельца О-7 (а), 2026-10-12): настоящий мобильный номер
+  чужой зоны (Беларусь, Украина, Киргизия, Турция, Китай; Израиль — при одной
+  лишней цифре) с лишними цифрами без маркера добавочного ОТВЕРГАЕТСЯ — его
+  длина не возможна ни для одного типа, каким бывает аккаунт мессенджера; сами
+  номера без лишних цифр принимаются. Граница названа в пункте 5 докстринга
+  `normalize_manual`, а не утверждена строкой: Германия `+49 151 23456789` с
+  одной и двумя лишними цифрами и Израиль `+972 50 123 4567` с двумя и тремя
+  остаются принятыми (переменная длина `FIXED_LINE`). Правило-сторож номеров-
+  образцов четырёх типов аккаунта доказывает, что отказ не режет ни одного из
+  830 образцов метаданных, а правило негеографических кодов закрепляет отказ
+  `+800` / `+808` / `+888` / `+979` ручным путём как решение (О-7 (а), О-1);
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
   у национальной части не длиннее двух цифр не видна ни одна её цифра (план
   16-07, ревью WR-03);
@@ -50,11 +65,13 @@
 import ast
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import phonenumbers
 import pytest
 
 from app.services.phone import (
+    ACCOUNT_NUMBER_TYPES,
     EXAMPLE_PHONE,
     MANUAL_INPUT_MAX_CHARS,
     PHONE_ERROR_BLANK,
@@ -218,6 +235,66 @@ VERDICT_NAMES = {
 ENUMERATION_FILLER = "2345678901234567"
 
 
+class AutoPathEnumeration(NamedTuple):
+    """Итог перебора автопути «каждый код страны × общая длина 7…15»."""
+
+    total: int
+    refused_verdict_inputs: int
+    accepted_by_verdict: dict[str, int]
+    invalid_possible: int
+    offences: list[tuple[str, str, str]]
+
+
+def _auto_path_enumeration() -> AutoPathEnumeration:
+    """Перебор «каждый код страны метаданных × общая длина 7…15» через автопуть.
+
+    Входы — код страны, дополненный цифрами `ENUMERATION_FILLER` до общей длины
+    7…15. Итог: число входов; число входов с отвергнутым владельцем вердиктом;
+    число принятых `normalize_reported` по имени вердикта; число принятых
+    `IS_POSSIBLE`-значений, которые валидатор «действительности» назвал бы
+    недействительными; принятые значения, которые автопуть хранить не вправе.
+
+    Валидатор зовёт ТЕСТ, а не модуль: запрет D-05 касается модуля номера, и
+    правило чистоты читает только его исходник. Числа перебора стоят в шапке
+    модуля (план 16-16, IN-08), и правило ниже сверяет их вживую.
+    """
+    inputs = [
+        str(code) + ENUMERATION_FILLER[: total - len(str(code))]
+        for code in phonenumbers.COUNTRY_CODE_TO_REGION_CODE
+        for total in range(7, 16)
+    ]
+    accepted_by_verdict: dict[str, int] = {}
+    refused_verdict_inputs = 0
+    invalid_possible = 0
+    offences: list[tuple[str, str, str]] = []
+    for raw in inputs:
+        number = phonenumbers.parse("+" + raw, None)
+        verdict = phonenumbers.is_possible_number_with_reason(number)
+        if verdict in OWNER_REFUSED_VERDICTS:
+            refused_verdict_inputs += 1
+        stored = normalize_reported(raw)
+        if stored is None:
+            continue
+        name = VERDICT_NAMES[verdict]
+        accepted_by_verdict[name] = accepted_by_verdict.get(name, 0) + 1
+        if verdict == phonenumbers.ValidationResult.IS_POSSIBLE and not (
+            phonenumbers.is_valid_number(number)
+        ):
+            invalid_possible += 1
+        impossible_zone_seven = number.country_code == 7 and (
+            bool(number.italian_leading_zero) or len(str(number.national_number)) != 10
+        )
+        if verdict in OWNER_REFUSED_VERDICTS or impossible_zone_seven:
+            offences.append((raw, stored, name))
+    return AutoPathEnumeration(
+        total=len(inputs),
+        refused_verdict_inputs=refused_verdict_inputs,
+        accepted_by_verdict=accepted_by_verdict,
+        invalid_possible=invalid_possible,
+        offences=offences,
+    )
+
+
 def test_the_auto_path_never_stores_a_verdict_the_owner_refused():
     """Перебор «каждый код страны × длина 7…15»: отказ автопути держится на классе.
 
@@ -230,32 +307,17 @@ def test_the_auto_path_never_stores_a_verdict_the_owner_refused():
 
     Сообщение печатает число принятых по вердиктам: оставшаяся граница —
     `TOO_SHORT` у кода, отличного от 7, — называется, а не утверждается нормой.
+    Перебор считает помощник `_auto_path_enumeration` (план 16-16): его же
+    числа сверяются с шапкой модуля.
     """
-    inputs = [
-        str(code) + ENUMERATION_FILLER[: total - len(str(code))]
-        for code in phonenumbers.COUNTRY_CODE_TO_REGION_CODE
-        for total in range(7, 16)
-    ]
-    accepted_by_verdict: dict[str, int] = {}
-    refused_verdict_inputs = 0
-    offences: list[tuple[str, str, str]] = []
-    for raw in inputs:
-        number = phonenumbers.parse("+" + raw, None)
-        verdict = phonenumbers.is_possible_number_with_reason(number)
-        if verdict in OWNER_REFUSED_VERDICTS:
-            refused_verdict_inputs += 1
-        stored = normalize_reported(raw)
-        if stored is None:
-            continue
-        name = VERDICT_NAMES[verdict]
-        accepted_by_verdict[name] = accepted_by_verdict.get(name, 0) + 1
-        impossible_zone_seven = number.country_code == 7 and (
-            bool(number.italian_leading_zero) or len(str(number.national_number)) != 10
-        )
-        if verdict in OWNER_REFUSED_VERDICTS or impossible_zone_seven:
-            offences.append((raw, stored, name))
+    enumeration = _auto_path_enumeration()
+    refused_verdict_inputs = enumeration.refused_verdict_inputs
+    accepted_by_verdict = enumeration.accepted_by_verdict
+    offences = enumeration.offences
 
-    assert len(inputs) >= 1900, f"антивакуум: входов перебора {len(inputs)}, ждали не меньше 1900"
+    assert enumeration.total >= 1900, (
+        f"антивакуум: входов перебора {enumeration.total}, ждали не меньше 1900"
+    )
     assert refused_verdict_inputs >= 700, (
         f"антивакуум: входов с отвергнутым вердиктом {refused_verdict_inputs}, ждали не меньше 700"
     )
@@ -263,6 +325,58 @@ def test_the_auto_path_never_stores_a_verdict_the_owner_refused():
     assert offences == [], (
         f"автопуть хранит отвергнутое владельцем: {len(offences)} значений, "
         f"первые {offences[:5]}; принятые по вердиктам: {accepted_by_verdict}"
+    )
+
+
+AUTO_PATH_BOUNDARY_HEADING = "⚠️ ГРАНИЦА ПРАВИЛА АВТОПУТИ"
+
+
+def test_the_module_header_names_the_auto_path_boundary_with_its_measurement():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 3 ПЛАНА 16-16: шапка называет настоящее множество автопути.
+
+    Ревью IN-08, верификация раунда 3 (2026-10-10), решение владельца О-8
+    (2026-10-12). Абзац «⚠️ ГРАНИЦА ПРАВИЛА АВТОПУТИ» в шапке модуля обязан
+    назвать оба класса значений, которые принимает автопуть, с замером рядом:
+    `TOO_SHORT` у кода, отличного от 7 («583 из 1935» входов перебора), и
+    значения, которые метаданные считают возможными, В ТОМ ЧИСЛЕ
+    НЕДЕЙСТВИТЕЛЬНЫЕ («400 из 558» принятых `IS_POSSIBLE`-значений; валидатор
+    «действительности» модуль не зовёт, D-05). До плана абзац начинался словами
+    «Кроме настоящих номеров…» и выдавал каждое принятое `IS_POSSIBLE`-значение
+    за настоящий номер.
+
+    Числа считаются перебором вживую: подъём пина `phonenumberslite` (IN-02,
+    отложено владельцем) изменит их — и правило покраснеет, а не оставит шапку
+    устаревшей молча.
+    """
+    docstring = ast.get_docstring(ast.parse(PHONE_MODULE.read_text(encoding="utf-8")))
+    assert docstring, "антивакуум: у модуля номера обязана быть шапка"
+    paragraphs = [
+        " ".join(line.strip() for line in block.splitlines())
+        for block in docstring.split("\n\n")
+    ]
+    boundary = [p for p in paragraphs if p.startswith(AUTO_PATH_BOUNDARY_HEADING)]
+    assert len(boundary) == 1, (
+        f"в шапке обязан быть ровно один абзац «{AUTO_PATH_BOUNDARY_HEADING}»"
+    )
+    paragraph = boundary[0]
+
+    enumeration = _auto_path_enumeration()
+    too_short = enumeration.accepted_by_verdict.get("TOO_SHORT", 0)
+    possible = enumeration.accepted_by_verdict.get("IS_POSSIBLE", 0)
+    assert enumeration.total >= 1900, (
+        f"антивакуум: входов перебора {enumeration.total}, ждали не меньше 1900"
+    )
+    assert possible > 0, "антивакуум: автопуть не принял ни одного IS_POSSIBLE-значения"
+
+    assert f"{too_short} из {enumeration.total}" in paragraph, (
+        f"шапка не называет замер «{too_short} из {enumeration.total}» значений TOO_SHORT"
+    )
+    assert f"{enumeration.invalid_possible} из {possible}" in paragraph, (
+        f"шапка не называет замер «{enumeration.invalid_possible} из {possible}» "
+        "недействительных среди принятых IS_POSSIBLE-значений"
+    )
+    assert "в том числе недействительн" in paragraph.lower(), (
+        "шапка обязана сказать, что автопуть принимает возможные, в том числе недействительные"
     )
 
 
@@ -376,6 +490,15 @@ MANUAL_ACCEPTED = [
     pytest.param("88801234567", "+78801234567", id="o1_fragment_without_plus_becomes_russian"),
     pytest.param(AT_INPUT_LIMIT, "+79991234567", id="exactly_32_chars"),
     pytest.param("+39 06 1234 5678", "+390612345678", id="italian_leading_zero_is_not_plus_seven"),
+    # Контроли плана 16-16 (ревью WR-09, решение владельца О-7 (а)): настоящие
+    # мобильные номера чужих зон без лишних цифр принимаются и до, и после отказа
+    # по типам аккаунта — отказ строк `wr09_*` идёт от лишних цифр.
+    pytest.param("+375 29 123 45 67", "+375291234567", id="belarus_mobile"),
+    pytest.param("+380 50 123 4567", "+380501234567", id="ukraine_mobile"),
+    pytest.param("+90 532 123 45 67", "+905321234567", id="turkey_mobile"),
+    pytest.param("+996 700 123 456", "+996700123456", id="kyrgyzstan_mobile"),
+    pytest.param("+972 50 123 4567", "+972501234567", id="israel_mobile"),
+    pytest.param("+86 138 0013 8000", "+8613800138000", id="china_mobile"),
 ]
 
 
@@ -429,6 +552,37 @@ def test_a_russian_number_with_four_extra_digits_typed_by_hand_is_refused():
     )
 
 
+def test_a_foreign_number_with_an_extra_digit_typed_by_hand_is_refused():
+    """⚠️ ТРАСЕР ПЛАНА 16-16: исход владельца О-7 (а), названный до исполнения.
+
+    Решение владельца О-7 (а) «отказ по типам аккаунта», 2026-10-12, третий
+    прогон `/gsd-plan-phase 16 --gaps`; исход `human_verification` 2
+    верификации раунда 3 назван ДО исполнения: `+375 29 123 45 67 1` (Беларусь)
+    и `+380 50 123 4567 1` (Украина) — отказ `PHONE_ERROR_NOT_A_NUMBER`, а
+    `+375 29 123 45 67` → `+375291234567` и `8-800-555-35-35` → `+78005553535`.
+
+    До плана 16-16 (ревью WR-09) класс «номер плюс лишние цифры» был закрыт
+    только у кода 7: общая «возможность» берёт объединение длин всех типов
+    номеров, и номер чужой зоны с цифрой, дописанной без маркера добавочного,
+    сохранялся выдуманным «ручным» номером, закрытым для автоисправления (D-07).
+    Вариант (б) «принимать как сейчас, граница — только код 7» владелец отверг.
+    """
+    for typed in ("+375 29 123 45 67 1", "+380 50 123 4567 1"):
+        with pytest.raises(PhoneError) as excinfo:
+            normalize_manual(typed)
+        assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+            f"номер чужой зоны с лишней цифрой {typed!r} обязан получить отказ "
+            "«Не похоже на номер телефона»"
+        )
+
+    assert normalize_manual("+375 29 123 45 67") == "+375291234567", (
+        "контроль: настоящий номер Беларуси без лишней цифры обязан приниматься"
+    )
+    assert normalize_manual("8-800-555-35-35") == "+78005553535", (
+        "контроль: бесплатный 8-800 по-прежнему принимается"
+    )
+
+
 MANUAL_REJECTED = [
     pytest.param("123-45-67", PHONE_ERROR_NOT_A_NUMBER, id="local_only_dashed"),
     pytest.param("1234567", PHONE_ERROR_NOT_A_NUMBER, id="local_only_digits"),
@@ -459,6 +613,36 @@ MANUAL_REJECTED = [
     ),
     pytest.param(
         "8 800 123 45 67 890", PHONE_ERROR_NOT_A_NUMBER, id="wr06_toll_free_three_extra_digits"
+    ),
+    # Летопись (план 16-16, ревью WR-09, верификация раунда 3 2026-10-10): до плана
+    # строки `wr09_*` сохранялись выдуманными «ручными» номерами (`+3752912345671`,
+    # `+37529123456712`, `+3805012345671`, `+9967001234561`, `+90532123456712`,
+    # `+905321234567123`, `+9725012345671`, `+86138001380001`), закрытыми для
+    # автоисправления (D-07). Решение владельца О-7 (а), 2026-10-12 — отказ по
+    # типам аккаунта.
+    pytest.param(
+        "+375 29 123 45 67 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_belarus_one_extra_digit"
+    ),
+    pytest.param(
+        "+375 29 123 45 67 12", PHONE_ERROR_NOT_A_NUMBER, id="wr09_belarus_two_extra_digits"
+    ),
+    pytest.param(
+        "+380 50 123 4567 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_ukraine_one_extra_digit"
+    ),
+    pytest.param(
+        "+996 700 123 456 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_kyrgyzstan_one_extra_digit"
+    ),
+    pytest.param(
+        "+90 532 123 45 67 12", PHONE_ERROR_NOT_A_NUMBER, id="wr09_turkey_two_extra_digits"
+    ),
+    pytest.param(
+        "+90 532 123 45 67 123", PHONE_ERROR_NOT_A_NUMBER, id="wr09_turkey_three_extra_digits"
+    ),
+    pytest.param(
+        "+972 50 123 4567 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_israel_one_extra_digit"
+    ),
+    pytest.param(
+        "+86 138 0013 8000 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_china_one_extra_digit"
     ),
     pytest.param("+7 999 123 45 67 доб 5", PHONE_ERROR_EXTENSION, id="extension_russian"),
     pytest.param("+7 999 123 45 67 ext 12", PHONE_ERROR_EXTENSION, id="extension_ext"),
@@ -500,6 +684,13 @@ def test_a_number_typed_by_hand_is_refused_with_an_explanation(text, message):
     с национальной частью не из 10 цифр. До плана 16-11 четыре такие строки
     сохранялись выдуманными номерами (`+799912345671234`, `+788001234567890`);
     теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
+
+    Строки `wr09_*` (план 16-16, ревью WR-09, решение владельца О-7 (а),
+    2026-10-12): то же у чужих зон — Беларусь, Украина, Киргизия, Турция,
+    Израиль, Китай. Длина такого ввода возможна лишь для типа, каким аккаунт
+    мессенджера не бывает (бесплатный, платный, UAN), и до плана 16-16 он
+    сохранялся выдуманным «ручным» номером; теперь — отказ
+    `PHONE_ERROR_NOT_A_NUMBER`.
     """
     with pytest.raises(PhoneError) as excinfo:
         normalize_manual(text)
@@ -549,6 +740,145 @@ def test_a_number_with_extra_digits_typed_by_hand_is_refused_whatever_their_coun
     assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
         f"номер +7 с {extra_count} лишними цифрами обязан получить отказ «Не похоже на номер телефона»"
     )
+
+
+# Настоящие мобильные номера чужих зон, к которым правило-перебор дописывает
+# лишние цифры (план 16-16, ревью WR-09, решение владельца О-7 (а)). Израиля и
+# Германии здесь нет намеренно: их номера с частью лишних цифр остаются
+# принятыми — это граница, названная в пункте 5 докстринга `normalize_manual`,
+# и строка таблицы утверждала бы её нормой.
+FOREIGN_EXTRA_DIGIT_BASES = [
+    pytest.param("+375 29 123 45 67", id="belarus"),
+    pytest.param("+380 50 123 4567", id="ukraine"),
+    pytest.param("+996 700 123 456", id="kyrgyzstan"),
+    pytest.param("+90 532 123 45 67", id="turkey"),
+    pytest.param("+86 138 0013 8000", id="china"),
+]
+
+
+@pytest.mark.parametrize(
+    "extra_count",
+    [pytest.param(k, id=f"extra_{k}") for k in range(1, len(EXTRA_DIGITS) + 1)],
+)
+@pytest.mark.parametrize("base", FOREIGN_EXTRA_DIGIT_BASES)
+def test_a_foreign_number_with_extra_digits_typed_by_hand_is_refused_whatever_their_count(
+    base, extra_count
+):
+    """Мобильный номер чужой зоны с 1…5 лишними цифрами — отказ при ЛЮБОМ их числе.
+
+    План 16-16, ревью WR-09, решение владельца О-7 (а), 2026-10-12. Зачем
+    перебор, а не строки: исход до плана был немонотонен — у Турции одна лишняя
+    цифра давала отказ (`INVALID_LENGTH`), а две и три давали «номер»
+    (`+90532123456712`, `+905321234567123`); у Беларуси «номером» становились
+    одна и две. Замер исполнения 2026-10-12: до плана 16-16 из 25 строк
+    сохранялись 7. Правило закрывает класс, а не отдельные вводы.
+
+    Израиля и Германии в таблице нет: у их `FIXED_LINE` /
+    `FIXED_LINE_OR_MOBILE` переменная длина, и часть их вводов с лишними
+    цифрами остаётся принятой — это граница пункта 5 докстринга
+    `normalize_manual`, а не норма; одна лишняя цифра Израиля закреплена
+    строкой `wr09_israel_one_extra_digit`.
+
+    Антивакуум: база обязана приниматься и быть возможной как `MOBILE` — отказ
+    должен идти от лишних цифр, а не от базы.
+    """
+    parsed = phonenumbers.parse(base, "RU")
+    assert normalize_manual(base) == phonenumbers.format_number(
+        parsed, phonenumbers.PhoneNumberFormat.E164
+    ), f"антивакуум: база {base!r} обязана приниматься"
+    assert (
+        phonenumbers.is_possible_number_for_type_with_reason(
+            parsed, phonenumbers.PhoneNumberType.MOBILE
+        )
+        == phonenumbers.ValidationResult.IS_POSSIBLE
+    ), f"антивакуум: база {base!r} обязана быть возможной как мобильный номер"
+
+    typed = f"{base} {EXTRA_DIGITS[:extra_count]}"
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual(typed)
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        f"номер чужой зоны с {extra_count} лишними цифрами обязан получить отказ "
+        "«Не похоже на номер телефона»"
+    )
+
+
+def test_every_account_type_example_number_of_the_metadata_is_accepted_by_hand():
+    """⚠️ СТОРОЖ ЗАПРЕТА 16-07 №3 ДЛЯ РУЧНОГО ПУТИ: отказ по типам не теряет номер.
+
+    План 16-16, решение владельца О-7 (а), D-05. Каждый номер-образец метаданных
+    (`phonenumberslite==9.0.41`) каждого типа из `ACCOUNT_NUMBER_TYPES` по всем
+    регионам, поданный в международной записи, ручной путь обязан вернуть тем
+    же E.164 (замер планирования и исполнения 2026-10-12 — 830 образцов).
+    Правило проходит и до, и после отказа по типам: оно доказывает, что отказ
+    не режет ни одной формы номера типа аккаунта, известной метаданным, — но не
+    больше. Образцы — не перечень всех настоящих номеров; риск ложного отказа
+    при отставании метаданных владелец принял в О-7 (а).
+    """
+    examples: list[tuple[str, str]] = []
+    for region in sorted(phonenumbers.SUPPORTED_REGIONS):
+        for kind in ACCOUNT_NUMBER_TYPES:
+            example = phonenumbers.example_number_for_type(region, kind)
+            if example is not None:
+                examples.append(
+                    (
+                        phonenumbers.format_number(
+                            example, phonenumbers.PhoneNumberFormat.INTERNATIONAL
+                        ),
+                        phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.E164),
+                    )
+                )
+
+    assert len(examples) >= 800, f"антивакуум: образцов {len(examples)}, ждали не меньше 800"
+    lost: list[str] = []
+    for typed, e164 in examples:
+        try:
+            stored = normalize_manual(typed)
+        except PhoneError:
+            stored = None
+        if stored != e164:
+            lost.append(typed)
+    assert lost == [], (
+        f"ручной путь потерял номера-образцы типов аккаунта: {len(lost)}, первые {lost[:10]}"
+    )
+
+
+# Решение владельца О-7 (а), согласовано с О-1: негеографические номера-образцы,
+# которые ручной путь отвергает по типу (план 16-16), и которые принимает.
+NON_GEO_REFUSED_BY_HAND = {800, 808, 888, 979}
+NON_GEO_ACCEPTED_BY_HAND = {870, 878, 881, 882, 883}
+
+
+def test_the_non_geographic_examples_split_by_account_type():
+    """Попутное следствие отказа по типам — решение, а не случайность (О-7 (а)).
+
+    Номера-образцы негеографических кодов ручным путём:
+    - ОТВЕРГАЮТСЯ `+800` (бесплатный UIFN), `+808` (shared cost), `+888`
+      (образец OCHA `+888 123 456 78901`, тип UAN) и `+979` (премиальный) —
+      аккаунтом мессенджера такие номера не бывают;
+    - ПРИНИМАЮТСЯ `+870`, `+881`, `+882` (спутниковые и сетевые мобильные) и
+      `+878`, `+883` (VoIP).
+
+    Связь с О-1: ручной `+888…` отвергается и раньше — номер Fragment для
+    библиотеки слишком короткий (`TOO_SHORT`, строка
+    `o1_fragment_by_hand_refused`); образец OCHA теперь отвергается по типу.
+    Fragment попадает в базу только автопутём.
+    """
+    accepted: set[int] = set()
+    refused: set[int] = set()
+    for code in sorted(phonenumbers.COUNTRY_CODES_FOR_NON_GEO_REGIONS):
+        example = phonenumbers.example_number_for_non_geo_entity(code)
+        assert example is not None, f"антивакуум: у кода {code} нет номера-образца"
+        typed = phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+        try:
+            normalize_manual(typed)
+        except PhoneError as error:
+            assert str(error) == PHONE_ERROR_NOT_A_NUMBER, f"текст отказа для {typed!r}"
+            refused.add(code)
+        else:
+            accepted.add(code)
+
+    assert refused == NON_GEO_REFUSED_BY_HAND, f"отвергнутые ручным путём коды: {sorted(refused)}"
+    assert accepted == NON_GEO_ACCEPTED_BY_HAND, f"принятые ручным путём коды: {sorted(accepted)}"
 
 
 @pytest.mark.parametrize("text,message", MANUAL_REJECTED)
@@ -647,7 +977,9 @@ def test_a_mask_shows_only_the_country_code_and_two_last_digits(stored):
     )
 
 
-FORBIDDEN_CALLS = {"is_valid_number", "is_possible_number"}
+# Голая проверка «возможности по типу» запрещена наравне с общей голой (план
+# 16-16, D-05): в 9.0.41 она тоже считает возможным `IS_POSSIBLE_LOCAL_ONLY`.
+FORBIDDEN_CALLS = {"is_valid_number", "is_possible_number", "is_possible_number_for_type"}
 
 
 def _imported_modules(tree: ast.Module) -> list[str]:
@@ -679,7 +1011,9 @@ def test_the_module_is_pure_and_never_asks_validity():
     - Валидатор «действительности» не зовётся вовсе: метаданные отстают, а
       Fragment он отвергает (D-05).
     - Голая проверка «возможности» не зовётся: она пропускает местный номер
-      `IS_POSSIBLE_LOCAL_ONLY`; разрешена только форма `…_with_reason`.
+      `IS_POSSIBLE_LOCAL_ONLY`; разрешена только форма `…_with_reason`. То же
+      у проверки «возможности по типу» (план 16-16): правило по типам аккаунта
+      обязано стоять в форме `is_possible_number_for_type_with_reason`.
     """
     tree = ast.parse(PHONE_MODULE.read_text(encoding="utf-8"))
 
@@ -695,6 +1029,9 @@ def test_the_module_is_pure_and_never_asks_validity():
 
     called = _called_names(tree)
     assert "parse" in called, "антивакуум: разбор обязан найтись среди вызовов"
+    assert "is_possible_number_for_type_with_reason" in called, (
+        "антивакуум: правило по типам аккаунта обязано стоять в форме …_with_reason"
+    )
     assert called & FORBIDDEN_CALLS == set(), (
         f"запрещённые вызовы: {sorted(called & FORBIDDEN_CALLS)}"
     )
@@ -707,6 +1044,8 @@ def test_the_ast_rule_catches_a_validity_call_and_a_database_import():
         "from sqlalchemy import select\n"
         "def f(n):\n"
         "    return phonenumbers.is_valid_number(n) or phonenumbers.is_possible_number(n)\n"
+        "def g(n, kind):\n"
+        "    return phonenumbers.is_possible_number_for_type(n, kind)\n"
     )
     assert "sqlalchemy" in _imported_modules(planted)
     assert _called_names(planted) & FORBIDDEN_CALLS == FORBIDDEN_CALLS
