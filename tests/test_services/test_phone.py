@@ -18,7 +18,9 @@
   О-5 (а), 2026-10-09): автопуть отвергает у кода 7 то же, что ручной путь
   (ведущий ноль, национальная часть не из 10 цифр), и вердикты `TOO_LONG` /
   `INVALID_LENGTH`, но не теряет ни Fragment, ни ни одного номера-образца
-  метаданных;
+  метаданных; правило-сверка шапки (план 16-16, ревью IN-08, решение
+  владельца О-8): абзац границы автопути в шапке модуля называет оба
+  принимаемых класса с числами того же перебора, посчитанными вживую;
 - показ (`DISPLAYED`) — разбивка своя у каждой страны, а сохранённое, но
   неразбираемое значение показывается как есть, а не «неизвестен» (D-06);
 - ручной ввод (`MANUAL_*`) — свободное написание человека сводится к E.164,
@@ -63,6 +65,7 @@
 import ast
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import phonenumbers
 import pytest
@@ -232,6 +235,66 @@ VERDICT_NAMES = {
 ENUMERATION_FILLER = "2345678901234567"
 
 
+class AutoPathEnumeration(NamedTuple):
+    """Итог перебора автопути «каждый код страны × общая длина 7…15»."""
+
+    total: int
+    refused_verdict_inputs: int
+    accepted_by_verdict: dict[str, int]
+    invalid_possible: int
+    offences: list[tuple[str, str, str]]
+
+
+def _auto_path_enumeration() -> AutoPathEnumeration:
+    """Перебор «каждый код страны метаданных × общая длина 7…15» через автопуть.
+
+    Входы — код страны, дополненный цифрами `ENUMERATION_FILLER` до общей длины
+    7…15. Итог: число входов; число входов с отвергнутым владельцем вердиктом;
+    число принятых `normalize_reported` по имени вердикта; число принятых
+    `IS_POSSIBLE`-значений, которые валидатор «действительности» назвал бы
+    недействительными; принятые значения, которые автопуть хранить не вправе.
+
+    Валидатор зовёт ТЕСТ, а не модуль: запрет D-05 касается модуля номера, и
+    правило чистоты читает только его исходник. Числа перебора стоят в шапке
+    модуля (план 16-16, IN-08), и правило ниже сверяет их вживую.
+    """
+    inputs = [
+        str(code) + ENUMERATION_FILLER[: total - len(str(code))]
+        for code in phonenumbers.COUNTRY_CODE_TO_REGION_CODE
+        for total in range(7, 16)
+    ]
+    accepted_by_verdict: dict[str, int] = {}
+    refused_verdict_inputs = 0
+    invalid_possible = 0
+    offences: list[tuple[str, str, str]] = []
+    for raw in inputs:
+        number = phonenumbers.parse("+" + raw, None)
+        verdict = phonenumbers.is_possible_number_with_reason(number)
+        if verdict in OWNER_REFUSED_VERDICTS:
+            refused_verdict_inputs += 1
+        stored = normalize_reported(raw)
+        if stored is None:
+            continue
+        name = VERDICT_NAMES[verdict]
+        accepted_by_verdict[name] = accepted_by_verdict.get(name, 0) + 1
+        if verdict == phonenumbers.ValidationResult.IS_POSSIBLE and not (
+            phonenumbers.is_valid_number(number)
+        ):
+            invalid_possible += 1
+        impossible_zone_seven = number.country_code == 7 and (
+            bool(number.italian_leading_zero) or len(str(number.national_number)) != 10
+        )
+        if verdict in OWNER_REFUSED_VERDICTS or impossible_zone_seven:
+            offences.append((raw, stored, name))
+    return AutoPathEnumeration(
+        total=len(inputs),
+        refused_verdict_inputs=refused_verdict_inputs,
+        accepted_by_verdict=accepted_by_verdict,
+        invalid_possible=invalid_possible,
+        offences=offences,
+    )
+
+
 def test_the_auto_path_never_stores_a_verdict_the_owner_refused():
     """Перебор «каждый код страны × длина 7…15»: отказ автопути держится на классе.
 
@@ -244,32 +307,17 @@ def test_the_auto_path_never_stores_a_verdict_the_owner_refused():
 
     Сообщение печатает число принятых по вердиктам: оставшаяся граница —
     `TOO_SHORT` у кода, отличного от 7, — называется, а не утверждается нормой.
+    Перебор считает помощник `_auto_path_enumeration` (план 16-16): его же
+    числа сверяются с шапкой модуля.
     """
-    inputs = [
-        str(code) + ENUMERATION_FILLER[: total - len(str(code))]
-        for code in phonenumbers.COUNTRY_CODE_TO_REGION_CODE
-        for total in range(7, 16)
-    ]
-    accepted_by_verdict: dict[str, int] = {}
-    refused_verdict_inputs = 0
-    offences: list[tuple[str, str, str]] = []
-    for raw in inputs:
-        number = phonenumbers.parse("+" + raw, None)
-        verdict = phonenumbers.is_possible_number_with_reason(number)
-        if verdict in OWNER_REFUSED_VERDICTS:
-            refused_verdict_inputs += 1
-        stored = normalize_reported(raw)
-        if stored is None:
-            continue
-        name = VERDICT_NAMES[verdict]
-        accepted_by_verdict[name] = accepted_by_verdict.get(name, 0) + 1
-        impossible_zone_seven = number.country_code == 7 and (
-            bool(number.italian_leading_zero) or len(str(number.national_number)) != 10
-        )
-        if verdict in OWNER_REFUSED_VERDICTS or impossible_zone_seven:
-            offences.append((raw, stored, name))
+    enumeration = _auto_path_enumeration()
+    refused_verdict_inputs = enumeration.refused_verdict_inputs
+    accepted_by_verdict = enumeration.accepted_by_verdict
+    offences = enumeration.offences
 
-    assert len(inputs) >= 1900, f"антивакуум: входов перебора {len(inputs)}, ждали не меньше 1900"
+    assert enumeration.total >= 1900, (
+        f"антивакуум: входов перебора {enumeration.total}, ждали не меньше 1900"
+    )
     assert refused_verdict_inputs >= 700, (
         f"антивакуум: входов с отвергнутым вердиктом {refused_verdict_inputs}, ждали не меньше 700"
     )
@@ -277,6 +325,56 @@ def test_the_auto_path_never_stores_a_verdict_the_owner_refused():
     assert offences == [], (
         f"автопуть хранит отвергнутое владельцем: {len(offences)} значений, "
         f"первые {offences[:5]}; принятые по вердиктам: {accepted_by_verdict}"
+    )
+
+
+AUTO_PATH_BOUNDARY_HEADING = "⚠️ ГРАНИЦА ПРАВИЛА АВТОПУТИ"
+
+
+def test_the_module_header_names_the_auto_path_boundary_with_its_measurement():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 3 ПЛАНА 16-16: шапка называет настоящее множество автопути.
+
+    Ревью IN-08, верификация раунда 3 (2026-10-10), решение владельца О-8
+    (2026-10-12). Абзац «⚠️ ГРАНИЦА ПРАВИЛА АВТОПУТИ» в шапке модуля обязан
+    назвать оба класса значений, которые принимает автопуть, с замером рядом:
+    `TOO_SHORT` у кода, отличного от 7 («583 из 1935» входов перебора), и
+    значения, которые метаданные считают возможными, В ТОМ ЧИСЛЕ
+    НЕДЕЙСТВИТЕЛЬНЫЕ («400 из 558» принятых `IS_POSSIBLE`-значений; валидатор
+    «действительности» модуль не зовёт, D-05). До плана абзац начинался словами
+    «Кроме настоящих номеров…» и выдавал каждое принятое `IS_POSSIBLE`-значение
+    за настоящий номер.
+
+    Числа считаются перебором вживую: подъём пина `phonenumberslite` (IN-02,
+    отложено владельцем) изменит их — и правило покраснеет, а не оставит шапку
+    устаревшей молча.
+    """
+    docstring = ast.get_docstring(ast.parse(PHONE_MODULE.read_text(encoding="utf-8")))
+    assert docstring, "антивакуум: у модуля номера обязана быть шапка"
+    paragraphs = [
+        " ".join(line.strip() for line in block.splitlines())
+        for block in docstring.split("\n\n")
+    ]
+    boundary = [p for p in paragraphs if p.startswith(AUTO_PATH_BOUNDARY_HEADING)]
+    assert len(boundary) == 1, f"в шапке обязан быть ровно один абзац «{AUTO_PATH_BOUNDARY_HEADING}»"
+    paragraph = boundary[0]
+
+    enumeration = _auto_path_enumeration()
+    too_short = enumeration.accepted_by_verdict.get("TOO_SHORT", 0)
+    possible = enumeration.accepted_by_verdict.get("IS_POSSIBLE", 0)
+    assert enumeration.total >= 1900, (
+        f"антивакуум: входов перебора {enumeration.total}, ждали не меньше 1900"
+    )
+    assert possible > 0, "антивакуум: автопуть не принял ни одного IS_POSSIBLE-значения"
+
+    assert f"{too_short} из {enumeration.total}" in paragraph, (
+        f"шапка не называет замер «{too_short} из {enumeration.total}» значений TOO_SHORT"
+    )
+    assert f"{enumeration.invalid_possible} из {possible}" in paragraph, (
+        f"шапка не называет замер «{enumeration.invalid_possible} из {possible}» "
+        "недействительных среди принятых IS_POSSIBLE-значений"
+    )
+    assert "в том числе недействительн" in paragraph.lower(), (
+        "шапка обязана сказать, что автопуть принимает возможные, в том числе недействительные"
     )
 
 
