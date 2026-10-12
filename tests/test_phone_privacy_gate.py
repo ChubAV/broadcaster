@@ -21,6 +21,10 @@
 `logger` (`import logging as L`, `from … import logger as lg`) — `module_log_names`. Это
 распознавание внутри рамки D-17: тот же журнал из фабрики, тот же `logging.*`, тот же
 `logger.*` под другим именем; журнал по любому имени с методом `.info` гейт НЕ угадывает.
+Вызовом журнала считается и голый вызов функции из `LOG_METHODS`, ввезённой из `logging`
+(`from logging import info` → `info(…)`; под псевдонимом `from logging import warning as
+warn_` → `warn_(…)` — тоже): это тот же `logging.*`, корневой журнал. Одноимённая функция
+без такого ввоза (`def info(x): …`) журналом не считается.
 Псевдонимы разрешаются по всему модулю без учёта областей видимости — цена названа:
 имя, связанное с фабрикой где-либо в модуле, считается журналом во всём модуле (на живом
 дереве совпадений ноль: множества распознанных вызовов всех 106 файлов прежние). Настройка
@@ -48,6 +52,9 @@
 (ревью IN-06, верификация 2026-10-09, advisory; решение владельца О-6 — закрыть в этом
 проходе). Тогда же: до плана 16-13 получатель с именем вне `LOG_RECEIVERS` и шаблона —
 `lg = logging.getLogger(); lg.info(…, account.phone)` — гейтом не читался (ревью IN-06).
+До плана 16-18 ввоз функции `logging` распознавался, только если имя похоже на журнал, и
+`from logging import info; info(…, account.phone)` уходил мимо гейта (ревью IN-09,
+верификация раунда 3 2026-10-10).
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -195,6 +202,11 @@ CONTEXT_BINDERS = frozenset(
 
 LOG_RECEIVERS = frozenset({"logger", "log", "logging", "_log", "_logger"})
 
+# Модуль, функции которого с именем из `LOG_METHODS` — функции журнала: `logging.info(…)`
+# судится как вызов журнала, и ввоз той же функции (`from logging import info`) — тот же
+# корневой журнал под голым именем (ревью IN-09).
+LOGGING_MODULES = frozenset({"logging"})
+
 # Фабрики журнала (D-17). `get_task_logger` — фабрика журнала Celery: фабрика по смыслу
 # D-17, а не новый получатель (ревью IN-06); в живом дереве её нет.
 LOGGER_FACTORIES = frozenset({"get_logger", "getLogger", "get_task_logger"})
@@ -276,12 +288,19 @@ class ModuleLogNames:
     `from … import logger as lg`) и имя, связанное с фабрикой или привязанным журналом
     (`lg = logging.getLogger()`, `lg = structlog.get_logger().bind(...)`).
     `receiver_attributes` — атрибуты, связанные так же (`self.lg = structlog.get_logger()`).
-    Область видимости — весь модуль.
+    `log_functions` — имена, голый вызов которых есть вызов журнала: функция модуля
+    `logging` из `LOG_METHODS`, ввезённая в модуль (`from logging import info`,
+    `from logging import warning as warn_`; ревью IN-09).
+    `factories` — псевдонимы ввоза фабрик журнала (`from logging import getLogger as gl`).
+    Область видимости — весь модуль. Два последних поля — с умолчаниями, чтобы позиционное
+    создание по трём прежним полям не ломалось.
     """
 
     binders: frozenset[str]
     receiver_names: frozenset[str]
     receiver_attributes: frozenset[str]
+    log_functions: frozenset[str] = frozenset()
+    factories: frozenset[str] = frozenset()
 
 
 NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
@@ -302,10 +321,16 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     binders: set[str] = set()
     receiver_names: set[str] = set()
     receiver_attributes: set[str] = set()
+    log_functions: set[str] = set()
     assignments: list[tuple[list[ast.expr], ast.Call]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
+            from_logging = node.level == 0 and node.module in LOGGING_MODULES
             for alias in node.names:
+                if from_logging and alias.name in LOG_METHODS:
+                    # `from logging import info` / `warning as warn_` — функция журнала (IN-09).
+                    log_functions.add(alias.asname or alias.name)
+                    continue
                 if not alias.asname:
                     continue
                 if alias.name in CONTEXT_BINDERS:
@@ -335,7 +360,12 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
                 elif isinstance(target, ast.Attribute) and target.attr not in receiver_attributes:
                     receiver_attributes.add(target.attr)
                     changed = True
-    return ModuleLogNames(frozenset(binders), frozenset(receiver_names), frozenset(receiver_attributes))
+    return ModuleLogNames(
+        frozenset(binders),
+        frozenset(receiver_names),
+        frozenset(receiver_attributes),
+        log_functions=frozenset(log_functions),
+    )
 
 
 def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -368,6 +398,11 @@ def _is_print(call: ast.Call) -> bool:
     return isinstance(call.func, ast.Name) and call.func.id == "print"
 
 
+def _is_log_function_call(call: ast.Call, names: ModuleLogNames) -> bool:
+    """Голый вызов функции журнала, ввезённой из `logging` (`info(…)`, `warn_(…)`; IN-09)."""
+    return isinstance(call.func, ast.Name) and call.func.id in names.log_functions
+
+
 def python_log_calls(source: str) -> list[ast.Call]:
     """Вызовы журнала в исходнике Python, в порядке строк."""
     tree = ast.parse(source)
@@ -376,7 +411,12 @@ def python_log_calls(source: str) -> list[ast.Call]:
         node
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
-        and (_is_print(node) or _is_log_method_call(node, names) or _is_context_binding(node, names))
+        and (
+            _is_print(node)
+            or _is_log_function_call(node, names)
+            or _is_log_method_call(node, names)
+            or _is_context_binding(node, names)
+        )
     ]
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
