@@ -36,24 +36,32 @@ UPDATE «записать, если номера нет и он не ручно�
 ссылки (и аргументами применения у `partial(…)(…)`); строка в
 `operator.methodcaller("bulk_update_mappings", …)`. У `AsyncSession` нет `bulk_*`
 вовсе, поэтому `run_sync` — естественный путь асинхронного скрипта к ним (план
-16-17, ревью WR-10).
+16-17, ревью WR-10). Судимый параметр берётся при любом литеральном связывании:
+позицией, именем, литеральной распаковкой `*[…]` / `*(…)` и `**{"имя": …}` /
+`**dict(имя=…)` (таблица `JUDGED_PARAMETERS`, сверена с установленными
+сигнатурами правилом-сторожем и с каждой формой связывания — правилом-матрицей).
 1. присваивание атрибуту `phone` / `phone_is_manual` (`=`, `+=`, аннотированное);
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
    `update(...)`, `insert(...)`, `MessengerAccount(...)` или псевдонима модели,
    заведённого в том же модуле (`from … import MessengerAccount as Account`,
    `Model = MessengerAccount`) — в том числе распаковкой литерала:
-   `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`;
+   `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`,
+   `values(**{"phone": n for n in …})`;
 3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"`, атрибут
    `MessengerAccount.phone`, индекс `table.c["phone"]` или `getattr(X, "phone")` —
    в позиционном аргументе `values(...)` и
-   устаревшего `Query.update({...})`. Отображение — `{…}` (и `{**{…}, …}`) или
+   устаревшего `Query.update({...})` (у него — и в параметре `values=`, сигнатура
+   `Query.update(self, values, …)`). Отображение — `{…}` (и `{**{…}, …}`),
+   `{"phone": v for …}` с постоянным ключом или
    вызов `dict(phone=…)` (и `dict({…})`, `dict(**{…})`, `dict([("phone", …)])`),
    взятое из литерального контейнера по грамматике `_literal_mappings`: список,
    кортеж, набор, comprehension и генератор (`values([{…} for …])`), обёртка
    `list(…)`, слияние `{…} | base`, склейка `+`, условное выражение, `*` и `:=`;
 4. запись атрибута по имени в обход присваивания: `setattr(obj, "phone", …)`,
    `set_committed_value(obj, "phone_is_manual", …)`, `set_attribute(obj, "phone",
-   …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)`;
+   …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)` —
+   имя атрибута позицией или именем `key=` / `name=`
+   (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`);
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
    строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
    (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
@@ -64,26 +72,32 @@ UPDATE «записать, если номера нет и он не ручно�
    аккаунтов>` (`COPY … TO` — выгрузка, чтение). Кавычки идентификатора — `"…"`,
    `` `…` `` и `[…]`: SQLite принимает все три. Сюда же
    COPY asyncpg в обход SQLAlchemy — `copy_records_to_table("messenger_accounts",
-   …)` / `copy_to_table`. Голое слово `phone_is_manual` в строке не судится — на нём
+   …)` / `copy_to_table` (таблица позицией или `table_name=`). Голое слово
+   `phone_is_manual` в строке не судится — на нём
    покраснела бы константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
    Летопись: до плана 16-12 вид звучал «`UPDATE … SET … phone… =` либо `INSERT
    INTO messenger_accounts`», и шаблон требовал голые идентификаторы — кавычки,
    префикс схемы, `INSERT OR REPLACE`, `MERGE` и склейка проходили (ревью WR-08).
-6. ключ номера в строках `execute` / `bulk_update_mappings` /
-   `bulk_insert_mappings` / Alembic `op.bulk_insert` — словарь или `dict(...)`,
-   поданный позиционно или аргументом `params=` / `mappings=` / `parameters=`
-   (так называется аргумент строк у `Connection.execute`), прямо или в
+6. ключ номера в строках исполняющих вызовов `execute` / `scalar` / `scalars` /
+   `stream` / `stream_scalars` / `exec_driver_sql` и bulk-API
+   `bulk_update_mappings` / `bulk_insert_mappings` / Alembic `op.bulk_insert` —
+   словарь или `dict(...)`, поданный позиционно или аргументом `params=` /
+   `mappings=` / `parameters=` (так называется аргумент строк у `Connection`) /
+   `rows=` (Alembic), прямо или в
    литеральном контейнере той же грамматики, что в виде 3 (comprehension строк из
    пар «аккаунт — номер» включительно): executemany по первичному ключу,
-   естественная форма скрипта дозаполнения Фазы 20 (ревью WR-01, WR-08);
+   естественная форма скрипта дозаполнения Фазы 20 (ревью WR-01, WR-08); и
+   `scalars(insert(MessengerAccount).returning(…), [{… "phone": p}])`, которая
+   вставляет номер так же, как `execute` (план 16-17, ревью WR-10);
 7. upsert пишет колонку при конфликте: ключ номера в литеральном отображении
-   `set_` у `on_conflict_do_update` (ревью WR-01); у MySQL
+   `set_` у `on_conflict_do_update` — именем или позицией (у PostgreSQL `set_` —
+   четвёртый аргумент вызова, у SQLite — третий; ревью WR-01, план 16-17); у MySQL
    `on_duplicate_key_update` — именованный аргумент номера, `**{…}`, позиционное
    отображение и позиционный перечень пар `[("phone", …)]` (план 16-12);
 8. колонка номера, названная ПОЗИЦИЕЙ: пара `(MessengerAccount.phone, x)` /
    `("phone_is_manual", x)` / `(table.c["phone"], x)` в `ordered_values(...)` (и
    `ordered_values(*[…])`) и имя колонки номера в перечне `from_select([…,
-   "phone"], select)` (план 16-12, ревью WR-08).
+   "phone"], select)` — позицией или `names=` (план 16-12, ревью WR-08).
 Перечень пар (виды 3, 7, 8: `dict([…])`, `on_duplicate_key_update([…])`,
 `ordered_values(*[…])`) разбирается той же грамматикой контейнера, что
 отображения, — список, кортеж, `*`, comprehension, `+`, условное выражение.
@@ -95,13 +109,24 @@ UPDATE «записать, если номера нет и он не ручно�
 срабатывание здесь снимается переименованием ключа, тогда как пропущенный второй
 писатель снимается только потерей ручного номера у пользователя. Псевдоним модели
 разрешается по всему модулю, без учёта областей видимости: имя, однажды связанное
-с `MessengerAccount`, считается моделью в любой функции того же файла.
+с `MessengerAccount`, считается моделью в любой функции того же файла. Та же цена у
+ссылки: имя пишущего API, поданное другому вызову (`handler(update, {"phone":
+x})`), судится как вызов этого API.
+
+ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА. `setattr(obj, name, value, /)` и
+`object.__setattr__(self, name, value, /)` — позиционно-только:
+`setattr(account, name="phone", value=x)` падает `TypeError` и ничего не пишет.
+Гейт судит и эту форму: вызов, который не исполнится, законной формой не является,
+а `key=` / `name=` судятся у каждого писателя по имени одним набором.
 
 ЦЕНА СТРОГОСТИ ШЕСТОГО ВИДА — та же по природе. `execute` судится по ключам строк,
 а не по первому аргументу: иначе `stmt = update(MessengerAccount);
 session.execute(stmt, rows)` прошёл бы. Поэтому параметр привязки `:phone` в
 словаре у `execute` для ЧТЕНИЯ — `execute(text("… WHERE phone = :phone"),
 {"phone": p})` — тоже краснеет; снимается переименованием параметра (`:number`).
+Те же вызовы для чтения краснеют так же, как `execute`:
+`scalars(select(…).where(… == bindparam("phone")), {"phone": p})`, `scalar(…)`,
+`stream(…)`, `exec_driver_sql("… = :phone", {"phone": p})`.
 
 ГРАНИЦА ПРЕДИКАТА — через механизм, а не через «всё». Ловится всякая запись, в
 которой колонка номера — или таблица аккаунтов во вставке, загрузке и слиянии —
@@ -190,6 +215,13 @@ NAMED_ATTRIBUTE_WRITERS = frozenset(
     {"setattr", "set_committed_value", "__setattr__", "set_attribute"}
 )
 
+# Именованная форма имени атрибута у тех же писателей: `key` у `set_attribute` /
+# `set_committed_value` — `(instance, key, value, …)`, `name` у `setattr` /
+# `object.__setattr__` (позиционно-только, судится по цене строгости). Судится у
+# каждого писателя по имени: до плана 16-17 `set_attribute(account, key="phone",
+# value=x)` проходил (ревью WR-10).
+NAMED_ATTRIBUTE_KEY_KEYWORDS = frozenset({"key", "name"})
+
 # Вызовы, называющие колонку ПОЗИЦИЕЙ, а не именованным аргументом или ключом
 # словаря: `ordered_values((колонка, значение), …)` и `from_select([имена колонок],
 # select)` (план 16-12, ревью WR-08).
@@ -201,8 +233,25 @@ POSITIONAL_COLUMN_CALL_NAMES = frozenset({"ordered_values", "from_select"})
 #
 # `bulk_insert` — Alembic `op.bulk_insert(table, rows)`: строки вставки стоят вторым
 # позиционным аргументом, который правило и так обходит (план 16-12).
+#
+# `scalar`, `scalars`, `stream`, `stream_scalars`, `exec_driver_sql` (план 16-17) —
+# исполняющие вызовы с тем же параметром строк, что у `execute`
+# (`(self, statement, params | parameters, …)`, замер `inspect.signature`):
+# `scalars(insert(MessengerAccount).returning(…), [{… "phone": p}])` реально
+# вставляет номер (замер планирования на SQLite в памяти). До плана 16-17 их имён в
+# наборе не было, и такая вставка проходила гейт (ревью WR-10).
 ROW_MAPPING_CALL_NAMES = frozenset(
-    {"execute", "bulk_update_mappings", "bulk_insert_mappings", "bulk_insert"}
+    {
+        "execute",
+        "scalar",
+        "scalars",
+        "stream",
+        "stream_scalars",
+        "exec_driver_sql",
+        "bulk_update_mappings",
+        "bulk_insert_mappings",
+        "bulk_insert",
+    }
 )
 
 # Именованные аргументы тех же вызовов, несущие строки: `execute(stmt, params=…)`,
@@ -211,7 +260,9 @@ ROW_MAPPING_CALL_NAMES = frozenset(
 # строк называется `parameters` (замер верификатора через `inspect.signature`), у
 # `Session.execute` — `params`. До плана 16-12 имени `parameters` в наборе не было,
 # и естественная форма скрипта дозаполнения на соединении проходила (ревью WR-08).
-ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters"})
+# `rows` — Alembic `Operations.bulk_insert(self, table, rows, *, multiinsert)`: до
+# плана 16-17 `op.bulk_insert(table, rows=[…])` проходил (ревью WR-10).
+ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters", "rows"})
 
 # Именованный параметр ССЫЛКИ на функцию: `fn` у `AsyncSession.run_sync` /
 # `AsyncConnection.run_sync` — `(self, fn, *arg, **kw)`, замер `inspect.signature`,
@@ -602,8 +653,20 @@ def _judge_call(
     Имя передаётся, а не берётся из узла, затем, чтобы тем же веткам подать и
     «синтетический» вызов API, названного ссылкой (`run_sync(Session.
     bulk_update_mappings, …)`) или строкой (`methodcaller("…", …)`).
+
+    Судимый параметр берётся при любом литеральном связывании (план 16-17, ревью
+    WR-10): позицией, именем, литеральной распаковкой `*[…]` и `**{"имя": …}` —
+    по таблице `JUDGED_PARAMETERS` (`_bound_arguments`). Аргументы без позиции
+    (строки executemany, отображения `values`) — каждый позиционный с раскрытой
+    распаковкой (`_positional_arguments`) и именованные (`_named_arguments`).
     """
+    positional = [argument for argument in _positional_arguments(node) if argument is not None]
+    named = _named_arguments(node)
+    indices, names = _judged_bindings(name)
     if name in write_names:
+        # Именованные колонки судятся своей веткой: раскрытие `**{…}` через
+        # `_named_arguments` здесь не применяется, иначе `values(**{"phone": x})`
+        # дал бы две находки.
         for keyword in node.keywords:
             if keyword.arg in PHONE_COLUMNS:
                 record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
@@ -614,7 +677,8 @@ def _judge_call(
                         text = _mapping_key_text(key, column)
                         record(key, KIND_KEYWORD, f"{name}(**{text})")
     if name in ("values", "update"):
-        # `update({...})` — устаревший `Query.update({"phone": x})`.
+        # `update({...})` — устаревший `Query.update({"phone": x})`, позицией или
+        # параметром `values=` (сигнатура `Query.update(self, values, …)`).
         for key, column in _values_dict_keys(node):
             record(key, KIND_DICT_KEY, f"{name}({_mapping_key_text(key, column)})")
     if name in POSITIONAL_COLUMN_CALL_NAMES:
@@ -626,28 +690,33 @@ def _judge_call(
             )
             record(column_node, KIND_POSITIONAL_COLUMN, subject)
     if name in ROW_MAPPING_CALL_NAMES:
-        arguments = list(node.args) + [
-            keyword.value
-            for keyword in node.keywords
-            if keyword.arg in ROW_MAPPING_KEYWORDS
+        arguments = positional + [
+            value for keyword, value in named if keyword in ROW_MAPPING_KEYWORDS | names
         ]
         for argument in arguments:
             # Скобки — когда строки лежат в контейнере или comprehension,
             # а не голым отображением.
-            rows = not (isinstance(argument, ast.Dict) or _is_dict_call(argument))
+            rows = not (
+                isinstance(argument, (ast.Dict, ast.DictComp)) or _is_dict_call(argument)
+            )
             for mapping in _literal_mappings(argument):
                 for key, column in _mapping_phone_keys(mapping):
                     text = _mapping_key_text(key, column)
                     subject = f"{name}([{text}])" if rows else f"{name}({text})"
                     record(key, KIND_ROW_MAPPING, subject)
     if name in UPSERT_CALL_NAMES and name == "on_conflict_do_update":
-        for keyword in node.keywords:
-            if keyword.arg != "set_":
-                continue
-            for mapping in _literal_mappings(keyword.value):
+        # `set_` именем — и любое позиционное литеральное отображение: у PostgreSQL
+        # `set_` на позиции 3, у SQLite — 2 (`JUDGED_PARAMETERS`), а прочие
+        # позиционные параметры (`constraint`, `index_elements`, `index_where`)
+        # отображениями не бывают.
+        arguments = [(value, True) for keyword, value in named if keyword in names]
+        arguments += [(argument, False) for argument in positional]
+        for argument, by_name in arguments:
+            for mapping in _literal_mappings(argument):
                 for key, column in _mapping_phone_keys(mapping):
                     text = _mapping_key_text(key, column)
-                    record(key, KIND_UPSERT_SET, f"{name}(set_={text})")
+                    shown = f"set_={text}" if by_name else text
+                    record(key, KIND_UPSERT_SET, f"{name}({shown})")
     elif name in UPSERT_CALL_NAMES:
         # MySQL `on_duplicate_key_update`: именованные аргументы, `**{…}`,
         # позиционное отображение и позиционный перечень пар.
@@ -659,7 +728,7 @@ def _judge_call(
                     for key, column in _mapping_phone_keys(mapping):
                         text = _mapping_key_text(key, column)
                         record(key, KIND_UPSERT_SET, f"{name}(**{text})")
-        for argument in node.args:
+        for argument in positional:
             for mapping in _literal_mappings(argument):
                 for key, column in _mapping_phone_keys(mapping):
                     text = _mapping_key_text(key, column)
@@ -667,31 +736,135 @@ def _judge_call(
             for key, column in _phone_pairs(argument):
                 record(key, KIND_UPSERT_SET, f"{name}([({column!r}, …)])")
     if name in NAMED_ATTRIBUTE_WRITERS:
-        # Имя атрибута — второй позиционный аргумент; у `__setattr__` ещё и
-        # первый (`account.__setattr__("phone", x)`).
-        positions = (0, 1) if name == "__setattr__" else (1,)
-        for position in positions:
-            if position >= len(node.args):
-                break
-            attribute = node.args[position]
+        # Имя атрибута — позицией из таблицы (второй аргумент), у `__setattr__` ещё
+        # и первым (`account.__setattr__("phone", x)`), и именем `key=` / `name=`.
+        positions = sorted(indices | ({0} if name == "__setattr__" else set()))
+        # (значение, как оно показано в предмете находки: перед ним «…, » или имя)
+        candidates = [
+            (value, "" if position == 0 else "…, ")
+            for position in positions
+            for value in _bound_arguments(node, position, frozenset())
+        ]
+        candidates += [
+            (value, f"…, {keyword}=")
+            for keyword, value in named
+            if keyword in names | NAMED_ATTRIBUTE_KEY_KEYWORDS
+        ]
+        for attribute, prefix in candidates:
             if isinstance(attribute, ast.Constant) and attribute.value in PHONE_COLUMNS:
-                shown = (
-                    f"{name}({attribute.value!r}, …)"
-                    if position == 0
-                    else f"{name}(…, {attribute.value!r}, …)"
-                )
-                record(node, KIND_SETATTR, shown)
+                record(node, KIND_SETATTR, f"{name}({prefix}{attribute.value!r}, …)")
                 break
     if name in ROW_COPY_CALL_NAMES:
-        table = node.args[0] if node.args else next(
-            (k.value for k in node.keywords if k.arg == "table_name"), None
-        )
-        if (
-            isinstance(table, ast.Constant)
-            and isinstance(table.value, str)
-            and _ACCOUNTS_TABLE_NAME.fullmatch(table.value)
-        ):
-            record(node, KIND_RAW_SQL, f"{name}({table.value!r}, …)")
+        # Таблица — позицией или `table_name=` (`JUDGED_PARAMETERS`).
+        for table in _bound_arguments(node, min(indices, default=0), names):
+            if (
+                isinstance(table, ast.Constant)
+                and isinstance(table.value, str)
+                and _ACCOUNTS_TABLE_NAME.fullmatch(table.value)
+            ):
+                record(node, KIND_RAW_SQL, f"{name}({table.value!r}, …)")
+                break
+
+
+def _judged_bindings(name: str) -> tuple[frozenset[int], frozenset[str]]:
+    """Позиции в вызове и имена судимых параметров API `name` — из `JUDGED_PARAMETERS`."""
+    rows = [row for row in JUDGED_PARAMETERS if row.call == name]
+    return (
+        frozenset(row.call_index for row in rows),
+        frozenset(row.parameter for row in rows),
+    )
+
+
+def _expanded_arguments(items: list[ast.expr]) -> list[ast.expr | None]:
+    """Элементы с раскрытой литеральной распаковкой: `*[a, b]` / `*(a, b)` → `a, b`.
+
+    Распаковка не-литерала (`*rows`, `*build()`) — один `None` на её месте.
+    """
+    found: list[ast.expr | None] = []
+    for item in items:
+        if isinstance(item, ast.Starred):
+            if isinstance(item.value, (ast.List, ast.Tuple)):
+                found.extend(_expanded_arguments(list(item.value.elts)))
+            else:
+                found.append(None)
+        else:
+            found.append(item)
+    return found
+
+
+def _positional_arguments(call: ast.Call) -> list[ast.expr | None]:
+    """Позиционные аргументы вызова с раскрытой литеральной распаковкой `*[…]` / `*(…)`.
+
+    Распаковка не-литерала даёт `None` и обрывает позиции: сколько аргументов она
+    подаст, решает поток данных, поэтому `_bound_arguments` позиций за первым
+    `None` не связывает. Литеральные аргументы после неё остаются в перечне — их
+    судят ветки, которым позиция не нужна (строки executemany, отображения).
+    """
+    return _expanded_arguments(list(call.args))
+
+
+def _named_arguments(call: ast.Call) -> list[tuple[str, ast.expr]]:
+    """Именованные аргументы: `имя=…` и пары литерального `**{"имя": …}` / `**dict(имя=…)`.
+
+    Распаковка `**` разбирается грамматикой `_literal_mappings` (вложенные `**`,
+    `dict(…)`, `|`, условное выражение, `:=`); ключ пары — строковая константа.
+    `**kwargs` (имя) — поток данных: пар не даёт.
+    """
+    found: list[tuple[str, ast.expr]] = []
+    for keyword in call.keywords:
+        if keyword.arg is not None:
+            found.append((keyword.arg, keyword.value))
+            continue
+        for mapping in _literal_mappings(keyword.value):
+            found.extend(_mapping_named_pairs(mapping))
+    return found
+
+
+def _mapping_named_pairs(mapping: ast.expr) -> list[tuple[str, ast.expr]]:
+    """Пары «строковый ключ — значение» одного литерального отображения."""
+    if isinstance(mapping, ast.Dict):
+        return [
+            (key.value, value)
+            for key, value in zip(mapping.keys, mapping.values)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        ]
+    if isinstance(mapping, ast.DictComp):
+        key = mapping.key
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            return [(key.value, mapping.value)]
+        return []
+    if _is_dict_call(mapping):
+        found = [(k.arg, k.value) for k in mapping.keywords if k.arg is not None]
+        for argument in mapping.args:
+            for pair in _pair_candidates(argument):
+                if (
+                    isinstance(pair, (ast.Tuple, ast.List))
+                    and len(pair.elts) == 2
+                    and isinstance(pair.elts[0], ast.Constant)
+                    and isinstance(pair.elts[0].value, str)
+                ):
+                    found.append((pair.elts[0].value, pair.elts[1]))
+        return found
+    return []
+
+
+def _bound_arguments(
+    call: ast.Call, call_index: int, names: frozenset[str] | set[str]
+) -> list[ast.expr]:
+    """Значения, связанные с параметром позицией `call_index` или одним из имён `names`.
+
+    Позиция связывается, только если до неё нет распаковки не-литерала (`None` в
+    `_positional_arguments`); имя — прямо или парой литерального `**{…}`.
+    """
+    positional = _positional_arguments(call)
+    reachable = positional[: positional.index(None)] if None in positional else positional
+    bound: list[ast.expr] = []
+    if 0 <= call_index < len(reachable):
+        argument = reachable[call_index]
+        assert argument is not None
+        bound.append(argument)
+    bound.extend(value for keyword, value in _named_arguments(call) if keyword in names)
+    return bound
 
 
 def _judged_call_names(write_names: frozenset[str]) -> frozenset[str]:
@@ -720,7 +893,7 @@ def _getattr_literal(node: ast.AST) -> str | None:
     return None
 
 
-def _reference_name(node: ast.AST) -> str | None:
+def _reference_name(node: ast.AST | None) -> str | None:
     """Имя ССЫЛКИ на функцию: `Name.id`, `Attribute.attr` или строка `getattr(…, "…")`.
 
     Ссылка — функция, поданная другому вызову без вызова: `run_sync(Session.
@@ -730,7 +903,7 @@ def _reference_name(node: ast.AST) -> str | None:
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
-    return _getattr_literal(node)
+    return _getattr_literal(node) if node is not None else None
 
 
 def _synthetic_call(
@@ -746,10 +919,11 @@ def _referenced_calls(
     """Вызовы пишущего API, названного в `call` ссылкой или строкой: (вызов, имя API).
 
     - `operator.methodcaller("<имя>", …)` — вызов `<имя>` с аргументами после строки;
-    - ссылка на судимый API среди позиционных аргументов (или в `fn=`, параметре
-      ссылки `run_sync`) — вызов этого API с позиционными аргументами ПОСЛЕ ссылки
-      и именованными аргументами `call`, кроме `fn`: `run_sync`, `to_thread`,
-      `run_in_executor`, `partial` подают их функции именно так;
+    - ссылка на судимый API среди позиционных аргументов (с раскрытой распаковкой
+      `*[…]`) или в `fn=` (и `**{"fn": …}`), параметре ссылки `run_sync`, — вызов
+      этого API с позиционными аргументами ПОСЛЕ ссылки и именованными аргументами
+      `call`, кроме `fn`: `run_sync`, `to_thread`, `run_in_executor`, `partial`
+      подают их функции именно так;
     - `partial(ref, …)(…)` — к ним добавляются аргументы применения; судится у
       применения (`call` с `func`-вызовом), а у самого `partial` — нет.
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
@@ -763,9 +937,8 @@ def _referenced_calls(
             and head.value in judged_names
         ):
             func = ast.copy_location(ast.Name(id=head.value, ctx=ast.Load()), head)
-            return [
-                (_synthetic_call(call, func, list(call.args[1:]), list(call.keywords)), head.value)
-            ]
+            rest = list(call.args[1:])
+            return [(_synthetic_call(call, func, rest, list(call.keywords)), head.value)]
         return []
     if name in judged_names or name == "getattr":
         return []
@@ -778,34 +951,24 @@ def _referenced_calls(
         if _call_name(call.func) in judged_names:
             return []
         source, outer_args, outer_keywords = call.func, list(call.args), list(call.keywords)
-    positional = list(source.args)
+    positional = _positional_arguments(source)
+    keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
         referenced = _reference_name(argument)
-        if referenced in judged_names:
-            keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
-            return [
-                (
-                    _synthetic_call(
-                        call, argument, positional[index + 1 :] + outer_args,
-                        keywords + outer_keywords,
-                    ),
-                    referenced,
-                )
-            ]
-    for keyword in source.keywords:
-        if keyword.arg in REFERENCE_KEYWORDS:
-            referenced = _reference_name(keyword.value)
-            if referenced in judged_names:
-                keywords = [k for k in source.keywords if k is not keyword]
-                return [
-                    (
-                        _synthetic_call(
-                            call, keyword.value, positional + outer_args,
-                            keywords + outer_keywords,
-                        ),
-                        referenced,
-                    )
-                ]
+        if argument is not None and referenced in judged_names:
+            after = [item for item in positional[index + 1 :] if item is not None]
+            synthetic = _synthetic_call(
+                call, argument, after + outer_args, keywords + outer_keywords
+            )
+            return [(synthetic, referenced)]
+    for keyword, value in _named_arguments(source):
+        referenced = _reference_name(value)
+        if keyword in REFERENCE_KEYWORDS and referenced in judged_names:
+            rest = [item for item in positional if item is not None]
+            synthetic = _synthetic_call(
+                call, value, rest + outer_args, keywords + outer_keywords
+            )
+            return [(synthetic, referenced)]
     return []
 
 
@@ -847,15 +1010,21 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
 
 
 def _values_dict_keys(call: ast.Call) -> list[tuple[ast.AST, str]]:
-    """Ключи номера в позиционных отображениях `values(...)` / `update(...)`.
+    """Ключи номера в отображениях `values(...)` / `update(...)`.
 
-    Отображение — `{...}` или `dict(...)` в литеральном контейнере грамматики
+    Каждый позиционный аргумент с раскрытой распаковкой `*[…]`, а у `update` ещё и
+    параметр `values` именем или парой `**{"values": …}` (`JUDGED_PARAMETERS`:
+    `Query.update(self, values, …)`; план 16-17, ревью WR-10). Отображение — `{...}`,
+    `dict(...)` или `{"phone": v for …}` в литеральном контейнере грамматики
     `_literal_mappings`; список — многострочная вставка; у `update` — устаревший
     `Query.update({"phone": x})`.
     """
+    _indices, names = _judged_bindings(_call_name(call) or "")
+    arguments = [argument for argument in _positional_arguments(call) if argument is not None]
+    arguments += [value for keyword, value in _named_arguments(call) if keyword in names]
     return [
         found
-        for argument in call.args
+        for argument in arguments
         for mapping in _literal_mappings(argument)
         for found in _mapping_phone_keys(mapping)
     ]
@@ -875,12 +1044,18 @@ def _literal_mappings(node: ast.expr) -> list[ast.expr]:
     - `a if c else b` — по обеим ветвям;
     - `*rows` — по распаковываемому значению;
     - `list(…)`, `tuple(…)`, `set(…)`, `iter(…)` ровно с одним позиционным аргументом
-      и без именованных (`LITERAL_CONTAINER_WRAPPERS`) — по этому аргументу.
+      и без именованных (`LITERAL_CONTAINER_WRAPPERS`) — по этому аргументу;
+    - `{k: v for …}` — само отображение (план 16-17, ревью WR-10): его ключ `k`
+      судит `_mapping_phone_keys`, и `{"phone": n for n in …}` с постоянным ключом
+      называет колонку литералом так же, как `{"phone": n}`.
 
-    Граница грамматики: всё прочее — имя, атрибут, вызов другого имени, `{k: v for …}`
-    с вычисленными ключами — пустой список. Это значения, пришедшие в пишущий вызов
-    именем или результатом другого вызова: поток данных предикат не прослеживает.
+    Граница грамматики: всё прочее — имя, атрибут, вызов другого имени — пустой
+    список. Это значения, пришедшие в пишущий вызов именем или результатом другого
+    вызова: поток данных предикат не прослеживает. `{k: v for …}` с вычисленным
+    ключом отображением остаётся, но колонкой номера его ключ не назван.
     """
+    if isinstance(node, ast.DictComp):
+        return [node]
     if isinstance(node, ast.Dict):
         # `{**{"phone": x}, …}` — отображение внутри отображения.
         return [node] + [
@@ -930,10 +1105,14 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
     """Ключи номера в литеральном отображении: (узел для строки находки, колонка).
 
     У `{...}` — строковая константа или атрибут (`MessengerAccount.phone`) из
-    `PHONE_COLUMNS`; у `dict(...)` — именованный аргумент из `PHONE_COLUMNS`.
+    `PHONE_COLUMNS`; у `{k: v for …}` — ключ `k`, если он колонка номера; у
+    `dict(...)` — именованный аргумент из `PHONE_COLUMNS`.
     """
     found: list[tuple[ast.AST, str]] = []
-    if isinstance(mapping, ast.Dict):
+    if isinstance(mapping, ast.DictComp):
+        if (column := _phone_column(mapping.key)) is not None:
+            found.append((mapping.key, column))
+    elif isinstance(mapping, ast.Dict):
         for key in mapping.keys:
             if key is not None and (column := _phone_column(key)) is not None:
                 found.append((key, column))
@@ -1028,8 +1207,9 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
     """Колонки номера, названные ПОЗИЦИЕЙ: (узел для строки находки, колонка).
 
     У `ordered_values` — каждый позиционный аргумент-пара, чей первый элемент —
-    колонка номера; у `from_select` — элементы первого позиционного аргумента
-    (или `names=`), являющиеся колонкой номера.
+    колонка номера; у `from_select` — элементы параметра `names`, связанного
+    позицией, именем, `**{"names": …}` или `*[…]` (`JUDGED_PARAMETERS`), являющиеся
+    колонкой номера.
     """
     name = _call_name(call)
     if name == "ordered_values":
@@ -1042,15 +1222,16 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
                 candidates.append(argument)
         return _phone_pairs_among(candidates)
     if name == "from_select":
-        names = call.args[0] if call.args else next(
-            (k.value for k in call.keywords if k.arg == "names"), None
-        )
-        if isinstance(names, (ast.List, ast.Tuple)):
-            return [
-                (item, column)
-                for item in names.elts
-                if (column := _phone_column(item)) is not None
-            ]
+        indices, parameters = _judged_bindings(name)
+        found: list[tuple[ast.AST, str]] = []
+        for names in _bound_arguments(call, min(indices, default=0), parameters):
+            if isinstance(names, (ast.List, ast.Tuple)):
+                found.extend(
+                    (item, column)
+                    for item in names.elts
+                    if (column := _phone_column(item)) is not None
+                )
+        return found
     return []
 
 
