@@ -69,6 +69,9 @@ UPDATE «записать, если номера нет и он не ручно�
    …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)` —
    имя атрибута позицией или именем `key=` / `name=`
    (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`);
+   `flag_modified(account, "phone")` — flush пишет колонку текущим значением
+   объекта (после `account.__dict__["phone"] = x` — значение `x`, у устаревшего
+   объекта — старый номер поверх ручного; самопроверка исполнителя 16-17, замер);
    и дескриптор колонки номера `MessengerAccount.phone.__set__(account, x)` /
    `type(account).phone_is_manual.__set__(…)`;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
@@ -243,8 +246,14 @@ MODEL_NAME = "MessengerAccount"
 # (`sqlalchemy.orm.attributes.set_attribute`) добавлены планом 16-12 (ревью WR-08);
 # у `__setattr__` судится и ПЕРВЫЙ позиционный аргумент — форма вызова через объект
 # `account.__setattr__("phone", x)`, где имени атрибута предшествует только он сам.
+#
+# `flag_modified` (`sqlalchemy.orm.attributes.flag_modified(instance, key)`) — найден
+# самопроверкой исполнителя 16-17: flush выдаёт UPDATE колонки текущим значением
+# объекта, то есть пишет её по имени в обход присваивания (замер на SQLite в памяти:
+# после `account.__dict__["phone"] = x` пишется `x`, у устаревшего объекта старый
+# номер затирает ручной).
 NAMED_ATTRIBUTE_WRITERS = frozenset(
-    {"setattr", "set_committed_value", "__setattr__", "set_attribute"}
+    {"setattr", "set_committed_value", "__setattr__", "set_attribute", "flag_modified"}
 )
 
 # Именованная форма имени атрибута у тех же писателей: `key` у `set_attribute` /
@@ -429,7 +438,9 @@ _ASYNC_CONNECTION = "sqlalchemy.ext.asyncio.AsyncConnection"
 # `Update.ordered_values` — `(self, *args)`; MySQL `Insert.on_duplicate_key_update` —
 # `(self, *args, **kw)`; конструктор модели — `**kwargs`. У `AsyncSession` нет
 # `bulk_*` вовсе — к ним ведёт только `run_sync`, поэтому две последние строки —
-# главная ось асинхронного проекта.
+# главная ось асинхронного проекта. 33 строки — перебор планирования; 34-я
+# (`flag_modified`) найдена самопроверкой исполнителя: новый пишущий API, которого
+# нет в таблице, — повод дописать строку, а не опровержение границы.
 JUDGED_PARAMETERS: tuple[JudgedParameter, ...] = (
     JudgedParameter("sqlalchemy.orm.Query.update", "update", "values", 1, 0, KIND_DICT_KEY),
     JudgedParameter(
