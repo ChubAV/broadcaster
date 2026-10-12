@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 from sqlalchemy.sql.selectable import Select
 
+from app.application.accounts import phone as writer_module
 from app.application.accounts.phone import (
     ACCOUNT_NOT_IN_SESSION,
     PhoneWrite,
@@ -419,6 +420,56 @@ async def test_recording_garbage_for_a_pending_member_issues_nothing(
     assert outcome is PhoneWrite.UNPARSEABLE
     assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов на мусоре"
     assert account.id is None, "сессия сброшена на пути мусора"
+
+
+@pytest.mark.asyncio
+async def test_each_refusal_of_the_recorder_names_its_own_cause(
+    db_session: AsyncSession, monkeypatch
+):
+    """ТРАСЕР IN-10: каждый отказ `record_reported_phone` называет свою причину.
+
+    Решение владельца О-8 (2026-10-12), ревью IN-10. У писателя две линии
+    отказа, и причины у них разные:
+
+    - проверка членства (первая строка писателя): объект не принадлежит сессии
+      писателя — не добавлен, отсоединён или живёт в чужой сессии. Текст
+      нейтрален и не советует действия: совет «добавьте его через session.add»
+      для объекта чужой сессии падает `InvalidRequestError` (замер
+      верификатора);
+    - вторая линия после `flush`: объект УЖЕ член сессии, но сброс не дал ему
+      `id`. Текст о членстве здесь неверен, поэтому у линии своя константа
+      `ACCOUNT_WITHOUT_ID_AFTER_FLUSH`.
+
+    Вторая линия достижима: член сессии, ожидающий вставки, при сбросе,
+    подменённом пустым, проходит проверку членства и нормализацию и остаётся
+    без `id`. Писатель при этом не отдаёт ни одного оператора.
+    """
+    assert "session.add" not in ACCOUNT_NOT_IN_SESSION, (
+        "совет session.add неверен для объекта чужой сессии — там он падает "
+        "InvalidRequestError"
+    )
+
+    seeded = await _seed_account(db_session)
+    account = MessengerAccount(
+        user_id=seeded.user_id, type="wa", credentials="creds", status="active"
+    )
+    db_session.add(account)
+
+    async def flush_that_assigns_no_id(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(db_session, "flush", flush_that_assigns_no_id)
+    calls = _count_executes(db_session, monkeypatch)
+
+    with pytest.raises(ValueError) as raised:
+        await record_reported_phone(db_session, account, "79991234567")
+
+    assert str(raised.value) == writer_module.ACCOUNT_WITHOUT_ID_AFTER_FLUSH
+    assert str(raised.value) != ACCOUNT_NOT_IN_SESSION, (
+        "вторая линия называет членство в сессии, а объект уже в сессии"
+    )
+    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов на отказе"
+    assert account.id is None
 
 
 @pytest.mark.asyncio
