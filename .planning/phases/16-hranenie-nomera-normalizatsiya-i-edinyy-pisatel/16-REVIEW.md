@@ -1,10 +1,10 @@
 ---
 phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel
-reviewed: 2026-10-10T06:59:01Z
+reviewed: 2026-10-12T20:15:50Z
 depth: standard
 review_kind: incremental
-diff_base: 7ad786703ac8b43128ff186b7f00f50c83d2e4cb
-head: 720cbd5e
+diff_base: 388add7184e27f4b42f2243c116888c6ec31af62
+head: 4bd0276f
 files_reviewed: 6
 files_reviewed_list:
   - app/application/accounts/phone.py
@@ -15,180 +15,195 @@ files_reviewed_list:
   - tests/test_services/test_phone.py
 findings:
   critical: 0
-  warning: 2
-  info: 3
+  warning: 3
+  info: 2
   total: 5
-carried_forward: 5
+carried_forward: 0
 closed_prior: 5
 status: issues_found
 ---
 
-# Phase 16: Code Review Report (incremental re-review after gap batch 16-11…16-14)
+# Phase 16: Code Review Report (incremental re-review after gap batch 16-16…16-20)
 
-**Reviewed:** 2026-10-10T06:59:01Z
+**Reviewed:** 2026-10-12T20:15:50Z
 **Depth:** standard
 **Files Reviewed:** 6
 **Status:** issues_found
 
 ## Summary
 
-This is an incremental re-review. The diff base is `7ad78670`, the commit of the prior review, and `HEAD` is `720cbd5e`. It covers the six files changed by gap batch 16-11…16-14:
-- the `+7` and auto-path refusals (16-11);
-- the single-writer gate widening (16-12);
-- the privacy gate's aliases and module loggers (16-13);
-- the writer's session-membership check (16-14).
+This is an incremental re-review. The diff base is `388add71`, the commit of the prior review, and `HEAD` is `4bd0276f`. It covers the six files changed by gap batch round 3:
+- account-type refusal on the manual path and the auto-path header (16-16);
+- single-writer gate: `JUDGED_PARAMETERS`, writer API by reference, kind 1 by `Store` grammar (16-17);
+- privacy gate: imported `logging` functions, class-body loggers, `:=`, aliases, wrappers, `partial` (16-18);
+- the writer's two refusal constants and the foreign-session row (16-19).
 
-This report replaces the prior `16-REVIEW.md`. Each prior finding appears once below, in a table with its original title. Its state is either `closed`, with evidence, or `still open`.
+This report replaces the prior `16-REVIEW.md`. Each prior finding appears once, in the disposition table below.
 
 What I checked:
-- **Tests.** The six files pass: `408 passed` (22 + 119 + 94 + 173), run under the shared flock with `-p no:randomly`.
-- **Commits.** Every GREEN commit cited in `16-REVIEW-DISPOSITION.md` for WR-06/07/08 and IN-06/07 is an ancestor of `HEAD`: `02d73c93`, `2565d515`, `f10abdd7`, `2ccdb4d2`, `6c862686`, `e168d3dd`, `3bd2e6a0`, `58550bb3`, `164a0276`, plus the guard `1fad15e3`. I checked each with `git merge-base --is-ancestor`.
-- **Probes.** I called the live functions and both gate predicates directly from `uv run python` scratch scripts. I checked SQLAlchemy 2.0.46 behaviour on a throwaway in-memory SQLite engine. Every new finding below was reproduced, not inferred.
-- **Deferred findings.** The batch did not touch the code behind IN-01…IN-05. `git diff 7ad78670..HEAD` is empty for `pyproject.toml`, `test_account_phone_race.py`, `scripts/prohibitions_census.py`, `tests/test_migrations/test_0023_*` and `alembic/`, and `set_manual_phone` and the `phone_is_manual` predicate are unchanged.
+- **Tests.** The four test files pass: `705 passed`. I ran them under the shared flock with `-p no:randomly`.
+- **Commits.** Every GREEN commit that `16-REVIEW-DISPOSITION.md` cites for round 3 is an ancestor of `HEAD` (checked with `git merge-base --is-ancestor`): `333bf8e0`, `5c3ffb94`, `9b074697`, `417229e7`, `282c16d7`, `b7a1e127`, `e3f46b63`, `e53d9320`, `38727536`, `5a7cc660`, `b2758f43`, and the test commit `27cfc105`.
+- **Probes.** I called `normalize_manual`, `phone_write_offences` and `python_log_offences` directly from scratch scripts. I confirmed SQLAlchemy 2.0.46 write behaviour on a throwaway in-memory SQLite engine. Every new finding below was reproduced, not inferred.
+- **Library path.** I read `phonenumbers` 9.0.41 `_test_number_length`. A type with no metadata description returns `INVALID_LENGTH`; it does not fall back to the general lengths. So `ACCOUNT_NUMBER_TYPES` is not vacuous for the 149 regions without a `VOIP` description.
 
 What the batch got right:
-- The shared predicate `_is_impossible_zone_seven` (`app/services/phone.py:159-176`) closes the `+7` extra-digit class on both paths. The 4×5 enumeration pins it and includes an anti-vacuum step on each base.
-- The auto path refuses `TOO_LONG` / `INVALID_LENGTH`. I re-ran the enumeration: 1935 inputs, 583 accepted as `TOO_SHORT` and 558 as `IS_POSSIBLE`, none with a refused verdict. This matches the header's "583 of 1935".
-- The membership check in `record_reported_phone` issues no statement and does not flush. A foreign-session object is refused. I verified that by probe; it is not covered by a test (see IN-10).
+- All five prior findings are closed (table below).
+- The 16-19 writer change is minimal and correct.
+- The header measurement rule (`test_the_module_header_names_the_auto_path_boundary_with_its_measurement`) recomputes both numbers live. A metadata bump will now turn the suite red instead of leaving the header stale.
 
 New problems:
-- **WR-06's harm survives outside code 7.** A Belarusian, Ukrainian, Kyrgyz, Turkish, Israeli, Chinese or German number typed with extra digits is still saved as an invented, locked "manual" number. Nothing in the code names this boundary (WR-09).
-- **The single-writer gate over-claims a third time.** The header now claims coverage "through the mechanism", but `Query.update(values={…})`, the keyword form of `set_attribute`, and `run_sync(Session.bulk_update_mappings, …)` all write the column and pass. None of the three is among the five named unreachable forms (WR-10).
-- Three smaller honesty gaps (IN-08, IN-09, IN-10).
+- **The manual-path boundary is named too narrowly.** Docstring item 5 says only Germany and Israel still accept a non-`+7` number with extra digits. Measured: 36 regions do, including Italy, Netherlands, Finland, Ireland, Austria, Serbia and Indonesia (WR-11).
+- **The single-writer gate's mechanism claim is wider than the predicate for a fourth time.** `MessengerAccount.phone.key` and container forms of `from_select` names both write the column and pass. So does a same-module import alias of a writer API (WR-12).
+- **The privacy gate misses structlog's async level methods.** `await logger.ainfo(…, phone=…)` passes, and the project's configured wrapper provides that method (WR-13).
+- Two small hygiene items (IN-11, IN-12).
 
 ## Prior findings — disposition
 
-Titles are copied verbatim from the prior report, with the appended « — still open (deferred per 16-REVIEW-DISPOSITION.md)» suffix stripped. Status is in the State column only. CR-01 and WR-01…WR-05 were already closed in the prior pass and are not repeated.
+Titles are copied verbatim from the prior `16-REVIEW.md`. Older ledger rows (WR-01…WR-08, CR-01, IN-01…IN-07) are not repeated: my re-derivation does not contradict their ledger state.
 
-| ID | Original title | State | Evidence (current tree `720cbd5e`) |
-|----|----------------|-------|------------------------------------|
-| WR-06 | Manual input of a valid `+7` number plus four extra digits is saved as an invented 15-digit "manual" number | closed (fix `02d73c93`, ancestor of HEAD) | `app/services/phone.py:237-238` calls `_is_impossible_zone_seven` (`:159-176`; `RU_KZ_NATIONAL_DIGITS = 10` at `:110`). Probed: `+7 999 123-45-67 1234`, `8 999 123 45 67 8901` and `89991234567 8901` → `PHONE_ERROR_NOT_A_NUMBER`. The rows are `wr06_*` (`tests/test_services/test_phone.py` `MANUAL_REJECTED`) plus the 4×5 class rule at `:512-551`. The closure is honest for code 7 only. The same harm in other zones is new **WR-09**. |
-| WR-07 | The P-1 boundary in the module header understates the auto path; `TOO_LONG`, `INVALID_LENGTH`, longer `TOO_SHORT` and `+7 0…` are all stored | closed (fix `2565d515`, ancestor of HEAD) | `REPORTED_REFUSED_VERDICTS` is at `app/services/phone.py:86-92`, the refusal at `:285-288`. Every row in the prior WR-07 table now gives `None` except `123456789` (`TOO_SHORT`, code 1). That value is named in the new boundary paragraph at `:37-45`. The owner chose (a) (O-5). The remaining TOO_SHORT boundary is honestly named. The paragraph's framing "Кроме настоящих номеров" ("besides real numbers") hides a second accepted class; see new **IN-08**. |
-| WR-08 | The single-writer gate's header claims "Всё, что видно литералом в исходнике, ловится" ("everything visible as a literal in the source is caught"), but literal write forms still pass | closed (fixes `f10abdd7`, `2ccdb4d2`, `6c862686`, `e168d3dd`, ancestors of HEAD) | All eight forms from the prior WR-08 code block now produce exactly one offence. Each is planted in `LITERAL_FORM_CASES`, and I re-checked `parameters=`, the comprehension, `values([… for …])`, quoted column, quoted table, schema prefix, `ordered_values` and `object.__setattr__` with `phone_write_offences`. The "everything" claim is gone (`test_phone_single_writer_gate.py:120-129` keeps it only as history). The five named unreachable forms (`:100-115`) are stated with reasons. The new mechanism claim is itself narrower than the predicate in three places; see new **WR-10**. |
-| IN-06 | The privacy gate's binder match misses an aliased import and the threadlocal binders | closed (fixes `3bd2e6a0`, `58550bb3`, ancestors of HEAD) | `CONTEXT_BINDERS` is at `tests/test_phone_privacy_gate.py:192-194` and covers `bind_threadlocal`, `bound_threadlocal` and `tmp_bind`. `module_log_names` (`:295-338`) resolves `bind_ctx` aliases. Probed: both forms named in the prior IN-06 produce an offence. The aliased factory import and the plain re-assignment `a = lg` are named in "ГРАНИЦА СРЕДСТВА" (the gate's stated boundary, `:119`, `:122-123`), as the SUMMARY says. Two forms identifiable "по ввозу" ("by import") or by module binding are neither caught nor named; see new **IN-09**. |
-| IN-07 | `record_reported_phone` still answers a forgotten `session.add` silently whenever the source sends no number | closed (fix `164a0276`, guard `1fad15e3`, ancestors of HEAD) | `app/application/accounts/phone.py:164-165` checks membership before `normalize_reported`. The test `test_recording_an_account_never_added_to_the_session_raises[none\|empty\|garbage\|parseable]` pins zero statements and `id is None`. A pending member with garbage input gets `UNPARSEABLE` with no flush (`test_recording_garbage_for_a_pending_member_issues_nothing`). The other-session case is untested. The test docstring's stated reason for that is false; see new **IN-10**. |
-| IN-01 | Blank manual input clears a manual number with no confirmation; `PHONE_ERROR_BLANK` cannot be reached through the writer | still open: deferred, not re-verified (outside this batch) | Owner decision O-4. Addressee: Phase 18 form. `set_manual_phone` (`app/application/accounts/phone.py:179-199`) is unchanged in substance by this batch; only its line numbers moved. |
-| IN-02 | The exact pin `phonenumberslite==9.0.41` freezes the metadata the manual path depends on | still open: deferred, not re-verified (outside this batch) | Owner decision O-4. Addressee: owner / backlog. `pyproject.toml` is untouched since `7ad78670`. The batch adds more measurements tied to 9.0.41 (`app/services/phone.py:72`, `:81-85`, `:104-109`, `:41-42`), which raises the cost of a silent bump. |
-| IN-03 | The race test cannot detect dropping the `phone_is_manual` predicate | still open: deferred, not re-verified (outside this batch) | Owner decision O-4. The predicate is now at `app/application/accounts/phone.py:110`. `test_account_phone_race.py` is untouched since `7ad78670`. |
-| IN-04 | `reconcile_lines` crashes on decimal phase directories (copied from Phase 15) | still open: deferred, not re-verified (outside this batch) | Owner decision O-4. Addressee: backlog, census owner. `scripts/prohibitions_census.py` is untouched since `7ad78670`. |
-| IN-05 | The migration test's claim that "children survive the recreate" is only proven with SQLite foreign keys off | still open: deferred, not re-verified (outside this batch) | Owner decision O-4. Addressee: backlog. The migration test and `alembic/` are untouched since `7ad78670`. |
+| ID | Prior title | State | Evidence (current tree `4bd0276f`) |
+|----|-------------|-------|------------------------------------|
+| WR-09 | Manual input of a non-`+7` number plus extra digits is still saved as an invented "manual" number (BY, UA, KG, TR, IL, CN, DE) | closed (GREEN `333bf8e0`, ancestor of HEAD) | `ACCOUNT_NUMBER_TYPES` is at `app/services/phone.py:142-147` and `_is_possible_for_an_account_type` at `:216-229`; the refusal is at `:318-319`. Probe results: every BY, UA, KG, TR and CN input in the prior table is refused, as is IL +1 (`PHONE_ERROR_NOT_A_NUMBER`). IL +2/+3 and DE +1/+2 are still accepted, and item 5 names them. Pinned by the `wr09_*` rows (`tests/test_services/test_phone.py:615-646`), the `FOREIGN_EXTRA_DIGIT_BASES` 5×5 enumeration (`:750-800`) and the 830-example guard (`:805`). The fix the prior review proposed was implemented as written. The boundary text it introduced is too narrow; that is new **WR-11**, a defect in the new item-5 text, not a reopening. |
+| WR-10 | The single-writer gate's new "through the mechanism" claim is again wider than the predicate: `Query.update(values=…)`, keyword `set_attribute`, and `run_sync(Session.bulk_*_mappings, …)` pass | closed (GREEN `9b074697`, `417229e7`, `282c16d7`, `b7a1e127`, `e3f46b63`, `e53d9320`, ancestors of HEAD) | Each of the five forms in the prior WR-10 code block now produces exactly one offence (probe): `Query.update(values=…)`, `set_attribute(…, key=…)`, `set_committed_value(…, key=…)`, `run_sync(Session.bulk_update_mappings, …)` and `values(**{"phone": n for …})`. `JUDGED_PARAMETERS` is at `tests/test_application/test_phone_single_writer_gate.py:454-587`; the signature guard at `:1952` and the binding matrix at `:2054` pass. The new mechanism claim is again wider than the predicate in other places; that is new **WR-12**. |
+| IN-08 | The auto-path boundary paragraph says "besides real numbers" the only extra acceptance is `TOO_SHORT`; 400 of the 558 `IS_POSSIBLE` values accepted in the same enumeration are not valid numbers | closed (GREEN `5c3ffb94`, ancestor of HEAD) | `app/services/phone.py:37-56` names both classes: possible values including invalid ones ("400 из 558") and `TOO_SHORT` outside code 7 ("583 из 1935"). The rule `test_the_module_header_names_the_auto_path_boundary_with_its_measurement` (`tests/test_services/test_phone.py:334`) recomputes both numbers live and passes. |
+| IN-09 | The privacy gate neither catches nor names two logger forms that are identifiable by import or module binding | closed (GREEN `38727536`, `5a7cc660`, ancestors of HEAD) | `module_log_names` (`tests/test_phone_privacy_gate.py:560-638`) handles both forms. A `from logging import <LOG_METHOD>` becomes a `log_functions` entry; a class-body binding also goes into the attributes (`_bind`, `:541-557`). `NamedExpr` is collected. Probe: `from logging import info`, `warning as warn_`, class-body `lg` through `self.`/`cls.`, and `if (lg := logging.getLogger()):` each produce an offence. |
+| IN-10 | The other-session case of `record_reported_phone` is left untested on a false premise, and the refusal text gives wrong advice for it | closed (GREEN `b2758f43`, test `27cfc105`, ancestors of HEAD) | `ACCOUNT_NOT_IN_SESSION` is neutral (`app/application/accounts/phone.py:73`). The post-flush line has its own `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` (`:75`, `:189`). The `"foreign"` row adds the object to an unbound `AsyncSession()` and has an anti-vacuum assert (`tests/test_application/test_account_phone_writer.py:371-413`). The false premise is gone from the docstring. `test_each_refusal_of_the_recorder_names_its_own_cause` is at `:444`. |
 
 ## Narrative Findings (AI reviewer)
 
 ## Warnings
 
-### WR-09: Manual input of a non-`+7` number plus extra digits is still saved as an invented "manual" number (BY, UA, KG, TR, IL, CN, DE)
+### WR-11: `normalize_manual` item 5 names Germany and Israel as the only non-`+7` extra-digit boundary; 36 regions still save an invented "manual" number
 
-**File:** `app/services/phone.py:159-176` (`_is_impossible_zone_seven` returns `False` for every code other than 7), `:193-213` (docstring item 5), `:237-240`; `tests/test_services/test_phone.py:512-517` (`EXTRA_DIGIT_BASES` contains only `+7` bases)
-**Issue:** WR-06 was raised because a real number with extra digits typed without `доб`/`ext` is saved under `phone_is_manual=true`. No auto source can then correct it (D-07). 16-11 closed that harm for code 7 only. For every other code, the only guard is the metadata's general possible lengths. Those lengths are the union over all number types, so they admit extra digits wherever any number type (toll-free, premium, shared cost) is longer than mobile. Measured with `normalize_manual` on `phonenumberslite==9.0.41` (extra digits = how many trailing digits were added; OK = saved):
+**File:** `app/services/phone.py:266-274` (item 5, "У кодов, отличных от 7, класс … закрывает пункт 7, КРОМЕ названной границы: Германия … и Израиль …") and `:278-282` (item 7); `tests/test_services/test_phone.py:45-53` (module docstring) and the `FOREIGN_EXTRA_DIGIT_BASES` docstring (`:745-749`, `:780-784`)
 
-| Base (real mobile) | +1 | +2 | +3 | +4 | Saved for +1 |
-|---|---|---|---|---|---|
-| `+375 29 123 45 67` (Belarus) | OK | OK | refused | refused | `+3752912345671` |
-| `+380 50 123 4567` (Ukraine) | OK | refused | refused | refused | `+3805012345671` |
-| `+996 700 123 456` (Kyrgyzstan) | OK | refused | refused | refused | — |
-| `+90 532 123 45 67` (Turkey) | refused | OK | OK | refused | — |
-| `+972 50 123 4567` (Israel) | OK | OK | OK | refused | — |
-| `+86 138 0013 8000` (China) | OK | refused | refused | refused | `+86138001380001` |
-| `+49 151 23456789` (Germany) | OK | OK | refused | refused | — |
+**Issue:** Item 5 says the "number plus extra digits" class outside code 7 is closed by item 7 *except* for Germany and Israel, "because their `FIXED_LINE` / `FIXED_LINE_OR_MOBILE` length is variable". The test module repeats the claim. I enumerated it: for every region, the metadata `MOBILE` example in E.164 with `1`, `12`, `123` and `1234` appended (976 inputs over 244 regions). **56 inputs in 36 regions are accepted** and stored with `phone_is_manual=true`, so no auto source can correct them (D-07). Examples (`normalize_manual` output):
 
-Belarus and Ukraine are the likeliest non-RU inputs for this product. Turkey is non-monotonic: +1 is refused while +2 and +3 are saved. That is the same shape the verifier used to reopen WR-06.
+| Typed | Stored | Type that admits the length |
+|---|---|---|
+| `+39 312 345 6789 1` (Italy) | `+3931234567891` | FIXED_LINE |
+| `+31 6 12345678 12` (Netherlands) | `+3161234567812` | **MOBILE** |
+| `+358 41 2345678 1` (Finland) | `+3584123456781` | **MOBILE** |
+| `+353 85 012 3456 1` (Ireland) | `+3538501234561` | FIXED_LINE |
+| `+381 60 1234567 123` (Serbia) | `+381601234567123` | FIXED_LINE |
+| `+62 812 345 678 123` (Indonesia) | `+62812345678123` | **MOBILE** |
+| `+886 912 345 678 1` (Taiwan) | `+8869123456781` | **VOIP** |
+| `+60 12 345 6789 1` (Malaysia) | `+601234567891` | MOBILE / VOIP |
 
-The code does not name this boundary. Docstring item 5 says "Условие ограничено кодом 7: у Италии `+39 06 …` ведущий ноль законен" ("The condition is limited to code 7: in Italy a leading zero `+39 06 …` is legitimate"), which explains the limit only for the leading-zero half. The 16-REVIEW-DISPOSITION row says "класс «номер плюс лишние цифры» закреплён перебором" ("the class 'number plus extra digits' is pinned by enumeration"). That reads wider than the code-7-only enumeration.
+The other regions: AD, AT (all four counts), AX, BA, BG, BQ, CD, CU, GA, GM, IS, KH, LU, MM, MN, NZ, PM, SM, SO, TK, TV, VA, VN, WS, XK, ZW, plus the named DE and IL.
 
-**Fix:** This stays within D-05: it checks lengths only and never calls the validity check. On the manual path, require the number to be possible for an account-shaped type:
+Two problems:
+- **The named boundary is about 1/18 of the real one.** It names 2 of the 36 regions.
+- **The stated reason is wrong for part of the set.** For NL, FI, ID and MY the *mobile* length itself is variable, and for TW it is `VOIP`. No length-only rule can close those, so the boundary is permanent there, not an artefact of `FIXED_LINE`.
+
+This is the same "named boundary narrower than the measured one" shape the phase has been closing (IN-08, WR-07). The disposition ledger repeats the narrow wording ("граница названа в пункте 5 … Германия … и Израиль").
+
+**Fix:** Name the class with a live measurement instead of two countries, and pin it the way the auto-path header is pinned:
 ```python
-_ACCOUNT_NUMBER_TYPES = (
-    PhoneNumberType.MOBILE, PhoneNumberType.FIXED_LINE,
-    PhoneNumberType.FIXED_LINE_OR_MOBILE, PhoneNumberType.VOIP,
-)
-...
-if not any(
-    phonenumbers.is_possible_number_for_type_with_reason(number, kind) == ValidationResult.IS_POSSIBLE
-    for kind in _ACCOUNT_NUMBER_TYPES
-):
-    raise PhoneError(PHONE_ERROR_NOT_A_NUMBER)
+# tests/test_services/test_phone.py
+def _manual_extra_digit_enumeration() -> tuple[int, int, set[str]]:
+    total = accepted = 0
+    regions: set[str] = set()
+    for region in sorted(phonenumbers.SUPPORTED_REGIONS):
+        example = phonenumbers.example_number_for_type(region, phonenumbers.PhoneNumberType.MOBILE)
+        if example is None:
+            continue
+        base = phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.E164)
+        for tail in ("1", "12", "123", "1234"):
+            total += 1
+            try:
+                normalize_manual(base + tail)
+            except PhoneError:
+                continue
+            accepted += 1
+            regions.add(region)
+    return total, accepted, regions
 ```
-Measured:
-- This refuses every +1/+2 row in the table above.
-- No `MANUAL_ACCEPTED` row is refused.
-- Every regional example number of those four types in the 9.0.41 metadata is still accepted.
-- Including `TOLL_FREE` re-admits every row in the table, so leave it out. That uses the same argument the module already makes for RU `8108…`: a toll-free number is never a messenger account.
+Then:
+- Assert that item 5 contains `f"{accepted} из {total}"` and the region count.
+- Reword item 5: "outside code 7 the class is closed only where no account type's length admits the extra digits; where MOBILE/VOIP length is itself variable (NL, FI, ID, MY, TW, AT, …) no length rule can close it" (D-05 forbids the validity check).
+- If the owner wants a tighter rule, that is a new decision (O-x). It is not something to word around.
 
-Add `EXTRA_DIGIT_BASES` rows for BY, UA and TR. If the owner keeps the current behaviour, name the boundary in item 5 and narrow the disposition wording to "code 7".
-
-### WR-10: The single-writer gate's new "through the mechanism" claim is again wider than the predicate: `Query.update(values=…)`, keyword `set_attribute`, and `run_sync(Session.bulk_*_mappings, …)` pass
+### WR-12: The single-writer gate's mechanism claim is again wider than the predicate: `MessengerAccount.phone.key`, container forms of `from_select` names, and same-module import aliases of writer APIs pass
 
 **File:** `tests/test_application/test_phone_single_writer_gate.py`:
-- `:36-46`: header kinds 3 and 4.
-- `:96-118`: the boundary. "Ловится всякая запись, в которой колонка номера … названа литералом в самом пишущем вызове, в его аргументе-контейнере" ("Every write is caught in which the phone column … is named by a literal in the writing call itself, or in its container argument").
-- `:360-363`: only positional args of `update(...)` are judged.
-- `:413-431`: named-attribute writers are judged by position only.
-- `:372-386`: row mappings only when the call name itself is `execute`/`bulk_*`.
+- `:152-160`: the boundary. "Ловится всякая запись, в которой колонка номера … названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика `_literal_mappings` …)".
+- `:1312-1348`: `_phone_column` accepts `X.phone` but not `X.phone.key`.
+- `:1418-1428`: `from_select` names only as a bare `List`/`Tuple`.
+- `:659`, `:675`: aliases are resolved only for the model and `partial`.
+- `:173-177`: boundary (4) names only "псевдоним модели, заведённый в чужом файле".
 
-**Issue:** Each form below names the phone column as a literal in the writing call's own argument. Each falls under the header's mechanism claim and none of the five named unreachable forms. `phone_write_offences` returns `[]` for each. On SQLAlchemy 2.0.46 the first two emit a real write: on a scratch engine I saw `UPDATE a SET phone=?`, and the value persisted.
+**Issue:** `phone_write_offences` returns `[]` for each form below. I ran the starred ones on SQLAlchemy 2.0.46 against an in-memory SQLite engine; each wrote the column (`+71`, `+72`, `+74` persisted):
 ```python
-session.query(MessengerAccount).filter_by(id=i).update(values={"phone": x})   # Query.update(self, values, …)
-set_attribute(account, key="phone", value=x)                                  # signature (instance, key, value, initiator=None)
-set_committed_value(account, key="phone", value=x)                            # same keyword form, kind 4
-await session.run_sync(Session.bulk_update_mappings, MessengerAccount, [{"id": 1, "phone": p}])
-stmt = update(MessengerAccount).values(**{"phone": n for n in [x]})           # boundary (1) excludes only "{k: v for …} с вычисленными ключами" (with computed keys)
+stmt = update(MessengerAccount).values({MessengerAccount.phone.key: x})                      # * writes
+session.bulk_update_mappings(MessengerAccount, [{"id": 1, MessengerAccount.phone.key: p}])  # * writes
+await session.execute(update(MessengerAccount), [{"id": 1, MessengerAccount.phone.key: p}])
+setattr(account, MessengerAccount.phone.key, x)
+set_committed_value(account, MessengerAccount.phone.key, x)
+stmt = insert(MessengerAccount).from_select(["user_id"] + ["phone"], sel)                    # * writes
+stmt = insert(MessengerAccount).from_select(["user_id", "phone"] if full else ["user_id"], sel)
+stmt = insert(MessengerAccount).from_select(list(("user_id", "phone")), sel)
+from sqlalchemy.orm.attributes import set_committed_value as scv; scv(account, "phone", x)
+from sqlalchemy.orm.attributes import flag_modified as touch; touch(account, "phone")
 ```
-- `run_sync(fn, *args)` is the AsyncSession way to reach a sync-only bulk API, and this project is async throughout, so for Phase 20 this form is plausible.
-- `Query.update` is legacy, but the header names it explicitly as kind 3 and judges only its positional form.
-- The header's own rule (`:116-118`) is: "Форма, которая под механизм подпадает, но предикатом не ловится, — слепота предиката" ("A form that falls under the mechanism but is not caught by the predicate is a blindness of the predicate"). This is the WR-01 → WR-08 pattern a third time, and less severe each time.
+- **`Model.attr.key`.** It is the standard way to build the *string* keys that `bulk_update_mappings` requires without a bare literal. That is exactly the Phase 20 backfill shape. The column is named literally (`MessengerAccount.phone`) inside the writing call's argument, and `_phone_column` already treats `X.phone` as literal naming. No boundary item covers it: (1) is "name or result of another call" and (2) is "computed at run time", and `.key` is neither in any sense that `X.phone` is not.
+- **`from_select` names.** The header promises the `_literal_mappings` container grammar (`+`, conditional, `list(…)`), but this kind is judged only on a bare list or tuple.
+- **Import aliases.** The gate already resolves same-module import aliases for the model and for `partial` (`_module_aliases`). Writer APIs get no such resolution, and boundary (4) names only the model alias from another file. If the intent is to file this under (1) ("reference in a variable"), (1) has to say so: today it names only `fn = s.bulk_update_mappings`.
+
+This is the WR-01 → WR-08 → WR-10 pattern a fourth time. The header's own rule (`:185-187`) says such a form is "слепота предиката, а не граница средства" ("a blindness of the predicate, not a boundary of the tool").
 
 **Fix:**
-- In the `update`/`values` branch, also judge `keyword.arg == "values"` through `_literal_mappings`.
-- For `NAMED_ATTRIBUTE_WRITERS`, also judge a `key=` keyword (and `name=` for `setattr`-like calls) whose value is a `PHONE_COLUMNS` constant.
-- For a call whose positional argument is a `Name`/`Attribute` with last name in `ROW_MAPPING_CALL_NAMES` (the `run_sync(Session.bulk_update_mappings, …)` shape), judge the remaining positional arguments as rows.
-- In `_literal_mappings`, return an `ast.DictComp` whose `key` is a `PHONE_COLUMNS` constant, and handle it in `_mapping_phone_keys`.
-- Plant each form as a `LITERAL_FORM_CASES` row.
+- In `_phone_column`, accept `ast.Attribute(attr in {"key", "name"})` whose `.value` is itself a phone-column node (`MessengerAccount.phone.key`, `table.c.phone.name`). For the `NAMED_ATTRIBUTE_WRITERS` branch (`:850-853`), test `_phone_column(attribute)` instead of `isinstance(attribute, ast.Constant)`.
+- In `_positional_phone_columns`, run the bound `names` value through `_pair_candidates` (which already implements the list/tuple/`+`/`IfExp`/`:=`/wrapper grammar) instead of requiring `List`/`Tuple`.
+- Build `write_names` / `judged_names` with `_module_aliases(tree, n)` for every name in `_judged_call_names(...)`, the same way it is done for `MessengerAccount` and `partial`.
+- Plant each form above as a `LITERAL_FORM_CASES` row, and keep `Group.title.key` in `LEGITIMATE_CASES` as the negative control.
 
-Alternatively, add a sixth named unreachable form: "API reached through a function reference or a keyword the predicate does not judge".
+### WR-13: The privacy gate misses structlog's async level methods (`ainfo`, `awarning`, …) that the project's configured logger provides
+
+**File:** `tests/test_phone_privacy_gate.py:218-235` (`LOG_METHODS`), `:12-14` (header: "метод — уровень журнала или `bind`/`new`"), `:177-181` (boundary bullet attributing the method list to D-17); `app/logging_config.py:35` (`wrapper_class=structlog.stdlib.BoundLogger`)
+
+**Issue:** The project configures structlog with `structlog.stdlib.BoundLogger`. In structlog 25.5.0 that class exposes `adebug`, `ainfo`, `awarning`, `aerror`, `aexception`, `acritical`, `afatal` and `alog` (checked with `dir()`). These are the level methods for `async` code, and this is an async FastAPI + Celery codebase. None of them is in `LOG_METHODS`. Probe:
+```python
+logger = structlog.get_logger()
+async def g(account):
+    await logger.ainfo("connected", phone=account.phone)      # python_log_offences -> []
+class S:
+    async def g(self, a):
+        await self.logger.awarning("x", phone=a.phone)         # -> []
+```
+The number goes to stdout, then Loki, exactly like `logger.info`.
+
+The boundary bullet says "методы журнала вне `LOG_METHODS` … D-17 задаёт гейт списком получателей и методов". But D-17 (`16-CONTEXT.md:90-94`) reads "Python — `logger.*`/`log.*`/`logging.*`/`print(`": a wildcard over methods, not a method list. The header also says the gate judges "вызовы уровней" ("level calls"), and `ainfo` is a level call. So this is a blindness of the predicate, not an owner frame. `ainfo` is not mentioned anywhere in `.planning/` or `tests/`.
+
+A smaller sibling: `lg = logging.getLogger(__name__).getChild("x"); lg.info(a.phone)` also passes. `getChild` returns a logger, as `bind` does, but it is neither a factory nor in `LOG_METHODS`.
+
+**Fix:**
+```python
+ASYNC_LOG_METHODS = frozenset({"adebug", "ainfo", "awarning", "aerror", "aexception",
+                               "acritical", "afatal", "alog"})
+LOG_METHODS = frozenset({...existing..., *ASYNC_LOG_METHODS})
+```
+- Add a guard rule that compares `ASYNC_LOG_METHODS` with `{m for m in dir(structlog.stdlib.BoundLogger) if m.startswith("a") and m[1:] in LOG_METHODS}`, so a structlog bump turns the suite red.
+- Plant `await logger.ainfo(…, phone=…)` as a positive case.
+- Optionally treat `getChild` like `bind` when classifying a binding's value (`module_log_names`).
+- If the owner does want a closed method list, fix the boundary bullet's attribution to D-17 instead.
 
 ## Info
 
-### IN-08: The auto-path boundary paragraph says "besides real numbers" the only extra acceptance is `TOO_SHORT`; 400 of the 558 `IS_POSSIBLE` values accepted in the same enumeration are not valid numbers
+### IN-11: Missing space after `=` in `normalize_manual`
 
-**File:** `app/services/phone.py:37-45`
-**Issue:** The paragraph reads: "Кроме настоящих номеров автопуть принимает ЛЮБОЕ разбираемое значение из 7…15 цифр с вердиктом `TOO_SHORT`" ("Besides real numbers, the auto path accepts ANY parseable 7…15-digit value with verdict `TOO_SHORT`"). That implies every accepted `IS_POSSIBLE` value is a real number. It is not. Re-running the header's own enumeration (code × length 7…15, filler `2345678901234567`):
-- 558 values are accepted as `IS_POSSIBLE`;
-- 400 of those fail `is_valid_number`;
-- examples: `+72345678901`, `+2023456789`, `+2723456`;
-- probes outside the enumeration give the same: `10000000000` → `+10000000000` and `440000000000` → `+44000000000`.
+**File:** `app/services/phone.py:320`
+**Issue:** `e164 =phonenumbers.format_number(number, PhoneNumberFormat.E164)` was introduced by `333bf8e0`. The project has no formatter in the toolchain (`uv run ruff` is not installed), so nothing catches it.
+**Fix:** `e164 = phonenumbers.format_number(number, PhoneNumberFormat.E164)`.
 
-A NANP number cannot start with 0 or 1 after `+1`, which is structurally the same as a `+7` national part starting with 0. Yet `+7 0…` is refused and `+1 0…` is stored. D-05 justifies skipping validity ("ложный отказ хуже пропуска" — "a false refusal is worse than a miss"). The boundary paragraph should still say this class exists rather than frame the remainder as "real numbers".
-**Fix:** Reword as: "besides numbers the metadata considers possible (including ones it considers invalid, D-05) …". Optionally cite the 400/558 measurement next to 583/1935.
+### IN-12: The writer test reaches the new constant through the module object while its sibling is imported by name
 
-### IN-09: The privacy gate neither catches nor names two logger forms that are identifiable by import or module binding
-
-**File:** `tests/test_phone_privacy_gate.py:17-23` (what counts as a log call), `:110-128` (ГРАНИЦА СРЕДСТВА, the gate's stated boundary), `:307-322`, `:331-337`
-**Issue:** The boundary justifies every out-of-scope form with one argument: the logger "нельзя опознать ни по фабрике, ни по имени журнала, ни по ввозу" ("cannot be identified by factory, by logger name, or by import"). Two forms can be identified that way, yet produce no offence and are not listed:
-- `from logging import info` / `from logging import warning as warn_`, then `info("n=%s", account.phone)`. This is a direct import of a `logging` module function. `module_log_names` only treats an `ImportFrom` alias as a receiver when the imported name looks like a logger (`:313`).
-- A class-body binding used through the instance or the class: `class S: lg = structlog.get_logger()` and then `self.lg.info(..., phone=…)` / `cls.lg.warning(...)`. The class-body `Assign` target is an `ast.Name`, so `lg` goes into `receiver_names` (`:332-334`). The call site is an `ast.Attribute`, which is matched only against `receiver_attributes`. The header lists `self.lg = structlog.get_logger()` as covered; this sibling form is not.
-
-`if (lg := logging.getLogger()): lg.info(account.phone)` is also missed (`NamedExpr` is not collected at `:319-322`), but it is contrived. None of these forms occurs in the live tree today.
-**Fix:**
-- Treat `ImportFrom` names from module `logging` that are in `LOG_METHODS` as bare log calls.
-- When a class-body `Assign`/`AnnAssign` binds a receiver, also add the name to `receiver_attributes`.
-- Or list both forms in ГРАНИЦА СРЕДСТВА with a reason.
-
-### IN-10: The other-session case of `record_reported_phone` is left untested on a false premise, and the refusal text gives wrong advice for it
-
-**File:** `tests/test_application/test_account_phone_writer.py:369-394`; `app/application/accounts/phone.py:70`, `:150-152`, `:169-172`
-**Issue:**
-- **False premise.** The test docstring says the foreign-session case is pinned only through a detached object because "вторая сессия к базе `:memory:` в фикстуре не гарантирована" ("a second session to the `:memory:` database is not guaranteed in the fixture"). A second session needs no database. The membership check reads `inspect(account).session` and never executes anything. I probed `other = AsyncSession(); other.add(account); await record_reported_phone(db_session, account, "79991234567")` with no bind: it raises `ValueError(ACCOUNT_NOT_IN_SESSION)`. So the case is trivially testable.
-- **Single-value parametrize.** `@pytest.mark.parametrize("detach", ["detached"])` has one value. It makes the rule look like a matrix that does not exist.
-- **Wrong advice.** `ACCOUNT_NOT_IN_SESSION` reads "добавьте его через session.add" ("add it via session.add"). For a foreign-session object that advice fails: `session.add` raises `InvalidRequestError` ("already attached to session"). The same text is raised by the post-flush check at `:171-172`, where the object is by construction already in the session.
-
-**Fix:**
-- Add a `"foreign"` row: create a fresh unbound `AsyncSession()` in the test, `add` a new `MessengerAccount`, assert the `ValueError`, assert zero statements on `db_session`, then close it.
-- Reword the constant neutrally, e.g. "аккаунт не принадлежит сессии писателя" ("the account does not belong to the writer's session").
-- Give the post-flush line its own closed constant, e.g. "после flush у аккаунта нет id" ("the account has no id after flush").
+**File:** `tests/test_application/test_account_phone_writer.py:29`, `:31`, `:485`
+**Issue:** `ACCOUNT_NOT_IN_SESSION` is imported from `app.application.accounts.phone`. `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` is read as `writer_module.ACCOUNT_WITHOUT_ID_AFTER_FLUSH` through an extra `import … as writer_module`. This is a leftover of the RED commit, where the constant did not yet exist and a by-name import would have broken collection. Now it is only an inconsistent second import path.
+**Fix:** Add `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` to the `from app.application.accounts.phone import (...)` list and drop `writer_module`.
 
 ---
 
-_Reviewed: 2026-10-10T06:59:01Z_
+_Reviewed: 2026-10-12T20:15:50Z_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: standard (incremental, diff base `7ad78670`, head `720cbd5e`)_
+_Depth: standard (incremental, diff base `388add71`, head `4bd0276f`)_
