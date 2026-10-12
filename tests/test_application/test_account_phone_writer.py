@@ -21,7 +21,7 @@
 """
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 from sqlalchemy.sql.selectable import Select
@@ -368,29 +368,47 @@ async def test_recording_an_account_never_added_to_the_session_raises(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("detach", ["detached"])
+@pytest.mark.parametrize("where", ["detached", "foreign"])
 async def test_recording_an_account_outside_this_session_raises(
-    db_session: AsyncSession, monkeypatch, detach
+    db_session: AsyncSession, monkeypatch, where
 ):
-    """Объект, отсоединённый от сессии писателя: тот же отказ, строка цела (IN-07).
+    """Объект вне сессии писателя — отсоединённый или чужой: отказ, строка цела.
 
-    У отсоединённого (`expunge`) объекта `id` есть, и прежде писатель исполнял
-    по нему условный UPDATE в чужой для объекта сессии и зеркалил значение на
-    отсоединённый объект. Признак «объект этой сессии» — `inspect(...).session`;
-    у объекта другой сессии он равен той, другой сессии и даёт тот же отказ
-    (замер планирования 16-14; вторая сессия к базе `:memory:` в фикстуре не
-    гарантирована, поэтому здесь закреплён отсоединённый объект).
+    У такого объекта `id` есть, и прежде писатель исполнял по нему условный
+    UPDATE в чужой для объекта сессии и зеркалил значение на объект (IN-07).
+    Признак «объект этой сессии» — `inspect(account).session`; у отсоединённого
+    (`expunge`) он пуст, у объекта чужой сессии равен той, другой сессии, и оба
+    получают `ACCOUNT_NOT_IN_SESSION`.
+
+    Проверке членства база не нужна: она читает только `inspect(account).session`
+    и не отдаёт ни одного оператора. Поэтому чужая сессия моделируется новой
+    непривязанной `AsyncSession()` (ревью IN-10). Антивакуум строки `foreign`:
+    объект действительно в другой сессии, а не просто отсоединён.
+
+    Летопись. До плана 16-19 (ревью IN-10) правило было параметризовано одной
+    строкой `detached` под видом матрицы, а случай чужой сессии объяснялся
+    ложной причиной: будто вторая сессия к базе `:memory:` в фикстуре не
+    гарантирована.
     """
     account = await _seed_account(db_session)
     account_id = account.id
     db_session.expunge(account)
-    calls = _count_executes(db_session, monkeypatch)
+    other = AsyncSession()
+    try:
+        if where == "foreign":
+            other.add(account)
+            assert inspect(account).session is other.sync_session, (
+                "объект не попал в чужую сессию — строка foreign проверяла бы отсоединённый"
+            )
+        calls = _count_executes(db_session, monkeypatch)
 
-    with pytest.raises(ValueError) as raised:
-        await record_reported_phone(db_session, account, "79991234567")
+        with pytest.raises(ValueError) as raised:
+            await record_reported_phone(db_session, account, "79991234567")
 
-    assert str(raised.value) == ACCOUNT_NOT_IN_SESSION
-    assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов вне сессии ({detach})"
+        assert str(raised.value) == ACCOUNT_NOT_IN_SESSION
+        assert calls["n"] == 0, f"писатель отдал {calls['n']} операторов вне сессии ({where})"
+    finally:
+        await other.close()
     monkeypatch.undo()
     assert await _row(db_session, account_id) == UNKNOWN
 
