@@ -26,24 +26,60 @@ UPDATE «записать, если номера нет и он не ручно�
 (замер разведки), и автор следующего плана снял бы гейт как шумный. Предикат судит
 только формы, которые действительно пишут в колонку.
 
-ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ (восемь):
-1. присваивание атрибуту `phone` / `phone_is_manual` (`=`, `+=`, аннотированное);
+ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ (восемь). Пишущий вызов опознаётся по имени,
+названному литералом, где бы оно ни стояло: последнее звено вызываемого
+(`stmt.values(…)`); строка вызываемого `getattr(obj, "bulk_update_mappings")(…)`;
+ссылка на пишущий API, поданная другому вызову вместе с его аргументами, —
+`session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
+`functools.partial(s.bulk_update_mappings, M)(rows)`, `asyncio.to_thread(…)`,
+`loop.run_in_executor(None, …)`: судится вызов этого API с аргументами после
+ссылки (и аргументами применения у `partial(…)(…)`); ссылка может стоять и внутри
+`functools.partial(ref, …)` (или его псевдонима в том же модуле — `from functools
+import partial as bind`, `bind = functools.partial`), поданного другому вызову
+вместе с остальными аргументами (`run_in_executor(None, partial(s.
+bulk_update_mappings, M), rows)`) — тогда первыми идут привязанные `partial`
+аргументы; строка в
+`operator.methodcaller("bulk_update_mappings", …)`. У `AsyncSession` нет `bulk_*`
+вовсе, поэтому `run_sync` — естественный путь асинхронного скрипта к ним (план
+16-17, ревью WR-10). Судимый параметр берётся при любом литеральном связывании:
+позицией, именем, литеральной распаковкой `*[…]` / `*(…)` и `**{"имя": …}` /
+`**dict(имя=…)` (таблица `JUDGED_PARAMETERS`, сверена с установленными
+сигнатурами правилом-сторожем и с каждой формой связывания — правилом-матрицей).
+1. присваивание атрибуту `phone` / `phone_is_manual` — по грамматике Python: узел
+   `Attribute` в контексте `Store`, то есть атрибут номера в любой позиции цели
+   присваивания: `=`, `+=`, аннотированное, распаковка кортежа, цель `for` /
+   `async for`, `with … as account.phone`, цель comprehension (`[… for
+   account.phone in numbers]` реально пишет колонку — замер, план 16-17, ревью
+   WR-10); `del account.phone` (контекст `Del`) — не запись, см. границу (5);
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
    `update(...)`, `insert(...)`, `MessengerAccount(...)` или псевдонима модели,
    заведённого в том же модуле (`from … import MessengerAccount as Account`,
-   `Model = MessengerAccount`) — в том числе распаковкой литерала:
-   `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`;
+   `Model = MessengerAccount`, `Model = models.MessengerAccount`) — в том числе
+   распаковкой литерала:
+   `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`,
+   `values(**{"phone": n for n in …})`; и повторный конструктор модели или её
+   псевдонима в модуле — `MessengerAccount.__init__(account, phone=x)`;
 3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"`, атрибут
-   `MessengerAccount.phone`, индекс `table.c["phone"]` или `getattr(X, "phone")` —
+   `MessengerAccount.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")` или
+   конструктор колонки `column("phone")` / `literal_column(…)` —
    в позиционном аргументе `values(...)` и
-   устаревшего `Query.update({...})`. Отображение — `{…}` (и `{**{…}, …}`) или
+   устаревшего `Query.update({...})` (у него — и в параметре `values=`, сигнатура
+   `Query.update(self, values, …)`). Отображение — `{…}` (и `{**{…}, …}`),
+   `{"phone": v for …}` с постоянным ключом или
    вызов `dict(phone=…)` (и `dict({…})`, `dict(**{…})`, `dict([("phone", …)])`),
    взятое из литерального контейнера по грамматике `_literal_mappings`: список,
    кортеж, набор, comprehension и генератор (`values([{…} for …])`), обёртка
    `list(…)`, слияние `{…} | base`, склейка `+`, условное выражение, `*` и `:=`;
 4. запись атрибута по имени в обход присваивания: `setattr(obj, "phone", …)`,
    `set_committed_value(obj, "phone_is_manual", …)`, `set_attribute(obj, "phone",
-   …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)`;
+   …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)` —
+   имя атрибута позицией или именем `key=` / `name=`
+   (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`);
+   `flag_modified(account, "phone")` — flush пишет колонку текущим значением
+   объекта (после `account.__dict__["phone"] = x` — значение `x`, у устаревшего
+   объекта — старый номер поверх ручного; самопроверка исполнителя 16-17, замер);
+   и дескриптор колонки номера `MessengerAccount.phone.__set__(account, x)` /
+   `type(account).phone_is_manual.__set__(…)`;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
    строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
    (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
@@ -54,26 +90,32 @@ UPDATE «записать, если номера нет и он не ручно�
    аккаунтов>` (`COPY … TO` — выгрузка, чтение). Кавычки идентификатора — `"…"`,
    `` `…` `` и `[…]`: SQLite принимает все три. Сюда же
    COPY asyncpg в обход SQLAlchemy — `copy_records_to_table("messenger_accounts",
-   …)` / `copy_to_table`. Голое слово `phone_is_manual` в строке не судится — на нём
+   …)` / `copy_to_table` (таблица позицией или `table_name=`). Голое слово
+   `phone_is_manual` в строке не судится — на нём
    покраснела бы константа условия CHECK модели (`MANUAL_REQUIRES_PHONE`).
    Летопись: до плана 16-12 вид звучал «`UPDATE … SET … phone… =` либо `INSERT
    INTO messenger_accounts`», и шаблон требовал голые идентификаторы — кавычки,
    префикс схемы, `INSERT OR REPLACE`, `MERGE` и склейка проходили (ревью WR-08).
-6. ключ номера в строках `execute` / `bulk_update_mappings` /
-   `bulk_insert_mappings` / Alembic `op.bulk_insert` — словарь или `dict(...)`,
-   поданный позиционно или аргументом `params=` / `mappings=` / `parameters=`
-   (так называется аргумент строк у `Connection.execute`), прямо или в
+6. ключ номера в строках исполняющих вызовов `execute` / `scalar` / `scalars` /
+   `stream` / `stream_scalars` / `exec_driver_sql` и bulk-API
+   `bulk_update_mappings` / `bulk_insert_mappings` / Alembic `op.bulk_insert` —
+   словарь или `dict(...)`, поданный позиционно или аргументом `params=` /
+   `mappings=` / `parameters=` (так называется аргумент строк у `Connection`) /
+   `rows=` (Alembic), прямо или в
    литеральном контейнере той же грамматики, что в виде 3 (comprehension строк из
    пар «аккаунт — номер» включительно): executemany по первичному ключу,
-   естественная форма скрипта дозаполнения Фазы 20 (ревью WR-01, WR-08);
+   естественная форма скрипта дозаполнения Фазы 20 (ревью WR-01, WR-08); и
+   `scalars(insert(MessengerAccount).returning(…), [{… "phone": p}])`, которая
+   вставляет номер так же, как `execute` (план 16-17, ревью WR-10);
 7. upsert пишет колонку при конфликте: ключ номера в литеральном отображении
-   `set_` у `on_conflict_do_update` (ревью WR-01); у MySQL
+   `set_` у `on_conflict_do_update` — именем или позицией (у PostgreSQL `set_` —
+   четвёртый аргумент вызова, у SQLite — третий; ревью WR-01, план 16-17); у MySQL
    `on_duplicate_key_update` — именованный аргумент номера, `**{…}`, позиционное
    отображение и позиционный перечень пар `[("phone", …)]` (план 16-12);
 8. колонка номера, названная ПОЗИЦИЕЙ: пара `(MessengerAccount.phone, x)` /
    `("phone_is_manual", x)` / `(table.c["phone"], x)` в `ordered_values(...)` (и
    `ordered_values(*[…])`) и имя колонки номера в перечне `from_select([…,
-   "phone"], select)` (план 16-12, ревью WR-08).
+   "phone"], select)` — позицией или `names=` (план 16-12, ревью WR-08).
 Перечень пар (виды 3, 7, 8: `dict([…])`, `on_duplicate_key_update([…])`,
 `ordered_values(*[…])`) разбирается той же грамматикой контейнера, что
 отображения, — список, кортеж, `*`, comprehension, `+`, условное выражение.
@@ -85,34 +127,61 @@ UPDATE «записать, если номера нет и он не ручно�
 срабатывание здесь снимается переименованием ключа, тогда как пропущенный второй
 писатель снимается только потерей ручного номера у пользователя. Псевдоним модели
 разрешается по всему модулю, без учёта областей видимости: имя, однажды связанное
-с `MessengerAccount`, считается моделью в любой функции того же файла.
+с `MessengerAccount`, считается моделью в любой функции того же файла. Та же цена у
+ссылки: имя пишущего API, поданное другому вызову (`handler(update, {"phone":
+x})`), судится как вызов этого API.
+
+ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА. `setattr(obj, name, value, /)` и
+`object.__setattr__(self, name, value, /)` — позиционно-только:
+`setattr(account, name="phone", value=x)` падает `TypeError` и ничего не пишет.
+Гейт судит и эту форму: вызов, который не исполнится, законной формой не является,
+а `key=` / `name=` судятся у каждого писателя по имени одним набором.
 
 ЦЕНА СТРОГОСТИ ШЕСТОГО ВИДА — та же по природе. `execute` судится по ключам строк,
 а не по первому аргументу: иначе `stmt = update(MessengerAccount);
 session.execute(stmt, rows)` прошёл бы. Поэтому параметр привязки `:phone` в
 словаре у `execute` для ЧТЕНИЯ — `execute(text("… WHERE phone = :phone"),
 {"phone": p})` — тоже краснеет; снимается переименованием параметра (`:number`).
+Те же вызовы для чтения краснеют так же, как `execute`:
+`scalars(select(…).where(… == bindparam("phone")), {"phone": p})`, `scalar(…)`,
+`stream(…)`, `exec_driver_sql("… = :phone", {"phone": p})`. Так же судится ключ-
+конструктор колонки в строках executemany (`[{"id": 1, column("phone"): p}]`),
+хотя на SQLite с SQLAlchemy 2.0.46 такая строка колонку не пишет (замер исполнителя
+плана 16-17): ключ называет колонку номера литералом в аргументе пишущего вызова.
 
 ГРАНИЦА ПРЕДИКАТА — через механизм, а не через «всё». Ловится всякая запись, в
 которой колонка номера — или таблица аккаунтов во вставке, загрузке и слиянии —
 названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика
-`_literal_mappings`) или в строковой константе SQL (и в склейке `+` констант).
-Вне охвата, каждая форма с причиной, по которой синтаксическому предикату она
-недостижима:
-(1) значение, пришедшее в пишущий вызов ИМЕНЕМ или результатом другого вызова, —
-    переменная, параметр, `build_rows()`, `values(**fields)`, `{k: v for …}` с
-    вычисленными ключами: поток данных предикат не прослеживает, даже когда
+`_literal_mappings`, включая `{"phone": v for …}` с постоянным ключом и
+`column("phone")`) или в строковой константе SQL (и в склейке `+` констант);
+пишущий вызов опознаётся по имени, названному литералом (последнее звено,
+`getattr`-строка, ссылка с аргументами, `methodcaller`); судимый параметр — при
+любом литеральном связывании (`JUDGED_PARAMETERS`); атрибут номера — в любой
+позиции цели присваивания. Вне охвата, каждая форма с правдивой причиной:
+(1) значение или ссылка, пришедшие в пишущий вызов ИМЕНЕМ или результатом
+    другого вызова, — переменная, параметр, `build_rows()`, `values(**fields)`,
+    распаковка не-литерала `*args` / `**kw`, `{k: v for …}` с вычисленным ключом,
+    ссылка на пишущий API в переменной (`fn = s.bulk_update_mappings; fn(…)`,
+    `w = partial(…); w(rows)`): поток данных предикат не прослеживает, даже когда
     литерал стоит строкой выше в том же файле;
-(2) имя колонки или SQL, вычисленные во время исполнения, — `setattr(obj, name,
-    …)`, f-строка с колонкой в подстановке, `.format(col)`, склейка с переменной;
+(2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
+    name, …)`, `getattr(s, name)(…)`, f-строка с колонкой в подстановке,
+    `.format(col)`, склейка с переменной;
 (3) вставка позиционным кортежем значений без имён колонок —
     `insert(MessengerAccount).values((…))`: колонку по исходнику не назвать,
     порядок колонок живёт в модели;
-(4) пишущий API без имени или под псевдонимом из другого модуля —
-    `type(account)(phone=…)`, псевдоним модели, заведённый в чужом файле: без
-    типов он неотличим от законного `render(…, phone=…)`;
-(5) НЕ запись в колонку — `account.__dict__["phone"] = …`, `vars(account)[…] = …`:
-    обход инструментовки ORM, оператора UPDATE не порождает и в базу не уходит.
+(4) пишущий API без имени или неизвестного типа — `type(account)(phone=…)`,
+    `obj.__init__(phone=…)` у объекта, тип которого по исходнику не назван (без
+    типов неотличим от `super().__init__(phone=…)` любого класса с параметром
+    `phone`), псевдоним модели, заведённый в чужом файле: без типов он неотличим от
+    законного `render(…, phone=…)`;
+(5) НЕ запись в колонку — `account.__dict__["phone"] = …`, `vars(account)[…] = …`,
+    `instance_dict(account)[…] = …` сами по себе: обход инструментовки ORM,
+    оператора UPDATE не порождает (и с `flag_dirty(account)` — тоже); а также
+    `del account.phone`, `delattr(account, "phone")`, `del_attribute(account,
+    "phone")` — на SQLAlchemy 2.0.46 flush падает `KeyError` и строку не меняет
+    (замер планирования 2026-10-12, перепроверен исполнителем плана 16-17 на SQLite
+    в памяти).
 Такие формы в коде записи номера сами по себе повод для ревью. Форма, которая
 под механизм подпадает, но предикатом не ловится, — слепота предиката, а не
 граница средства: повод дописать строку `LITERAL_FORM_CASES` и предикат.
@@ -126,7 +195,14 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 WR-08 (2026-10-09) — ещё девять (`parameters=`, comprehension и генератор строк,
 `values([…for…])`, кавычки у колонки и у таблицы, префикс схемы, `ordered_values`,
 `object.__setattr__`). План 16-12 чинит их и формы тех же семейств, найденные
-перебором, и заменяет заявление «всё» заявлением через механизм.
+перебором, и заменяет заявление «всё» заявлением через механизм. До плана 16-17
+заявление «через механизм» снова было шире предиката: ревью WR-10 (2026-10-10)
+нашло пять форм — `Query.update(values=…)`, `set_attribute(…, key=…)`,
+`set_committed_value(…, key=…)`, `run_sync(Session.bulk_update_mappings, …)`,
+`values(**{"phone": n for …})`; это третий круг одного класса (WR-01 → WR-08 →
+WR-10). План 16-17 перебрал сигнатуры каждого судимого API (`JUDGED_PARAMETERS`,
+сторож и матрица), научил предикат опознавать API по ссылке и по строке и судить
+вид 1 по грамматике, а заявление расширил ровно на то, что предикат видит.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -142,8 +218,12 @@ WR-08 (2026-10-09) — ещё девять (`parameters=`, comprehension и ге
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -172,9 +252,22 @@ MODEL_NAME = "MessengerAccount"
 # (`sqlalchemy.orm.attributes.set_attribute`) добавлены планом 16-12 (ревью WR-08);
 # у `__setattr__` судится и ПЕРВЫЙ позиционный аргумент — форма вызова через объект
 # `account.__setattr__("phone", x)`, где имени атрибута предшествует только он сам.
+#
+# `flag_modified` (`sqlalchemy.orm.attributes.flag_modified(instance, key)`) — найден
+# самопроверкой исполнителя 16-17: flush выдаёт UPDATE колонки текущим значением
+# объекта, то есть пишет её по имени в обход присваивания (замер на SQLite в памяти:
+# после `account.__dict__["phone"] = x` пишется `x`, у устаревшего объекта старый
+# номер затирает ручной).
 NAMED_ATTRIBUTE_WRITERS = frozenset(
-    {"setattr", "set_committed_value", "__setattr__", "set_attribute"}
+    {"setattr", "set_committed_value", "__setattr__", "set_attribute", "flag_modified"}
 )
+
+# Именованная форма имени атрибута у тех же писателей: `key` у `set_attribute` /
+# `set_committed_value` — `(instance, key, value, …)`, `name` у `setattr` /
+# `object.__setattr__` (позиционно-только, судится по цене строгости). Судится у
+# каждого писателя по имени: до плана 16-17 `set_attribute(account, key="phone",
+# value=x)` проходил (ревью WR-10).
+NAMED_ATTRIBUTE_KEY_KEYWORDS = frozenset({"key", "name"})
 
 # Вызовы, называющие колонку ПОЗИЦИЕЙ, а не именованным аргументом или ключом
 # словаря: `ordered_values((колонка, значение), …)` и `from_select([имена колонок],
@@ -187,8 +280,25 @@ POSITIONAL_COLUMN_CALL_NAMES = frozenset({"ordered_values", "from_select"})
 #
 # `bulk_insert` — Alembic `op.bulk_insert(table, rows)`: строки вставки стоят вторым
 # позиционным аргументом, который правило и так обходит (план 16-12).
+#
+# `scalar`, `scalars`, `stream`, `stream_scalars`, `exec_driver_sql` (план 16-17) —
+# исполняющие вызовы с тем же параметром строк, что у `execute`
+# (`(self, statement, params | parameters, …)`, замер `inspect.signature`):
+# `scalars(insert(MessengerAccount).returning(…), [{… "phone": p}])` реально
+# вставляет номер (замер планирования на SQLite в памяти). До плана 16-17 их имён в
+# наборе не было, и такая вставка проходила гейт (ревью WR-10).
 ROW_MAPPING_CALL_NAMES = frozenset(
-    {"execute", "bulk_update_mappings", "bulk_insert_mappings", "bulk_insert"}
+    {
+        "execute",
+        "scalar",
+        "scalars",
+        "stream",
+        "stream_scalars",
+        "exec_driver_sql",
+        "bulk_update_mappings",
+        "bulk_insert_mappings",
+        "bulk_insert",
+    }
 )
 
 # Именованные аргументы тех же вызовов, несущие строки: `execute(stmt, params=…)`,
@@ -197,7 +307,32 @@ ROW_MAPPING_CALL_NAMES = frozenset(
 # строк называется `parameters` (замер верификатора через `inspect.signature`), у
 # `Session.execute` — `params`. До плана 16-12 имени `parameters` в наборе не было,
 # и естественная форма скрипта дозаполнения на соединении проходила (ревью WR-08).
-ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters"})
+# `rows` — Alembic `Operations.bulk_insert(self, table, rows, *, multiinsert)`: до
+# плана 16-17 `op.bulk_insert(table, rows=[…])` проходил (ревью WR-10).
+ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters", "rows"})
+
+# Именованный параметр ССЫЛКИ на функцию: `fn` у `AsyncSession.run_sync` /
+# `AsyncConnection.run_sync` — `(self, fn, *arg, **kw)`, замер `inspect.signature`,
+# SQLAlchemy 2.0.46. У `asyncio.to_thread` и `functools.partial` ссылка
+# позиционно-только (`partial(func=…)` и `to_thread(func=…)` падают `TypeError`,
+# замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
+# (план 16-17, ревью WR-10).
+REFERENCE_KEYWORDS = frozenset({"fn"})
+
+# Обёртка ссылки с привязанными аргументами: `functools.partial(ref, …)`; её псевдонимы
+# в модуле добавляются при разборе исходника (`_module_aliases(tree, "partial")`).
+PARTIAL_NAMES = frozenset({"partial"})
+
+# Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
+# отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
+COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
+
+# Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
+# `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
+# в обход присваивания; `MessengerAccount.__init__(account, phone=x)` — повторный
+# конструктор модели пишет колонку именованным аргументом.
+DESCRIPTOR_SET = "__set__"
+MODEL_INIT = "__init__"
 
 # Обёртки литерального контейнера: `list(<генератор словарей>)` и подобные с ОДНИМ
 # позиционным аргументом и без именованных — разбираются по этому аргументу.
@@ -263,6 +398,196 @@ KIND_RAW_SQL = "сырой SQL"
 KIND_ROW_MAPPING = "ключ словаря строк"
 KIND_UPSERT_SET = "set_ при конфликте"
 KIND_POSITIONAL_COLUMN = "колонка позицией"
+
+# Не вид находки, а пометка строк `JUDGED_PARAMETERS` о параметре ССЫЛКИ: у них вид
+# находки — вид API, названного ссылкой (`run_sync(Session.bulk_update_mappings, …)`
+# даёт вид строк `bulk_update_mappings`).
+KIND_BY_REFERENCE = "вид API по ссылке"
+
+
+class JudgedParameter(NamedTuple):
+    """Судимый параметр судимого API: где он стоит и под каким именем.
+
+    `api` — путь для правила-сторожа (`importlib` + `getattr` по звеньям); `call` —
+    последнее звено вызова в исходнике; `signature_index` — индекс в
+    `inspect.signature(api).parameters` (у методов `self` — индекс 0);
+    `call_index` — позиция в записи вызова, как её пишет код
+    (`session.execute(stmt, rows)` — `rows` на позиции 1); `kind` — вид находки.
+    """
+
+    api: str
+    call: str
+    parameter: str
+    signature_index: int
+    call_index: int
+    kind: str
+
+
+# Классы сессии и соединения в путях таблицы ниже.
+_SESSION = "sqlalchemy.orm.Session"
+_ASYNC_SESSION = "sqlalchemy.ext.asyncio.AsyncSession"
+_CONNECTION = "sqlalchemy.engine.Connection"
+_ASYNC_CONNECTION = "sqlalchemy.ext.asyncio.AsyncConnection"
+
+# Перебор сигнатур судимых API (план 16-17, ревью WR-10): замер `inspect.signature`
+# 2026-10-12 на установленных SQLAlchemy 2.0.46, Alembic 1.18.4, asyncpg 0.31.0 и
+# builtins. Каждый параметр здесь судится при ЛЮБОМ литеральном связывании —
+# позицией, именем, `**{"имя": …}` и `*[…]`; таблицу сверяет с установленными
+# сигнатурами правило-сторож, а правило-матрица — каждую строку с каждой формой.
+# Подъём библиотеки, сменивший имя или позицию параметра, краснит сторож, а не
+# оставляет гейт слепым молча (пин версий отложен владельцем — IN-02).
+#
+# `setattr(obj, name, value, /)` и `object.__setattr__(self, name, value, /)` —
+# позиционно-только: `setattr(account, name="phone", value=x)` падает `TypeError:
+# setattr() takes no keyword arguments` и ничего не пишет. Гейт судит и такую форму —
+# по цене строгости: вызов, который не исполнится, законной формой не является.
+#
+# API без именованного позиционного параметра — у них именованной формы нет, и они
+# судятся, как прежде (каждый позиционный аргумент, `*[…]`, именованные колонки,
+# `**{…}`): `Update.values` / `Insert.values` — `(self, *args, **kwargs)`;
+# `Update.ordered_values` — `(self, *args)`; MySQL `Insert.on_duplicate_key_update` —
+# `(self, *args, **kw)`; конструктор модели — `**kwargs`. У `AsyncSession` нет
+# `bulk_*` вовсе — к ним ведёт только `run_sync`, поэтому две последние строки —
+# главная ось асинхронного проекта. 33 строки — перебор планирования; 34-я
+# (`flag_modified`) найдена самопроверкой исполнителя: новый пишущий API, которого
+# нет в таблице, — повод дописать строку, а не опровержение границы.
+JUDGED_PARAMETERS: tuple[JudgedParameter, ...] = (
+    JudgedParameter("sqlalchemy.orm.Query.update", "update", "values", 1, 0, KIND_DICT_KEY),
+    JudgedParameter(
+        "sqlalchemy.orm.attributes.set_attribute", "set_attribute", "key", 1, 1, KIND_SETATTR
+    ),
+    JudgedParameter(
+        "sqlalchemy.orm.attributes.set_committed_value",
+        "set_committed_value",
+        "key",
+        1,
+        1,
+        KIND_SETATTR,
+    ),
+    # Строка самопроверки исполнителя 16-17 (34-я): `flag_modified(instance, key)`
+    # заставляет flush выдать UPDATE колонки текущим значением объекта — после
+    # `account.__dict__["phone"] = x` это запись `x`, а у устаревшего объекта — запись
+    # старого номера поверх ручного, записанного другим писателем (замер на SQLite в
+    # памяти, SQLAlchemy 2.0.46: `+7MANUAL` затёрт значением `+70`, D-07).
+    JudgedParameter(
+        "sqlalchemy.orm.attributes.flag_modified", "flag_modified", "key", 1, 1, KIND_SETATTR
+    ),
+    JudgedParameter("builtins.setattr", "setattr", "name", 1, 1, KIND_SETATTR),
+    JudgedParameter("builtins.object.__setattr__", "__setattr__", "name", 1, 1, KIND_SETATTR),
+    JudgedParameter(
+        "sqlalchemy.sql.dml.Insert.from_select",
+        "from_select",
+        "names",
+        1,
+        0,
+        KIND_POSITIONAL_COLUMN,
+    ),
+    JudgedParameter(
+        "sqlalchemy.dialects.postgresql.dml.Insert.on_conflict_do_update",
+        "on_conflict_do_update",
+        "set_",
+        4,
+        3,
+        KIND_UPSERT_SET,
+    ),
+    JudgedParameter(
+        "sqlalchemy.dialects.sqlite.dml.Insert.on_conflict_do_update",
+        "on_conflict_do_update",
+        "set_",
+        3,
+        2,
+        KIND_UPSERT_SET,
+    ),
+    # Исполняющие вызовы: у `Session` / `AsyncSession` параметр строк — `params`, у
+    # `Connection` / `AsyncConnection` — `parameters`; до плана 16-17 судился один
+    # `execute`, а `scalar(s)` / `stream*` / `exec_driver_sql` — нет (ревью WR-10).
+    JudgedParameter(f"{_SESSION}.execute", "execute", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_ASYNC_SESSION}.execute", "execute", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_CONNECTION}.execute", "execute", "parameters", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.execute", "execute", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(f"{_SESSION}.scalar", "scalar", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_ASYNC_SESSION}.scalar", "scalar", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_CONNECTION}.scalar", "scalar", "parameters", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.scalar", "scalar", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(f"{_SESSION}.scalars", "scalars", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_ASYNC_SESSION}.scalars", "scalars", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_CONNECTION}.scalars", "scalars", "parameters", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.scalars", "scalars", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(f"{_ASYNC_SESSION}.stream", "stream", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.stream", "stream", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        f"{_ASYNC_SESSION}.stream_scalars", "stream_scalars", "params", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.stream_scalars",
+        "stream_scalars",
+        "parameters",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        f"{_CONNECTION}.exec_driver_sql", "exec_driver_sql", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.exec_driver_sql",
+        "exec_driver_sql",
+        "parameters",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        f"{_SESSION}.bulk_update_mappings",
+        "bulk_update_mappings",
+        "mappings",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        f"{_SESSION}.bulk_insert_mappings",
+        "bulk_insert_mappings",
+        "mappings",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        "alembic.operations.Operations.bulk_insert", "bulk_insert", "rows", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        "asyncpg.connection.Connection.copy_records_to_table",
+        "copy_records_to_table",
+        "table_name",
+        1,
+        0,
+        KIND_RAW_SQL,
+    ),
+    JudgedParameter(
+        "asyncpg.connection.Connection.copy_to_table",
+        "copy_to_table",
+        "table_name",
+        1,
+        0,
+        KIND_RAW_SQL,
+    ),
+    JudgedParameter(f"{_ASYNC_SESSION}.run_sync", "run_sync", "fn", 1, 0, KIND_BY_REFERENCE),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.run_sync", "run_sync", "fn", 1, 0, KIND_BY_REFERENCE
+    ),
+)
+
+# Строки таблицы, чей параметр позиционно-только (сноска выше).
+POSITIONAL_ONLY_APIS = frozenset({"builtins.setattr", "builtins.object.__setattr__"})
 
 # Реестр исключений: путь → причина. РОВНО ОДНА ЗАПИСЬ; см. шапку модуля.
 PHONE_WRITER_EXCEPTIONS: dict[str, str] = {
@@ -332,113 +657,62 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     }
     # Пишущие вызовы этого исходника: общий набор плюс псевдонимы модели в модуле.
     write_names = WRITE_CALL_NAMES | _module_model_aliases(tree)
+    # Имена, которые судятся у ссылки: всякий пишущий API, который судит `_judge_call`.
+    judged_names = _judged_call_names(write_names)
+    # Вызовы, чей результат тут же вызывается (`partial(ref, …)(…)`): ссылка в них
+    # судится один раз — у применения, с аргументами обоих вызовов.
+    applied = {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
+    }
+    # Ссылки у каждого вызова (`_referenced_calls`). `partial(ref, …)`, поданный
+    # другому вызову и разобранный им как носитель ссылки, сам не судится: его
+    # аргументы уже стоят в синтетическом вызове внешнего (иначе
+    # `run_in_executor(None, partial(ref, M, rows))` дал бы две находки).
+    # `functools.partial` и его псевдонимы в модуле (`from functools import partial
+    # as bind`, `bind = functools.partial`) — обёртка ссылки у `_bound_reference`.
+    partial_names = PARTIAL_NAMES | _module_aliases(tree, "partial")
+    references = {
+        id(node): _referenced_calls(node, judged_names, partial_names)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (id(node) not in applied or _call_name(node) == "methodcaller")
+    }
+    consumed = {
+        id(carrier)
+        for triples in references.values()
+        for _synthetic, _referenced, carrier in triples
+        if isinstance(carrier, ast.Call)
+    }
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
         found.append((node.lineno, node.col_offset, kind, subject))
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            for target in node.targets:
-                for attribute in _assigned_attributes(target):
-                    record(attribute, KIND_ASSIGNMENT, ast.unparse(attribute))
-        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
-            for attribute in _assigned_attributes(node.target):
-                record(attribute, KIND_ASSIGNMENT, ast.unparse(attribute))
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.ctx, ast.Store)
+            and node.attr in PHONE_COLUMNS
+        ):
+            # Вид 1 — по грамматике Python: атрибут номера в контексте `Store` —
+            # цель `=`, `+=`, аннотированного присваивания, распаковки, `for` /
+            # `async for`, `with … as`, comprehension (план 16-17, ревью WR-10).
+            # `del account.phone` (контекст `Del`) — не запись: flush падает
+            # `KeyError` и строку не меняет (замер планирования, SQLAlchemy 2.0.46).
+            # Цель-имя (`phone: Mapped[...] = mapped_column(...)` в теле модели) —
+            # объявление колонки, а не запись в неё: узел `Name`, не `Attribute`.
+            record(node, KIND_ASSIGNMENT, ast.unparse(node))
         elif isinstance(node, ast.Call):
             name = _call_name(node)
-            if name in write_names:
-                for keyword in node.keywords:
-                    if keyword.arg in PHONE_COLUMNS:
-                        record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
-                    elif keyword.arg is None:
-                        # `values(**{"phone": x})`, `MessengerAccount(**dict(phone=x))`
-                        for mapping in _literal_mappings(keyword.value):
-                            for key, column in _mapping_phone_keys(mapping):
-                                text = _mapping_key_text(key, column)
-                                record(key, KIND_KEYWORD, f"{name}(**{text})")
-            if name in ("values", "update"):
-                # `update({...})` — устаревший `Query.update({"phone": x})`.
-                for key, column in _values_dict_keys(node):
-                    record(key, KIND_DICT_KEY, f"{name}({_mapping_key_text(key, column)})")
-            if name in POSITIONAL_COLUMN_CALL_NAMES:
-                for column_node, column in _positional_phone_columns(node):
-                    subject = (
-                        f"ordered_values(({column}, …))"
-                        if name == "ordered_values"
-                        else f"from_select([{column!r}, …])"
-                    )
-                    record(column_node, KIND_POSITIONAL_COLUMN, subject)
-            if name in ROW_MAPPING_CALL_NAMES:
-                arguments = list(node.args) + [
-                    keyword.value
-                    for keyword in node.keywords
-                    if keyword.arg in ROW_MAPPING_KEYWORDS
-                ]
-                for argument in arguments:
-                    # Скобки — когда строки лежат в контейнере или comprehension,
-                    # а не голым отображением.
-                    rows = not (isinstance(argument, ast.Dict) or _is_dict_call(argument))
-                    for mapping in _literal_mappings(argument):
-                        for key, column in _mapping_phone_keys(mapping):
-                            text = _mapping_key_text(key, column)
-                            subject = f"{name}([{text}])" if rows else f"{name}({text})"
-                            record(key, KIND_ROW_MAPPING, subject)
-            if name in UPSERT_CALL_NAMES and name == "on_conflict_do_update":
-                for keyword in node.keywords:
-                    if keyword.arg != "set_":
-                        continue
-                    for mapping in _literal_mappings(keyword.value):
-                        for key, column in _mapping_phone_keys(mapping):
-                            text = _mapping_key_text(key, column)
-                            record(key, KIND_UPSERT_SET, f"{name}(set_={text})")
-            elif name in UPSERT_CALL_NAMES:
-                # MySQL `on_duplicate_key_update`: именованные аргументы, `**{…}`,
-                # позиционное отображение и позиционный перечень пар.
-                for keyword in node.keywords:
-                    if keyword.arg in PHONE_COLUMNS:
-                        record(keyword, KIND_UPSERT_SET, f"{name}({keyword.arg}=…)")
-                    elif keyword.arg is None:
-                        for mapping in _literal_mappings(keyword.value):
-                            for key, column in _mapping_phone_keys(mapping):
-                                text = _mapping_key_text(key, column)
-                                record(key, KIND_UPSERT_SET, f"{name}(**{text})")
-                for argument in node.args:
-                    for mapping in _literal_mappings(argument):
-                        for key, column in _mapping_phone_keys(mapping):
-                            text = _mapping_key_text(key, column)
-                            record(key, KIND_UPSERT_SET, f"{name}({text})")
-                    for key, column in _phone_pairs(argument):
-                        record(key, KIND_UPSERT_SET, f"{name}([({column!r}, …)])")
-            if name in NAMED_ATTRIBUTE_WRITERS:
-                # Имя атрибута — второй позиционный аргумент; у `__setattr__` ещё и
-                # первый (`account.__setattr__("phone", x)`).
-                positions = (0, 1) if name == "__setattr__" else (1,)
-                for position in positions:
-                    if position >= len(node.args):
-                        break
-                    attribute = node.args[position]
-                    if (
-                        isinstance(attribute, ast.Constant)
-                        and attribute.value in PHONE_COLUMNS
-                    ):
-                        shown = (
-                            f"{name}({attribute.value!r}, …)"
-                            if position == 0
-                            else f"{name}(…, {attribute.value!r}, …)"
-                        )
-                        record(node, KIND_SETATTR, shown)
-                        break
-            if name in ROW_COPY_CALL_NAMES:
-                table = node.args[0] if node.args else next(
-                    (k.value for k in node.keywords if k.arg == "table_name"), None
-                )
-                if (
-                    isinstance(table, ast.Constant)
-                    and isinstance(table.value, str)
-                    and _ACCOUNTS_TABLE_NAME.fullmatch(table.value)
-                ):
-                    record(node, KIND_RAW_SQL, f"{name}({table.value!r}, …)")
+            if name is not None:
+                _judge_call(node, name, write_names, record)
+            # `methodcaller("…", …)` судится у себя: его применение подаёт объект,
+            # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
+            if id(node) not in consumed:
+                for synthetic, referenced, _carrier in references.get(id(node), []):
+                    _judge_call(synthetic, referenced, write_names, record)
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -463,6 +737,422 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             record(node, KIND_RAW_SQL, f"«{snippet}»")
 
     return sorted(found)
+
+
+def _judge_call(
+    node: ast.Call,
+    name: str,
+    write_names: frozenset[str],
+    record: Callable[[ast.AST, str, str], None],
+) -> None:
+    """Ветки видов 2–8 у одного вызова с именем `name`.
+
+    Имя передаётся, а не берётся из узла, затем, чтобы тем же веткам подать и
+    «синтетический» вызов API, названного ссылкой (`run_sync(Session.
+    bulk_update_mappings, …)`) или строкой (`methodcaller("…", …)`).
+
+    Судимый параметр берётся при любом литеральном связывании (план 16-17, ревью
+    WR-10): позицией, именем, литеральной распаковкой `*[…]` и `**{"имя": …}` —
+    по таблице `JUDGED_PARAMETERS` (`_bound_arguments`). Аргументы без позиции
+    (строки executemany, отображения `values`) — каждый позиционный с раскрытой
+    распаковкой (`_positional_arguments`) и именованные (`_named_arguments`).
+    """
+    positional = [argument for argument in _positional_arguments(node) if argument is not None]
+    named = _named_arguments(node)
+    indices, names = _judged_bindings(name)
+    if name in write_names:
+        # Именованные колонки судятся своей веткой: раскрытие `**{…}` через
+        # `_named_arguments` здесь не применяется, иначе `values(**{"phone": x})`
+        # дал бы две находки.
+        for keyword in node.keywords:
+            if keyword.arg in PHONE_COLUMNS:
+                record(keyword, KIND_KEYWORD, f"{name}({keyword.arg}=…)")
+            elif keyword.arg is None:
+                # `values(**{"phone": x})`, `MessengerAccount(**dict(phone=x))`
+                for mapping in _literal_mappings(keyword.value):
+                    for key, column in _mapping_phone_keys(mapping):
+                        text = _mapping_key_text(key, column)
+                        record(key, KIND_KEYWORD, f"{name}(**{text})")
+    if name in ("values", "update"):
+        # `update({...})` — устаревший `Query.update({"phone": x})`, позицией или
+        # параметром `values=` (сигнатура `Query.update(self, values, …)`).
+        for key, column in _values_dict_keys(node):
+            record(key, KIND_DICT_KEY, f"{name}({_mapping_key_text(key, column)})")
+    if name in POSITIONAL_COLUMN_CALL_NAMES:
+        for column_node, column in _positional_phone_columns(node):
+            subject = (
+                f"ordered_values(({column}, …))"
+                if name == "ordered_values"
+                else f"from_select([{column!r}, …])"
+            )
+            record(column_node, KIND_POSITIONAL_COLUMN, subject)
+    if name in ROW_MAPPING_CALL_NAMES:
+        arguments = positional + [
+            value for keyword, value in named if keyword in ROW_MAPPING_KEYWORDS | names
+        ]
+        for argument in arguments:
+            # Скобки — когда строки лежат в контейнере или comprehension,
+            # а не голым отображением.
+            rows = not (
+                isinstance(argument, (ast.Dict, ast.DictComp)) or _is_dict_call(argument)
+            )
+            for mapping in _literal_mappings(argument):
+                for key, column in _mapping_phone_keys(mapping):
+                    text = _mapping_key_text(key, column)
+                    subject = f"{name}([{text}])" if rows else f"{name}({text})"
+                    record(key, KIND_ROW_MAPPING, subject)
+    if name in UPSERT_CALL_NAMES and name == "on_conflict_do_update":
+        # `set_` именем — и любое позиционное литеральное отображение: у PostgreSQL
+        # `set_` на позиции 3, у SQLite — 2 (`JUDGED_PARAMETERS`), а прочие
+        # позиционные параметры (`constraint`, `index_elements`, `index_where`)
+        # отображениями не бывают.
+        arguments = [(value, True) for keyword, value in named if keyword in names]
+        arguments += [(argument, False) for argument in positional]
+        for argument, by_name in arguments:
+            for mapping in _literal_mappings(argument):
+                for key, column in _mapping_phone_keys(mapping):
+                    text = _mapping_key_text(key, column)
+                    shown = f"set_={text}" if by_name else text
+                    record(key, KIND_UPSERT_SET, f"{name}({shown})")
+    elif name in UPSERT_CALL_NAMES:
+        # MySQL `on_duplicate_key_update`: именованные аргументы, `**{…}`,
+        # позиционное отображение и позиционный перечень пар.
+        for keyword in node.keywords:
+            if keyword.arg in PHONE_COLUMNS:
+                record(keyword, KIND_UPSERT_SET, f"{name}({keyword.arg}=…)")
+            elif keyword.arg is None:
+                for mapping in _literal_mappings(keyword.value):
+                    for key, column in _mapping_phone_keys(mapping):
+                        text = _mapping_key_text(key, column)
+                        record(key, KIND_UPSERT_SET, f"{name}(**{text})")
+        for argument in positional:
+            for mapping in _literal_mappings(argument):
+                for key, column in _mapping_phone_keys(mapping):
+                    text = _mapping_key_text(key, column)
+                    record(key, KIND_UPSERT_SET, f"{name}({text})")
+            for key, column in _phone_pairs(argument):
+                record(key, KIND_UPSERT_SET, f"{name}([({column!r}, …)])")
+    if name in NAMED_ATTRIBUTE_WRITERS:
+        # Имя атрибута — позицией из таблицы (второй аргумент), у `__setattr__` ещё
+        # и первым (`account.__setattr__("phone", x)`), и именем `key=` / `name=`.
+        positions = sorted(indices | ({0} if name == "__setattr__" else set()))
+        # (значение, как оно показано в предмете находки: перед ним «…, » или имя)
+        candidates = [
+            (value, "" if position == 0 else "…, ")
+            for position in positions
+            for value in _bound_arguments(node, position, frozenset())
+        ]
+        candidates += [
+            (value, f"…, {keyword}=")
+            for keyword, value in named
+            if keyword in names | NAMED_ATTRIBUTE_KEY_KEYWORDS
+        ]
+        for attribute, prefix in candidates:
+            if isinstance(attribute, ast.Constant) and attribute.value in PHONE_COLUMNS:
+                record(node, KIND_SETATTR, f"{name}({prefix}{attribute.value!r}, …)")
+                break
+    receiver = _callee_receiver(node.func)
+    if name == DESCRIPTOR_SET and receiver is not None:
+        # `MessengerAccount.phone.__set__(account, x)`,
+        # `type(account).phone_is_manual.__set__(account, True)`: дескриптор колонки
+        # номера пишет атрибут в обход присваивания.
+        if _phone_column(receiver) is not None:
+            record(node, KIND_SETATTR, f"{ast.unparse(receiver)}.__set__(…)")
+    if (
+        name == MODEL_INIT
+        and isinstance(receiver, ast.Name)
+        and receiver.id in (write_names - WRITE_CALL_NAMES) | {MODEL_NAME}
+    ):
+        # `MessengerAccount.__init__(account, phone=x)` — повторный конструктор
+        # модели (или её псевдонима в модуле). `obj.__init__(phone=…)` у объекта,
+        # тип которого по исходнику не назван, сюда не попадает: без типов он
+        # неотличим от `super().__init__(phone=…)` любого класса.
+        shown = f"{receiver.id}.__init__"
+        for keyword in node.keywords:
+            if keyword.arg in PHONE_COLUMNS:
+                record(keyword, KIND_KEYWORD, f"{shown}({keyword.arg}=…)")
+            elif keyword.arg is None:
+                for mapping in _literal_mappings(keyword.value):
+                    for key, column in _mapping_phone_keys(mapping):
+                        text = _mapping_key_text(key, column)
+                        record(key, KIND_KEYWORD, f"{shown}(**{text})")
+    if name in ROW_COPY_CALL_NAMES:
+        # Таблица — позицией или `table_name=` (`JUDGED_PARAMETERS`).
+        for table in _bound_arguments(node, min(indices, default=0), names):
+            if (
+                isinstance(table, ast.Constant)
+                and isinstance(table.value, str)
+                and _ACCOUNTS_TABLE_NAME.fullmatch(table.value)
+            ):
+                record(node, KIND_RAW_SQL, f"{name}({table.value!r}, …)")
+                break
+
+
+def _judged_bindings(name: str) -> tuple[frozenset[int], frozenset[str]]:
+    """Позиции в вызове и имена судимых параметров API `name` — из `JUDGED_PARAMETERS`."""
+    rows = [row for row in JUDGED_PARAMETERS if row.call == name]
+    return (
+        frozenset(row.call_index for row in rows),
+        frozenset(row.parameter for row in rows),
+    )
+
+
+def _expanded_arguments(items: list[ast.expr]) -> list[ast.expr | None]:
+    """Элементы с раскрытой литеральной распаковкой: `*[a, b]` / `*(a, b)` → `a, b`.
+
+    Распаковка не-литерала (`*rows`, `*build()`) — один `None` на её месте.
+    """
+    found: list[ast.expr | None] = []
+    for item in items:
+        if isinstance(item, ast.Starred):
+            if isinstance(item.value, (ast.List, ast.Tuple)):
+                found.extend(_expanded_arguments(list(item.value.elts)))
+            else:
+                found.append(None)
+        else:
+            found.append(item)
+    return found
+
+
+def _positional_arguments(call: ast.Call) -> list[ast.expr | None]:
+    """Позиционные аргументы вызова с раскрытой литеральной распаковкой `*[…]` / `*(…)`.
+
+    Распаковка не-литерала даёт `None` и обрывает позиции: сколько аргументов она
+    подаст, решает поток данных, поэтому `_bound_arguments` позиций за первым
+    `None` не связывает. Литеральные аргументы после неё остаются в перечне — их
+    судят ветки, которым позиция не нужна (строки executemany, отображения).
+    """
+    return _expanded_arguments(list(call.args))
+
+
+def _named_arguments(call: ast.Call) -> list[tuple[str, ast.expr]]:
+    """Именованные аргументы: `имя=…` и пары литерального `**{"имя": …}` / `**dict(имя=…)`.
+
+    Распаковка `**` разбирается грамматикой `_literal_mappings` (вложенные `**`,
+    `dict(…)`, `|`, условное выражение, `:=`); ключ пары — строковая константа.
+    `**kwargs` (имя) — поток данных: пар не даёт.
+    """
+    found: list[tuple[str, ast.expr]] = []
+    for keyword in call.keywords:
+        if keyword.arg is not None:
+            found.append((keyword.arg, keyword.value))
+            continue
+        for mapping in _literal_mappings(keyword.value):
+            found.extend(_mapping_named_pairs(mapping))
+    return found
+
+
+def _mapping_named_pairs(mapping: ast.expr) -> list[tuple[str, ast.expr]]:
+    """Пары «строковый ключ — значение» одного литерального отображения."""
+    if isinstance(mapping, ast.Dict):
+        return [
+            (key.value, value)
+            for key, value in zip(mapping.keys, mapping.values)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        ]
+    if isinstance(mapping, ast.DictComp):
+        key = mapping.key
+        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            return [(key.value, mapping.value)]
+        return []
+    if _is_dict_call(mapping):
+        found = [(k.arg, k.value) for k in mapping.keywords if k.arg is not None]
+        for argument in mapping.args:
+            for pair in _pair_candidates(argument):
+                if (
+                    isinstance(pair, (ast.Tuple, ast.List))
+                    and len(pair.elts) == 2
+                    and isinstance(pair.elts[0], ast.Constant)
+                    and isinstance(pair.elts[0].value, str)
+                ):
+                    found.append((pair.elts[0].value, pair.elts[1]))
+        return found
+    return []
+
+
+def _bound_arguments(
+    call: ast.Call, call_index: int, names: frozenset[str] | set[str]
+) -> list[ast.expr]:
+    """Значения, связанные с параметром позицией `call_index` или одним из имён `names`.
+
+    Позиция связывается, только если до неё нет распаковки не-литерала (`None` в
+    `_positional_arguments`); имя — прямо или парой литерального `**{…}`.
+    """
+    positional = _positional_arguments(call)
+    reachable = positional[: positional.index(None)] if None in positional else positional
+    bound: list[ast.expr] = []
+    if 0 <= call_index < len(reachable):
+        argument = reachable[call_index]
+        assert argument is not None
+        bound.append(argument)
+    bound.extend(value for keyword, value in _named_arguments(call) if keyword in names)
+    return bound
+
+
+def _judged_call_names(write_names: frozenset[str]) -> frozenset[str]:
+    """Имена пишущих API, которые судит `_judge_call`, — их и опознаёт ссылка."""
+    return (
+        write_names
+        | NAMED_ATTRIBUTE_WRITERS
+        | POSITIONAL_COLUMN_CALL_NAMES
+        | ROW_MAPPING_CALL_NAMES
+        | UPSERT_CALL_NAMES
+        | ROW_COPY_CALL_NAMES
+        | {DESCRIPTOR_SET, MODEL_INIT}
+    )
+
+
+def _callee_receiver(func: ast.expr) -> ast.expr | None:
+    """Получатель вызываемого: `X` у `X.attr(…)` и у `getattr(X, "attr")(…)`.
+
+    У имени, вызова и прочих узлов — `None`: получателя по исходнику нет.
+    """
+    if isinstance(func, ast.Attribute):
+        return func.value
+    if _getattr_literal(func) is not None:
+        assert isinstance(func, ast.Call)
+        return func.args[0]
+    return None
+
+
+def _getattr_literal(node: ast.AST) -> str | None:
+    """Строка в `getattr(<что угодно>, "<строка>")`, иначе `None`."""
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    ):
+        return node.args[1].value
+    return None
+
+
+def _reference_name(node: ast.AST | None) -> str | None:
+    """Имя ССЫЛКИ на функцию: `Name.id`, `Attribute.attr` или строка `getattr(…, "…")`.
+
+    Ссылка — функция, поданная другому вызову без вызова: `run_sync(Session.
+    bulk_update_mappings, …)`, `partial(set_attribute, …)`. У прочих узлов — `None`.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return _getattr_literal(node) if node is not None else None
+
+
+# Ссылка с привязанными аргументами: (имя API, узел ссылки, позиционные, именованные).
+BoundReference = tuple[str, ast.expr, list[ast.expr], list[ast.keyword]]
+
+
+def _bound_reference(
+    node: ast.expr | None, partial_names: frozenset[str] = PARTIAL_NAMES
+) -> BoundReference | None:
+    """Ссылка на функцию — голая или внутри `functools.partial(…)` с аргументами.
+
+    `s.bulk_update_mappings` → (`bulk_update_mappings`, ссылка, [], []);
+    `partial(s.bulk_update_mappings, M, mapper=…)` → та же ссылка с привязанными
+    `M` и `mapper=…`; `partial(partial(ref, a), b)` — рекурсивно (самопроверка
+    исполнителя 16-17: `run_in_executor(None, partial(ref, M), rows)` — обычная
+    форма, у `run_in_executor` нет именованных аргументов).
+    """
+    name = _reference_name(node)
+    if name is not None:
+        assert node is not None
+        return name, node, [], []
+    if isinstance(node, ast.Call) and _call_name(node) in partial_names:
+        positional = _positional_arguments(node)
+        if positional and positional[0] is not None:
+            inner = _bound_reference(positional[0], partial_names)
+            if inner is not None:
+                referenced, func, args, keywords = inner
+                rest = [item for item in positional[1:] if item is not None]
+                return referenced, func, args + rest, keywords + list(node.keywords)
+    return None
+
+
+def _synthetic_call(
+    origin: ast.Call, func: ast.expr, args: list[ast.expr], keywords: list[ast.keyword]
+) -> ast.Call:
+    """Вызов `func(*args, **keywords)` на месте `origin`: строка находки — настоящая."""
+    return ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), origin)
+
+
+def _referenced_calls(
+    call: ast.Call,
+    judged_names: frozenset[str],
+    partial_names: frozenset[str] = PARTIAL_NAMES,
+) -> list[tuple[ast.Call, str, ast.expr | None]]:
+    """Вызовы пишущего API, названного в `call` ссылкой или строкой.
+
+    Тройки (синтетический вызов, имя API, носитель ссылки — аргумент `call`, в
+    котором она стоит; у `methodcaller` — `None`):
+    - `operator.methodcaller("<имя>", …)` — вызов `<имя>` с аргументами после строки;
+    - ссылка на судимый API среди позиционных аргументов (с раскрытой распаковкой
+      `*[…]`) или в `fn=` (и `**{"fn": …}`), параметре ссылки `run_sync`, — вызов
+      этого API с позиционными аргументами ПОСЛЕ ссылки и именованными аргументами
+      `call`, кроме `fn`: `run_sync`, `to_thread`, `run_in_executor`, `partial`
+      подают их функции именно так; ссылка может стоять и внутри
+      `functools.partial(ref, …)` — тогда первыми идут его привязанные аргументы
+      (`_bound_reference`);
+    - `partial(ref, …)(…)` — к ним добавляются аргументы применения; судится у
+      применения (`call` с `func`-вызовом), а у самого `partial` — нет.
+    Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
+    """
+    name = _call_name(call)
+    if name == "methodcaller":
+        head = call.args[0] if call.args else None
+        if (
+            isinstance(head, ast.Constant)
+            and isinstance(head.value, str)
+            and head.value in judged_names
+        ):
+            func = ast.copy_location(ast.Name(id=head.value, ctx=ast.Load()), head)
+            rest = list(call.args[1:])
+            synthetic = _synthetic_call(call, func, rest, list(call.keywords))
+            return [(synthetic, head.value, None)]
+        return []
+    if name in judged_names or name == "getattr":
+        return []
+    source, outer_args, outer_keywords = call, [], []
+    if isinstance(call.func, ast.Call) and _call_name(call.func) not in (
+        "getattr",
+        "methodcaller",
+    ):
+        # `partial(ref, …)(…)`: ссылка — в применяемом вызове, хвост — у применения.
+        if _call_name(call.func) in judged_names:
+            return []
+        source, outer_args, outer_keywords = call.func, list(call.args), list(call.keywords)
+    positional = _positional_arguments(source)
+    keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
+    for index, argument in enumerate(positional):
+        bound = _bound_reference(argument, partial_names)
+        if argument is not None and bound is not None and bound[0] in judged_names:
+            referenced, func, bound_args, bound_keywords = bound
+            after = [item for item in positional[index + 1 :] if item is not None]
+            synthetic = _synthetic_call(
+                call,
+                func,
+                bound_args + after + outer_args,
+                bound_keywords + keywords + outer_keywords,
+            )
+            return [(synthetic, referenced, argument)]
+    for keyword, value in _named_arguments(source):
+        bound = (
+            _bound_reference(value, partial_names) if keyword in REFERENCE_KEYWORDS else None
+        )
+        if bound is not None and bound[0] in judged_names:
+            referenced, func, bound_args, bound_keywords = bound
+            rest = [item for item in positional if item is not None]
+            synthetic = _synthetic_call(
+                call,
+                func,
+                bound_args + rest + outer_args,
+                bound_keywords + keywords + outer_keywords,
+            )
+            return [(synthetic, referenced, value)]
+    return []
 
 
 def _is_concatenation(node: ast.AST) -> bool:
@@ -503,15 +1193,21 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
 
 
 def _values_dict_keys(call: ast.Call) -> list[tuple[ast.AST, str]]:
-    """Ключи номера в позиционных отображениях `values(...)` / `update(...)`.
+    """Ключи номера в отображениях `values(...)` / `update(...)`.
 
-    Отображение — `{...}` или `dict(...)` в литеральном контейнере грамматики
+    Каждый позиционный аргумент с раскрытой распаковкой `*[…]`, а у `update` ещё и
+    параметр `values` именем или парой `**{"values": …}` (`JUDGED_PARAMETERS`:
+    `Query.update(self, values, …)`; план 16-17, ревью WR-10). Отображение — `{...}`,
+    `dict(...)` или `{"phone": v for …}` в литеральном контейнере грамматики
     `_literal_mappings`; список — многострочная вставка; у `update` — устаревший
     `Query.update({"phone": x})`.
     """
+    _indices, names = _judged_bindings(_call_name(call) or "")
+    arguments = [argument for argument in _positional_arguments(call) if argument is not None]
+    arguments += [value for keyword, value in _named_arguments(call) if keyword in names]
     return [
         found
-        for argument in call.args
+        for argument in arguments
         for mapping in _literal_mappings(argument)
         for found in _mapping_phone_keys(mapping)
     ]
@@ -531,12 +1227,18 @@ def _literal_mappings(node: ast.expr) -> list[ast.expr]:
     - `a if c else b` — по обеим ветвям;
     - `*rows` — по распаковываемому значению;
     - `list(…)`, `tuple(…)`, `set(…)`, `iter(…)` ровно с одним позиционным аргументом
-      и без именованных (`LITERAL_CONTAINER_WRAPPERS`) — по этому аргументу.
+      и без именованных (`LITERAL_CONTAINER_WRAPPERS`) — по этому аргументу;
+    - `{k: v for …}` — само отображение (план 16-17, ревью WR-10): его ключ `k`
+      судит `_mapping_phone_keys`, и `{"phone": n for n in …}` с постоянным ключом
+      называет колонку литералом так же, как `{"phone": n}`.
 
-    Граница грамматики: всё прочее — имя, атрибут, вызов другого имени, `{k: v for …}`
-    с вычисленными ключами — пустой список. Это значения, пришедшие в пишущий вызов
-    именем или результатом другого вызова: поток данных предикат не прослеживает.
+    Граница грамматики: всё прочее — имя, атрибут, вызов другого имени — пустой
+    список. Это значения, пришедшие в пишущий вызов именем или результатом другого
+    вызова: поток данных предикат не прослеживает. `{k: v for …}` с вычисленным
+    ключом отображением остаётся, но колонкой номера его ключ не назван.
     """
+    if isinstance(node, ast.DictComp):
+        return [node]
     if isinstance(node, ast.Dict):
         # `{**{"phone": x}, …}` — отображение внутри отображения.
         return [node] + [
@@ -586,10 +1288,14 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
     """Ключи номера в литеральном отображении: (узел для строки находки, колонка).
 
     У `{...}` — строковая константа или атрибут (`MessengerAccount.phone`) из
-    `PHONE_COLUMNS`; у `dict(...)` — именованный аргумент из `PHONE_COLUMNS`.
+    `PHONE_COLUMNS`; у `{k: v for …}` — ключ `k`, если он колонка номера; у
+    `dict(...)` — именованный аргумент из `PHONE_COLUMNS`.
     """
     found: list[tuple[ast.AST, str]] = []
-    if isinstance(mapping, ast.Dict):
+    if isinstance(mapping, ast.DictComp):
+        if (column := _phone_column(mapping.key)) is not None:
+            found.append((mapping.key, column))
+    elif isinstance(mapping, ast.Dict):
         for key in mapping.keys:
             if key is not None and (column := _phone_column(key)) is not None:
                 found.append((key, column))
@@ -606,9 +1312,20 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
 def _phone_column(node: ast.AST) -> str | None:
     """Колонка номера, названная узлом литералом.
 
-    Строка `"phone"`, атрибут `X.phone`, индекс `table.c["phone"]` и
-    `getattr(X, "phone")` с именем-константой.
+    Строка `"phone"`, атрибут `X.phone`, индекс `table.c["phone"]`,
+    `getattr(X, "phone")` с именем-константой и конструктор колонки
+    `column("phone")` / `sa.literal_column("phone_is_manual")`
+    (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
+    строках executemany пишет колонку — замер на SQLite в памяти).
     """
+    if (
+        isinstance(node, ast.Call)
+        and _call_name(node) in COLUMN_CONSTRUCTORS
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value in PHONE_COLUMNS
+    ):
+        return node.args[0].value
     if isinstance(node, ast.Constant) and node.value in PHONE_COLUMNS:
         return node.value
     if isinstance(node, ast.Attribute) and node.attr in PHONE_COLUMNS:
@@ -684,8 +1401,9 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
     """Колонки номера, названные ПОЗИЦИЕЙ: (узел для строки находки, колонка).
 
     У `ordered_values` — каждый позиционный аргумент-пара, чей первый элемент —
-    колонка номера; у `from_select` — элементы первого позиционного аргумента
-    (или `names=`), являющиеся колонкой номера.
+    колонка номера; у `from_select` — элементы параметра `names`, связанного
+    позицией, именем, `**{"names": …}` или `*[…]` (`JUDGED_PARAMETERS`), являющиеся
+    колонкой номера.
     """
     name = _call_name(call)
     if name == "ordered_values":
@@ -698,31 +1416,38 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
                 candidates.append(argument)
         return _phone_pairs_among(candidates)
     if name == "from_select":
-        names = call.args[0] if call.args else next(
-            (k.value for k in call.keywords if k.arg == "names"), None
-        )
-        if isinstance(names, (ast.List, ast.Tuple)):
-            return [
-                (item, column)
-                for item in names.elts
-                if (column := _phone_column(item)) is not None
-            ]
+        indices, parameters = _judged_bindings(name)
+        found: list[tuple[ast.AST, str]] = []
+        for names in _bound_arguments(call, min(indices, default=0), parameters):
+            if isinstance(names, (ast.List, ast.Tuple)):
+                found.extend(
+                    (item, column)
+                    for item in names.elts
+                    if (column := _phone_column(item)) is not None
+                )
+        return found
     return []
 
 
 def _module_model_aliases(tree: ast.AST) -> frozenset[str]:
-    """Псевдонимы модели аккаунта в ТОМ ЖЕ модуле.
+    """Псевдонимы модели аккаунта в ТОМ ЖЕ модуле (`_module_aliases`)."""
+    return _module_aliases(tree, MODEL_NAME)
 
-    `from … import MessengerAccount as X` и присваивание `X = MessengerAccount` (и
-    цепочкой `Y = X`). Область видимости плоская — весь модуль, без учёта функций и
+
+def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
+    """Псевдонимы имени `name` в ТОМ ЖЕ модуле.
+
+    `from … import <name> as X`, присваивание `X = <name>` и `X = module.<name>`
+    (план 16-17: `Model = models.MessengerAccount`, `bind = functools.partial`), и
+    цепочкой `Y = X`. Область видимости плоская — весь модуль, без учёта функций и
     классов; псевдоним, заведённый в другом модуле, — поток данных между модулями,
     и это названная граница предиката.
     """
-    known = {MODEL_NAME}
+    known = {name}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name == MODEL_NAME and alias.asname:
+                if alias.name == name and alias.asname:
                     known.add(alias.asname)
     changed = True
     while changed:
@@ -734,12 +1459,14 @@ def _module_model_aliases(tree: ast.AST) -> frozenset[str]:
                 targets, value = [node.target], node.value
             else:
                 continue
-            if isinstance(value, ast.Name) and value.id in known:
+            if (isinstance(value, ast.Name) and value.id in known) or (
+                isinstance(value, ast.Attribute) and value.attr == name
+            ):
                 for target in targets:
                     if isinstance(target, ast.Name) and target.id not in known:
                         known.add(target.id)
                         changed = True
-    return frozenset(known - {MODEL_NAME})
+    return frozenset(known - {name})
 
 
 def _mapping_key_text(key: ast.AST, column: str) -> str:
@@ -751,28 +1478,18 @@ def _mapping_key_text(key: ast.AST, column: str) -> str:
     return f"{{{column!r}: …}}"
 
 
-def _assigned_attributes(target: ast.AST) -> list[ast.Attribute]:
-    """Атрибуты номера среди целей присваивания, включая распаковку кортежа.
-
-    Цель-имя (`phone: Mapped[...] = mapped_column(...)` в теле класса модели) не
-    судится: это объявление колонки, а не запись в неё.
-    """
-    if isinstance(target, ast.Attribute):
-        return [target] if target.attr in PHONE_COLUMNS else []
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return [item for element in target.elts for item in _assigned_attributes(element)]
-    if isinstance(target, ast.Starred):
-        return _assigned_attributes(target.value)
-    return []
-
-
 def _call_name(call: ast.Call) -> str | None:
-    """Последнее звено имени вызова: `update(...)` → `update`, `stmt.values(...)` → `values`."""
+    """Имя вызова, названное литералом.
+
+    Последнее звено вызываемого: `update(...)` → `update`, `stmt.values(...)` →
+    `values`; строка вызываемого `getattr(<что угодно>, "<строка>")(…)` →
+    `<строка>` (ревью WR-10: `getattr(session, "bulk_update_mappings")(…)`).
+    """
     if isinstance(call.func, ast.Name):
         return call.func.id
     if isinstance(call.func, ast.Attribute):
         return call.func.attr
-    return None
+    return _getattr_literal(call.func)
 
 
 def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
@@ -895,6 +1612,45 @@ def test_a_planted_backfill_with_parameters_and_a_comprehension_reddens_the_gate
     )
 
 
+def test_a_planted_backfill_through_run_sync_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-10: строки `bulk_update_mappings`, поданные через `run_sync`.
+
+    У `AsyncSession` нет `bulk_*` вовсе (замер `inspect.signature`, SQLAlchemy
+    2.0.46): синхронный bulk-API асинхронный код достаёт только через
+    `run_sync(Session.bulk_update_mappings, …)`. Проект асинхронный целиком,
+    поэтому скрипт дозаполнения Фазы 20 вероятнее всего пойдёт именно так — и
+    обойдёт условную запись, если гейт опознаёт пишущий API лишь по имени самого
+    вызова (D-13). Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_run_sync.py",
+        "async def backfill(session, rows):\n"
+        "    await session.run_sync(Session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": a.id, "phone": n} for a, n in rows])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_run_sync.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_run_sync.py:2 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "строки bulk_update_mappings, поданные через run_sync, не найдены: "
+        "`session.run_sync(Session.bulk_update_mappings, MessengerAccount, "
+        "[{'phone': n} for …])` в scripts/backfill_run_sync.py гейт пропустил: "
+        f"{offences}"
+    )
+    assert all(
+        "bulk_update_mappings" in offence and "phone" in offence for offence in found
+    ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
+
+
 ASSIGNMENT_CASES = [
     pytest.param("account.phone = x\n", "account.phone", id="assign-phone"),
     pytest.param(
@@ -913,6 +1669,22 @@ def test_an_assignment_to_a_phone_attribute_is_a_write(source, subject):
 
     assert offences == [f"app/x.py:1 — {KIND_ASSIGNMENT} — {subject}"], (
         f"присваивание `{subject}` гейт не нашёл: {offences}"
+    )
+
+
+def test_a_phone_attribute_bound_as_a_loop_target_is_a_write():
+    """Цель `for` — присваивание: `for account.phone in numbers` пишет колонку.
+
+    Атрибут номера в любой позиции цели присваивания — узел `Attribute` в контексте
+    `Store`: цель `=`, `+=`, аннотированного присваивания, распаковки, `for` /
+    `async for`, `with … as`, comprehension. Цикл с целью-атрибутом реально пишет
+    колонку (замер планирования 2026-10-12 на SQLite в памяти); до плана 16-17 вид 1
+    судил только цели операторов присваивания (ревью WR-10).
+    """
+    offences = phone_write_offences("for account.phone in numbers:\n    pass\n", "app/x.py")
+
+    assert offences == [f"app/x.py:1 — {KIND_ASSIGNMENT} — account.phone"], (
+        f"цель цикла account.phone не найдена: {offences}"
     )
 
 
@@ -1139,6 +1911,171 @@ def test_an_ordered_values_pair_of_a_phone_column_is_a_write():
     )
     assert "ordered_values" in offences[0] and "phone" in offences[0], (
         f"предмет находки не называет `ordered_values` и `phone`: {offences}"
+    )
+
+
+def test_a_query_update_with_values_as_a_keyword_is_a_write():
+    """`Query.update(values={"phone": x})` пишет колонку — именем, а не позицией (WR-10).
+
+    Сигнатура `Query.update(self, values, synchronize_session, update_args)`
+    (SQLAlchemy 2.0.46): `values` — обычный позиционно-именованный параметр, и
+    именованная форма пишет так же, как позиционная (замер верификатора на SQLite в
+    памяти). До плана 16-17 судилась только позиционная.
+    """
+    source = 'session.query(MessengerAccount).filter_by(id=i).update(values={"phone": x})\n'
+
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert offences, f"Query.update(values=…) с ключом номера не найден: {offences}"
+    assert len(offences) == 1 and offences[0].startswith(f"app/x.py:1 — {KIND_DICT_KEY} — "), (
+        f"Query.update(values=…) дал не ровно одну находку вида «{KIND_DICT_KEY}»: {offences}"
+    )
+    assert "update" in offences[0] and "phone" in offences[0], (
+        f"предмет находки не называет `update` и колонку `phone`: {offences}"
+    )
+
+
+def _resolve_api(path: str) -> object:
+    """Объект по пути: самый длинный ввозимый модуль, затем `getattr` по звеньям."""
+    parts = path.split(".")
+    for cut in range(len(parts), 0, -1):
+        try:
+            found: object = importlib.import_module(".".join(parts[:cut]))
+        except ImportError:
+            continue
+        for part in parts[cut:]:
+            found = getattr(found, part)
+        return found
+    raise ImportError(f"ни один префикс пути {path} не ввозится")
+
+
+def test_the_judged_parameters_name_the_installed_signatures():
+    """Таблица `JUDGED_PARAMETERS` совпадает с установленными сигнатурами.
+
+    Для каждой строки параметр с именем `parameter` стоит на индексе
+    `signature_index` в `inspect.signature(api)`, и позиционно-только он ровно у
+    `setattr` и `object.__setattr__`. Подъём SQLAlchemy / Alembic / asyncpg,
+    переименовавший или переставивший параметр, краснит это правило, а не оставляет
+    предикат молча слепым к новой форме.
+    """
+    mismatches: list[str] = []
+    for row in JUDGED_PARAMETERS:
+        try:
+            api = _resolve_api(row.api)
+            parameters = list(inspect.signature(api).parameters.values())
+        except (ImportError, AttributeError, TypeError, ValueError) as error:
+            mismatches.append(f"{row.api}: сигнатура не снимается ({error!r})")
+            continue
+        if row.signature_index >= len(parameters):
+            mismatches.append(
+                f"{row.api}: индекса {row.signature_index} нет, параметры "
+                f"{[p.name for p in parameters]}"
+            )
+            continue
+        parameter = parameters[row.signature_index]
+        if parameter.name != row.parameter:
+            mismatches.append(
+                f"{row.api}: на индексе {row.signature_index} стоит «{parameter.name}», "
+                f"а не «{row.parameter}»"
+            )
+        positional_only = parameter.kind is inspect.Parameter.POSITIONAL_ONLY
+        expected_only = row.api in POSITIONAL_ONLY_APIS
+        if positional_only != expected_only:
+            expected = "POSITIONAL_ONLY" if expected_only else "не POSITIONAL_ONLY"
+            mismatches.append(
+                f"{row.api}: «{parameter.name}» — {parameter.kind.name}, таблица "
+                f"ждёт {expected}"
+            )
+
+    assert len(JUDGED_PARAMETERS) >= 33, (
+        f"в таблице {len(JUDGED_PARAMETERS)} строк вместо 33 — перебор сигнатур неполон"
+    )
+    assert not mismatches, (
+        "таблица судимых параметров разошлась с установленными сигнатурами — "
+        "предикат судит не те позиции или имена:\n"
+        + "\n".join(f"  {mismatch}" for mismatch in mismatches)
+    )
+
+
+# Образец значения судимого параметра — по виду строки таблицы.
+BINDING_SAMPLES = {
+    KIND_DICT_KEY: '{"phone": x}',
+    KIND_SETATTR: '"phone"',
+    KIND_POSITIONAL_COLUMN: '["user_id", "phone"]',
+    KIND_UPSERT_SET: '{"phone": x}',
+    KIND_ROW_MAPPING: '[{"id": 1, "phone": p}]',
+    KIND_RAW_SQL: '"messenger_accounts"',
+}
+
+# Обязательные хвосты вызова: у COPY asyncpg `records` / `source` — только именем.
+BINDING_TAILS = {
+    "copy_records_to_table": ["records=rows"],
+    "copy_to_table": ["source=src"],
+}
+
+# Как вызов пишется в исходнике: функции модуля — без получателя, прочее — методом.
+BINDING_RECEIVERS = {
+    "setattr": "",
+    "set_attribute": "",
+    "set_committed_value": "",
+    "flag_modified": "",
+    "__setattr__": "object.",
+}
+
+BINDING_FORMS = ("positional", "keyword", "double-star", "starred")
+
+
+def _binding_source(row: JudgedParameter, form: str) -> str:
+    """Вызов API строки с судимым параметром, связанным формой `form`."""
+    value = BINDING_SAMPLES[row.kind]
+    fillers = [f"a{index}" for index in range(row.call_index)]
+    if form == "positional":
+        arguments = [*fillers, value]
+    elif form == "keyword":
+        arguments = [*fillers, f"{row.parameter}={value}"]
+    elif form == "double-star":
+        arguments = [*fillers, f'**{{"{row.parameter}": {value}}}']
+    else:
+        arguments = ["*[" + ", ".join([*fillers, value]) + "]"]
+    receiver = BINDING_RECEIVERS.get(row.call, "obj.")
+    arguments += BINDING_TAILS.get(row.call, [])
+    return f"{receiver}{row.call}({', '.join(arguments)})\n"
+
+
+BINDING_CASES = [
+    pytest.param(row, form, id=f"{row.api}-{form}")
+    for row in JUDGED_PARAMETERS
+    if row.parameter not in REFERENCE_KEYWORDS
+    for form in BINDING_FORMS
+]
+
+
+@pytest.mark.parametrize(("row", "form"), BINDING_CASES)
+def test_every_literal_binding_of_a_judged_parameter_is_judged(row, form):
+    """Каждая литеральная форма связывания судимого параметра — ровно одна находка.
+
+    Строка таблицы × форма: позицией (`call_index` после заполнителей), именем
+    (`parameter=…`), `**{"parameter": …}` и `*[заполнители…, значение]`. Две строки
+    ссылки `run_sync` здесь не участвуют: их предмет называет API по ссылке, а не
+    `run_sync`, и все четыре формы связывания `fn` закреплены поимённо строками
+    `LITERAL_FORM_CASES`. Формы позиционно-только параметров (`setattr(…, name=…)`)
+    при исполнении падают `TypeError` и ничего не пишут — гейт судит их по цене
+    строгости, поэтому правило называется «is_judged», а не «is_a_write».
+    """
+    source = _binding_source(row, form)
+
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert len(offences) == 1, (
+        f"`{source.strip()}` — {form}-связывание `{row.parameter}` у {row.api} — дало "
+        f"{len(offences)} находок вместо одной: {offences}"
+    )
+    _location, found_kind, subject = offences[0].split(" — ", 2)
+    assert found_kind == row.kind, (
+        f"`{source.strip()}`: вид «{found_kind}», ожидался «{row.kind}»: {offences}"
+    )
+    assert row.call in subject, (
+        f"`{source.strip()}`: предмет находки не называет `{row.call}`: {offences}"
     )
 
 
@@ -1611,6 +2548,385 @@ LITERAL_FORM_CASES = [
         "messenger_accounts",
         id="raw-sql-load-data",
     ),
+    # Ревью WR-10 (2026-10-10) и план 16-17, задача 1: пишущий API, названный
+    # литералом не последним звеном вызываемого, — ссылкой, поданной другому вызову
+    # вместе с аргументами (`run_sync`, `partial(…)(…)`, `to_thread`,
+    # `run_in_executor`), строкой в `getattr(obj, "…")(…)` и в `methodcaller("…", …)`.
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(Session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-bulk-update-mappings",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(fn=Session.bulk_update_mappings, "
+        'mapper=MessengerAccount, mappings=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-keyword-fn",
+    ),
+    pytest.param(
+        "async def f(conn, p):\n"
+        "    await conn.run_sync(Connection.execute, update(MessengerAccount), "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="conn-run-sync-execute",
+    ),
+    pytest.param(
+        "functools.partial(session.bulk_update_mappings, MessengerAccount)("
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-bulk-update-applied",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await asyncio.to_thread(s.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="to-thread-bulk-update",
+    ),
+    pytest.param(
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, s.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-in-executor-bulk-update",
+    ),
+    pytest.param(
+        'getattr(session, "bulk_update_mappings")(MessengerAccount, '
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="getattr-callee-bulk-update",
+    ),
+    pytest.param(
+        'operator.methodcaller("bulk_update_mappings", MessengerAccount, '
+        '[{"id": 1, "phone": p}])(session)\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="methodcaller-bulk-update",
+    ),
+    pytest.param(
+        'functools.partial(set_attribute, account, "phone")(x)\n',
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="partial-set-attribute-applied",
+    ),
+    pytest.param(
+        "async def f(loop, a, x):\n"
+        '    await loop.run_in_executor(None, setattr, a, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="run-in-executor-setattr",
+    ),
+    pytest.param(
+        'stmt = getattr(update(MessengerAccount), "values")(phone=x)\n',
+        KIND_KEYWORD,
+        "values",
+        "phone",
+        id="getattr-callee-values-keyword",
+    ),
+    # План 16-17, задача 2: судимый параметр при любом литеральном связывании
+    # (`JUDGED_PARAMETERS`), `{"phone": v for …}` с постоянным ключом и исполняющие
+    # вызовы с параметром строк, как у `execute` (ревью WR-10, формы 1, 2, 3, 5).
+    pytest.param(
+        'session.query(MessengerAccount).filter_by(id=i).update(values={"phone": x})\n',
+        KIND_DICT_KEY,
+        "update",
+        "phone",
+        id="query-update-values-keyword",
+    ),
+    pytest.param(
+        'set_attribute(account, key="phone", value=x)\n',
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="set-attribute-key-keyword",
+    ),
+    pytest.param(
+        'set_committed_value(account, key="phone", value=x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="set-committed-value-key-keyword",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(**{"phone": n for n in [x]})\n',
+        KIND_KEYWORD,
+        "values",
+        "phone",
+        id="values-double-star-dictcomp-constant-key",
+    ),
+    pytest.param(
+        "async def f(s, ns):\n"
+        '    await s.execute(update(MessengerAccount), [{"phone": n for n in ns}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-dictcomp-constant-key",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.scalars(insert(MessengerAccount).returning(MessengerAccount.id), "
+        '[{"user_id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "scalars",
+        "phone",
+        id="scalars-insert-returning-rows",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.scalar(insert(MessengerAccount).returning(MessengerAccount.id), "
+        '{"user_id": 1, "phone": p})\n',
+        KIND_ROW_MAPPING,
+        "scalar",
+        "phone",
+        id="scalar-insert-returning-row",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.stream(insert(MessengerAccount), [{"user_id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "stream",
+        "phone",
+        id="stream-insert-rows",
+    ),
+    pytest.param(
+        'c.exec_driver_sql(sql, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "exec_driver_sql",
+        "phone",
+        id="exec-driver-sql-rows",
+    ),
+    pytest.param(
+        'op.bulk_insert(accounts_table, rows=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_insert",
+        "phone",
+        id="alembic-bulk-insert-rows-keyword",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'None, ["id"], None, {"phone": x})\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone",
+        id="upsert-set-positional-pg",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        '["id"], None, {"phone": x})\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone",
+        id="upsert-set-positional-sqlite",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        '    await session.run_sync(**{"fn": Session.bulk_update_mappings}, '
+        'mapper=MessengerAccount, mappings=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-double-star-fn",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(*[Session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}]])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-starred-reference",
+    ),
+    # План 16-17, задача 3: вид 1 по грамматике (атрибут номера в контексте `Store`;
+    # у вида 1 поле «вызов» — объект, поле «колонка» — атрибут), дескриптор колонки
+    # `__set__`, повторный конструктор модели `__init__` и колонка, названная
+    # конструктором `column("phone")` / `literal_column(…)` в ключе отображения.
+    pytest.param(
+        "async def f(account, numbers):\n"
+        "    async for account.phone in numbers:\n"
+        "        pass\n",
+        KIND_ASSIGNMENT,
+        "account",
+        "phone",
+        id="async-for-target-attribute",
+    ),
+    pytest.param(
+        "with nullcontext(x) as account.phone:\n    pass\n",
+        KIND_ASSIGNMENT,
+        "account",
+        "phone",
+        id="with-target-attribute",
+    ),
+    pytest.param(
+        "[None for account.phone in numbers]\n",
+        KIND_ASSIGNMENT,
+        "account",
+        "phone",
+        id="comprehension-target-attribute",
+    ),
+    pytest.param(
+        "MessengerAccount.phone.__set__(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="descriptor-set",
+    ),
+    pytest.param(
+        "type(account).phone_is_manual.__set__(account, True)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone_is_manual",
+        id="type-descriptor-set",
+    ),
+    pytest.param(
+        "MessengerAccount.__init__(account, phone=x)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="model-init-reinvoked",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({column("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-constructor-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({literal_column("phone_is_manual"): True})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone_is_manual",
+        id="values-literal-column-key",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(update(MessengerAccount), "
+        '[{"id": 1, sa.column("phone"): p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-column-constructor-key",
+    ),
+    # Самопроверка исполнителя 16-17 (отклонение, Rule 2), класс 1: `flag_modified`
+    # пишет колонку текущим значением объекта — запись атрибута по имени.
+    pytest.param(
+        'flag_modified(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="flag-modified-phone",
+    ),
+    pytest.param(
+        'account.__dict__["phone"] = x\nflag_modified(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="flag-modified-after-dict-write",
+    ),
+    pytest.param(
+        'flag_modified(account, key="phone_is_manual")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone_is_manual",
+        id="flag-modified-key-keyword",
+    ),
+    # Самопроверка исполнителя 16-17 (отклонение, Rule 2), класс 2: ссылка на
+    # пишущий API внутри `functools.partial(…)`, поданного другому вызову вместе с
+    # аргументами, — обычная форма `run_in_executor`, у которого нет именованных
+    # аргументов. Последняя строка — контроль: всё внутри `partial`, находка одна.
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await asyncio.to_thread(functools.partial(s.bulk_update_mappings, "
+        'MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="to-thread-partial-bulk-update",
+    ),
+    pytest.param(
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, functools.partial(s.bulk_update_mappings, "
+        'MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-in-executor-partial-bulk-update",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(functools.partial(Session.bulk_update_mappings, "
+        'mapper=MessengerAccount), mappings=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-partial-bulk-update",
+    ),
+    pytest.param(
+        'functools.partial(functools.partial(set_attribute, account), "phone")(x)\n',
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="partial-of-partial-applied",
+    ),
+    pytest.param(
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, functools.partial(s.bulk_update_mappings, "
+        'MessengerAccount, [{"id": 1, "phone": p}]))\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-in-executor-partial-all-arguments",
+    ),
+    # Самопроверка исполнителя 16-17 (отклонение, Rule 2), класс 3: псевдонимы,
+    # заведённые в том же модуле, — `functools.partial` под другим именем и модель,
+    # связанная через атрибут модуля (`Model = models.MessengerAccount`).
+    pytest.param(
+        "from functools import partial as bind\n"
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, bind(s.bulk_update_mappings, "
+        'MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-import-alias-nested",
+    ),
+    pytest.param(
+        "bind = functools.partial\n"
+        "async def f(s, p):\n"
+        "    await asyncio.to_thread(bind(s.bulk_update_mappings, MessengerAccount), "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-assignment-alias-nested",
+    ),
+    pytest.param(
+        "Model = models.MessengerAccount\naccount = Model(phone=x)\n",
+        KIND_KEYWORD,
+        "Model",
+        "phone",
+        id="model-attribute-alias",
+    ),
 ]
 
 
@@ -1776,6 +3092,91 @@ LEGITIMATE_CASES = [
     pytest.param(
         'stmt = select(accounts).where(accounts.c["phone"] == p)\n',
         id="where-table-c-subscript-phone",
+    ),
+    # План 16-17, задача 1: ссылки на функции, которые не пишут номер. Первая —
+    # живая форма `app/services/image_upload.py` (`to_thread(prepare_upload, …)`).
+    pytest.param(
+        "async def f(content):\n"
+        "    return await asyncio.to_thread(prepare_upload, content)\n",
+        id="to-thread-other-function",
+    ),
+    pytest.param(
+        "async def f(conn):\n    await conn.run_sync(Base.metadata.create_all)\n",
+        id="run-sync-create-all",
+    ),
+    pytest.param(
+        "async def f(s, t):\n"
+        "    await s.run_sync(Session.bulk_update_mappings, Group, "
+        '[{"id": 1, "title": t}])\n',
+        id="run-sync-bulk-other-columns",
+    ),
+    pytest.param(
+        'view = functools.partial(render, request, "x.html", phone=phone)\n',
+        id="partial-render-phone-kwarg",
+    ),
+    pytest.param(
+        'getattr(session, "add")(account)\n',
+        id="getattr-other-method",
+    ),
+    pytest.param(
+        'operator.methodcaller("bulk_update_mappings", Group, '
+        '[{"id": 1, "title": t}])(session)\n',
+        id="methodcaller-other-columns",
+    ),
+    # План 16-17, задача 2: исполняющий вызов без строк и запись чужого атрибута.
+    pytest.param(
+        "async def f(s):\n"
+        "    return await s.scalars(\n"
+        "        select(MessengerAccount).where(MessengerAccount.phone.is_(None))\n"
+        "    )\n",
+        id="scalars-select-without-rows",
+    ),
+    pytest.param(
+        'set_attribute(account, key="status", value=x)\n',
+        id="set-attribute-keyword-other-attribute",
+    ),
+    # План 16-17, задача 3: `__init__` объекта, тип которого по исходнику не назван,
+    # дескриптор и конструктор чужой колонки, имя-цель цикла и не-записи (`del`,
+    # `delattr` — на SQLAlchemy 2.0.46 flush падает `KeyError`, строка не меняется).
+    pytest.param(
+        "class Form(Base):\n"
+        "    def __init__(self, phone):\n"
+        "        super().__init__(phone=phone)\n",
+        id="super-init-phone-kwarg",
+    ),
+    pytest.param("form.__init__(phone=x)\n", id="unknown-object-init-phone-kwarg"),
+    pytest.param("Group.title.__set__(group, t)\n", id="descriptor-set-other-column"),
+    pytest.param(
+        'stmt = update(groups).values({column("title"): t})\n',
+        id="column-constructor-other-key",
+    ),
+    pytest.param(
+        "for phone in numbers:\n    print(mask_phone(phone))\n",
+        id="for-target-name-phone",
+    ),
+    pytest.param("del account.phone\n", id="del-attribute-is-not-a-write"),
+    pytest.param('delattr(account, "phone")\n', id="delattr-is-not-a-write"),
+    pytest.param('flag_modified(account, "status")\n', id="flag-modified-other-attribute"),
+    pytest.param(
+        'account.__dict__["phone"] = x\nflag_dirty(account)\n',
+        id="dict-write-with-flag-dirty-is-not-a-write",
+    ),
+    pytest.param(
+        "async def f(content):\n"
+        "    return await asyncio.to_thread(\n"
+        "        functools.partial(prepare_upload, quality=80), content\n"
+        "    )\n",
+        id="to-thread-partial-other-function",
+    ),
+    pytest.param(
+        "G = models.Group\ng = G(phone=x)\n",
+        id="attribute-alias-of-another-model-with-phone-kwarg",
+    ),
+    pytest.param(
+        "from functools import partial as bind\n"
+        "async def f(content):\n"
+        "    return await asyncio.to_thread(bind(prepare_upload, quality=80), content)\n",
+        id="partial-alias-other-function",
     ),
 ]
 
