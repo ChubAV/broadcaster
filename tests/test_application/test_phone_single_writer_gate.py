@@ -1485,6 +1485,22 @@ def test_an_assignment_to_a_phone_attribute_is_a_write(source, subject):
     )
 
 
+def test_a_phone_attribute_bound_as_a_loop_target_is_a_write():
+    """Цель `for` — присваивание: `for account.phone in numbers` пишет колонку.
+
+    Атрибут номера в любой позиции цели присваивания — узел `Attribute` в контексте
+    `Store`: цель `=`, `+=`, аннотированного присваивания, распаковки, `for` /
+    `async for`, `with … as`, comprehension. Цикл с целью-атрибутом реально пишет
+    колонку (замер планирования 2026-10-12 на SQLite в памяти); до плана 16-17 вид 1
+    судил только цели операторов присваивания (ревью WR-10).
+    """
+    offences = phone_write_offences("for account.phone in numbers:\n    pass\n", "app/x.py")
+
+    assert offences == [f"app/x.py:1 — {KIND_ASSIGNMENT} — account.phone"], (
+        f"цель цикла account.phone не найдена: {offences}"
+    )
+
+
 KEYWORD_CASES = [
     pytest.param(
         "stmt = update(MessengerAccount).where(MessengerAccount.id == 1).values(phone=x)\n",
@@ -2552,6 +2568,77 @@ LITERAL_FORM_CASES = [
         "phone",
         id="run-sync-starred-reference",
     ),
+    # План 16-17, задача 3: вид 1 по грамматике (атрибут номера в контексте `Store`;
+    # у вида 1 поле «вызов» — объект, поле «колонка» — атрибут), дескриптор колонки
+    # `__set__`, повторный конструктор модели `__init__` и колонка, названная
+    # конструктором `column("phone")` / `literal_column(…)` в ключе отображения.
+    pytest.param(
+        "async def f(account, numbers):\n"
+        "    async for account.phone in numbers:\n"
+        "        pass\n",
+        KIND_ASSIGNMENT,
+        "account",
+        "phone",
+        id="async-for-target-attribute",
+    ),
+    pytest.param(
+        "with nullcontext(x) as account.phone:\n    pass\n",
+        KIND_ASSIGNMENT,
+        "account",
+        "phone",
+        id="with-target-attribute",
+    ),
+    pytest.param(
+        "[None for account.phone in numbers]\n",
+        KIND_ASSIGNMENT,
+        "account",
+        "phone",
+        id="comprehension-target-attribute",
+    ),
+    pytest.param(
+        "MessengerAccount.phone.__set__(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="descriptor-set",
+    ),
+    pytest.param(
+        "type(account).phone_is_manual.__set__(account, True)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone_is_manual",
+        id="type-descriptor-set",
+    ),
+    pytest.param(
+        "MessengerAccount.__init__(account, phone=x)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="model-init-reinvoked",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({column("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-constructor-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({literal_column("phone_is_manual"): True})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone_is_manual",
+        id="values-literal-column-key",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(update(MessengerAccount), "
+        '[{"id": 1, sa.column("phone"): p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-column-constructor-key",
+    ),
 ]
 
 
@@ -2760,6 +2847,27 @@ LEGITIMATE_CASES = [
         'set_attribute(account, key="status", value=x)\n',
         id="set-attribute-keyword-other-attribute",
     ),
+    # План 16-17, задача 3: `__init__` объекта, тип которого по исходнику не назван,
+    # дескриптор и конструктор чужой колонки, имя-цель цикла и не-записи (`del`,
+    # `delattr` — на SQLAlchemy 2.0.46 flush падает `KeyError`, строка не меняется).
+    pytest.param(
+        "class Form(Base):\n"
+        "    def __init__(self, phone):\n"
+        "        super().__init__(phone=phone)\n",
+        id="super-init-phone-kwarg",
+    ),
+    pytest.param("form.__init__(phone=x)\n", id="unknown-object-init-phone-kwarg"),
+    pytest.param("Group.title.__set__(group, t)\n", id="descriptor-set-other-column"),
+    pytest.param(
+        'stmt = update(groups).values({column("title"): t})\n',
+        id="column-constructor-other-key",
+    ),
+    pytest.param(
+        "for phone in numbers:\n    print(mask_phone(phone))\n",
+        id="for-target-name-phone",
+    ),
+    pytest.param("del account.phone\n", id="del-attribute-is-not-a-write"),
+    pytest.param('delattr(account, "phone")\n', id="delattr-is-not-a-write"),
 ]
 
 
