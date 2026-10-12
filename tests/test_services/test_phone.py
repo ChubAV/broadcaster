@@ -49,7 +49,10 @@
   номера без лишних цифр принимаются. Граница названа в пункте 5 докстринга
   `normalize_manual`, а не утверждена строкой: Германия `+49 151 23456789` с
   одной и двумя лишними цифрами и Израиль `+972 50 123 4567` с двумя и тремя
-  остаются принятыми (переменная длина `FIXED_LINE`);
+  остаются принятыми (переменная длина `FIXED_LINE`). Правило-сторож номеров-
+  образцов четырёх типов аккаунта доказывает, что отказ не режет ни одного из
+  830 образцов метаданных, а правило негеографических кодов закрепляет отказ
+  `+800` / `+808` / `+888` / `+979` ручным путём как решение (О-7 (а), О-1);
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
   у национальной части не длиннее двух цифр не видна ни одна её цифра (план
   16-07, ревью WR-03);
@@ -65,6 +68,7 @@ import phonenumbers
 import pytest
 
 from app.services.phone import (
+    ACCOUNT_NUMBER_TYPES,
     EXAMPLE_PHONE,
     MANUAL_INPUT_MAX_CHARS,
     PHONE_ERROR_BLANK,
@@ -698,6 +702,85 @@ def test_a_foreign_number_with_extra_digits_typed_by_hand_is_refused_whatever_th
     )
 
 
+def test_every_account_type_example_number_of_the_metadata_is_accepted_by_hand():
+    """⚠️ СТОРОЖ ЗАПРЕТА 16-07 №3 ДЛЯ РУЧНОГО ПУТИ: отказ по типам не теряет номер.
+
+    План 16-16, решение владельца О-7 (а), D-05. Каждый номер-образец метаданных
+    (`phonenumberslite==9.0.41`) каждого типа из `ACCOUNT_NUMBER_TYPES` по всем
+    регионам, поданный в международной записи, ручной путь обязан вернуть тем
+    же E.164 (замер планирования и исполнения 2026-10-12 — 830 образцов).
+    Правило проходит и до, и после отказа по типам: оно доказывает, что отказ
+    не режет ни одной формы номера типа аккаунта, известной метаданным, — но не
+    больше. Образцы — не перечень всех настоящих номеров; риск ложного отказа
+    при отставании метаданных владелец принял в О-7 (а).
+    """
+    examples: list[tuple[str, str]] = []
+    for region in sorted(phonenumbers.SUPPORTED_REGIONS):
+        for kind in ACCOUNT_NUMBER_TYPES:
+            example = phonenumbers.example_number_for_type(region, kind)
+            if example is not None:
+                examples.append(
+                    (
+                        phonenumbers.format_number(
+                            example, phonenumbers.PhoneNumberFormat.INTERNATIONAL
+                        ),
+                        phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.E164),
+                    )
+                )
+
+    assert len(examples) >= 800, f"антивакуум: образцов {len(examples)}, ждали не меньше 800"
+    lost: list[str] = []
+    for typed, e164 in examples:
+        try:
+            stored = normalize_manual(typed)
+        except PhoneError:
+            stored = None
+        if stored != e164:
+            lost.append(typed)
+    assert lost == [], (
+        f"ручной путь потерял номера-образцы типов аккаунта: {len(lost)}, первые {lost[:10]}"
+    )
+
+
+# Решение владельца О-7 (а), согласовано с О-1: негеографические номера-образцы,
+# которые ручной путь отвергает по типу (план 16-16), и которые принимает.
+NON_GEO_REFUSED_BY_HAND = {800, 808, 888, 979}
+NON_GEO_ACCEPTED_BY_HAND = {870, 878, 881, 882, 883}
+
+
+def test_the_non_geographic_examples_split_by_account_type():
+    """Попутное следствие отказа по типам — решение, а не случайность (О-7 (а)).
+
+    Номера-образцы негеографических кодов ручным путём:
+    - ОТВЕРГАЮТСЯ `+800` (бесплатный UIFN), `+808` (shared cost), `+888`
+      (образец OCHA `+888 123 456 78901`, тип UAN) и `+979` (премиальный) —
+      аккаунтом мессенджера такие номера не бывают;
+    - ПРИНИМАЮТСЯ `+870`, `+881`, `+882` (спутниковые и сетевые мобильные) и
+      `+878`, `+883` (VoIP).
+
+    Связь с О-1: ручной `+888…` отвергается и раньше — номер Fragment для
+    библиотеки слишком короткий (`TOO_SHORT`, строка
+    `o1_fragment_by_hand_refused`); образец OCHA теперь отвергается по типу.
+    Fragment попадает в базу только автопутём.
+    """
+    accepted: set[int] = set()
+    refused: set[int] = set()
+    for code in sorted(phonenumbers.COUNTRY_CODES_FOR_NON_GEO_REGIONS):
+        example = phonenumbers.example_number_for_non_geo_entity(code)
+        assert example is not None, f"антивакуум: у кода {code} нет номера-образца"
+        typed = phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+        try:
+            normalize_manual(typed)
+        except PhoneError as error:
+            assert str(error) == PHONE_ERROR_NOT_A_NUMBER, f"текст отказа для {typed!r}"
+            refused.add(code)
+        else:
+            accepted.add(code)
+
+    assert refused == NON_GEO_REFUSED_BY_HAND, f"отвергнутые ручным путём коды: {sorted(refused)}"
+    assert accepted == NON_GEO_ACCEPTED_BY_HAND, f"принятые ручным путём коды: {sorted(accepted)}"
+
+
 @pytest.mark.parametrize("text,message", MANUAL_REJECTED)
 def test_every_refusal_text_is_a_declared_constant_with_the_example(text, message):
     """⚠️ ТЕКСТ ОТКАЗА — ИЗ ЗАКРЫТОГО НАБОРА И БЕЗ ПРИЧИНЫ (D-18, PHONE-21).
@@ -794,7 +877,9 @@ def test_a_mask_shows_only_the_country_code_and_two_last_digits(stored):
     )
 
 
-FORBIDDEN_CALLS = {"is_valid_number", "is_possible_number"}
+# Голая проверка «возможности по типу» запрещена наравне с общей голой (план
+# 16-16, D-05): в 9.0.41 она тоже считает возможным `IS_POSSIBLE_LOCAL_ONLY`.
+FORBIDDEN_CALLS = {"is_valid_number", "is_possible_number", "is_possible_number_for_type"}
 
 
 def _imported_modules(tree: ast.Module) -> list[str]:
@@ -826,7 +911,9 @@ def test_the_module_is_pure_and_never_asks_validity():
     - Валидатор «действительности» не зовётся вовсе: метаданные отстают, а
       Fragment он отвергает (D-05).
     - Голая проверка «возможности» не зовётся: она пропускает местный номер
-      `IS_POSSIBLE_LOCAL_ONLY`; разрешена только форма `…_with_reason`.
+      `IS_POSSIBLE_LOCAL_ONLY`; разрешена только форма `…_with_reason`. То же
+      у проверки «возможности по типу» (план 16-16): правило по типам аккаунта
+      обязано стоять в форме `is_possible_number_for_type_with_reason`.
     """
     tree = ast.parse(PHONE_MODULE.read_text(encoding="utf-8"))
 
@@ -842,6 +929,9 @@ def test_the_module_is_pure_and_never_asks_validity():
 
     called = _called_names(tree)
     assert "parse" in called, "антивакуум: разбор обязан найтись среди вызовов"
+    assert "is_possible_number_for_type_with_reason" in called, (
+        "антивакуум: правило по типам аккаунта обязано стоять в форме …_with_reason"
+    )
     assert called & FORBIDDEN_CALLS == set(), (
         f"запрещённые вызовы: {sorted(called & FORBIDDEN_CALLS)}"
     )
@@ -854,6 +944,8 @@ def test_the_ast_rule_catches_a_validity_call_and_a_database_import():
         "from sqlalchemy import select\n"
         "def f(n):\n"
         "    return phonenumbers.is_valid_number(n) or phonenumbers.is_possible_number(n)\n"
+        "def g(n, kind):\n"
+        "    return phonenumbers.is_possible_number_for_type(n, kind)\n"
     )
     assert "sqlalchemy" in _imported_modules(planted)
     assert _called_names(planted) & FORBIDDEN_CALLS == FORBIDDEN_CALLS
