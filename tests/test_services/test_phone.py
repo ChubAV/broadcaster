@@ -40,6 +40,16 @@
   код 7 с национальной частью не из 10 цифр и ОТВЕРГАЕТСЯ при любом числе
   лишних цифр, а не сохраняется выдуманным `+799912345671234` под признаком
   «ручной» (D-07);
+- строки `wr09_*`, контроли `*_mobile` и правило-перебор над
+  `FOREIGN_EXTRA_DIGIT_BASES` (план 16-16, ревью WR-09, верификация раунда 3
+  2026-10-10; решение владельца О-7 (а), 2026-10-12): настоящий мобильный номер
+  чужой зоны (Беларусь, Украина, Киргизия, Турция, Китай; Израиль — при одной
+  лишней цифре) с лишними цифрами без маркера добавочного ОТВЕРГАЕТСЯ — его
+  длина не возможна ни для одного типа, каким бывает аккаунт мессенджера; сами
+  номера без лишних цифр принимаются. Граница названа в пункте 5 докстринга
+  `normalize_manual`, а не утверждена строкой: Германия `+49 151 23456789` с
+  одной и двумя лишними цифрами и Израиль `+972 50 123 4567` с двумя и тремя
+  остаются принятыми (переменная длина `FIXED_LINE`);
 - маска (`MASKED`, D-10) — видны код страны и две последние цифры, не больше;
   у национальной части не длиннее двух цифр не видна ни одна её цифра (план
   16-07, ревью WR-03);
@@ -376,6 +386,15 @@ MANUAL_ACCEPTED = [
     pytest.param("88801234567", "+78801234567", id="o1_fragment_without_plus_becomes_russian"),
     pytest.param(AT_INPUT_LIMIT, "+79991234567", id="exactly_32_chars"),
     pytest.param("+39 06 1234 5678", "+390612345678", id="italian_leading_zero_is_not_plus_seven"),
+    # Контроли плана 16-16 (ревью WR-09, решение владельца О-7 (а)): настоящие
+    # мобильные номера чужих зон без лишних цифр принимаются и до, и после отказа
+    # по типам аккаунта — отказ строк `wr09_*` идёт от лишних цифр.
+    pytest.param("+375 29 123 45 67", "+375291234567", id="belarus_mobile"),
+    pytest.param("+380 50 123 4567", "+380501234567", id="ukraine_mobile"),
+    pytest.param("+90 532 123 45 67", "+905321234567", id="turkey_mobile"),
+    pytest.param("+996 700 123 456", "+996700123456", id="kyrgyzstan_mobile"),
+    pytest.param("+972 50 123 4567", "+972501234567", id="israel_mobile"),
+    pytest.param("+86 138 0013 8000", "+8613800138000", id="china_mobile"),
 ]
 
 
@@ -429,6 +448,37 @@ def test_a_russian_number_with_four_extra_digits_typed_by_hand_is_refused():
     )
 
 
+def test_a_foreign_number_with_an_extra_digit_typed_by_hand_is_refused():
+    """⚠️ ТРАСЕР ПЛАНА 16-16: исход владельца О-7 (а), названный до исполнения.
+
+    Решение владельца О-7 (а) «отказ по типам аккаунта», 2026-10-12, третий
+    прогон `/gsd-plan-phase 16 --gaps`; исход `human_verification` 2
+    верификации раунда 3 назван ДО исполнения: `+375 29 123 45 67 1` (Беларусь)
+    и `+380 50 123 4567 1` (Украина) — отказ `PHONE_ERROR_NOT_A_NUMBER`, а
+    `+375 29 123 45 67` → `+375291234567` и `8-800-555-35-35` → `+78005553535`.
+
+    До плана 16-16 (ревью WR-09) класс «номер плюс лишние цифры» был закрыт
+    только у кода 7: общая «возможность» берёт объединение длин всех типов
+    номеров, и номер чужой зоны с цифрой, дописанной без маркера добавочного,
+    сохранялся выдуманным «ручным» номером, закрытым для автоисправления (D-07).
+    Вариант (б) «принимать как сейчас, граница — только код 7» владелец отверг.
+    """
+    for typed in ("+375 29 123 45 67 1", "+380 50 123 4567 1"):
+        with pytest.raises(PhoneError) as excinfo:
+            normalize_manual(typed)
+        assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+            f"номер чужой зоны с лишней цифрой {typed!r} обязан получить отказ "
+            "«Не похоже на номер телефона»"
+        )
+
+    assert normalize_manual("+375 29 123 45 67") == "+375291234567", (
+        "контроль: настоящий номер Беларуси без лишней цифры обязан приниматься"
+    )
+    assert normalize_manual("8-800-555-35-35") == "+78005553535", (
+        "контроль: бесплатный 8-800 по-прежнему принимается"
+    )
+
+
 MANUAL_REJECTED = [
     pytest.param("123-45-67", PHONE_ERROR_NOT_A_NUMBER, id="local_only_dashed"),
     pytest.param("1234567", PHONE_ERROR_NOT_A_NUMBER, id="local_only_digits"),
@@ -459,6 +509,36 @@ MANUAL_REJECTED = [
     ),
     pytest.param(
         "8 800 123 45 67 890", PHONE_ERROR_NOT_A_NUMBER, id="wr06_toll_free_three_extra_digits"
+    ),
+    # Летопись (план 16-16, ревью WR-09, верификация раунда 3 2026-10-10): до плана
+    # строки `wr09_*` сохранялись выдуманными «ручными» номерами (`+3752912345671`,
+    # `+37529123456712`, `+3805012345671`, `+9967001234561`, `+90532123456712`,
+    # `+905321234567123`, `+9725012345671`, `+86138001380001`), закрытыми для
+    # автоисправления (D-07). Решение владельца О-7 (а), 2026-10-12 — отказ по
+    # типам аккаунта.
+    pytest.param(
+        "+375 29 123 45 67 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_belarus_one_extra_digit"
+    ),
+    pytest.param(
+        "+375 29 123 45 67 12", PHONE_ERROR_NOT_A_NUMBER, id="wr09_belarus_two_extra_digits"
+    ),
+    pytest.param(
+        "+380 50 123 4567 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_ukraine_one_extra_digit"
+    ),
+    pytest.param(
+        "+996 700 123 456 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_kyrgyzstan_one_extra_digit"
+    ),
+    pytest.param(
+        "+90 532 123 45 67 12", PHONE_ERROR_NOT_A_NUMBER, id="wr09_turkey_two_extra_digits"
+    ),
+    pytest.param(
+        "+90 532 123 45 67 123", PHONE_ERROR_NOT_A_NUMBER, id="wr09_turkey_three_extra_digits"
+    ),
+    pytest.param(
+        "+972 50 123 4567 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_israel_one_extra_digit"
+    ),
+    pytest.param(
+        "+86 138 0013 8000 1", PHONE_ERROR_NOT_A_NUMBER, id="wr09_china_one_extra_digit"
     ),
     pytest.param("+7 999 123 45 67 доб 5", PHONE_ERROR_EXTENSION, id="extension_russian"),
     pytest.param("+7 999 123 45 67 ext 12", PHONE_ERROR_EXTENSION, id="extension_ext"),
@@ -500,6 +580,13 @@ def test_a_number_typed_by_hand_is_refused_with_an_explanation(text, message):
     с национальной частью не из 10 цифр. До плана 16-11 четыре такие строки
     сохранялись выдуманными номерами (`+799912345671234`, `+788001234567890`);
     теперь — отказ `PHONE_ERROR_NOT_A_NUMBER`.
+
+    Строки `wr09_*` (план 16-16, ревью WR-09, решение владельца О-7 (а),
+    2026-10-12): то же у чужих зон — Беларусь, Украина, Киргизия, Турция,
+    Израиль, Китай. Длина такого ввода возможна лишь для типа, каким аккаунт
+    мессенджера не бывает (бесплатный, платный, UAN), и до плана 16-16 он
+    сохранялся выдуманным «ручным» номером; теперь — отказ
+    `PHONE_ERROR_NOT_A_NUMBER`.
     """
     with pytest.raises(PhoneError) as excinfo:
         normalize_manual(text)
@@ -548,6 +635,66 @@ def test_a_number_with_extra_digits_typed_by_hand_is_refused_whatever_their_coun
         normalize_manual(typed)
     assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
         f"номер +7 с {extra_count} лишними цифрами обязан получить отказ «Не похоже на номер телефона»"
+    )
+
+
+# Настоящие мобильные номера чужих зон, к которым правило-перебор дописывает
+# лишние цифры (план 16-16, ревью WR-09, решение владельца О-7 (а)). Израиля и
+# Германии здесь нет намеренно: их номера с частью лишних цифр остаются
+# принятыми — это граница, названная в пункте 5 докстринга `normalize_manual`,
+# и строка таблицы утверждала бы её нормой.
+FOREIGN_EXTRA_DIGIT_BASES = [
+    pytest.param("+375 29 123 45 67", id="belarus"),
+    pytest.param("+380 50 123 4567", id="ukraine"),
+    pytest.param("+996 700 123 456", id="kyrgyzstan"),
+    pytest.param("+90 532 123 45 67", id="turkey"),
+    pytest.param("+86 138 0013 8000", id="china"),
+]
+
+
+@pytest.mark.parametrize(
+    "extra_count",
+    [pytest.param(k, id=f"extra_{k}") for k in range(1, len(EXTRA_DIGITS) + 1)],
+)
+@pytest.mark.parametrize("base", FOREIGN_EXTRA_DIGIT_BASES)
+def test_a_foreign_number_with_extra_digits_typed_by_hand_is_refused_whatever_their_count(
+    base, extra_count
+):
+    """Мобильный номер чужой зоны с 1…5 лишними цифрами — отказ при ЛЮБОМ их числе.
+
+    План 16-16, ревью WR-09, решение владельца О-7 (а), 2026-10-12. Зачем
+    перебор, а не строки: исход до плана был немонотонен — у Турции одна лишняя
+    цифра давала отказ (`INVALID_LENGTH`), а две и три давали «номер»
+    (`+90532123456712`, `+905321234567123`); у Беларуси «номером» становились
+    одна и две. Замер исполнения 2026-10-12: до плана 16-16 из 25 строк
+    сохранялись 7. Правило закрывает класс, а не отдельные вводы.
+
+    Израиля и Германии в таблице нет: у их `FIXED_LINE` /
+    `FIXED_LINE_OR_MOBILE` переменная длина, и часть их вводов с лишними
+    цифрами остаётся принятой — это граница пункта 5 докстринга
+    `normalize_manual`, а не норма; одна лишняя цифра Израиля закреплена
+    строкой `wr09_israel_one_extra_digit`.
+
+    Антивакуум: база обязана приниматься и быть возможной как `MOBILE` — отказ
+    должен идти от лишних цифр, а не от базы.
+    """
+    parsed = phonenumbers.parse(base, "RU")
+    assert normalize_manual(base) == phonenumbers.format_number(
+        parsed, phonenumbers.PhoneNumberFormat.E164
+    ), f"антивакуум: база {base!r} обязана приниматься"
+    assert (
+        phonenumbers.is_possible_number_for_type_with_reason(
+            parsed, phonenumbers.PhoneNumberType.MOBILE
+        )
+        == phonenumbers.ValidationResult.IS_POSSIBLE
+    ), f"антивакуум: база {base!r} обязана быть возможной как мобильный номер"
+
+    typed = f"{base} {EXTRA_DIGITS[:extra_count]}"
+    with pytest.raises(PhoneError) as excinfo:
+        normalize_manual(typed)
+    assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
+        f"номер чужой зоны с {extra_count} лишними цифрами обязан получить отказ "
+        "«Не похоже на номер телефона»"
     )
 
 
