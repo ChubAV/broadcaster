@@ -204,7 +204,7 @@ status: complete
 | сквозные гейты (`test_htmx_post_pairs.py`, `test_htmx_gates.py`, `tests/test_templates`, `test_declared_invariants.py`) | 576 passed (как на базе) |
 | `uv run python -m compileall -q app main.py tests` | exit 0 |
 | `scripts/prohibitions_census.py --check` | exit 0 |
-| `tests/test_planning` | гоняется после коммита этой сводки; счёт — в ответе оркестратору |
+| `tests/test_planning` (после коммита сводки `83b2100b`) | 218 passed, 2 skipped (как на базе) |
 
 **Зависимость от текста писателя (для слияния с 16-19):** вердикт «6 сырых в писателе, 0 вне» зависит только от форм ВЫЗОВОВ модуля-писателя: `values(phone=…, phone_is_manual=…)` и `set_committed_value(account, "phone", …)`. Константы, тексты отказов и строки сообщений в счёт не входят, если только строка не содержит пишущий SQL по `RAW_SQL_PHONE_WRITE` (например, `UPDATE messenger_accounts SET phone =`). Новое правило ссылки судило бы имя пишущего API, поданное позицией (`f(update, …)`); в нынешнем писателе таких нет. Правка 16-19 (тексты `ACCOUNT_NOT_IN_SESSION`, `ACCOUNT_WITHOUT_ID_AFTER_FLUSH`) счёт менять не должна. Оркестратор перепроверяет на объединённом дереве.
 
@@ -237,3 +237,9 @@ None - no external service configuration required.
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-12*
+
+## Self-Check: PASSED
+
+- FOUND: `tests/test_application/test_phone_single_writer_gate.py`, `.planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-17-SUMMARY.md`.
+- FOUND (на ветке после `e9141128`): `4aac9144`, `9b074697`, `1769a712`, `417229e7`, `6a2c3364`, `282c16d7`, `70861b52`, `b7a1e127`, `ec47679d`, `e3f46b63`, `16f810e1`, `e53d9320`, `83b2100b`.
+- Критерии приёмки задач 1–3 перепрогнаны на `e53d9320`: все проходят, кроме буквального `len(rows) == 33` задачи 2 (отклонение 3; 34 строки — сознательно).
