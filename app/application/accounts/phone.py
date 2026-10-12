@@ -67,7 +67,12 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.models.messenger_account import MessengerAccount
 from app.services.phone import normalize_manual, normalize_reported
 
-ACCOUNT_NOT_IN_SESSION = "аккаунт не принадлежит сессии писателя: добавьте его через session.add"
+# Проверка членства: объект не добавлен, отсоединён или живёт в чужой сессии.
+# Текст нейтрален и совета не даёт: «добавьте через session.add» для объекта
+# чужой сессии падает `InvalidRequestError` (ревью IN-10).
+ACCOUNT_NOT_IN_SESSION = "аккаунт не принадлежит сессии писателя"
+# Вторая линия после сброса: объект уже в сессии, причина другая (ревью IN-10).
+ACCOUNT_WITHOUT_ID_AFTER_FLUSH = "после flush у аккаунта нет id"
 
 
 class PhoneWrite(enum.Enum):
@@ -151,6 +156,14 @@ async def record_reported_phone(
     сессии получают тот же отказ: прежде по их `id` исполнялся UPDATE в чужой
     для объекта сессии с зеркалом на объект. Это ошибка вызывающего, а не исход.
 
+    У отказов две причины, и каждая названа своей константой (ревью IN-10):
+    - `ACCOUNT_NOT_IN_SESSION` — проверка членства: объект не принадлежит
+      сессии писателя. Текст нейтрален: какое действие нужно, зависит от того,
+      откуда взят объект, а `session.add` объекта чужой сессии падает
+      `InvalidRequestError`;
+    - `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` — вторая линия после сброса: объект уже
+      член сессии, но сброс не дал ему `id`.
+
     Летопись. До плана 16-08 (ревью WR-05) писатель исполнял UPDATE по
     `id IS NULL` и молча возвращал `KEPT`. До плана 16-14 (ревью IN-07,
     верификация 2026-10-09) проверка `id` стояла после нормализации, и на
@@ -159,7 +172,11 @@ async def record_reported_phone(
     «сбросить и проверить id»: сброс исполнил бы вставки других ожидающих
     объектов раньше времени и сбросил бы сам объект на пути мусора, где
     писатель базы не касается. Проверка `id` после сброса оставлена второй
-    линией: `UPDATE … WHERE id IS NULL` невозможен независимо от первой.
+    линией: `UPDATE … WHERE id IS NULL` невозможен независимо от первой. До
+    плана 16-19 (ревью IN-10, верификация раунда 3 2026-10-10, решение
+    владельца О-8) обе линии поднимали один текст с советом добавить объект в
+    сессию — для объекта чужой сессии этот совет падал `InvalidRequestError`,
+    а у второй линии объект уже в сессии.
     """
     if inspect(account).session is not session.sync_session:
         raise ValueError(ACCOUNT_NOT_IN_SESSION)
@@ -169,7 +186,7 @@ async def record_reported_phone(
     if account.id is None:
         await session.flush()
     if account.id is None:
-        raise ValueError(ACCOUNT_NOT_IN_SESSION)
+        raise ValueError(ACCOUNT_WITHOUT_ID_AFTER_FLUSH)
     outcome = await _fill_if_unknown(session, account.id, e164)
     if outcome is PhoneWrite.WRITTEN:
         set_committed_value(account, "phone", e164)
