@@ -895,6 +895,45 @@ def test_a_planted_backfill_with_parameters_and_a_comprehension_reddens_the_gate
     )
 
 
+def test_a_planted_backfill_through_run_sync_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-10: строки `bulk_update_mappings`, поданные через `run_sync`.
+
+    У `AsyncSession` нет `bulk_*` вовсе (замер `inspect.signature`, SQLAlchemy
+    2.0.46): синхронный bulk-API асинхронный код достаёт только через
+    `run_sync(Session.bulk_update_mappings, …)`. Проект асинхронный целиком,
+    поэтому скрипт дозаполнения Фазы 20 вероятнее всего пойдёт именно так — и
+    обойдёт условную запись, если гейт опознаёт пишущий API лишь по имени самого
+    вызова (D-13). Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_run_sync.py",
+        "async def backfill(session, rows):\n"
+        "    await session.run_sync(Session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": a.id, "phone": n} for a, n in rows])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_run_sync.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_run_sync.py:2 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "строки bulk_update_mappings, поданные через run_sync, не найдены: "
+        "`session.run_sync(Session.bulk_update_mappings, MessengerAccount, "
+        "[{'phone': n} for …])` в scripts/backfill_run_sync.py гейт пропустил: "
+        f"{offences}"
+    )
+    assert all(
+        "bulk_update_mappings" in offence and "phone" in offence for offence in found
+    ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
+
+
 ASSIGNMENT_CASES = [
     pytest.param("account.phone = x\n", "account.phone", id="assign-phone"),
     pytest.param(
@@ -1611,6 +1650,101 @@ LITERAL_FORM_CASES = [
         "messenger_accounts",
         id="raw-sql-load-data",
     ),
+    # Ревью WR-10 (2026-10-10) и план 16-17, задача 1: пишущий API, названный
+    # литералом не последним звеном вызываемого, — ссылкой, поданной другому вызову
+    # вместе с аргументами (`run_sync`, `partial(…)(…)`, `to_thread`,
+    # `run_in_executor`), строкой в `getattr(obj, "…")(…)` и в `methodcaller("…", …)`.
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(Session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-bulk-update-mappings",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(fn=Session.bulk_update_mappings, "
+        'mapper=MessengerAccount, mappings=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-keyword-fn",
+    ),
+    pytest.param(
+        "async def f(conn, p):\n"
+        "    await conn.run_sync(Connection.execute, update(MessengerAccount), "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="conn-run-sync-execute",
+    ),
+    pytest.param(
+        "functools.partial(session.bulk_update_mappings, MessengerAccount)("
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-bulk-update-applied",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await asyncio.to_thread(s.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="to-thread-bulk-update",
+    ),
+    pytest.param(
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, s.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-in-executor-bulk-update",
+    ),
+    pytest.param(
+        'getattr(session, "bulk_update_mappings")(MessengerAccount, '
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="getattr-callee-bulk-update",
+    ),
+    pytest.param(
+        'operator.methodcaller("bulk_update_mappings", MessengerAccount, '
+        '[{"id": 1, "phone": p}])(session)\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="methodcaller-bulk-update",
+    ),
+    pytest.param(
+        'functools.partial(set_attribute, account, "phone")(x)\n',
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="partial-set-attribute-applied",
+    ),
+    pytest.param(
+        "async def f(loop, a, x):\n"
+        '    await loop.run_in_executor(None, setattr, a, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="run-in-executor-setattr",
+    ),
+    pytest.param(
+        'stmt = getattr(update(MessengerAccount), "values")(phone=x)\n',
+        KIND_KEYWORD,
+        "values",
+        "phone",
+        id="getattr-callee-values-keyword",
+    ),
 ]
 
 
@@ -1776,6 +1910,36 @@ LEGITIMATE_CASES = [
     pytest.param(
         'stmt = select(accounts).where(accounts.c["phone"] == p)\n',
         id="where-table-c-subscript-phone",
+    ),
+    # План 16-17, задача 1: ссылки на функции, которые не пишут номер. Первая —
+    # живая форма `app/services/image_upload.py` (`to_thread(prepare_upload, …)`).
+    pytest.param(
+        "async def f(content):\n"
+        "    return await asyncio.to_thread(prepare_upload, content)\n",
+        id="to-thread-other-function",
+    ),
+    pytest.param(
+        "async def f(conn):\n    await conn.run_sync(Base.metadata.create_all)\n",
+        id="run-sync-create-all",
+    ),
+    pytest.param(
+        "async def f(s, t):\n"
+        "    await s.run_sync(Session.bulk_update_mappings, Group, "
+        '[{"id": 1, "title": t}])\n',
+        id="run-sync-bulk-other-columns",
+    ),
+    pytest.param(
+        'view = functools.partial(render, request, "x.html", phone=phone)\n',
+        id="partial-render-phone-kwarg",
+    ),
+    pytest.param(
+        'getattr(session, "add")(account)\n',
+        id="getattr-other-method",
+    ),
+    pytest.param(
+        'operator.methodcaller("bulk_update_mappings", Group, '
+        '[{"id": 1, "title": t}])(session)\n',
+        id="methodcaller-other-columns",
     ),
 ]
 
