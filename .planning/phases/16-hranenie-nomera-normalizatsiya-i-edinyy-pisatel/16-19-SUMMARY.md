@@ -160,7 +160,7 @@ status: complete
 | broad `app/` source gates (6 files) | 130 passed | 130 |
 | `uv run python -m compileall -q app main.py tests` | exit 0 | — |
 | `uv run python scripts/prohibitions_census.py --check` | exit 0 | exit 0 |
-| `tests/test_planning -q` | run after the SUMMARY commit; the count is in the executor's return message | 218 passed, 2 skipped |
+| `tests/test_planning -q` | 218 passed, 2 skipped (run after the SUMMARY commit `1660570e`) | 218 passed, 2 skipped |
 
 **Substitutions (named):**
 - I did not run the full suite (`just test`, ~45 min) here, per orchestrator note 4. The orchestrator's post-merge gate runs it on the merged wave tree.
@@ -179,6 +179,12 @@ None - no external service configuration required.
 ## Next Phase Readiness
 - Phase 19's connection wizard, the first product caller of `record_reported_phone`, now gets a true cause for each refusal.
 - Wave-mate interaction: the module keeps 6 raw writes, 0 logging calls and no phone value in any exception text. The pinned counts of 16-17 (single-writer gate) and 16-18 (privacy gate) should therefore stay where they are on the merged tree. The orchestrator re-runs both gates after the merge.
+
+## Self-Check: PASSED
+
+- FOUND: `app/application/accounts/phone.py`, `tests/test_application/test_account_phone_writer.py`, `16-19-SUMMARY.md`
+- FOUND on this branch (`git log e9141128..HEAD`): `80347a94` test, `b2758f43` feat, `27cfc105` test, `1660570e` docs
+- TDD gate commits: two `test(16-19):` (RED and guard), one `feat(16-19):` (GREEN). RED precedes GREEN.
 
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
