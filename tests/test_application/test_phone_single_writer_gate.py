@@ -33,7 +33,10 @@ UPDATE «записать, если номера нет и он не ручно�
 `session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
 `functools.partial(s.bulk_update_mappings, M)(rows)`, `asyncio.to_thread(…)`,
 `loop.run_in_executor(None, …)`: судится вызов этого API с аргументами после
-ссылки (и аргументами применения у `partial(…)(…)`); строка в
+ссылки (и аргументами применения у `partial(…)(…)`); ссылка может стоять и внутри
+`functools.partial(ref, …)`, поданного другому вызову вместе с остальными
+аргументами (`run_in_executor(None, partial(s.bulk_update_mappings, M), rows)`) —
+тогда первыми идут привязанные `partial` аргументы; строка в
 `operator.methodcaller("bulk_update_mappings", …)`. У `AsyncSession` нет `bulk_*`
 вовсе, поэтому `run_sync` — естественный путь асинхронного скрипта к ним (план
 16-17, ревью WR-10). Судимый параметр берётся при любом литеральном связывании:
@@ -656,6 +659,22 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
     }
+    # Ссылки у каждого вызова (`_referenced_calls`). `partial(ref, …)`, поданный
+    # другому вызову и разобранный им как носитель ссылки, сам не судится: его
+    # аргументы уже стоят в синтетическом вызове внешнего (иначе
+    # `run_in_executor(None, partial(ref, M, rows))` дал бы две находки).
+    references = {
+        id(node): _referenced_calls(node, judged_names)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (id(node) not in applied or _call_name(node) == "methodcaller")
+    }
+    consumed = {
+        id(carrier)
+        for triples in references.values()
+        for _synthetic, _referenced, carrier in triples
+        if isinstance(carrier, ast.Call)
+    }
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -680,9 +699,9 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             if name is not None:
                 _judge_call(node, name, write_names, record)
             # `methodcaller("…", …)` судится у себя: его применение подаёт объект,
-            # а не аргументы API.
-            if id(node) not in applied or name == "methodcaller":
-                for synthetic, referenced in _referenced_calls(node, judged_names):
+            # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
+            if id(node) not in consumed:
+                for synthetic, referenced, _carrier in references.get(id(node), []):
                     _judge_call(synthetic, referenced, write_names, record)
         elif (
             isinstance(node, ast.Constant)
@@ -1013,6 +1032,34 @@ def _reference_name(node: ast.AST | None) -> str | None:
     return _getattr_literal(node) if node is not None else None
 
 
+# Ссылка с привязанными аргументами: (имя API, узел ссылки, позиционные, именованные).
+BoundReference = tuple[str, ast.expr, list[ast.expr], list[ast.keyword]]
+
+
+def _bound_reference(node: ast.expr | None) -> BoundReference | None:
+    """Ссылка на функцию — голая или внутри `functools.partial(…)` с аргументами.
+
+    `s.bulk_update_mappings` → (`bulk_update_mappings`, ссылка, [], []);
+    `partial(s.bulk_update_mappings, M, mapper=…)` → та же ссылка с привязанными
+    `M` и `mapper=…`; `partial(partial(ref, a), b)` — рекурсивно (самопроверка
+    исполнителя 16-17: `run_in_executor(None, partial(ref, M), rows)` — обычная
+    форма, у `run_in_executor` нет именованных аргументов).
+    """
+    name = _reference_name(node)
+    if name is not None:
+        assert node is not None
+        return name, node, [], []
+    if isinstance(node, ast.Call) and _call_name(node) == "partial":
+        positional = _positional_arguments(node)
+        if positional and positional[0] is not None:
+            inner = _bound_reference(positional[0])
+            if inner is not None:
+                referenced, func, args, keywords = inner
+                rest = [item for item in positional[1:] if item is not None]
+                return referenced, func, args + rest, keywords + list(node.keywords)
+    return None
+
+
 def _synthetic_call(
     origin: ast.Call, func: ast.expr, args: list[ast.expr], keywords: list[ast.keyword]
 ) -> ast.Call:
@@ -1022,15 +1069,19 @@ def _synthetic_call(
 
 def _referenced_calls(
     call: ast.Call, judged_names: frozenset[str]
-) -> list[tuple[ast.Call, str]]:
-    """Вызовы пишущего API, названного в `call` ссылкой или строкой: (вызов, имя API).
+) -> list[tuple[ast.Call, str, ast.expr | None]]:
+    """Вызовы пишущего API, названного в `call` ссылкой или строкой.
 
+    Тройки (синтетический вызов, имя API, носитель ссылки — аргумент `call`, в
+    котором она стоит; у `methodcaller` — `None`):
     - `operator.methodcaller("<имя>", …)` — вызов `<имя>` с аргументами после строки;
     - ссылка на судимый API среди позиционных аргументов (с раскрытой распаковкой
       `*[…]`) или в `fn=` (и `**{"fn": …}`), параметре ссылки `run_sync`, — вызов
       этого API с позиционными аргументами ПОСЛЕ ссылки и именованными аргументами
       `call`, кроме `fn`: `run_sync`, `to_thread`, `run_in_executor`, `partial`
-      подают их функции именно так;
+      подают их функции именно так; ссылка может стоять и внутри
+      `functools.partial(ref, …)` — тогда первыми идут его привязанные аргументы
+      (`_bound_reference`);
     - `partial(ref, …)(…)` — к ним добавляются аргументы применения; судится у
       применения (`call` с `func`-вызовом), а у самого `partial` — нет.
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
@@ -1045,7 +1096,8 @@ def _referenced_calls(
         ):
             func = ast.copy_location(ast.Name(id=head.value, ctx=ast.Load()), head)
             rest = list(call.args[1:])
-            return [(_synthetic_call(call, func, rest, list(call.keywords)), head.value)]
+            synthetic = _synthetic_call(call, func, rest, list(call.keywords))
+            return [(synthetic, head.value, None)]
         return []
     if name in judged_names or name == "getattr":
         return []
@@ -1061,21 +1113,29 @@ def _referenced_calls(
     positional = _positional_arguments(source)
     keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
-        referenced = _reference_name(argument)
-        if argument is not None and referenced in judged_names:
+        bound = _bound_reference(argument)
+        if argument is not None and bound is not None and bound[0] in judged_names:
+            referenced, func, bound_args, bound_keywords = bound
             after = [item for item in positional[index + 1 :] if item is not None]
             synthetic = _synthetic_call(
-                call, argument, after + outer_args, keywords + outer_keywords
+                call,
+                func,
+                bound_args + after + outer_args,
+                bound_keywords + keywords + outer_keywords,
             )
-            return [(synthetic, referenced)]
+            return [(synthetic, referenced, argument)]
     for keyword, value in _named_arguments(source):
-        referenced = _reference_name(value)
-        if keyword in REFERENCE_KEYWORDS and referenced in judged_names:
+        bound = _bound_reference(value) if keyword in REFERENCE_KEYWORDS else None
+        if bound is not None and bound[0] in judged_names:
+            referenced, func, bound_args, bound_keywords = bound
             rest = [item for item in positional if item is not None]
             synthetic = _synthetic_call(
-                call, value, rest + outer_args, keywords + outer_keywords
+                call,
+                func,
+                bound_args + rest + outer_args,
+                bound_keywords + keywords + outer_keywords,
             )
-            return [(synthetic, referenced)]
+            return [(synthetic, referenced, value)]
     return []
 
 
