@@ -1119,6 +1119,166 @@ NEGATIVE_CONTROLS = [
         "'phone'",
         id="logging-exception-function-import",
     ),
+    # IN-09 (D-17): журнал, опознаваемый по связыванию в модуле, — тело класса через
+    # `self.` / `cls.`, оператор `:=`, второе связывание.
+    pytest.param(
+        "app/x.py",
+        "class S:\n"
+        "    lg = structlog.get_logger()\n"
+        "\n"
+        "    def f(self, a):\n"
+        '        self.lg.info("x", phone=a.phone)\n',
+        "phone=",
+        id="class-body-receiver-self",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class S:\n"
+        "    lg: Logger = logging.getLogger(__name__)\n"
+        "\n"
+        "    @classmethod\n"
+        "    def f(cls, a):\n"
+        '        cls.lg.warning("x %s", a.phone)\n',
+        "phone",
+        id="class-body-receiver-cls",
+    ),
+    pytest.param(
+        "app/x.py",
+        "if (lg := logging.getLogger()):\n    lg.info(account.phone)\n",
+        "phone",
+        id="named-expression-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = logging.getLogger()\na = lg\na.info("x %s", account.phone)\n',
+        "phone",
+        id="second-binding",
+    ),
+    pytest.param("app/x.py", 'a = logger\na.error("x", phone=p)\n', "phone=", id="second-binding-of-logger"),
+    # IN-09, аудит прежней границы: фабрика под псевдонимом ввоза, `getattr` со строкой,
+    # обёртки-фабрики и начальные значения фабрики (довод `bind`, D-11).
+    pytest.param(
+        "app/x.py",
+        'from logging import getLogger as gl\n\nlg = gl(__name__)\nlg.info("x %s", account.phone)\n',
+        "phone",
+        id="aliased-factory-import",
+    ),
+    pytest.param(
+        "app/x.py",
+        'from structlog import get_logger as gl\n\ngl().info("x", phone=p)\n',
+        "phone=",
+        id="aliased-structlog-factory-direct",
+    ),
+    pytest.param(
+        "app/x.py", 'getattr(logger, "info")("x %s", account.phone)\n', "phone", id="getattr-log-method"
+    ),
+    pytest.param(
+        "app/x.py",
+        'getattr(structlog.contextvars, "bind_contextvars")(phone=p)\n',
+        "phone=",
+        id="getattr-binder",
+    ),
+    pytest.param(
+        "app/x.py",
+        'adapter = logging.LoggerAdapter(logger, {})\nadapter.info("x %s", account.phone)\n',
+        "phone",
+        id="logger-adapter",
+    ),
+    pytest.param(
+        "app/x.py",
+        'adapter = logging.LoggerAdapter(logger, {"phone": p})\n',
+        "'phone'",
+        id="logger-adapter-extra",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.wrap_logger(logging.getLogger())\nlg.info("x", phone=p)\n',
+        "phone=",
+        id="wrap-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        "lg = structlog.get_logger(__name__, phone=account.phone)\n",
+        "phone=",
+        id="factory-initial-values",
+    ),
+    # IN-09, аудит прежней границы: ссылка на метод опознанного журнала и на `print` —
+    # применённая через `functools.partial` или связанная с именем.
+    pytest.param(
+        "app/x.py",
+        'functools.partial(logger.info, "x %s")(account.phone)\n',
+        "phone",
+        id="partial-log-method-applied",
+    ),
+    pytest.param(
+        "app/x.py",
+        'p = functools.partial(logger.info, "x %s")\np(account.phone)\n',
+        "phone",
+        id="partial-log-method-bound",
+    ),
+    pytest.param(
+        "app/x.py",
+        'info = logger.info\ninfo("x %s", account.phone)\n',
+        "phone",
+        id="log-method-reference-bound",
+    ),
+    pytest.param("app/x.py", "out = print\nout(account.phone)\n", "phone", id="print-alias"),
+    # Сверх плана 16-18 (та же ось — опознание по ввозу, фабрике или связыванию в модуле):
+    # корневой журнал `logging.root`, класс журнала, созданный напрямую, вызываемое журнала,
+    # связанное с атрибутом или в теле класса, попарное связывание кортежем, ссылка на
+    # фабрику без вызова, фабрика через `getattr`, `builtins.print`.
+    pytest.param("app/x.py", 'logging.root.info("x %s", account.phone)\n', "phone", id="logging-root-attribute"),
+    pytest.param(
+        "app/x.py",
+        'from logging import root\n\nroot.warning("x %s", account.phone)\n',
+        "phone",
+        id="logging-root-import",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = logging.Logger("x")\nlg.info("x %s", account.phone)\n',
+        "phone",
+        id="logger-class-constructed",
+    ),
+    pytest.param(
+        "app/x.py", "structlog.PrintLogger().msg(account.phone)\n", "phone", id="print-logger-constructed"
+    ),
+    pytest.param(
+        "app/x.py",
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.out = logger.info\n"
+        "\n"
+        "    def f(self, a):\n"
+        '        self.out("x %s", a.phone)\n',
+        "phone",
+        id="attribute-bound-log-method",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class W:\n    out = print\n\n    def f(self, a):\n        self.out(a.phone)\n",
+        "phone",
+        id="class-body-bound-print",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg, n = logging.getLogger(), 1\nlg.info("x %s", account.phone)\n',
+        "phone",
+        id="tuple-unpacked-receiver",
+    ),
+    pytest.param(
+        "app/x.py",
+        'gl = logging.getLogger\ngl().info("x %s", account.phone)\n',
+        "phone",
+        id="factory-reference-bound",
+    ),
+    pytest.param(
+        "app/x.py",
+        'getattr(logging, "getLogger")().info("x %s", account.phone)\n',
+        "phone",
+        id="getattr-logging-factory",
+    ),
+    pytest.param("app/x.py", "import builtins\n\nbuiltins.print(account.phone)\n", "phone", id="builtins-print"),
 ]
 
 
@@ -1145,6 +1305,40 @@ def test_a_number_handed_to_a_logger_bound_by_assignment_is_found():
     assert any(offence.startswith("app/x.py:4 — имя — phone") for offence in offences), (
         "получатель журнала из фабрики под нестандартным именем не распознан: "
         f"`lg = logging.getLogger(); lg.info(…, account.phone)` прошёл мимо гейта: {offences}"
+    )
+
+
+def test_a_logger_bound_in_a_class_body_is_found_through_self_and_cls():
+    """IN-09 (D-17): журнал, связанный с фабрикой в теле класса, зовут через экземпляр и класс.
+
+    Присваивание в теле класса связывает имя `lg`, а вызов идёт через атрибут
+    `self.lg` / `cls.lg` — тот же журнал из фабрики, что и `self.lg = …` в `__init__`.
+    """
+    through_self = (
+        "class S:\n"
+        "    lg = structlog.get_logger()\n"
+        "\n"
+        "    def f(self, a):\n"
+        '        self.lg.info("x", phone=a.phone)\n'
+    )
+    through_cls = (
+        "class S:\n"
+        "    lg: Logger = logging.getLogger(__name__)\n"
+        "\n"
+        "    @classmethod\n"
+        "    def f(cls, a):\n"
+        '        cls.lg.warning("x %s", a.phone)\n'
+    )
+
+    offences = python_log_offences(through_self, "app/x.py")
+    assert any(offence.startswith("app/x.py:5 — имя — phone") for offence in offences), (
+        "журнал, связанный в теле класса, не распознан через self: "
+        f"`class S: lg = structlog.get_logger()` и `self.lg.info(…, phone=…)` прошли мимо гейта: {offences}"
+    )
+    offences = python_log_offences(through_cls, "app/x.py")
+    assert any(offence.startswith("app/x.py:6 — имя — phone") for offence in offences), (
+        "журнал, связанный в теле класса, не распознан через cls: "
+        f"`lg: Logger = logging.getLogger(__name__)` и `cls.lg.warning(…)` прошли мимо гейта: {offences}"
     )
 
 
@@ -1256,6 +1450,55 @@ POSITIVE_CONTROLS = [
         "def info(x):\n    return x\n\n\ninfo(account.phone)\n",
         False,
         id="info-without-logging-import-is-not-a-log",
+    ),
+    # IN-09 (D-17): связывание без фабрики, `:=` с чужим значением, второе связывание записи
+    # `SendLog`, `partial` чужой функции, настройка через `getattr` и фабрика без начальных
+    # значений — не вызовы журнала.
+    pytest.param(
+        "app/x.py",
+        "class S:\n"
+        "    lg = make_thing()\n"
+        "\n"
+        "    def f(self, a):\n"
+        '        self.lg.info("x", phone=a.phone)\n',
+        False,
+        id="class-body-non-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        'if (m := re.match("x", s)):\n    m.group(1)\n',
+        False,
+        id="named-expression-non-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(db, i):\n"
+        "    log = await db.get(SendLog, i)\n"
+        "    entry = log\n"
+        '    entry.status = "x"\n',
+        False,
+        id="second-binding-of-send-log-record",
+    ),
+    pytest.param(
+        "app/x.py",
+        "f = functools.partial(render, request, phone=phone)\nf()\n",
+        False,
+        id="partial-of-another-function",
+    ),
+    pytest.param("app/x.py", 'getattr(logger, "setLevel")(10)\n', False, id="getattr-configuration-method"),
+    pytest.param(
+        "app/x.py", "lg = structlog.get_logger(__name__)\n", False, id="factory-without-initial-values"
+    ),
+    # Сверх плана 16-18: имя журнала ключевым словом — настройка, а не значение;
+    # `.root` чужого объекта — не корневой журнал; ввоз `info` из `logging` не делает
+    # журналом метод `.info` любого объекта — гейт не угадывает по имени.
+    pytest.param("app/x.py", 'logging.getLogger(name="x")\n', False, id="factory-name-keyword-is-not-a-log"),
+    pytest.param("app/x.py", 'tree.root.info("x", phone=p)\n', False, id="root-attribute-of-non-logger"),
+    pytest.param(
+        "app/x.py",
+        "from logging import info\n\nreport.info(account.phone)\n",
+        False,
+        id="info-attribute-after-logging-import-is-not-a-log",
     ),
 ]
 
