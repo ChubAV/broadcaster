@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-09
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Manual input of a non-`+7` number plus extra digits is still saved as an invented \"manual\" number (BY, UA, KG, TR, IL, CN, DE)"
   - id: WR-10
     severity: warning
@@ -87,7 +87,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 5
+open: 4
 total: 21
 recorded: 2026-10-10T07:01:03.448Z
 ---
@@ -96,7 +96,7 @@ recorded: 2026-10-10T07:01:03.448Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-09 | warning | open | - |
+| WR-09 | warning | fixed | `16-16` задача 1, GREEN `333bf8e0` — решение владельца О-7 (а): ручной номер принимается, только если его длина возможна хотя бы для одного типа аккаунта (`ACCOUNT_NUMBER_TYPES`: `MOBILE`, `FIXED_LINE`, `FIXED_LINE_OR_MOBILE`, `VOIP`; пункт 7 докстринга `normalize_manual`): «+375 29 123 45 67 1» и «+380 50 123 4567 1» — отказ `PHONE_ERROR_NOT_A_NUMBER`; класс «чужой номер плюс лишние цифры» закреплён перебором 5 баз × 1–5 лишних цифр (до плана сохранялись 7 из 25 строк, замер исполнения), а не отдельными вводами; граница названа в пункте 5 докстринга — Германия «+49 151 23456789» с одной и двумя лишними цифрами (с тремя и четырьмя её отвергает предел E.164) и Израиль «+972 50 123 4567» с двумя и тремя остаются принятыми |
 | WR-10 | warning | open | - |
 | IN-08 | info | open | - |
 | IN-09 | info | open | - |
