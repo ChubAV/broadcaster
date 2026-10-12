@@ -355,7 +355,9 @@ def test_the_module_header_names_the_auto_path_boundary_with_its_measurement():
         for block in docstring.split("\n\n")
     ]
     boundary = [p for p in paragraphs if p.startswith(AUTO_PATH_BOUNDARY_HEADING)]
-    assert len(boundary) == 1, f"в шапке обязан быть ровно один абзац «{AUTO_PATH_BOUNDARY_HEADING}»"
+    assert len(boundary) == 1, (
+        f"в шапке обязан быть ровно один абзац «{AUTO_PATH_BOUNDARY_HEADING}»"
+    )
     paragraph = boundary[0]
 
     enumeration = _auto_path_enumeration()
