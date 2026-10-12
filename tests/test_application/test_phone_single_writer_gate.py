@@ -443,6 +443,14 @@ JUDGED_PARAMETERS: tuple[JudgedParameter, ...] = (
         1,
         KIND_SETATTR,
     ),
+    # Строка самопроверки исполнителя 16-17 (34-я): `flag_modified(instance, key)`
+    # заставляет flush выдать UPDATE колонки текущим значением объекта — после
+    # `account.__dict__["phone"] = x` это запись `x`, а у устаревшего объекта — запись
+    # старого номера поверх ручного, записанного другим писателем (замер на SQLite в
+    # памяти, SQLAlchemy 2.0.46: `+7MANUAL` затёрт значением `+70`, D-07).
+    JudgedParameter(
+        "sqlalchemy.orm.attributes.flag_modified", "flag_modified", "key", 1, 1, KIND_SETATTR
+    ),
     JudgedParameter("builtins.setattr", "setattr", "name", 1, 1, KIND_SETATTR),
     JudgedParameter("builtins.object.__setattr__", "__setattr__", "name", 1, 1, KIND_SETATTR),
     JudgedParameter(
@@ -1915,6 +1923,7 @@ BINDING_RECEIVERS = {
     "setattr": "",
     "set_attribute": "",
     "set_committed_value": "",
+    "flag_modified": "",
     "__setattr__": "object.",
 }
 
@@ -2723,6 +2732,29 @@ LITERAL_FORM_CASES = [
         "phone",
         id="rows-column-constructor-key",
     ),
+    # Самопроверка исполнителя 16-17 (отклонение, Rule 2), класс 1: `flag_modified`
+    # пишет колонку текущим значением объекта — запись атрибута по имени.
+    pytest.param(
+        'flag_modified(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="flag-modified-phone",
+    ),
+    pytest.param(
+        'account.__dict__["phone"] = x\nflag_modified(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="flag-modified-after-dict-write",
+    ),
+    pytest.param(
+        'flag_modified(account, key="phone_is_manual")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone_is_manual",
+        id="flag-modified-key-keyword",
+    ),
 ]
 
 
@@ -2952,6 +2984,11 @@ LEGITIMATE_CASES = [
     ),
     pytest.param("del account.phone\n", id="del-attribute-is-not-a-write"),
     pytest.param('delattr(account, "phone")\n', id="delattr-is-not-a-write"),
+    pytest.param('flag_modified(account, "status")\n', id="flag-modified-other-attribute"),
+    pytest.param(
+        'account.__dict__["phone"] = x\nflag_dirty(account)\n',
+        id="dict-write-with-flag-dirty-is-not-a-write",
+    ),
 ]
 
 
