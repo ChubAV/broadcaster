@@ -34,9 +34,11 @@ UPDATE «записать, если номера нет и он не ручно�
 `functools.partial(s.bulk_update_mappings, M)(rows)`, `asyncio.to_thread(…)`,
 `loop.run_in_executor(None, …)`: судится вызов этого API с аргументами после
 ссылки (и аргументами применения у `partial(…)(…)`); ссылка может стоять и внутри
-`functools.partial(ref, …)`, поданного другому вызову вместе с остальными
-аргументами (`run_in_executor(None, partial(s.bulk_update_mappings, M), rows)`) —
-тогда первыми идут привязанные `partial` аргументы; строка в
+`functools.partial(ref, …)` (или его псевдонима в том же модуле — `from functools
+import partial as bind`, `bind = functools.partial`), поданного другому вызову
+вместе с остальными аргументами (`run_in_executor(None, partial(s.
+bulk_update_mappings, M), rows)`) — тогда первыми идут привязанные `partial`
+аргументы; строка в
 `operator.methodcaller("bulk_update_mappings", …)`. У `AsyncSession` нет `bulk_*`
 вовсе, поэтому `run_sync` — естественный путь асинхронного скрипта к ним (план
 16-17, ревью WR-10). Судимый параметр берётся при любом литеральном связывании:
@@ -52,7 +54,8 @@ UPDATE «записать, если номера нет и он не ручно�
 2. именованный аргумент `phone` / `phone_is_manual` в вызове `values(...)`,
    `update(...)`, `insert(...)`, `MessengerAccount(...)` или псевдонима модели,
    заведённого в том же модуле (`from … import MessengerAccount as Account`,
-   `Model = MessengerAccount`) — в том числе распаковкой литерала:
+   `Model = MessengerAccount`, `Model = models.MessengerAccount`) — в том числе
+   распаковкой литерала:
    `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`,
    `values(**{"phone": n for n in …})`; и повторный конструктор модели или её
    псевдонима в модуле — `MessengerAccount.__init__(account, phone=x)`;
@@ -315,6 +318,10 @@ ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters", "rows"})
 # замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
 # (план 16-17, ревью WR-10).
 REFERENCE_KEYWORDS = frozenset({"fn"})
+
+# Обёртка ссылки с привязанными аргументами: `functools.partial(ref, …)`; её псевдонимы
+# в модуле добавляются при разборе исходника (`_module_aliases(tree, "partial")`).
+PARTIAL_NAMES = frozenset({"partial"})
 
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
 # отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
@@ -663,8 +670,11 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # другому вызову и разобранный им как носитель ссылки, сам не судится: его
     # аргументы уже стоят в синтетическом вызове внешнего (иначе
     # `run_in_executor(None, partial(ref, M, rows))` дал бы две находки).
+    # `functools.partial` и его псевдонимы в модуле (`from functools import partial
+    # as bind`, `bind = functools.partial`) — обёртка ссылки у `_bound_reference`.
+    partial_names = PARTIAL_NAMES | _module_aliases(tree, "partial")
     references = {
-        id(node): _referenced_calls(node, judged_names)
+        id(node): _referenced_calls(node, judged_names, partial_names)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (id(node) not in applied or _call_name(node) == "methodcaller")
@@ -1036,7 +1046,9 @@ def _reference_name(node: ast.AST | None) -> str | None:
 BoundReference = tuple[str, ast.expr, list[ast.expr], list[ast.keyword]]
 
 
-def _bound_reference(node: ast.expr | None) -> BoundReference | None:
+def _bound_reference(
+    node: ast.expr | None, partial_names: frozenset[str] = PARTIAL_NAMES
+) -> BoundReference | None:
     """Ссылка на функцию — голая или внутри `functools.partial(…)` с аргументами.
 
     `s.bulk_update_mappings` → (`bulk_update_mappings`, ссылка, [], []);
@@ -1049,10 +1061,10 @@ def _bound_reference(node: ast.expr | None) -> BoundReference | None:
     if name is not None:
         assert node is not None
         return name, node, [], []
-    if isinstance(node, ast.Call) and _call_name(node) == "partial":
+    if isinstance(node, ast.Call) and _call_name(node) in partial_names:
         positional = _positional_arguments(node)
         if positional and positional[0] is not None:
-            inner = _bound_reference(positional[0])
+            inner = _bound_reference(positional[0], partial_names)
             if inner is not None:
                 referenced, func, args, keywords = inner
                 rest = [item for item in positional[1:] if item is not None]
@@ -1068,7 +1080,9 @@ def _synthetic_call(
 
 
 def _referenced_calls(
-    call: ast.Call, judged_names: frozenset[str]
+    call: ast.Call,
+    judged_names: frozenset[str],
+    partial_names: frozenset[str] = PARTIAL_NAMES,
 ) -> list[tuple[ast.Call, str, ast.expr | None]]:
     """Вызовы пишущего API, названного в `call` ссылкой или строкой.
 
@@ -1113,7 +1127,7 @@ def _referenced_calls(
     positional = _positional_arguments(source)
     keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
-        bound = _bound_reference(argument)
+        bound = _bound_reference(argument, partial_names)
         if argument is not None and bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
             after = [item for item in positional[index + 1 :] if item is not None]
@@ -1125,7 +1139,9 @@ def _referenced_calls(
             )
             return [(synthetic, referenced, argument)]
     for keyword, value in _named_arguments(source):
-        bound = _bound_reference(value) if keyword in REFERENCE_KEYWORDS else None
+        bound = (
+            _bound_reference(value, partial_names) if keyword in REFERENCE_KEYWORDS else None
+        )
         if bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
             rest = [item for item in positional if item is not None]
@@ -1414,18 +1430,24 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
 
 
 def _module_model_aliases(tree: ast.AST) -> frozenset[str]:
-    """Псевдонимы модели аккаунта в ТОМ ЖЕ модуле.
+    """Псевдонимы модели аккаунта в ТОМ ЖЕ модуле (`_module_aliases`)."""
+    return _module_aliases(tree, MODEL_NAME)
 
-    `from … import MessengerAccount as X` и присваивание `X = MessengerAccount` (и
-    цепочкой `Y = X`). Область видимости плоская — весь модуль, без учёта функций и
+
+def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
+    """Псевдонимы имени `name` в ТОМ ЖЕ модуле.
+
+    `from … import <name> as X`, присваивание `X = <name>` и `X = module.<name>`
+    (план 16-17: `Model = models.MessengerAccount`, `bind = functools.partial`), и
+    цепочкой `Y = X`. Область видимости плоская — весь модуль, без учёта функций и
     классов; псевдоним, заведённый в другом модуле, — поток данных между модулями,
     и это названная граница предиката.
     """
-    known = {MODEL_NAME}
+    known = {name}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name == MODEL_NAME and alias.asname:
+                if alias.name == name and alias.asname:
                     known.add(alias.asname)
     changed = True
     while changed:
@@ -1437,12 +1459,14 @@ def _module_model_aliases(tree: ast.AST) -> frozenset[str]:
                 targets, value = [node.target], node.value
             else:
                 continue
-            if isinstance(value, ast.Name) and value.id in known:
+            if (isinstance(value, ast.Name) and value.id in known) or (
+                isinstance(value, ast.Attribute) and value.attr == name
+            ):
                 for target in targets:
                     if isinstance(target, ast.Name) and target.id not in known:
                         known.add(target.id)
                         changed = True
-    return frozenset(known - {MODEL_NAME})
+    return frozenset(known - {name})
 
 
 def _mapping_key_text(key: ast.AST, column: str) -> str:
