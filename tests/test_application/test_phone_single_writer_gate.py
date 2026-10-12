@@ -2766,6 +2766,53 @@ LITERAL_FORM_CASES = [
         "phone_is_manual",
         id="flag-modified-key-keyword",
     ),
+    # Самопроверка исполнителя 16-17 (отклонение, Rule 2), класс 2: ссылка на
+    # пишущий API внутри `functools.partial(…)`, поданного другому вызову вместе с
+    # аргументами, — обычная форма `run_in_executor`, у которого нет именованных
+    # аргументов. Последняя строка — контроль: всё внутри `partial`, находка одна.
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await asyncio.to_thread(functools.partial(s.bulk_update_mappings, "
+        'MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="to-thread-partial-bulk-update",
+    ),
+    pytest.param(
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, functools.partial(s.bulk_update_mappings, "
+        'MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-in-executor-partial-bulk-update",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(functools.partial(Session.bulk_update_mappings, "
+        'mapper=MessengerAccount), mappings=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-partial-bulk-update",
+    ),
+    pytest.param(
+        'functools.partial(functools.partial(set_attribute, account), "phone")(x)\n',
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="partial-of-partial-applied",
+    ),
+    pytest.param(
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, functools.partial(s.bulk_update_mappings, "
+        'MessengerAccount, [{"id": 1, "phone": p}]))\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-in-executor-partial-all-arguments",
+    ),
 ]
 
 
@@ -2999,6 +3046,13 @@ LEGITIMATE_CASES = [
     pytest.param(
         'account.__dict__["phone"] = x\nflag_dirty(account)\n',
         id="dict-write-with-flag-dirty-is-not-a-write",
+    ),
+    pytest.param(
+        "async def f(content):\n"
+        "    return await asyncio.to_thread(\n"
+        "        functools.partial(prepare_upload, quality=80), content\n"
+        "    )\n",
+        id="to-thread-partial-other-function",
     ),
 ]
 
