@@ -894,6 +894,37 @@ def test_a_planted_aliased_binding_in_app_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_logging_function_import_in_app_reddens_the_gate(tmp_path):
+    """IN-09 (D-17): функция модуля `logging`, ввезённая в модуль, — тот же `logging.*`.
+
+    `from logging import warning as warn_` прячет и модуль, и имя метода: получателя у
+    вызова `warn_(…)` нет вовсе, а номер всё так же уходит в корневой журнал. Подложенный
+    файл находится тем же обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "planted_logging_function.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "from logging import warning as warn_\n"
+        "\n"
+        "\n"
+        "def connected(account):\n"
+        '    warn_("connected %s", account.phone)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert any(
+        offence.startswith("app/planted_logging_function.py:5 — имя — phone") for offence in offences
+    ), (
+        "функция журнала, ввезённая из logging, не распознана: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о `warn_(…, account.phone)`: {offences}"
+    )
+
+
 # --- Отрицательные контроли: каждый краснит чистую функцию ----------------------
 
 NEGATIVE_CONTROLS = [
@@ -1022,6 +1053,32 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="aliased-logger-import",
     ),
+    # IN-09 (D-17): функция модуля `logging`, ввезённая в модуль (и под псевдонимом), —
+    # тот же `logging.*`: голый вызов уходит в корневой журнал.
+    pytest.param(
+        "app/x.py",
+        'from logging import info\n\ninfo("n=%s", account.phone)\n',
+        "phone",
+        id="logging-function-import",
+    ),
+    pytest.param(
+        "app/x.py",
+        'from logging import warning as warn_\n\nwarn_("x %s", account.phone)\n',
+        "phone",
+        id="logging-function-import-alias",
+    ),
+    pytest.param(
+        "app/x.py",
+        'from logging import log\n\nlog(20, "x %s", account.phone)\n',
+        "phone",
+        id="logging-log-function-import",
+    ),
+    pytest.param(
+        "app/x.py",
+        'from logging import exception as log_exc\n\nlog_exc("x", extra={"phone": p})\n',
+        "'phone'",
+        id="logging-exception-function-import",
+    ),
 ]
 
 
@@ -1138,6 +1195,27 @@ POSITIVE_CONTROLS = [
         'lg = structlog.get_logger()\nlg.info("x", phone_set=account.phone is not None)\n',
         True,
         id="factory-assigned-receiver-presence-flag",
+    ),
+    # IN-09 (D-17): ввоз из `logging` того, что не функция журнала, вызовом журнала не
+    # делает; признак наличия через ввезённую функцию не краснит; одноимённая функция без
+    # ввоза из `logging` журналом не считается — гейт не угадывает по имени.
+    pytest.param(
+        "app/x.py",
+        'from logging import getLogger, INFO\n\ngetLogger("x").setLevel(INFO)\n',
+        False,
+        id="logging-config-import-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        'from logging import info\n\ninfo("x", phone_set=account.phone is not None)\n',
+        True,
+        id="logging-function-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def info(x):\n    return x\n\n\ninfo(account.phone)\n",
+        False,
+        id="info-without-logging-import-is-not-a-log",
     ),
 ]
 
