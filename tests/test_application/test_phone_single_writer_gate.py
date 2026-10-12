@@ -2873,6 +2873,36 @@ LITERAL_FORM_CASES = [
         "phone",
         id="run-in-executor-partial-all-arguments",
     ),
+    # Самопроверка исполнителя 16-17 (отклонение, Rule 2), класс 3: псевдонимы,
+    # заведённые в том же модуле, — `functools.partial` под другим именем и модель,
+    # связанная через атрибут модуля (`Model = models.MessengerAccount`).
+    pytest.param(
+        "from functools import partial as bind\n"
+        "async def f(loop, s, p):\n"
+        "    await loop.run_in_executor(None, bind(s.bulk_update_mappings, "
+        'MessengerAccount), [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-import-alias-nested",
+    ),
+    pytest.param(
+        "bind = functools.partial\n"
+        "async def f(s, p):\n"
+        "    await asyncio.to_thread(bind(s.bulk_update_mappings, MessengerAccount), "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-assignment-alias-nested",
+    ),
+    pytest.param(
+        "Model = models.MessengerAccount\naccount = Model(phone=x)\n",
+        KIND_KEYWORD,
+        "Model",
+        "phone",
+        id="model-attribute-alias",
+    ),
 ]
 
 
@@ -3113,6 +3143,16 @@ LEGITIMATE_CASES = [
         "        functools.partial(prepare_upload, quality=80), content\n"
         "    )\n",
         id="to-thread-partial-other-function",
+    ),
+    pytest.param(
+        "G = models.Group\ng = G(phone=x)\n",
+        id="attribute-alias-of-another-model-with-phone-kwarg",
+    ),
+    pytest.param(
+        "from functools import partial as bind\n"
+        "async def f(content):\n"
+        "    return await asyncio.to_thread(bind(prepare_upload, quality=80), content)\n",
+        id="partial-alias-other-function",
     ),
 ]
 
