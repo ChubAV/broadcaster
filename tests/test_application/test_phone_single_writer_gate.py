@@ -152,9 +152,12 @@ WR-08 (2026-10-09) — ещё девять (`parameters=`, comprehension и ге
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -282,6 +285,186 @@ KIND_RAW_SQL = "сырой SQL"
 KIND_ROW_MAPPING = "ключ словаря строк"
 KIND_UPSERT_SET = "set_ при конфликте"
 KIND_POSITIONAL_COLUMN = "колонка позицией"
+
+# Не вид находки, а пометка строк `JUDGED_PARAMETERS` о параметре ССЫЛКИ: у них вид
+# находки — вид API, названного ссылкой (`run_sync(Session.bulk_update_mappings, …)`
+# даёт вид строк `bulk_update_mappings`).
+KIND_BY_REFERENCE = "вид API по ссылке"
+
+
+class JudgedParameter(NamedTuple):
+    """Судимый параметр судимого API: где он стоит и под каким именем.
+
+    `api` — путь для правила-сторожа (`importlib` + `getattr` по звеньям); `call` —
+    последнее звено вызова в исходнике; `signature_index` — индекс в
+    `inspect.signature(api).parameters` (у методов `self` — индекс 0);
+    `call_index` — позиция в записи вызова, как её пишет код
+    (`session.execute(stmt, rows)` — `rows` на позиции 1); `kind` — вид находки.
+    """
+
+    api: str
+    call: str
+    parameter: str
+    signature_index: int
+    call_index: int
+    kind: str
+
+
+# Классы сессии и соединения в путях таблицы ниже.
+_SESSION = "sqlalchemy.orm.Session"
+_ASYNC_SESSION = "sqlalchemy.ext.asyncio.AsyncSession"
+_CONNECTION = "sqlalchemy.engine.Connection"
+_ASYNC_CONNECTION = "sqlalchemy.ext.asyncio.AsyncConnection"
+
+# Перебор сигнатур судимых API (план 16-17, ревью WR-10): замер `inspect.signature`
+# 2026-10-12 на установленных SQLAlchemy 2.0.46, Alembic 1.18.4, asyncpg 0.31.0 и
+# builtins. Каждый параметр здесь судится при ЛЮБОМ литеральном связывании —
+# позицией, именем, `**{"имя": …}` и `*[…]`; таблицу сверяет с установленными
+# сигнатурами правило-сторож, а правило-матрица — каждую строку с каждой формой.
+# Подъём библиотеки, сменивший имя или позицию параметра, краснит сторож, а не
+# оставляет гейт слепым молча (пин версий отложен владельцем — IN-02).
+#
+# `setattr(obj, name, value, /)` и `object.__setattr__(self, name, value, /)` —
+# позиционно-только: `setattr(account, name="phone", value=x)` падает `TypeError:
+# setattr() takes no keyword arguments` и ничего не пишет. Гейт судит и такую форму —
+# по цене строгости: вызов, который не исполнится, законной формой не является.
+#
+# API без именованного позиционного параметра — у них именованной формы нет, и они
+# судятся, как прежде (каждый позиционный аргумент, `*[…]`, именованные колонки,
+# `**{…}`): `Update.values` / `Insert.values` — `(self, *args, **kwargs)`;
+# `Update.ordered_values` — `(self, *args)`; MySQL `Insert.on_duplicate_key_update` —
+# `(self, *args, **kw)`; конструктор модели — `**kwargs`. У `AsyncSession` нет
+# `bulk_*` вовсе — к ним ведёт только `run_sync`, поэтому две последние строки —
+# главная ось асинхронного проекта.
+JUDGED_PARAMETERS: tuple[JudgedParameter, ...] = (
+    JudgedParameter("sqlalchemy.orm.Query.update", "update", "values", 1, 0, KIND_DICT_KEY),
+    JudgedParameter(
+        "sqlalchemy.orm.attributes.set_attribute", "set_attribute", "key", 1, 1, KIND_SETATTR
+    ),
+    JudgedParameter(
+        "sqlalchemy.orm.attributes.set_committed_value",
+        "set_committed_value",
+        "key",
+        1,
+        1,
+        KIND_SETATTR,
+    ),
+    JudgedParameter("builtins.setattr", "setattr", "name", 1, 1, KIND_SETATTR),
+    JudgedParameter("builtins.object.__setattr__", "__setattr__", "name", 1, 1, KIND_SETATTR),
+    JudgedParameter(
+        "sqlalchemy.sql.dml.Insert.from_select",
+        "from_select",
+        "names",
+        1,
+        0,
+        KIND_POSITIONAL_COLUMN,
+    ),
+    JudgedParameter(
+        "sqlalchemy.dialects.postgresql.dml.Insert.on_conflict_do_update",
+        "on_conflict_do_update",
+        "set_",
+        4,
+        3,
+        KIND_UPSERT_SET,
+    ),
+    JudgedParameter(
+        "sqlalchemy.dialects.sqlite.dml.Insert.on_conflict_do_update",
+        "on_conflict_do_update",
+        "set_",
+        3,
+        2,
+        KIND_UPSERT_SET,
+    ),
+    # Исполняющие вызовы: у `Session` / `AsyncSession` параметр строк — `params`, у
+    # `Connection` / `AsyncConnection` — `parameters`; до плана 16-17 судился один
+    # `execute`, а `scalar(s)` / `stream*` / `exec_driver_sql` — нет (ревью WR-10).
+    JudgedParameter(f"{_SESSION}.execute", "execute", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_ASYNC_SESSION}.execute", "execute", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_CONNECTION}.execute", "execute", "parameters", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.execute", "execute", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(f"{_SESSION}.scalar", "scalar", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_ASYNC_SESSION}.scalar", "scalar", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_CONNECTION}.scalar", "scalar", "parameters", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.scalar", "scalar", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(f"{_SESSION}.scalars", "scalars", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_ASYNC_SESSION}.scalars", "scalars", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(f"{_CONNECTION}.scalars", "scalars", "parameters", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.scalars", "scalars", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(f"{_ASYNC_SESSION}.stream", "stream", "params", 2, 1, KIND_ROW_MAPPING),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.stream", "stream", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        f"{_ASYNC_SESSION}.stream_scalars", "stream_scalars", "params", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.stream_scalars",
+        "stream_scalars",
+        "parameters",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        f"{_CONNECTION}.exec_driver_sql", "exec_driver_sql", "parameters", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.exec_driver_sql",
+        "exec_driver_sql",
+        "parameters",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        f"{_SESSION}.bulk_update_mappings",
+        "bulk_update_mappings",
+        "mappings",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        f"{_SESSION}.bulk_insert_mappings",
+        "bulk_insert_mappings",
+        "mappings",
+        2,
+        1,
+        KIND_ROW_MAPPING,
+    ),
+    JudgedParameter(
+        "alembic.operations.Operations.bulk_insert", "bulk_insert", "rows", 2, 1, KIND_ROW_MAPPING
+    ),
+    JudgedParameter(
+        "asyncpg.connection.Connection.copy_records_to_table",
+        "copy_records_to_table",
+        "table_name",
+        1,
+        0,
+        KIND_RAW_SQL,
+    ),
+    JudgedParameter(
+        "asyncpg.connection.Connection.copy_to_table",
+        "copy_to_table",
+        "table_name",
+        1,
+        0,
+        KIND_RAW_SQL,
+    ),
+    JudgedParameter(f"{_ASYNC_SESSION}.run_sync", "run_sync", "fn", 1, 0, KIND_BY_REFERENCE),
+    JudgedParameter(
+        f"{_ASYNC_CONNECTION}.run_sync", "run_sync", "fn", 1, 0, KIND_BY_REFERENCE
+    ),
+)
+
+# Строки таблицы, чей параметр позиционно-только (сноска выше).
+POSITIONAL_ONLY_APIS = frozenset({"builtins.setattr", "builtins.object.__setattr__"})
 
 # Реестр исключений: путь → причина. РОВНО ОДНА ЗАПИСЬ; см. шапку модуля.
 PHONE_WRITER_EXCEPTIONS: dict[str, str] = {
@@ -1347,6 +1530,170 @@ def test_an_ordered_values_pair_of_a_phone_column_is_a_write():
     )
 
 
+def test_a_query_update_with_values_as_a_keyword_is_a_write():
+    """`Query.update(values={"phone": x})` пишет колонку — именем, а не позицией (WR-10).
+
+    Сигнатура `Query.update(self, values, synchronize_session, update_args)`
+    (SQLAlchemy 2.0.46): `values` — обычный позиционно-именованный параметр, и
+    именованная форма пишет так же, как позиционная (замер верификатора на SQLite в
+    памяти). До плана 16-17 судилась только позиционная.
+    """
+    source = 'session.query(MessengerAccount).filter_by(id=i).update(values={"phone": x})\n'
+
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert offences, f"Query.update(values=…) с ключом номера не найден: {offences}"
+    assert len(offences) == 1 and offences[0].startswith(f"app/x.py:1 — {KIND_DICT_KEY} — "), (
+        f"Query.update(values=…) дал не ровно одну находку вида «{KIND_DICT_KEY}»: {offences}"
+    )
+    assert "update" in offences[0] and "phone" in offences[0], (
+        f"предмет находки не называет `update` и колонку `phone`: {offences}"
+    )
+
+
+def _resolve_api(path: str) -> object:
+    """Объект по пути: самый длинный ввозимый модуль, затем `getattr` по звеньям."""
+    parts = path.split(".")
+    for cut in range(len(parts), 0, -1):
+        try:
+            found: object = importlib.import_module(".".join(parts[:cut]))
+        except ImportError:
+            continue
+        for part in parts[cut:]:
+            found = getattr(found, part)
+        return found
+    raise ImportError(f"ни один префикс пути {path} не ввозится")
+
+
+def test_the_judged_parameters_name_the_installed_signatures():
+    """Таблица `JUDGED_PARAMETERS` совпадает с установленными сигнатурами.
+
+    Для каждой строки параметр с именем `parameter` стоит на индексе
+    `signature_index` в `inspect.signature(api)`, и позиционно-только он ровно у
+    `setattr` и `object.__setattr__`. Подъём SQLAlchemy / Alembic / asyncpg,
+    переименовавший или переставивший параметр, краснит это правило, а не оставляет
+    предикат молча слепым к новой форме.
+    """
+    mismatches: list[str] = []
+    for row in JUDGED_PARAMETERS:
+        try:
+            api = _resolve_api(row.api)
+            parameters = list(inspect.signature(api).parameters.values())
+        except (ImportError, AttributeError, TypeError, ValueError) as error:
+            mismatches.append(f"{row.api}: сигнатура не снимается ({error!r})")
+            continue
+        if row.signature_index >= len(parameters):
+            mismatches.append(
+                f"{row.api}: индекса {row.signature_index} нет, параметры "
+                f"{[p.name for p in parameters]}"
+            )
+            continue
+        parameter = parameters[row.signature_index]
+        if parameter.name != row.parameter:
+            mismatches.append(
+                f"{row.api}: на индексе {row.signature_index} стоит «{parameter.name}», "
+                f"а не «{row.parameter}»"
+            )
+        positional_only = parameter.kind is inspect.Parameter.POSITIONAL_ONLY
+        expected_only = row.api in POSITIONAL_ONLY_APIS
+        if positional_only != expected_only:
+            expected = "POSITIONAL_ONLY" if expected_only else "не POSITIONAL_ONLY"
+            mismatches.append(
+                f"{row.api}: «{parameter.name}» — {parameter.kind.name}, таблица "
+                f"ждёт {expected}"
+            )
+
+    assert len(JUDGED_PARAMETERS) >= 33, (
+        f"в таблице {len(JUDGED_PARAMETERS)} строк вместо 33 — перебор сигнатур неполон"
+    )
+    assert not mismatches, (
+        "таблица судимых параметров разошлась с установленными сигнатурами — "
+        "предикат судит не те позиции или имена:\n"
+        + "\n".join(f"  {mismatch}" for mismatch in mismatches)
+    )
+
+
+# Образец значения судимого параметра — по виду строки таблицы.
+BINDING_SAMPLES = {
+    KIND_DICT_KEY: '{"phone": x}',
+    KIND_SETATTR: '"phone"',
+    KIND_POSITIONAL_COLUMN: '["user_id", "phone"]',
+    KIND_UPSERT_SET: '{"phone": x}',
+    KIND_ROW_MAPPING: '[{"id": 1, "phone": p}]',
+    KIND_RAW_SQL: '"messenger_accounts"',
+}
+
+# Обязательные хвосты вызова: у COPY asyncpg `records` / `source` — только именем.
+BINDING_TAILS = {
+    "copy_records_to_table": ["records=rows"],
+    "copy_to_table": ["source=src"],
+}
+
+# Как вызов пишется в исходнике: функции модуля — без получателя, прочее — методом.
+BINDING_RECEIVERS = {
+    "setattr": "",
+    "set_attribute": "",
+    "set_committed_value": "",
+    "__setattr__": "object.",
+}
+
+BINDING_FORMS = ("positional", "keyword", "double-star", "starred")
+
+
+def _binding_source(row: JudgedParameter, form: str) -> str:
+    """Вызов API строки с судимым параметром, связанным формой `form`."""
+    value = BINDING_SAMPLES[row.kind]
+    fillers = [f"a{index}" for index in range(row.call_index)]
+    if form == "positional":
+        arguments = [*fillers, value]
+    elif form == "keyword":
+        arguments = [*fillers, f"{row.parameter}={value}"]
+    elif form == "double-star":
+        arguments = [*fillers, f'**{{"{row.parameter}": {value}}}']
+    else:
+        arguments = ["*[" + ", ".join([*fillers, value]) + "]"]
+    receiver = BINDING_RECEIVERS.get(row.call, "obj.")
+    arguments += BINDING_TAILS.get(row.call, [])
+    return f"{receiver}{row.call}({', '.join(arguments)})\n"
+
+
+BINDING_CASES = [
+    pytest.param(row, form, id=f"{row.api}-{form}")
+    for row in JUDGED_PARAMETERS
+    if row.parameter not in REFERENCE_KEYWORDS
+    for form in BINDING_FORMS
+]
+
+
+@pytest.mark.parametrize(("row", "form"), BINDING_CASES)
+def test_every_literal_binding_of_a_judged_parameter_is_judged(row, form):
+    """Каждая литеральная форма связывания судимого параметра — ровно одна находка.
+
+    Строка таблицы × форма: позицией (`call_index` после заполнителей), именем
+    (`parameter=…`), `**{"parameter": …}` и `*[заполнители…, значение]`. Две строки
+    ссылки `run_sync` здесь не участвуют: их предмет называет API по ссылке, а не
+    `run_sync`, и все четыре формы связывания `fn` закреплены поимённо строками
+    `LITERAL_FORM_CASES`. Формы позиционно-только параметров (`setattr(…, name=…)`)
+    при исполнении падают `TypeError` и ничего не пишут — гейт судит их по цене
+    строгости, поэтому правило называется «is_judged», а не «is_a_write».
+    """
+    source = _binding_source(row, form)
+
+    offences = phone_write_offences(source, "app/x.py")
+
+    assert len(offences) == 1, (
+        f"`{source.strip()}` — {form}-связывание `{row.parameter}` у {row.api} — дало "
+        f"{len(offences)} находок вместо одной: {offences}"
+    )
+    _location, found_kind, subject = offences[0].split(" — ", 2)
+    assert found_kind == row.kind, (
+        f"`{source.strip()}`: вид «{found_kind}», ожидался «{row.kind}»: {offences}"
+    )
+    assert row.call in subject, (
+        f"`{source.strip()}`: предмет находки не называет `{row.call}`: {offences}"
+    )
+
+
 # Литеральные формы записи из ревью WR-01: (исходник, вид, имя вызова, колонка).
 # Каждая видна в исходнике, а до плана 16-09 проходила гейт молча.
 LITERAL_FORM_CASES = [
@@ -1911,6 +2258,119 @@ LITERAL_FORM_CASES = [
         "phone",
         id="getattr-callee-values-keyword",
     ),
+    # План 16-17, задача 2: судимый параметр при любом литеральном связывании
+    # (`JUDGED_PARAMETERS`), `{"phone": v for …}` с постоянным ключом и исполняющие
+    # вызовы с параметром строк, как у `execute` (ревью WR-10, формы 1, 2, 3, 5).
+    pytest.param(
+        'session.query(MessengerAccount).filter_by(id=i).update(values={"phone": x})\n',
+        KIND_DICT_KEY,
+        "update",
+        "phone",
+        id="query-update-values-keyword",
+    ),
+    pytest.param(
+        'set_attribute(account, key="phone", value=x)\n',
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="set-attribute-key-keyword",
+    ),
+    pytest.param(
+        'set_committed_value(account, key="phone", value=x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="set-committed-value-key-keyword",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values(**{"phone": n for n in [x]})\n',
+        KIND_KEYWORD,
+        "values",
+        "phone",
+        id="values-double-star-dictcomp-constant-key",
+    ),
+    pytest.param(
+        "async def f(s, ns):\n"
+        '    await s.execute(update(MessengerAccount), [{"phone": n for n in ns}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-dictcomp-constant-key",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.scalars(insert(MessengerAccount).returning(MessengerAccount.id), "
+        '[{"user_id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "scalars",
+        "phone",
+        id="scalars-insert-returning-rows",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.scalar(insert(MessengerAccount).returning(MessengerAccount.id), "
+        '{"user_id": 1, "phone": p})\n',
+        KIND_ROW_MAPPING,
+        "scalar",
+        "phone",
+        id="scalar-insert-returning-row",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.stream(insert(MessengerAccount), [{"user_id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "stream",
+        "phone",
+        id="stream-insert-rows",
+    ),
+    pytest.param(
+        'c.exec_driver_sql(sql, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "exec_driver_sql",
+        "phone",
+        id="exec-driver-sql-rows",
+    ),
+    pytest.param(
+        'op.bulk_insert(accounts_table, rows=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_insert",
+        "phone",
+        id="alembic-bulk-insert-rows-keyword",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        'None, ["id"], None, {"phone": x})\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone",
+        id="upsert-set-positional-pg",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).values(user_id=1).on_conflict_do_update("
+        '["id"], None, {"phone": x})\n',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+        "phone",
+        id="upsert-set-positional-sqlite",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        '    await session.run_sync(**{"fn": Session.bulk_update_mappings}, '
+        'mapper=MessengerAccount, mappings=[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-double-star-fn",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.run_sync(*[Session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}]])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="run-sync-starred-reference",
+    ),
 ]
 
 
@@ -2106,6 +2566,18 @@ LEGITIMATE_CASES = [
         'operator.methodcaller("bulk_update_mappings", Group, '
         '[{"id": 1, "title": t}])(session)\n',
         id="methodcaller-other-columns",
+    ),
+    # План 16-17, задача 2: исполняющий вызов без строк и запись чужого атрибута.
+    pytest.param(
+        "async def f(s):\n"
+        "    return await s.scalars(\n"
+        "        select(MessengerAccount).where(MessengerAccount.phone.is_(None))\n"
+        "    )\n",
+        id="scalars-select-without-rows",
+    ),
+    pytest.param(
+        'set_attribute(account, key="status", value=x)\n',
+        id="set-attribute-keyword-other-attribute",
     ),
 ]
 
