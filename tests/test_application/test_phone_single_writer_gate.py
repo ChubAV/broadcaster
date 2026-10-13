@@ -45,7 +45,9 @@ import partial as bind`, `bind = functools.partial`), поданного дру�
 bulk_update_mappings, M), rows)`) — тогда первыми идут привязанные `partial`
 аргументы; строка в
 `operator.methodcaller("bulk_update_mappings", …)` (применение `methodcaller(…)(obj)`
-подаёт получателя `obj`). Псевдоним, связанный с атрибутом
+подаёт получателя `obj`); псевдонимы самих носителей в том же модуле —
+`from operator import methodcaller as mc`, `attr = getattr` — разрешаются так же,
+как у `functools.partial` (`IDENTIFICATION_CARRIERS`). Псевдоним, связанный с атрибутом
 (`set_phone = MessengerAccount.phone.__set__`), вызывается этим атрибутом — с
 получателем; метод, вызванный через класс с явным `self`
 (`Insert.from_select(stmt, names, sel)`, `Connection.copy_records_to_table(conn,
@@ -384,6 +386,11 @@ REFERENCE_KEYWORDS = frozenset({"fn"})
 # в модуле добавляются при разборе исходника (`_module_aliases(tree, "partial")`).
 PARTIAL_NAMES = frozenset({"partial"})
 
+# Носители опознания пишущего API по строке: `operator.methodcaller("<имя>", …)` и
+# встроенный `getattr(obj, "<имя>")(…)`. Их псевдонимы в том же модуле разрешаются
+# так же, как у `functools.partial` (самопроверка исполнителя 16-22).
+IDENTIFICATION_CARRIERS = ("methodcaller", "getattr")
+
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
 # отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
 COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
@@ -718,6 +725,12 @@ def _format(path: str, write: tuple[int, int, str, str]) -> str:
 def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     """Записи номера видов шапки: (строка, столбец, вид, предмет), по порядку в файле."""
     tree = ast.parse(source, filename=path)
+    # Носители опознания под псевдонимом в том же модуле — `from operator import
+    # methodcaller as mc`, `mc = operator.methodcaller`, `attr = getattr` —
+    # переименовываются в исходное имя до разбора (самопроверка исполнителя 16-22).
+    for carrier in IDENTIFICATION_CARRIERS:
+        if carrier in source:
+            _rename_aliases(tree, carrier)
     docstrings = _docstring_nodes(tree)
     # Звенья склейки строк внутри более длинной склейки: судится только внешняя.
     inner_concatenations = {
@@ -1653,6 +1666,21 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
                         known.add(target.id)
                         changed = True
     return frozenset(known - {name})
+
+
+def _rename_aliases(tree: ast.AST, name: str) -> None:
+    """Имя каждого псевдонима `name` в том же модуле (`_module_aliases`) — в `name`.
+
+    Только узлы `Name` в контексте чтения: присваивание псевдонима остаётся, а его
+    использования читаются как исходное имя всеми ветками, опознающими носитель по
+    имени (`_call_name`, `_getattr_literal`, `_referenced_calls`).
+    """
+    aliases = _module_aliases(tree, name)
+    if not aliases:
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
+            node.id = name
 
 
 def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
