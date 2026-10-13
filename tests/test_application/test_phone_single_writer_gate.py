@@ -64,11 +64,16 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`,
    `values(**{"phone": n for n in …})`; и повторный конструктор модели или её
    псевдонима в модуле — `MessengerAccount.__init__(account, phone=x)`;
-3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"`, атрибут
-   `MessengerAccount.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")`,
-   конструктор колонки `column("phone")` / `literal_column(…)` или производная такой
-   колонки — `MessengerAccount.phone.key` / `.name`, `table.c.phone.name`,
-   `MessengerAccount.__table__.c.phone.name` (план 16-22, ревью WR-12) —
+3. ключ литерального отображения — колонка номера, названная литералом одним из
+   наименований (`_phone_column`): строка `"phone"` / `"phone_is_manual"`; атрибут
+   модели или таблицы (`MessengerAccount.phone`, `MessengerAccount.__table__.c.phone`,
+   `t.c.phone`, `inspect(M).c.phone`); индекс (`t.c["phone"]`,
+   `inspect(M).columns["phone"]`); `getattr(M, "phone")`; конструктор колонки
+   `column("phone")` / `literal_column(…)`; и любая производная такой колонки доступом
+   к атрибуту или индексу (`.key`, `.name`, `.expression`, `.property.key`,
+   `.property.columns[0]`; план 16-22, ревью WR-12). Источник перечня —
+   `COLUMN_NAMINGS`, и правило-матрица держит его в суите по каждому судимому
+   контексту `COLUMN_CONTEXTS`; те же наименования судятся в видах 4, 6, 7 и 8 —
    в позиционном аргументе `values(...)` и
    устаревшего `Query.update({...})` (у него — и в параметре `values=`, сигнатура
    `Query.update(self, values, …)`). Отображение — `{…}` (и `{**{…}, …}`),
@@ -171,6 +176,9 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика
 `_literal_mappings`, включая `{"phone": v for …}` с постоянным ключом и
 `column("phone")`) или в строковой константе SQL (и в склейке `+` констант);
+«названа литералом» включает производную колонки любой цепочкой атрибутов и
+индексов (`MessengerAccount.phone.key`, `.property.key`, `.expression`) — перечень
+наименований `COLUMN_NAMINGS` (вид 3);
 пишущий вызов опознаётся по имени, названному литералом (последнее звено,
 `getattr`-строка, ссылка с аргументами, `methodcaller`), и по псевдониму такого
 имени, связанному в том же модуле ввозом `as` или присваиванием имени либо
@@ -229,7 +237,19 @@ WR-10). План 16-17 перебрал сигнатуры каждого суд
 плана 16-22 пункт (1) границы называл «ссылкой на пишущий API в переменной» и
 форму `fn = s.bulk_update_mappings; fn(…)`; план 16-22 разрешил псевдонимы пишущих
 API в том же модуле (`_api_aliases`), такая ссылка теперь ловится, и из пункта (1)
-она убрана.
+она убрана. До плана 16-22 заявление «через механизм» в четвёртый раз было шире
+предиката: ревью WR-12 (2026-10-12) нашло одиннадцать форм — колонку через `.key` /
+`.name` (`MessengerAccount.phone.key` в ключе `values`, в строках
+`bulk_update_mappings` и `execute`, в `setattr` и `set_committed_value`;
+`MessengerAccount.__table__.c.phone.name`), перечень `from_select` в контейнере
+(`+`, условное выражение, `list(…)`) и псевдоним ввоза пишущего API
+(`set_committed_value as scv`, `flag_modified as touch`); четвёртый круг одной оси
+(WR-01 → WR-08 → WR-10 → WR-12): ось «как названа колонка» была закрытым списком
+самопроверки 16-17. План 16-22 сделал её таблицей `COLUMN_NAMINGS` с
+правилом-матрицей, производную колонки — грамматикой, псевдонимы пишущих API — тем
+же помощником, что у модели и `partial`; решение владельца О-10 (а), 2026-10-13:
+заявление прежнее, вариант (б) «сузить заявление до перечня грамматики и снять
+запреты записью в `overrides`» ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -353,11 +373,6 @@ PARTIAL_NAMES = frozenset({"partial"})
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
 # отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
 COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
-
-# Производная колонки атрибутом: `MessengerAccount.phone.key` — строковое имя
-# колонки, `table.c.phone.name` — имя колонки таблицы. Колонка названа литералом
-# внутри производной, поэтому производная — та же колонка (план 16-22, ревью WR-12).
-COLUMN_DERIVATIVE_ATTRIBUTES = frozenset({"key", "name"})
 
 # Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
 # `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
@@ -1367,13 +1382,16 @@ def _phone_column(node: ast.AST) -> str | None:
     (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
     строках executemany пишет колонку — замер на SQLite в памяти).
 
-    И производная такой колонки — атрибут `.key` / `.name` над ней
-    (`COLUMN_DERIVATIVE_ATTRIBUTES`): `MessengerAccount.phone.key`,
-    `MessengerAccount.phone.name`, `table.c.phone.name`,
-    `MessengerAccount.__table__.c.phone.name`. `.key` — штатный способ получить
-    строковый ключ для `bulk_update_mappings` без голого литерала; до плана 16-22
-    такие ключи проходили гейт, хотя пишут колонку (ревью WR-12, замер верификатора
-    раунда 4 на SQLite в памяти). Производная проверяется ПОСЛЕ прямых наименований.
+    И производная такой колонки — любая цепочка доступа к атрибуту или индексу над
+    ней: `MessengerAccount.phone.key`, `MessengerAccount.phone.name`,
+    `table.c.phone.name`, `MessengerAccount.__table__.c.phone.name`,
+    `MessengerAccount.phone.property.key`, `MessengerAccount.phone.expression`,
+    `MessengerAccount.phone.property.columns[0]`, `getattr(M, "phone").key`.
+    `.key` — штатный способ получить строковый ключ для `bulk_update_mappings` без
+    голого литерала; до плана 16-22 такие ключи проходили гейт, хотя пишут колонку
+    (ревью WR-12, замер верификатора раунда 4 на SQLite в памяти). Производная
+    проверяется ПОСЛЕ прямых наименований. Перечень наименований держит в суите
+    правило-матрица `COLUMN_NAMINGS` × `COLUMN_CONTEXTS`.
     """
     if (
         isinstance(node, ast.Call)
@@ -1402,9 +1420,12 @@ def _phone_column(node: ast.AST) -> str | None:
         and node.args[1].value in PHONE_COLUMNS
     ):
         return node.args[1].value
-    if isinstance(node, ast.Attribute) and node.attr in COLUMN_DERIVATIVE_ATTRIBUTES:
-        # Производная колонки номера — после всех прямых наименований (ревью WR-12):
-        # `MessengerAccount.phone.key`, `table.c.phone.name` — та же колонка.
+    if isinstance(node, (ast.Attribute, ast.Subscript)):
+        # Производная колонки номера любой цепочкой атрибутов и индексов — ПОСЛЕ всех
+        # прямых наименований (ревью WR-12, план 16-22): иначе индекс `t.c["phone"]`
+        # ушёл бы в рекурсию по `value` и перестал бы быть наименованием (ловушка
+        # порядка, замер планирования). `MessengerAccount.phone.key`,
+        # `.property.key`, `.expression`, `.property.columns[0]` — та же колонка.
         return _phone_column(node.value)
     return None
 
