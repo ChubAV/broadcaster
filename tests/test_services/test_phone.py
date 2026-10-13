@@ -63,6 +63,7 @@
 """
 
 import ast
+import re
 import sys
 from pathlib import Path
 from typing import NamedTuple
@@ -799,6 +800,181 @@ def test_a_foreign_number_with_extra_digits_typed_by_hand_is_refused_whatever_th
     assert str(excinfo.value) == PHONE_ERROR_NOT_A_NUMBER, (
         f"номер чужой зоны с {extra_count} лишними цифрами обязан получить отказ "
         "«Не похоже на номер телефона»"
+    )
+
+
+MANUAL_EXTRA_DIGIT_TAILS = ("1", "12", "123", "1234")
+
+
+class ManualExtraDigitEnumeration(NamedTuple):
+    """Итог перебора ручного пути «номер-образец `MOBILE` региона + лишние цифры»."""
+
+    total: int
+    accepted: int
+    regions: frozenset[str]
+    valid: int
+    admitting: dict[str, list[frozenset[str]]]
+
+
+def _manual_extra_digit_enumeration() -> ManualExtraDigitEnumeration:
+    """Перебор «номер-образец `MOBILE` каждого региона в E.164 + хвост» через ручной путь.
+
+    Перебор ревью WR-11 и верификации раунда 4 (2026-10-12): для каждого региона
+    `phonenumbers.SUPPORTED_REGIONS` номер-образец `MOBILE` в записи E.164, к
+    нему дописан хвост из `MANUAL_EXTRA_DIGIT_TAILS`, ввод подан
+    `normalize_manual`. Регион без образца `MOBILE` пропускается. Итог: число
+    вводов; число принятых; регионы принятых; число принятых, которые
+    метаданные считают действительными номерами; для каждого региона — по
+    каждому принятому вводу набор имён типов `ACCOUNT_NUMBER_TYPES`, у которых
+    длина ввода `IS_POSSIBLE`.
+
+    Валидатор «действительности» зовёт ТЕСТ, а не модуль: запрет D-05 касается
+    модуля номера, и правило чистоты читает только его исходник (тот же довод,
+    что у `_auto_path_enumeration`). Числа перебора стоят в пункте 5 докстринга
+    `normalize_manual`, и правило-сверка ниже сверяет их вживую.
+    """
+    total = accepted = valid = 0
+    regions: set[str] = set()
+    admitting: dict[str, list[frozenset[str]]] = {}
+    for region in sorted(phonenumbers.SUPPORTED_REGIONS):
+        example = phonenumbers.example_number_for_type(region, phonenumbers.PhoneNumberType.MOBILE)
+        if example is None:
+            continue
+        base = phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.E164)
+        for tail in MANUAL_EXTRA_DIGIT_TAILS:
+            total += 1
+            typed = base + tail
+            try:
+                normalize_manual(typed)
+            except PhoneError:
+                continue
+            accepted += 1
+            regions.add(region)
+            parsed = phonenumbers.parse(typed, None)
+            admitting.setdefault(region, []).append(
+                frozenset(
+                    phonenumbers.PhoneNumberType.to_string(kind)
+                    for kind in ACCOUNT_NUMBER_TYPES
+                    if phonenumbers.is_possible_number_for_type_with_reason(parsed, kind)
+                    == phonenumbers.ValidationResult.IS_POSSIBLE
+                )
+            )
+            if phonenumbers.is_valid_number(parsed):
+                valid += 1
+    return ManualExtraDigitEnumeration(
+        total=total,
+        accepted=accepted,
+        regions=frozenset(regions),
+        valid=valid,
+        admitting=admitting,
+    )
+
+
+# Регионы-примеры пункта 5 докстринга `normalize_manual` и класс причины, по
+# которой правило по длинам не закрывает у них класс «номер плюс лишние цифры»:
+# `MOBILE` — длину допускает сам `MOBILE`; `VOIP_ONLY` — только `VOIP`;
+# `FIXED_LINE` — только `FIXED_LINE` / `FIXED_LINE_OR_MOBILE`. Регион, названный
+# прозой пункта 5, обязан стоять здесь (запрет №3 плана 16-21).
+MANUAL_BOUNDARY_EXAMPLES: dict[str, str] = {
+    "NL": "MOBILE",
+    "FI": "MOBILE",
+    "ID": "MOBILE",
+    "MY": "MOBILE",
+    "AT": "MOBILE",
+    "TW": "VOIP_ONLY",
+    "ZW": "VOIP_ONLY",
+    "DE": "FIXED_LINE",
+    "IL": "FIXED_LINE",
+    "IT": "FIXED_LINE",
+}
+
+
+def _manual_item_five() -> str:
+    """Пункт 5 докстринга `normalize_manual`: строки от «5. » до «6. », склеенные пробелом."""
+    tree = ast.parse(PHONE_MODULE.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "normalize_manual"
+    )
+    lines: list[str] = []
+    inside = False
+    for line in (ast.get_docstring(function) or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("5. "):
+            inside = True
+        elif stripped.startswith("6. "):
+            break
+        if inside:
+            lines.append(stripped)
+    return " ".join(lines)
+
+
+def _boundary_cause_holds(cause: str, admitting: list[frozenset[str]]) -> bool:
+    """Класс причины региона подтверждён замером по типам его принятых вводов."""
+    if not admitting:
+        return False
+    if cause == "MOBILE":
+        return any("MOBILE" in kinds for kinds in admitting)
+    if cause == "VOIP_ONLY":
+        return any(kinds == {"VOIP"} for kinds in admitting)
+    if cause == "FIXED_LINE":
+        return all(
+            "MOBILE" not in kinds and bool(kinds & {"FIXED_LINE", "FIXED_LINE_OR_MOBILE"})
+            for kinds in admitting
+        )
+    return False
+
+
+def test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 1 ПЛАНА 16-21: пункт 5 называет настоящий остаток правила О-7 (а).
+
+    Ревью WR-11, верификация раунда 4 (2026-10-12), решение владельца О-9 (а)
+    (2026-10-13). До плана пункт 5 докстринга `normalize_manual` называл
+    остатком класса «номер плюс лишние цифры» вне кода 7 только Германию и
+    Израиль, с причиной «переменная длина `FIXED_LINE`», а перебор ручного пути
+    принимал вводы в десятках регионов, и у части из них длину допускает сам
+    `MOBILE` или только `VOIP`. Правило утверждает, что пункт 5 называет замер
+    перебора `_manual_extra_digit_enumeration` — «{принято} из {всего}» вводов,
+    «{число регионов} регион…», «{действительных} из {принято}», — и что каждый
+    регион `MANUAL_BOUNDARY_EXAMPLES` назван пунктом и его причина подтверждена
+    замером по типам.
+
+    Зачем живой пересчёт: подъём пина `phonenumberslite` (IN-02, отложено
+    владельцем) изменит числа — и правило покраснеет, а не оставит прозу
+    устаревшей молча. Замер на 2026-10-13 (`phonenumberslite==9.0.41`):
+    «56 из 976» вводов, 36 регионов, «15 из 56» действительных.
+    """
+    item = _manual_item_five()
+    assert item.startswith("5. "), "антивакуум: в докстринге normalize_manual нет пункта 5"
+    enumeration = _manual_extra_digit_enumeration()
+    assert enumeration.total >= 900, (
+        f"антивакуум: вводов перебора {enumeration.total}, ждали не меньше 900"
+    )
+    assert enumeration.accepted > 0, "антивакуум: ручной путь не принял ни одного ввода перебора"
+
+    problems: list[str] = []
+    for claim in (
+        f"{enumeration.accepted} из {enumeration.total}",
+        f"{len(enumeration.regions)} регион",
+        f"{enumeration.valid} из {enumeration.accepted}",
+    ):
+        if claim not in item:
+            problems.append(f"нет «{claim}»")
+    for region, cause in MANUAL_BOUNDARY_EXAMPLES.items():
+        if not re.search(rf"(?<![A-Za-z]){region}(?![A-Za-z])", item):
+            problems.append(f"регион {region} не назван")
+        if region not in enumeration.regions:
+            problems.append(f"регион {region} не принят перебором")
+        elif not _boundary_cause_holds(cause, enumeration.admitting[region]):
+            problems.append(
+                f"причина {cause} у {region} не подтверждена замером: "
+                f"{[sorted(kinds) for kinds in enumeration.admitting[region]]}"
+            )
+    assert problems == [], (
+        f"пункт 5 не называет замер остатка: {problems}; замер — принято "
+        f"{enumeration.accepted} из {enumeration.total}, регионов {len(enumeration.regions)}, "
+        f"действительных {enumeration.valid}"
     )
 
 
