@@ -44,7 +44,14 @@ import partial as bind`, `bind = functools.partial`), поданного дру�
 вместе с остальными аргументами (`run_in_executor(None, partial(s.
 bulk_update_mappings, M), rows)`) — тогда первыми идут привязанные `partial`
 аргументы; строка в
-`operator.methodcaller("bulk_update_mappings", …)`. У `AsyncSession` нет `bulk_*`
+`operator.methodcaller("bulk_update_mappings", …)` (применение `methodcaller(…)(obj)`
+подаёт получателя `obj`). Псевдоним, связанный с атрибутом
+(`set_phone = MessengerAccount.phone.__set__`), вызывается этим атрибутом — с
+получателем; метод, вызванный через класс с явным `self`
+(`Insert.from_select(stmt, names, sel)`, `Connection.copy_records_to_table(conn,
+…)`), судится так же: перечень `from_select` и таблица COPY ищутся в каждом
+позиционном аргументе, а распаковка не-литерала за ссылкой подаётся API как есть
+(самопроверка исполнителя 16-22). У `AsyncSession` нет `bulk_*`
 вовсе, поэтому `run_sync` — естественный путь асинхронного скрипта к ним (план
 16-17, ревью WR-10). Судимый параметр берётся при любом литеральном связывании:
 позицией, именем, литеральной распаковкой `*[…]` / `*(…)` и `**{"имя": …}` /
@@ -96,7 +103,8 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    объекта (после `account.__dict__["phone"] = x` — значение `x`, у устаревшего
    объекта — старый номер поверх ручного; самопроверка исполнителя 16-17, замер);
    и дескриптор колонки номера `MessengerAccount.phone.__set__(account, x)` /
-   `type(account).phone_is_manual.__set__(…)`;
+   `type(account).phone_is_manual.__set__(…)` — и через класс дескриптора
+   `InstrumentedAttribute.__set__(MessengerAccount.phone, account, x)`;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
    строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
    (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
@@ -721,6 +729,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # Псевдонимы пишущих API в том же модуле — ввоз `as`, присваивание имени или
     # атрибута (ревью WR-12): вызов и ссылка псевдонима судятся как исходный API.
     api_aliases = _api_aliases(tree, judged_names)
+    alias_targets = _api_alias_targets(tree, api_aliases)
     referable = judged_names | frozenset(api_aliases)
     # Вызовы, чей результат тут же вызывается (`partial(ref, …)(…)`): ссылка в них
     # судится один раз — у применения, с аргументами обоих вызовов.
@@ -728,6 +737,19 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         id(node.func)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
+    }
+    # Получатель `methodcaller(…)` — объект его применения `methodcaller(…)(obj)`:
+    # вызов `obj.<имя>(…)` судится с получателем, по которому судятся дескриптор
+    # колонки и повторный конструктор модели (самопроверка исполнителя 16-22).
+    methodcaller_receivers = {
+        id(node.func): node.args[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Call)
+        and _call_name(node.func) == "methodcaller"
+        and len(node.args) == 1
+        and not isinstance(node.args[0], ast.Starred)
+        and not node.keywords
     }
     # Ссылки у каждого вызова (`_referenced_calls`). `partial(ref, …)`, поданный
     # другому вызову и разобранный им как носитель ссылки, сам не судится: его
@@ -770,13 +792,23 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         elif isinstance(node, ast.Call):
             name = _call_name(node)
             if name is not None:
-                _judge_call(*_canonical_call(node, name, api_aliases), write_names, record)
+                _judge_call(
+                    *_canonical_call(node, name, api_aliases, alias_targets), write_names, record
+                )
             # `methodcaller("…", …)` судится у себя: его применение подаёт объект,
             # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
             if id(node) not in consumed:
                 for synthetic, referenced, _carrier in references.get(id(node), []):
+                    if (holder := methodcaller_receivers.get(id(node))) is not None:
+                        func = ast.copy_location(
+                            ast.Attribute(value=holder, attr=referenced, ctx=ast.Load()),
+                            synthetic,
+                        )
+                        synthetic = _synthetic_call(
+                            synthetic, func, list(synthetic.args), list(synthetic.keywords)
+                        )
                     _judge_call(
-                        *_canonical_call(synthetic, referenced, api_aliases),
+                        *_canonical_call(synthetic, referenced, api_aliases, alias_targets),
                         write_names,
                         record,
                     )
@@ -928,12 +960,18 @@ def _judge_call(
                 record(node, KIND_SETATTR, f"{name}({prefix}{shown}, …)")
                 break
     receiver = _callee_receiver(node.func)
-    if name == DESCRIPTOR_SET and receiver is not None:
+    if name == DESCRIPTOR_SET:
         # `MessengerAccount.phone.__set__(account, x)`,
         # `type(account).phone_is_manual.__set__(account, True)`: дескриптор колонки
-        # номера пишет атрибут в обход присваивания.
-        if _phone_column(receiver) is not None:
-            record(node, KIND_SETATTR, f"{ast.unparse(receiver)}.__set__(…)")
+        # номера пишет атрибут в обход присваивания. Вызов через класс дескриптора —
+        # `InstrumentedAttribute.__set__(MessengerAccount.phone, account, x)` —
+        # подаёт дескриптор первым позиционным (самопроверка исполнителя 16-22).
+        descriptors = [receiver] if receiver is not None else []
+        descriptors += positional[:1]
+        for descriptor in descriptors:
+            if _phone_column(descriptor) is not None:
+                record(node, KIND_SETATTR, f"{ast.unparse(descriptor)}.__set__(…)")
+                break
     if (
         name == MODEL_INIT
         and isinstance(receiver, ast.Name)
@@ -1642,20 +1680,58 @@ def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
     return aliases
 
 
+def _api_alias_targets(tree: ast.AST, api_aliases: dict[str, str]) -> dict[str, ast.expr]:
+    """Атрибут, с которым псевдоним пишущего API связан присваиванием: «псевдоним → узел».
+
+    `set_phone = MessengerAccount.phone.__set__` → `MessengerAccount.phone.__set__`
+    (и цепочкой `Y = X`). Синтетический вызов псевдонима берёт этот узел вызываемым и
+    сохраняет ПОЛУЧАТЕЛЯ, по которому судятся дескриптор колонки и повторный
+    конструктор модели (самопроверка исполнителя 16-22). Ввоз `as` атрибута не даёт.
+    """
+    bindings: dict[str, ast.expr] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if isinstance(value, (ast.Name, ast.Attribute)):
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, value)
+    found: dict[str, ast.expr] = {}
+    for alias, original in api_aliases.items():
+        value, seen = bindings.get(alias), {alias}
+        while isinstance(value, ast.Name) and value.id in bindings and value.id not in seen:
+            seen.add(value.id)
+            value = bindings[value.id]
+        if isinstance(value, ast.Attribute) and value.attr == original:
+            found[alias] = value
+    return found
+
+
 def _canonical_call(
-    call: ast.Call, name: str, api_aliases: dict[str, str]
+    call: ast.Call,
+    name: str,
+    api_aliases: dict[str, str],
+    alias_targets: dict[str, ast.expr] | None = None,
 ) -> tuple[ast.Call, str]:
     """Вызов псевдонима пишущего API как вызов самого API: (вызов, имя).
 
     `scv(account, "phone", x)` при `set_committed_value as scv` — синтетический
     `set_committed_value(account, "phone", x)` на месте исходного: ветки
     `_judge_call`, которые берут имя у самого узла (`_values_dict_keys`,
-    `_positional_phone_columns`), видят исходное имя. Имя без псевдонима — как есть.
+    `_positional_phone_columns`), видят исходное имя. Псевдоним, связанный с
+    атрибутом (`_api_alias_targets`), вызывается этим атрибутом — с получателем.
+    Имя без псевдонима — как есть.
     """
     original = api_aliases.get(name)
     if original is None:
         return call, name
-    func = ast.copy_location(ast.Name(id=original, ctx=ast.Load()), call.func)
+    func = (alias_targets or {}).get(name)
+    if func is None:
+        func = ast.copy_location(ast.Name(id=original, ctx=ast.Load()), call.func)
     return _synthetic_call(call, func, list(call.args), list(call.keywords)), original
 
 
