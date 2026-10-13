@@ -10,14 +10,28 @@
 
 ЧТО СЧИТАЕТСЯ ВЫЗОВОМ ЖУРНАЛА (Python, деревья `app/`, `scripts/`, `max_worker/`).
 `print(...)` (и `builtins.print(...)`) — в контейнере он уходит в тот же stdout, что и
-журнал; и `X.<метод>(...)` или `getattr(X, "<метод>")(...)`, где метод — уровень журнала
-или `bind`/`new` (`LOG_METHODS`), а получатель `X` — имя `logger`/`log`/`logging`/`_log`/
+журнал; и `X.<метод>(...)` или `getattr(X, "<метод>")(...)` с ЛЮБЫМ методом опознанного
+получателя `X`. D-17 пишет `logger.*` / `log.*` / `logging.*` — это охват по получателю, а
+не список методов: уровни журнала, синхронные и асинхронные structlog (`ainfo`,
+`awarning`, …, `ASYNC_LOG_METHODS`, сверены сторожем с установленным structlog), `bind` /
+`new` (`LOG_METHODS`), низкоуровневые `_log`, `makeRecord`, `handle`, `callHandlers`,
+`_proxy_to_logger`, функции модуля (`logging.makeLogRecord(…)`, `logging.StreamHandler(…)`)
+и настройка (`setLevel`, `addHandler`) — их аргументы судятся теми же правилами, и без
+номера находок нет. Вызов фабрики — связывание, а не вызов журнала (его начальные значения
+судятся, как `bind`, см. ниже). Получатель `X` — имя `logger`/`log`/`logging`/`_log`/
 `_logger` (и любое имя, оканчивающееся на `_log`/`_logger`), атрибут с тем же окончанием
-(`self.log`), корневой журнал `logging.root` (`.root` любого журнала), вызов фабрики
+(`self.log`), корневой журнал `logging.root` (`.root` любого журнала) и родитель
+`logger.parent` (`LOGGER_ATTRIBUTE_LOGGERS`), вызов фабрики
 (`LOGGER_FACTORIES`: `get_logger`/`getLogger`/`get_task_logger`, обёртки-фабрики
 `LoggerAdapter`/`wrap_logger` и классы журнала, созданные напрямую, — `Logger`,
-`RootLogger`, `PrintLogger`, `WriteLogger`, `BytesLogger`, `BoundLogger`) или сам вызов
-журнала (`logger.bind(...).info`).
+`RootLogger`, `PrintLogger`, `WriteLogger`, `BytesLogger`, `BoundLogger`) или журнал,
+который вернул вызов метода опознанного журнала: `bind`/`new`, уровень или метод,
+возвращающий журнал (`LOGGER_RETURNING_METHODS`: `getChild`, `unbind`, `try_unbind`) —
+`logger.bind(...).info`, `logging.getLogger(…).getChild("x").info`. Результат вызова
+прочих методов журналом не считается (`handler = logging.StreamHandler(…)` — обработчик).
+Член опознанного получателя — его метод (`logger._log`, `logging.log`), а журналом он
+остаётся, только если это `root` / `parent`, атрибут, связанный в модуле с журналом, или
+имя по шаблону журнала (`logger._logger` — обёрнутый журнал structlog).
 
 Получатель опознаётся и по связыванию в модуле — `module_log_names`, внутри рамки D-17:
 тот же журнал из фабрики, тот же `logging.*`, тот же `logger.*` под другим именем.
@@ -32,15 +46,16 @@
   в теле класса (кортеж на кортеж той же длины — попарно), значение которого — получатель:
   вызов фабрики (`lg = logging.getLogger()`, `lg: Logger = logging.getLogger(__name__)`,
   `self.lg = structlog.get_logger()`, `if (lg := logging.getLogger()):`), привязанный
-  журнал (`lg = structlog.get_logger().bind(...)`) или уже опознанный журнал — второе
+  журнал (`lg = structlog.get_logger().bind(...)`, `lg = logger.getChild("x")`,
+  `lg = logger.unbind("k")`) или уже опознанный журнал — второе
   связывание (`a = lg`, `a = logger`). Имя, связанное в теле класса, зовут через
   `self.lg` / `cls.lg` / имя класса — оно считается и атрибутом. Ссылка на фабрику без
   вызова (`gl = logging.getLogger`) делает имя фабрикой.
-* ПО ССЫЛКЕ НА МЕТОД ОПОЗНАННОГО ЖУРНАЛА: имя или атрибут, связанные с `logger.info`,
-  `getattr(logger, "info")`, `print`, привязкой к контексту или `functools.partial(<то
+* ПО ССЫЛКЕ НА МЕТОД ОПОЗНАННОГО ЖУРНАЛА: имя или атрибут, связанные с любым методом
+  опознанного журнала (`logger.info`, `logger._log`), `getattr(logger, "info")`, `print`, привязкой к контексту или `functools.partial(<то
   же>, …)` (`info = logger.info`, `out = print`, `self.out = logger.info`,
-  `p = functools.partial(logger.info, …)`), — функция журнала: её вызов есть вызов
-  журнала. Вызовом журнала считаются и сам `functools.partial(<вызываемое журнала>, …)`
+  `p = functools.partial(logger.info, …)`, `emit = logger._log`), — функция журнала: её
+  вызов есть вызов журнала. Вызовом журнала считаются и сам `functools.partial(<вызываемое журнала>, …)`
   (его аргументы уйдут в журнал), и вызов, применённый к нему (`partial(…)(…)`).
 * НАЧАЛЬНЫЕ ЗНАЧЕНИЯ ФАБРИКИ судятся, как `bind` (D-11): фабрика с именованным аргументом
   вне `FACTORY_CONFIGURATION_KEYWORDS` или со вторым позиционным аргументом
@@ -53,10 +68,15 @@
 Псевдонимы и связывания разрешаются по всему модулю без учёта областей видимости — цена
 названа: имя, связанное с журналом где-либо в модуле, считается журналом во всём модуле
 (на живом дереве совпадений ноль: множества распознанных вызовов всех 106 файлов прежние,
-сверка планом 16-18 по строке и столбцу каждого вызова). Настройка такого журнала
-(`_lg.handlers.clear()`, `_lg.propagate = True`, `lg.setLevel(...)`,
-`getattr(logger, "setLevel")(…)`) вызовом журнала не считается — методов журнала она не
-зовёт.
+сверка планом 16-18 по строке и столбцу каждого вызова). Настройка опознанного журнала
+(`lg.setLevel(...)`, `root.addHandler(...)`, `getattr(logger, "setLevel")(…)`,
+`logging.StreamHandler(…)`) — вызов журнала без находок: её аргументы судятся теми же
+правилами. Атрибут журнала (`_lg.handlers.clear()`, `_lg.propagate = True`) — не метод
+получателя: `handlers` — список, и его `clear()` вызовом журнала не считается. Цена
+строгости названа: метод любого объекта с именем журнала (`log.mark_failed(…)` у записи
+`SendLog`, связанной с именем `log`) судится тоже; на живом дереве таких вызовов ноль —
+сверка планом 16-23 по строке и столбцу: новые вызовы — ровно настройка журнала
+`app/logging_config.py` и `max_worker/main.py`.
 `bind` включён НАМЕРЕННО: `logger.bind(phone=x)` кладёт номер в каждую следующую
 строку этого журнала. По той же причине вызовом журнала считается любой вызов с
 именем `bind_contextvars` или `bound_contextvars`, а также привязки устаревшего
@@ -67,8 +87,9 @@
 модуль (`from structlog.contextvars import bind_contextvars as bind_ctx` → `bind_ctx(...)`,
 `module_log_names`): привязанное значение уходит в каждую следующую строку журнала
 запроса, задачи или потока. `unbind_*` и `clear_*` — нет, и под псевдонимом тоже: номера
-они не кладут. `parser.error(...)` у argparse, `log.status` у записи `SendLog` и
-`logging.getLogger(...).setLevel(...)` вызовом журнала не считаются.
+они не кладут. `parser.error(...)` у argparse и `log.status` у записи `SendLog` (атрибут,
+а не вызов) вызовом журнала не считаются; `logging.getLogger(...).setLevel(...)` — вызов
+журнала без находок.
 
 Летопись: до плана 16-09 `structlog.contextvars.bind_contextvars(phone=…)` вызовом
 журнала не считался — имени нет в `LOG_METHODS`, а получатель `structlog.contextvars`
@@ -93,7 +114,18 @@ IN-09 (`from logging import info`, журнал из тела класса че�
 пойманы формы той же оси, которых не называли ни охват, ни граница: `logging.root`,
 классы журнала, созданные напрямую, вызываемое журнала, связанное с атрибутом или в
 теле класса, попарное связывание кортежем, ссылка на фабрику без вызова, фабрика через
-`getattr`, `builtins.print`.
+`getattr`, `builtins.print`. До плана 16-23 асинхронные уровни structlog в `LOG_METHODS`
+не входили, и `await logger.ainfo(…, phone=…)` уходил мимо гейта (ревью WR-13,
+верификация раунда 4, 2026-10-12).
+
+Летопись WR-13: до плана 16-23 пункт границы относил методы журнала вне `LOG_METHODS`
+(`logger._log`, `makeRecord`, `handle`, `logging.makeLogRecord`) к «рамке владельца» с
+доводом «D-17 задаёт гейт списком получателей и методов», а D-17 пишет `logger.*` — охват
+по получателю; этот пункт дописал исполнитель 16-18 сверх плана, решения владельца о
+закрытом списке методов нет; асинхронные уровни structlog и `getChild` не были ни пойманы,
+ни названы (ревью WR-13, верификация раунда 4, 2026-10-12). До плана 16-23 настройка
+журнала (`setLevel`) вызовом журнала не считалась — строки `POSITIVE_CONTROLS`
+`set-level-is-not-a-log` и три соседние утверждали закрытый список методов.
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -172,14 +204,11 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
 * область видимости одна — модуль: имя, связанное с журналом в одной функции, журналом
   считается и в другой (цена в сторону лишней находки, а не пропуска; на живом дереве
   совпадений ноль);
-* формы вне списка D-17 (рамка владельца, а не слепота предиката): вывод мимо журнала и
-  `print` — `sys.stdout.write`, `sys.stderr.write`, `warnings.warn`,
-  `traceback.print_*`, `pprint`, `os.write`; методы журнала вне `LOG_METHODS`
-  (`logger._log(…)`, `logger.makeRecord(…)` / `logger.handle(record)`,
-  `logging.makeLogRecord(…)`) — гейт судит вызовы уровней и `bind`/`new`; текст
-  исключения (`raise X(account.phone)`). D-17 задаёт гейт списком получателей и методов,
-  и их расширение — решение владельца, а не правка гейта; для нормализатора текст
-  исключения закрыт набором констант (D-18).
+* получатель вне списка D-17 (`logger.*` / `log.*` / `logging.*` / `print(`): вывод мимо
+  журнала и `print` — `sys.stdout.write`, `sys.stderr.write`, `warnings.warn`,
+  `traceback.print_*`, `pprint`, `os.write` — и текст исключения
+  (`raise X(account.phone)`). Расширение получателей — решение владельца, а не правка
+  гейта; для нормализатора текст исключения закрыт набором констант (D-18).
 """
 
 from __future__ import annotations
@@ -215,6 +244,16 @@ PHONE_LOG_EXCEPTIONS_CEILING = 0
 # в рабочей копии воркера — тысячи чужих файлов, и их журналы — граница гейта.
 SKIPPED_DIR_NAMES = frozenset({"node_modules", "__pycache__"})
 
+# Асинхронные уровни `structlog.stdlib.BoundLogger` — журнал, которым проект настраивает
+# structlog (`app/logging_config.py`, `wrapper_class=structlog.stdlib.BoundLogger`): замер
+# `dir()`, structlog 25.5.0 — ровно восемь. Проект асинхронный целиком (FastAPI, Celery), и
+# `await logger.ainfo(…, phone=…)` уходит в stdout и Loki так же, как `logger.info` (ревью
+# WR-13). Набор сверяет правило-сторож с установленным structlog: подъём библиотеки,
+# добавивший или убравший асинхронный уровень, краснит суиту, а не оставляет гейт слепым.
+ASYNC_LOG_METHODS = frozenset(
+    {"adebug", "ainfo", "awarning", "aerror", "aexception", "acritical", "afatal", "alog"}
+)
+
 LOG_METHODS = frozenset(
     {
         "debug",
@@ -230,8 +269,17 @@ LOG_METHODS = frozenset(
         # `bind` и `new` — НАМЕРЕННО: привязанное значение уходит во все строки.
         "bind",
         "new",
+        # Асинхронные уровни structlog — те же уровни для `async`-кода (ревью WR-13).
+        *ASYNC_LOG_METHODS,
     }
 )
+
+# Методы, возвращающие журнал (замер `dir()` `logging.Logger` и `structlog.stdlib.BoundLogger`,
+# structlog 25.5.0): их результат — журнал, как у `bind` / `new` (`LOG_METHODS`), — привязка
+# (ревью WR-13: `lg = logging.getLogger(__name__).getChild("x"); lg.info(a.phone)`).
+# Результат вызова прочих методов журнала журналом не считается: `logging.StreamHandler(…)`
+# — обработчик, и его методы — не вызовы журнала.
+LOGGER_RETURNING_METHODS = frozenset({"getChild", "unbind", "try_unbind"})
 
 # Привязка к контексту structlog: значение уходит в КАЖДУЮ следующую строку журнала
 # запроса или задачи — тот же довод, по которому в `LOG_METHODS` стоит `bind`. Судится
@@ -257,6 +305,11 @@ LOGGING_MODULES = frozenset({"logging"})
 # Журналы, которые модуль `logging` отдаёт атрибутом: `logging.root` (и `logger.root` у
 # любого журнала) — корневой журнал; `from logging import root` — он же.
 LOGGING_MODULE_LOGGERS = frozenset({"root"})
+
+# Члены журнала, которые сами — журнал: корневой `root` и родитель `parent` (`logging.Logger`
+# и `structlog.stdlib.BoundLogger`, замер `dir()`); прочие члены опознанного журнала — его
+# методы (ревью WR-13, самопроверка исполнителя 16-23: `logger.parent.info(…)` уходил мимо).
+LOGGER_ATTRIBUTE_LOGGERS = LOGGING_MODULE_LOGGERS | frozenset({"parent"})
 
 # Фабрики журнала (D-17). `get_task_logger` — фабрика журнала Celery: фабрика по смыслу
 # D-17, а не новый получатель (ревью IN-06); в живом дереве её нет.
@@ -463,9 +516,19 @@ def _is_factory_call(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES
 
 
 def _log_method_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
-    """Ссылка на метод опознанного журнала: `logger.info` или `getattr(logger, "info")`."""
+    """Ссылка на ЛЮБОЙ метод опознанного журнала (охват по получателю D-17, ревью WR-13):
+    `logger.info`, `logger._log`, `getattr(logger, "makeRecord")` — член опознанного
+    получателя, кроме журнала-атрибута (`root`, `parent`, атрибут, связанный в модуле с
+    журналом) и
+    фабрики (`logging.getLogger` — фабрика: её вызов — связывание, а не вызов журнала)."""
     member = _member(node)
-    return member is not None and member[1] in LOG_METHODS and _is_log_receiver(member[0], names)
+    return (
+        member is not None
+        and member[1] not in LOGGER_ATTRIBUTE_LOGGERS
+        and member[1] not in names.receiver_attributes
+        and not _is_factory_reference(node, names)
+        and _is_log_receiver(member[0], names)
+    )
 
 
 def _binder_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -566,9 +629,11 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     `bound = lg.bind(...)` и `a = lg` — тоже журнал. Значение связывания решает, кем
     становится цель: ссылка на фабрику без вызова — фабрикой (проверяется первой:
     `structlog.get_logger` подходит под шаблон имени журнала); получатель журнала (вызов
-    фабрики, вызов метода журнала, имя или атрибут, которые гейт уже признаёт журналом) —
-    получателем; вызываемое журнала (`logger.info`, `print`, `partial(…)`) — функцией
-    журнала.
+    фабрики, вызов уровня, `bind` / `new` или метода из `LOGGER_RETURNING_METHODS`, имя или
+    атрибут, которые гейт уже признаёт журналом) — получателем; вызываемое журнала (любой
+    метод опознанного журнала, `print`, `partial(…)`) — функцией журнала. Две последние
+    проверки независимы (ревью WR-13): `emit = logger._log` — функция журнала, хотя `_log`
+    подходит и под шаблон имени журнала.
     """
     binders: set[str] = set()
     receiver_names: set[str] = set()
@@ -624,9 +689,14 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
         for target, value, in_class_body in bindings:
             if _is_factory_reference(value, known):
                 changed |= _bind(target, in_class_body, factories, factories)
-            elif _is_log_receiver(value, known) and not _log_method_reference(value, known):
+                continue
+            # Получатель и вызываемое журнала — независимо (ревью WR-13): `emit = logger._log`
+            # — ссылка на метод журнала, и `emit(…)` — вызов журнала, хотя имя `_log` подходит
+            # и под шаблон журнала; `x = logger._logger` (обёрнутый журнал structlog) —
+            # получатель, и `x.info(…)` — вызов журнала.
+            if _is_log_receiver(value, known):
                 changed |= _bind(target, in_class_body, receiver_names, receiver_attributes)
-            elif _is_log_callable(value, known):
+            if _is_log_callable(value, known):
                 changed |= _bind(target, in_class_body, log_functions, log_function_attributes)
     return ModuleLogNames(
         frozenset(binders),
@@ -647,17 +717,33 @@ def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES
         return (
             bool(_LOGGER_NAME.search(attribute))
             or attribute in names.receiver_attributes
-            or (attribute in LOGGING_MODULE_LOGGERS and _is_log_receiver(owner, names))
+            or (attribute in LOGGER_ATTRIBUTE_LOGGERS and _is_log_receiver(owner, names))
         )
     if isinstance(node, ast.Call):
-        # `structlog.get_logger(__name__).info(...)`, `gl().info(...)` и `logger.bind(...).info(...)`.
-        return _is_factory_call(node, names) or _is_log_method_call(node, names)
+        # `structlog.get_logger(__name__).info(...)`, `gl().info(...)`, `logger.bind(...).info(...)`
+        # и `logging.getLogger(__name__).getChild("x").info(...)`: результат вызова — журнал
+        # только у фабрики и у методов из `LOG_METHODS` / `LOGGER_RETURNING_METHODS` опознанного
+        # получателя (`logging.StreamHandler(…)` — обработчик, а не журнал).
+        if _is_factory_call(node, names):
+            return True
+        member = _member(node.func)
+        return (
+            member is not None
+            and member[1] in (LOG_METHODS | LOGGER_RETURNING_METHODS)
+            and _is_log_receiver(member[0], names)
+        )
     return False
 
 
 def _is_log_method_call(call: ast.Call, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
-    """`<получатель>.<метод>(…)` и `getattr(<получатель>, "<метод>")(…)`, метод из `LOG_METHODS`."""
-    return _log_method_reference(call.func, names)
+    """`<получатель>.<метод>(…)` и `getattr(<получатель>, "<метод>")(…)` с ЛЮБЫМ методом
+    опознанного получателя (D-17 `logger.*` / `log.*` / `logging.*`, ревью WR-13), кроме
+    вызова фабрики: фабрика — связывание, её начальные значения судит
+    `_carries_initial_values`."""
+    if _is_factory_call(call, names):
+        return False
+    member = _member(call.func)
+    return member is not None and _is_log_receiver(member[0], names)
 
 
 def _is_context_binding(call: ast.Call, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -1257,6 +1343,63 @@ def test_a_planted_logging_function_import_in_app_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_async_level_call_in_app_reddens_the_gate(tmp_path):
+    """WR-13 (D-11, D-17): асинхронный уровень structlog — вызов журнала.
+
+    Проект настраивает structlog с `structlog.stdlib.BoundLogger` (`app/logging_config.py`),
+    у которого есть асинхронные уровни (`ainfo`, `awarning`, …); проект асинхронный целиком,
+    и писатели номера Фаз 17–20 — асинхронный код (ревью WR-13). Подложенный файл находится
+    тем же обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "planted_async_level.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import structlog\n"
+        "\n"
+        "logger = structlog.get_logger()\n"
+        "\n"
+        "\n"
+        "async def connected(account):\n"
+        '    await logger.ainfo("connected", phone=account.phone)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert any(
+        offence.startswith("app/planted_async_level.py:7 — имя — phone") for offence in offences
+    ), (
+        "асинхронный уровень structlog не распознан: гейт обошёл синтетическое дерево "
+        f"({_render(scans)}) и промолчал о `await logger.ainfo(…, phone=…)`: {offences}"
+    )
+
+
+def test_the_async_level_methods_match_the_installed_structlog():
+    """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
+
+    Асинхронный уровень — имя `dir(structlog.stdlib.BoundLogger)` на `a`, хвост которого —
+    синхронный метод `LOG_METHODS` (`ainfo` → `info`). Подъём structlog, добавивший или
+    убравший такой уровень, краснит суиту, а не оставляет гейт слепым молча.
+    """
+    import structlog
+
+    installed = {
+        method
+        for method in dir(structlog.stdlib.BoundLogger)
+        if method.startswith("a") and method[1:] in (LOG_METHODS - ASYNC_LOG_METHODS)
+    }
+
+    assert installed, "у установленного structlog не найдено ни одного асинхронного уровня — сверка вакуумна"
+    assert ASYNC_LOG_METHODS == installed, (
+        f"набор асинхронных уровней разошёлся с structlog {structlog.__version__}: "
+        f"нет в гейте {sorted(installed - ASYNC_LOG_METHODS)}, "
+        f"нет в structlog {sorted(ASYNC_LOG_METHODS - installed)}"
+    )
+
+
 # --- Отрицательные контроли: каждый краснит чистую функцию ----------------------
 
 NEGATIVE_CONTROLS = [
@@ -1585,6 +1728,127 @@ NEGATIVE_CONTROLS = [
         id="getattr-logging-factory",
     ),
     pytest.param("app/x.py", "import builtins\n\nbuiltins.print(account.phone)\n", "phone", id="builtins-print"),
+    # WR-13 (D-11, D-17): асинхронные уровни structlog (`ASYNC_LOG_METHODS`) — у журнала
+    # модуля, из тела класса через `self.`, через `getattr`-строку, по ссылке, `alog` с
+    # уровнем и `aexception` с `extra`.
+    pytest.param(
+        "app/x.py",
+        "logger = structlog.get_logger()\n"
+        "\n"
+        "\n"
+        "async def f(account):\n"
+        '    await logger.ainfo("connected", phone=account.phone)\n',
+        "phone=",
+        id="async-level-module-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class S:\n"
+        "    logger = structlog.get_logger()\n"
+        "\n"
+        "    async def g(self, a):\n"
+        '        await self.logger.awarning("x", phone=a.phone)\n',
+        "phone=",
+        id="async-level-class-body-self",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await getattr(logger, "aerror")("x %s", account.phone)\n',
+        "phone",
+        id="async-level-getattr",
+    ),
+    pytest.param(
+        "app/x.py",
+        'say = logger.ainfo\n\n\nasync def f(p):\n    await say("x", phone=p)\n',
+        "phone=",
+        id="async-level-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await logger.alog(20, "x %s", account.phone)\n',
+        "phone",
+        id="async-log-with-level",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(p):\n    await log.aexception("x", extra={"phone": p})\n',
+        "'phone'",
+        id="async-exception-extra",
+    ),
+    # WR-13 (D-17 `logger.*`): охват по получателю — любой метод опознанного журнала,
+    # низкоуровневый (`_log`, `makeRecord`, `handle`, `callHandlers`, `_proxy_to_logger`),
+    # функция модуля `logging`, метод обёртки и настройка с номером; ссылка на любой метод;
+    # методы, возвращающие журнал (`getChild`, `unbind`, `try_unbind`), — привязки.
+    pytest.param(
+        "app/x.py",
+        'import logging\n\nlogger = logging.getLogger(__name__)\nlogger._log(20, "x %s", (account.phone,))\n',
+        "phone",
+        id="private-log-method",
+    ),
+    pytest.param(
+        "app/x.py",
+        'logger.makeRecord("n", 20, "f", 1, "x %s", (account.phone,), None)\n',
+        "phone",
+        id="make-record",
+    ),
+    pytest.param("app/x.py", "logger.handle(make_record(account.phone))\n", "phone", id="handle-record"),
+    pytest.param("app/x.py", "logger.callHandlers(make_record(account.phone))\n", "phone", id="call-handlers"),
+    pytest.param(
+        "app/x.py", 'logger._proxy_to_logger("info", "x", phone=p)\n', "phone=", id="proxy-to-logger"
+    ),
+    pytest.param(
+        "app/x.py", 'logging.makeLogRecord({"msg": account.phone})\n', "phone", id="logging-make-log-record"
+    ),
+    pytest.param(
+        "app/x.py",
+        "adapter = logging.LoggerAdapter(logger, {})\nadapter.process(account.phone, {})\n",
+        "phone",
+        id="adapter-process",
+    ),
+    pytest.param("app/x.py", "logger.setLevel(account.phone)\n", "phone", id="configuration-method-with-a-number"),
+    pytest.param(
+        "app/x.py",
+        'import logging\n\nlg = logging.getLogger(__name__).getChild("x")\nlg.info(account.phone)\n',
+        "phone",
+        id="getchild-binding",
+    ),
+    pytest.param(
+        "app/x.py",
+        'logging.getLogger(__name__).getChild("x").info(account.phone)\n',
+        "phone",
+        id="getchild-chain",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger().unbind("k")\nlg.info("x", phone=p)\n',
+        "phone=",
+        id="unbind-binding",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger().try_unbind("k")\nlg.info("x", phone=p)\n',
+        "phone=",
+        id="try-unbind-binding",
+    ),
+    pytest.param(
+        "app/x.py",
+        'emit = logger._log\nemit(20, "x %s", (account.phone,))\n',
+        "phone",
+        id="private-log-method-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'functools.partial(logger._log, 20)("x %s", (account.phone,))\n',
+        "phone",
+        id="partial-of-private-log-method",
+    ),
+    # Самопроверка исполнителя 16-23 (перебор 18 490 форм): журнал-атрибут опознанного
+    # журнала — родитель `logger.parent` (`logging.Logger`, `structlog.stdlib.BoundLogger`) и
+    # обёрнутый журнал structlog `logger._logger` (имя по шаблону) — тот же `logger.*`.
+    pytest.param("app/x.py", "logger.parent.info(account.phone)\n", "phone", id="logger-parent-attribute"),
+    pytest.param(
+        "app/x.py", 'logger._logger.info("x", phone=p)\n', "phone=", id="wrapped-structlog-logger-attribute"
+    ),
 ]
 
 
@@ -1648,6 +1912,30 @@ def test_a_logger_bound_in_a_class_body_is_found_through_self_and_cls():
     )
 
 
+def test_any_method_of_an_identified_logger_is_a_log_call():
+    """WR-13 (D-17): охват по получателю — любой метод опознанного журнала судится.
+
+    D-17 пишет `logger.*` / `log.*` / `logging.*`: это охват по получателю, а не список
+    методов. Прежний пункт границы приписывал D-17 закрытый список методов и отпускал
+    `logger._log(…)`, `logger.makeRecord(…)`, `logger.handle(…)` (ревью WR-13); журнал из
+    `getChild` — привязка, как `bind`, и тоже уходил мимо гейта.
+    """
+    prefix = "import logging\n\nlogger = logging.getLogger(__name__)\n"
+    sources = [
+        prefix + 'logger._log(20, "x %s", (account.phone,))\n',
+        prefix + 'logger.makeRecord("n", 20, "f", 1, "x %s", (account.phone,), None)\n',
+        prefix + "logger.handle(make_record(account.phone))\n",
+        'import logging\n\nlg = logging.getLogger(__name__).getChild("x")\nlg.info(account.phone)\n',
+    ]
+
+    for source in sources:
+        offences = python_log_offences(source, "app/x.py")
+        assert any(offence.startswith("app/x.py:4 — имя — phone") for offence in offences), (
+            "метод опознанного журнала вне списка уровней не судится: "
+            f"{source!r} прошёл мимо гейта: {offences}"
+        )
+
+
 # --- Положительные контроли: ничего не найдено ---------------------------------
 
 POSITIVE_CONTROLS = [
@@ -1669,8 +1957,14 @@ POSITIVE_CONTROLS = [
         False,
         id="send-log-record-named-log",
     ),
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
     pytest.param(
-        "app/x.py", 'logging.getLogger("x").setLevel(logging.WARNING)\n', False, id="set-level-is-not-a-log"
+        "app/x.py",
+        'logging.getLogger("x").setLevel(logging.WARNING)\n',
+        True,
+        id="set-level-is-judged-without-a-finding",
     ),
     pytest.param(
         "app/x.py",
@@ -1716,19 +2010,23 @@ POSITIVE_CONTROLS = [
         False,
         id="aliased-threadlocal-unbind-is-not-a-log",
     ),
-    # IN-06 (D-17): настройка журнала, связанного с фабрикой, — не вызов журнала (живая
-    # форма `max_worker/main.py`); признак наличия через такой журнал не краснит.
+    # IN-06 (D-17): атрибут журнала, связанного с фабрикой (`_lg.handlers.clear()`), — не
+    # метод получателя (живая форма `max_worker/main.py`); признак наличия через такой журнал
+    # не краснит.
     pytest.param(
         "app/x.py",
         "_lg = logging.getLogger(name)\n_lg.handlers.clear()\n_lg.propagate = True\n",
         False,
         id="factory-assigned-receiver-configuration-is-not-a-log",
     ),
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
     pytest.param(
         "app/x.py",
         'lg = logging.getLogger("x")\nlg.setLevel(logging.WARNING)\n',
-        False,
-        id="factory-assigned-receiver-set-level-is-not-a-log",
+        True,
+        id="factory-assigned-receiver-set-level-is-judged-without-a-finding",
     ),
     pytest.param(
         "app/x.py",
@@ -1736,14 +2034,17 @@ POSITIVE_CONTROLS = [
         True,
         id="factory-assigned-receiver-presence-flag",
     ),
-    # IN-09 (D-17): ввоз из `logging` того, что не функция журнала, вызовом журнала не
-    # делает; признак наличия через ввезённую функцию не краснит; одноимённая функция без
-    # ввоза из `logging` журналом не считается — гейт не угадывает по имени.
+    # IN-09 (D-17): ввоз фабрики из `logging` функцией журнала её не делает — вызов фабрики
+    # остаётся связыванием; признак наличия через ввезённую функцию не краснит; одноимённая
+    # функция без ввоза из `logging` журналом не считается — гейт не угадывает по имени.
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
     pytest.param(
         "app/x.py",
         'from logging import getLogger, INFO\n\ngetLogger("x").setLevel(INFO)\n',
-        False,
-        id="logging-config-import-is-not-a-log",
+        True,
+        id="logging-config-import-set-level-is-judged-without-a-finding",
     ),
     pytest.param(
         "app/x.py",
@@ -1758,8 +2059,8 @@ POSITIVE_CONTROLS = [
         id="info-without-logging-import-is-not-a-log",
     ),
     # IN-09 (D-17): связывание без фабрики, `:=` с чужим значением, второе связывание записи
-    # `SendLog`, `partial` чужой функции, настройка через `getattr` и фабрика без начальных
-    # значений — не вызовы журнала.
+    # `SendLog`, `partial` чужой функции и фабрика без начальных значений — не вызовы журнала;
+    # настройка через `getattr` — вызов журнала без находок (WR-13).
     pytest.param(
         "app/x.py",
         "class S:\n"
@@ -1791,7 +2092,15 @@ POSITIVE_CONTROLS = [
         False,
         id="partial-of-another-function",
     ),
-    pytest.param("app/x.py", 'getattr(logger, "setLevel")(10)\n', False, id="getattr-configuration-method"),
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
+    pytest.param(
+        "app/x.py",
+        'getattr(logger, "setLevel")(10)\n',
+        True,
+        id="getattr-configuration-method-is-judged-without-a-finding",
+    ),
     pytest.param(
         "app/x.py", "lg = structlog.get_logger(__name__)\n", False, id="factory-without-initial-values"
     ),
@@ -1805,6 +2114,35 @@ POSITIVE_CONTROLS = [
         "from logging import info\n\nreport.info(account.phone)\n",
         False,
         id="info-attribute-after-logging-import-is-not-a-log",
+    ),
+    # WR-13: признак наличия через асинхронный уровень не краснит; асинхронное имя уровня у
+    # неопознанного объекта журналом не делает — рамка D-17, гейт не угадывает по имени.
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await logger.ainfo("x", phone_set=account.phone is not None)\n',
+        True,
+        id="async-level-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(client, account):\n    await client.ainfo(account.phone)\n",
+        False,
+        id="async-named-method-of-non-logger",
+    ),
+    # WR-13 (D-17): журнал из `getChild` — привязка, признак наличия через него не краснит;
+    # метод любого объекта с именем журнала (запись `SendLog` под именем `log`) судится —
+    # цена строгости охвата по получателю, находок нет (на живом дереве таких вызовов ноль).
+    pytest.param(
+        "app/x.py",
+        'lg = logging.getLogger(__name__).getChild("x")\nlg.info("x", phone_set=account.phone is not None)\n',
+        True,
+        id="getchild-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(db, i):\n    log = await db.get(SendLog, i)\n    log.mark_failed("timeout")\n',
+        True,
+        id="send-log-record-method-is-judged-without-a-finding",
     ),
 ]
 
