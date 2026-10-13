@@ -334,7 +334,7 @@ def normalize_manual(text: str) -> str:
         raise PhoneError(PHONE_ERROR_NOT_A_NUMBER)
     if not _is_possible_for_an_account_type(number):
         raise PhoneError(PHONE_ERROR_NOT_A_NUMBER)
-    e164 =phonenumbers.format_number(number, PhoneNumberFormat.E164)
+    e164 = phonenumbers.format_number(number, PhoneNumberFormat.E164)
     if len(e164) - 1 > E164_MAX_DIGITS:
         raise PhoneError(PHONE_ERROR_TOO_LONG)
     return e164
