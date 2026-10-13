@@ -65,11 +65,14 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `values(**{"phone": n for n in …})`; и повторный конструктор модели или её
    псевдонима в модуле — `MessengerAccount.__init__(account, phone=x)`;
 3. ключ литерального отображения — колонка номера, названная литералом одним из
-   наименований (`_phone_column`): строка `"phone"` / `"phone_is_manual"`; атрибут
-   модели или таблицы (`MessengerAccount.phone`, `MessengerAccount.__table__.c.phone`,
+   наименований (`_phone_column`): строка `"phone"` / `"phone_is_manual"` (и
+   склейка `+` строковых констант, f-строка без подстановок); атрибут модели или
+   таблицы (`MessengerAccount.phone`, `MessengerAccount.__table__.c.phone`,
    `t.c.phone`, `inspect(M).c.phone`); индекс (`t.c["phone"]`,
-   `inspect(M).columns["phone"]`); `getattr(M, "phone")`; конструктор колонки
-   `column("phone")` / `literal_column(…)`; и любая производная такой колонки доступом
+   `inspect(M).columns["phone"]`) и поиск по имени (`t.c.get("phone")`,
+   `inspect(M).get_property("phone")`); `getattr(M, "phone")`; конструктор колонки
+   `column("phone")` / `literal_column(…)`, имя позицией или `text=`; и любая
+   производная такой колонки доступом
    к атрибуту или индексу (`.key`, `.name`, `.expression`, `.property.key`,
    `.property.columns[0]`; план 16-22, ревью WR-12). Источник перечня —
    `COLUMN_NAMINGS`, и правило-матрица держит его в суите по каждому судимому
@@ -194,7 +197,10 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
     предикат не прослеживает, даже когда литерал стоит строкой выше в том же файле;
 (2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
     name, …)`, `getattr(s, name)(…)`, f-строка с колонкой в подстановке,
-    `.format(col)`, склейка с переменной;
+    `.format(col)`, склейка с переменной, результат вызова над строкой
+    (`"PHONE".lower()`, `"{}".format("phone")`, `"".join([…])`, `str("phone")`):
+    предикат вызовов не исполняет (самопроверка исполнителя 16-22 — 8 456 форм,
+    ни одна не поймана, и это граница, а не слепота);
 (3) вставка позиционным кортежем значений без имён колонок —
     `insert(MessengerAccount).values((…))`: колонку по исходнику не назвать,
     порядок колонок живёт в модели;
@@ -373,6 +379,12 @@ PARTIAL_NAMES = frozenset({"partial"})
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
 # отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
 COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
+
+# Поиск колонки по имени-литералу: `t.c.get("phone")`, `t.columns.get("phone")`,
+# `inspect(M).get_property("phone")`, `t.c.__getitem__("phone")` — та же колонка, что
+# индекс `t.c["phone"]` (самопроверка исполнителя 16-22). Цена строгости та же, что у
+# индекса: `{form.get("phone"): x}` в пишущем вызове тоже судится.
+COLUMN_LOOKUP_METHODS = frozenset({"get", "get_property", "__getitem__"})
 
 # Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
 # `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
@@ -907,10 +919,10 @@ def _judge_call(
         # и `set_committed_value(account, MessengerAccount.phone.key, x)` пишут
         # атрибут `phone` так же, как `"phone"`. Цена строгости — в шапке, вид 4.
         for attribute, prefix in candidates:
-            if _phone_column(attribute) is not None:
+            if (column := _phone_column(attribute)) is not None:
                 shown = (
-                    repr(attribute.value)
-                    if isinstance(attribute, ast.Constant)
+                    repr(column)
+                    if _constant_text(attribute) is not None
                     else ast.unparse(attribute)
                 )
                 record(node, KIND_SETATTR, f"{name}({prefix}{shown}, …)")
@@ -1376,9 +1388,11 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
 def _phone_column(node: ast.AST) -> str | None:
     """Колонка номера, названная узлом литералом.
 
-    Строка `"phone"`, атрибут `X.phone`, индекс `table.c["phone"]`,
-    `getattr(X, "phone")` с именем-константой и конструктор колонки
-    `column("phone")` / `sa.literal_column("phone_is_manual")`
+    Строка `"phone"` (и склейка `"pho" + "ne"`, f-строка без подстановок), атрибут
+    `X.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")` с именем-константой,
+    поиск по имени `table.c.get("phone")` / `mapper.get_property("phone")`
+    (`COLUMN_LOOKUP_METHODS`) и конструктор колонки `column("phone")` /
+    `sa.literal_column("phone_is_manual")` / `column(text="phone")`
     (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
     строках executemany пишет колонку — замер на SQLite в памяти).
 
@@ -1393,16 +1407,20 @@ def _phone_column(node: ast.AST) -> str | None:
     проверяется ПОСЛЕ прямых наименований. Перечень наименований держит в суите
     правило-матрица `COLUMN_NAMINGS` × `COLUMN_CONTEXTS`.
     """
-    if (
-        isinstance(node, ast.Call)
-        and _call_name(node) in COLUMN_CONSTRUCTORS
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value in PHONE_COLUMNS
+    if isinstance(node, ast.Call) and (
+        _call_name(node) in COLUMN_CONSTRUCTORS
+        or (isinstance(node.func, ast.Attribute) and node.func.attr in COLUMN_LOOKUP_METHODS)
     ):
-        return node.args[0].value
-    if isinstance(node, ast.Constant) and node.value in PHONE_COLUMNS:
-        return node.value
+        # Конструктор колонки — имя первым позиционным или `text=`; поиск колонки по
+        # имени — `t.c.get("phone")`, `mapper.get_property("phone")` (самопроверка
+        # исполнителя 16-22).
+        names = list(node.args[:1]) + [k.value for k in node.keywords if k.arg == "text"]
+        for name in names:
+            if (text := _constant_text(name)) in PHONE_COLUMNS:
+                return text
+    if (text := _constant_text(node)) in PHONE_COLUMNS:
+        # Строка — константа, склейка `+` констант или f-строка без подстановок.
+        return text
     if isinstance(node, ast.Attribute) and node.attr in PHONE_COLUMNS:
         return node.attr
     if (
@@ -1428,6 +1446,15 @@ def _phone_column(node: ast.AST) -> str | None:
         # `.property.key`, `.expression`, `.property.columns[0]` — та же колонка.
         return _phone_column(node.value)
     return None
+
+
+def _constant_text(node: ast.AST) -> str | None:
+    """Строка, названная литералом: константа, склейка `+` констант, f-строка без подстановок."""
+    if isinstance(node, ast.JoinedStr) and all(
+        isinstance(part, ast.Constant) and isinstance(part.value, str) for part in node.values
+    ):
+        return "".join(part.value for part in node.values if isinstance(part, ast.Constant))
+    return _folded_string(node)
 
 
 def _pair_candidates(node: ast.AST) -> list[ast.AST]:
