@@ -953,8 +953,12 @@ def _judge_call(
                         text = _mapping_key_text(key, column)
                         record(key, KIND_KEYWORD, f"{shown}(**{text})")
     if name in ROW_COPY_CALL_NAMES:
-        # Таблица — позицией или `table_name=` (`JUDGED_PARAMETERS`).
-        for table in _bound_arguments(node, min(indices, default=0), names):
+        # Таблица — любым позиционным аргументом или `table_name=`: у COPY asyncpg
+        # прочие параметры только именованные, а метод через класс с явным `self`
+        # (`Connection.copy_records_to_table(conn, "messenger_accounts", …)`) сдвигает
+        # позицию таблицы на одну (самопроверка исполнителя 16-22).
+        tables = positional + [value for keyword, value in named if keyword in names]
+        for table in tables:
             if (
                 isinstance(table, ast.Constant)
                 and isinstance(table.value, str)
@@ -1549,9 +1553,16 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
                 candidates.append(argument)
         return _phone_pairs_among(candidates)
     if name == "from_select":
-        indices, parameters = _judged_bindings(name)
+        # Перечень — в КАЖДОМ позиционном аргументе, а не только на позиции из
+        # `JUDGED_PARAMETERS`: метод через класс с явным `self` —
+        # `Insert.from_select(stmt, names, sel)` и псевдоним `fs = Insert.from_select`
+        # — сдвигает позиции на одну (самопроверка исполнителя 16-22). Второй
+        # параметр, `select`, перечнем имён не бывает.
+        _indices, parameters = _judged_bindings(name)
         found: list[tuple[ast.AST, str]] = []
-        for names in _bound_arguments(call, min(indices, default=0), parameters):
+        bound = [argument for argument in _positional_arguments(call) if argument is not None]
+        bound += [value for keyword, value in _named_arguments(call) if keyword in parameters]
+        for names in bound:
             found.extend(
                 (item, column)
                 for item in _pair_candidates(names)
