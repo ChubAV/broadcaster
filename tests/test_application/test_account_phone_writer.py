@@ -26,9 +26,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.dml import Update
 from sqlalchemy.sql.selectable import Select
 
-from app.application.accounts import phone as writer_module
 from app.application.accounts.phone import (
     ACCOUNT_NOT_IN_SESSION,
+    ACCOUNT_WITHOUT_ID_AFTER_FLUSH,
     PhoneWrite,
     fill_reported_phone,
     record_reported_phone,
@@ -482,7 +482,7 @@ async def test_each_refusal_of_the_recorder_names_its_own_cause(
     with pytest.raises(ValueError) as raised:
         await record_reported_phone(db_session, account, "79991234567")
 
-    assert str(raised.value) == writer_module.ACCOUNT_WITHOUT_ID_AFTER_FLUSH
+    assert str(raised.value) == ACCOUNT_WITHOUT_ID_AFTER_FLUSH
     assert str(raised.value) != ACCOUNT_NOT_IN_SESSION, (
         "вторая линия называет членство в сессии, а объект уже в сессии"
     )
