@@ -27,7 +27,12 @@ UPDATE «записать, если номера нет и он не ручно�
 только формы, которые действительно пишут в колонку.
 
 ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ (восемь). Пишущий вызов опознаётся по имени,
-названному литералом, где бы оно ни стояло: последнее звено вызываемого
+названному литералом, ИЛИ по псевдониму, связанному с таким именем в том же модуле —
+ввозом `from sqlalchemy.orm.attributes import set_committed_value as scv`,
+присваиванием имени `scv = set_committed_value` или атрибута
+`bum = Session.bulk_update_mappings`, `touch = attrs.flag_modified` (`_api_aliases`
+— тем же разрешением `_module_aliases`, что у модели и `functools.partial`; план
+16-22, ревью WR-12), — где бы имя ни стояло: последнее звено вызываемого
 (`stmt.values(…)`); строка вызываемого `getattr(obj, "bulk_update_mappings")(…)`;
 ссылка на пишущий API, поданная другому вызову вместе с его аргументами, —
 `session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
@@ -119,7 +124,9 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 8. колонка номера, названная ПОЗИЦИЕЙ: пара `(MessengerAccount.phone, x)` /
    `("phone_is_manual", x)` / `(table.c["phone"], x)` в `ordered_values(...)` (и
    `ordered_values(*[…])`) и имя колонки номера в перечне `from_select([…,
-   "phone"], select)` — позицией или `names=` (план 16-12, ревью WR-08).
+   "phone"], select)` — позицией или `names=` (план 16-12, ревью WR-08); перечень
+   `from_select` — в той же грамматике контейнера: склейка `["user_id"] +
+   ["phone"]`, условное выражение, `list((…))`, `:=` (план 16-22, ревью WR-12).
 Перечень пар (виды 3, 7, 8: `dict([…])`, `on_duplicate_key_update([…])`,
 `ordered_values(*[…])`) разбирается той же грамматикой контейнера, что
 отображения, — список, кортеж, `*`, comprehension, `+`, условное выражение.
@@ -131,9 +138,11 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 срабатывание здесь снимается переименованием ключа, тогда как пропущенный второй
 писатель снимается только потерей ручного номера у пользователя. Псевдоним модели
 разрешается по всему модулю, без учёта областей видимости: имя, однажды связанное
-с `MessengerAccount`, считается моделью в любой функции того же файла. Та же цена у
-ссылки: имя пишущего API, поданное другому вызову (`handler(update, {"phone":
-x})`), судится как вызов этого API.
+с `MessengerAccount`, считается моделью в любой функции того же файла. Так же
+разрешается псевдоним пишущего API (план 16-22): имя, однажды связанное с
+`set_committed_value`, судится как он и по последнему звену (`obj.scv(…)`). Та же
+цена у ссылки: имя пишущего API, поданное другому вызову (`handler(update,
+{"phone": x})`), судится как вызов этого API.
 
 ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА. `setattr(obj, name, value, /)` и
 `object.__setattr__(self, name, value, /)` — позиционно-только:
@@ -163,15 +172,18 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 `_literal_mappings`, включая `{"phone": v for …}` с постоянным ключом и
 `column("phone")`) или в строковой константе SQL (и в склейке `+` констант);
 пишущий вызов опознаётся по имени, названному литералом (последнее звено,
-`getattr`-строка, ссылка с аргументами, `methodcaller`); судимый параметр — при
-любом литеральном связывании (`JUDGED_PARAMETERS`); атрибут номера — в любой
-позиции цели присваивания. Вне охвата, каждая форма с правдивой причиной:
-(1) значение или ссылка, пришедшие в пишущий вызов ИМЕНЕМ или результатом
-    другого вызова, — переменная, параметр, `build_rows()`, `values(**fields)`,
-    распаковка не-литерала `*args` / `**kw`, `{k: v for …}` с вычисленным ключом,
-    ссылка на пишущий API в переменной (`fn = s.bulk_update_mappings; fn(…)`,
-    `w = partial(…); w(rows)`): поток данных предикат не прослеживает, даже когда
-    литерал стоит строкой выше в том же файле;
+`getattr`-строка, ссылка с аргументами, `methodcaller`), и по псевдониму такого
+имени, связанному в том же модуле ввозом `as` или присваиванием имени либо
+атрибута; судимый параметр — при любом литеральном связывании
+(`JUDGED_PARAMETERS`); атрибут номера — в любой позиции цели присваивания. Вне
+охвата, каждая форма с правдивой причиной:
+(1) значение или ссылка, пришедшие в пишущий вызов ПАРАМЕТРОМ, из контейнера или
+    результатом другого вызова, — переменная со значением, параметр функции,
+    `build_rows()`, `values(**fields)`, распаковка не-литерала `*args` / `**kw`,
+    `{k: v for …}` с вычисленным ключом, ссылка на пишущий API, пришедшая
+    параметром, из контейнера (`writers["bulk"](…)`) или результатом другого вызова
+    (`w = partial(…); w(rows)`, `fn = make_writer(); fn(…)`): поток данных
+    предикат не прослеживает, даже когда литерал стоит строкой выше в том же файле;
 (2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
     name, …)`, `getattr(s, name)(…)`, f-строка с колонкой в подстановке,
     `.format(col)`, склейка с переменной;
@@ -181,8 +193,11 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 (4) пишущий API без имени или неизвестного типа — `type(account)(phone=…)`,
     `obj.__init__(phone=…)` у объекта, тип которого по исходнику не назван (без
     типов неотличим от `super().__init__(phone=…)` любого класса с параметром
-    `phone`), псевдоним модели, заведённый в чужом файле: без типов он неотличим от
-    законного `render(…, phone=…)`;
+    `phone`), псевдоним модели или пишущего API, заведённый в ЧУЖОМ файле и
+    ввезённый оттуда под своим именем (`from app.db import Account`, `from
+    app.helpers import scv`): поток данных между модулями предикат не
+    прослеживает, а без типов такое имя неотличимо от законного `render(…,
+    phone=…)`;
 (5) НЕ запись в колонку — `account.__dict__["phone"] = …`, `vars(account)[…] = …`,
     `instance_dict(account)[…] = …` сами по себе: обход инструментовки ORM,
     оператора UPDATE не порождает (и с `flag_dirty(account)` — тоже); а также
@@ -210,7 +225,11 @@ WR-08 (2026-10-09) — ещё девять (`parameters=`, comprehension и ге
 `values(**{"phone": n for …})`; это третий круг одного класса (WR-01 → WR-08 →
 WR-10). План 16-17 перебрал сигнатуры каждого судимого API (`JUDGED_PARAMETERS`,
 сторож и матрица), научил предикат опознавать API по ссылке и по строке и судить
-вид 1 по грамматике, а заявление расширил ровно на то, что предикат видит.
+вид 1 по грамматике, а заявление расширил ровно на то, что предикат видит. До
+плана 16-22 пункт (1) границы называл «ссылкой на пишущий API в переменной» и
+форму `fn = s.bulk_update_mappings; fn(…)`; план 16-22 разрешил псевдонимы пишущих
+API в том же модуле (`_api_aliases`), такая ссылка теперь ловится, и из пункта (1)
+она убрана.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -672,6 +691,10 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     write_names = WRITE_CALL_NAMES | _module_model_aliases(tree)
     # Имена, которые судятся у ссылки: всякий пишущий API, который судит `_judge_call`.
     judged_names = _judged_call_names(write_names)
+    # Псевдонимы пишущих API в том же модуле — ввоз `as`, присваивание имени или
+    # атрибута (ревью WR-12): вызов и ссылка псевдонима судятся как исходный API.
+    api_aliases = _api_aliases(tree, judged_names)
+    referable = judged_names | frozenset(api_aliases)
     # Вызовы, чей результат тут же вызывается (`partial(ref, …)(…)`): ссылка в них
     # судится один раз — у применения, с аргументами обоих вызовов.
     applied = {
@@ -687,7 +710,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # as bind`, `bind = functools.partial`) — обёртка ссылки у `_bound_reference`.
     partial_names = PARTIAL_NAMES | _module_aliases(tree, "partial")
     references = {
-        id(node): _referenced_calls(node, judged_names, partial_names)
+        id(node): _referenced_calls(node, referable, partial_names)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (id(node) not in applied or _call_name(node) == "methodcaller")
@@ -720,12 +743,16 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         elif isinstance(node, ast.Call):
             name = _call_name(node)
             if name is not None:
-                _judge_call(node, name, write_names, record)
+                _judge_call(*_canonical_call(node, name, api_aliases), write_names, record)
             # `methodcaller("…", …)` судится у себя: его применение подаёт объект,
             # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
             if id(node) not in consumed:
                 for synthetic, referenced, _carrier in references.get(id(node), []):
-                    _judge_call(synthetic, referenced, write_names, record)
+                    _judge_call(
+                        *_canonical_call(synthetic, referenced, api_aliases),
+                        write_names,
+                        record,
+                    )
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -1437,7 +1464,12 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
     У `ordered_values` — каждый позиционный аргумент-пара, чей первый элемент —
     колонка номера; у `from_select` — элементы параметра `names`, связанного
     позицией, именем, `**{"names": …}` или `*[…]` (`JUDGED_PARAMETERS`), являющиеся
-    колонкой номера.
+    колонкой номера. Перечень `names` разбирается грамматикой литерального
+    контейнера `_pair_candidates` — список, кортеж, набор, `*`, склейка `+`,
+    условное выражение, `:=`, обёртки `list(…)` и подобные, элемент comprehension:
+    до плана 16-22 судились только голые список и кортеж, и
+    `from_select(["user_id"] + ["phone"], sel)` проходил, хотя пишет колонку (ревью
+    WR-12, замер верификатора на SQLite в памяти).
     """
     name = _call_name(call)
     if name == "ordered_values":
@@ -1453,12 +1485,11 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
         indices, parameters = _judged_bindings(name)
         found: list[tuple[ast.AST, str]] = []
         for names in _bound_arguments(call, min(indices, default=0), parameters):
-            if isinstance(names, (ast.List, ast.Tuple)):
-                found.extend(
-                    (item, column)
-                    for item in names.elts
-                    if (column := _phone_column(item)) is not None
-                )
+            found.extend(
+                (item, column)
+                for item in _pair_candidates(names)
+                if (column := _phone_column(item)) is not None
+            )
         return found
     return []
 
@@ -1501,6 +1532,53 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
                         known.add(target.id)
                         changed = True
     return frozenset(known - {name})
+
+
+def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
+    """Псевдонимы пишущих API в ТОМ ЖЕ модуле: «псевдоним → исходное имя».
+
+    Для каждого имени из `judged_names` (`_judged_call_names`) — его псевдонимы
+    `_module_aliases`: ввоз `from … import <имя> as X`, присваивание `X = <имя>` и
+    `X = <объект>.<имя>`, цепочка `Y = X`, — тот же помощник, что у модели и
+    `functools.partial`. Псевдоним, который сам судимое имя, не переводится. До плана
+    16-22 у пишущих API разрешения псевдонимов не было: `set_committed_value as scv`
+    и `bum = Session.bulk_update_mappings` проходили гейт (ревью WR-12).
+
+    `_module_aliases` зовётся только для имён, которые в модуле вообще ввозятся под
+    псевдонимом или стоят значением присваивания, — итог тот же, обход короче.
+    """
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            bound.update(alias.name for alias in node.names if alias.asname)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            if isinstance(node.value, ast.Name):
+                bound.add(node.value.id)
+            elif isinstance(node.value, ast.Attribute):
+                bound.add(node.value.attr)
+    aliases: dict[str, str] = {}
+    for name in sorted(judged_names & bound):
+        for alias in sorted(_module_aliases(tree, name)):
+            if alias not in judged_names:
+                aliases.setdefault(alias, name)
+    return aliases
+
+
+def _canonical_call(
+    call: ast.Call, name: str, api_aliases: dict[str, str]
+) -> tuple[ast.Call, str]:
+    """Вызов псевдонима пишущего API как вызов самого API: (вызов, имя).
+
+    `scv(account, "phone", x)` при `set_committed_value as scv` — синтетический
+    `set_committed_value(account, "phone", x)` на месте исходного: ветки
+    `_judge_call`, которые берут имя у самого узла (`_values_dict_keys`,
+    `_positional_phone_columns`), видят исходное имя. Имя без псевдонима — как есть.
+    """
+    original = api_aliases.get(name)
+    if original is None:
+        return call, name
+    func = ast.copy_location(ast.Name(id=original, ctx=ast.Load()), call.func)
+    return _synthetic_call(call, func, list(call.args), list(call.keywords)), original
 
 
 def _mapping_key_text(key: ast.AST, column: str) -> str:
