@@ -20,7 +20,8 @@
 номера находок нет. Вызов фабрики — связывание, а не вызов журнала (его начальные значения
 судятся, как `bind`, см. ниже). Получатель `X` — имя `logger`/`log`/`logging`/`_log`/
 `_logger` (и любое имя, оканчивающееся на `_log`/`_logger`), атрибут с тем же окончанием
-(`self.log`), корневой журнал `logging.root` (`.root` любого журнала), вызов фабрики
+(`self.log`), корневой журнал `logging.root` (`.root` любого журнала) и родитель
+`logger.parent` (`LOGGER_ATTRIBUTE_LOGGERS`), вызов фабрики
 (`LOGGER_FACTORIES`: `get_logger`/`getLogger`/`get_task_logger`, обёртки-фабрики
 `LoggerAdapter`/`wrap_logger` и классы журнала, созданные напрямую, — `Logger`,
 `RootLogger`, `PrintLogger`, `WriteLogger`, `BytesLogger`, `BoundLogger`) или журнал,
@@ -29,8 +30,8 @@
 `logger.bind(...).info`, `logging.getLogger(…).getChild("x").info`. Результат вызова
 прочих методов журналом не считается (`handler = logging.StreamHandler(…)` — обработчик).
 Член опознанного получателя — его метод (`logger._log`, `logging.log`), а журналом он
-остаётся, только если это `root`, атрибут, связанный в модуле с журналом, или имя по
-шаблону журнала (`logger._logger` — обёрнутый журнал structlog).
+остаётся, только если это `root` / `parent`, атрибут, связанный в модуле с журналом, или
+имя по шаблону журнала (`logger._logger` — обёрнутый журнал structlog).
 
 Получатель опознаётся и по связыванию в модуле — `module_log_names`, внутри рамки D-17:
 тот же журнал из фабрики, тот же `logging.*`, тот же `logger.*` под другим именем.
@@ -305,6 +306,11 @@ LOGGING_MODULES = frozenset({"logging"})
 # любого журнала) — корневой журнал; `from logging import root` — он же.
 LOGGING_MODULE_LOGGERS = frozenset({"root"})
 
+# Члены журнала, которые сами — журнал: корневой `root` и родитель `parent` (`logging.Logger`
+# и `structlog.stdlib.BoundLogger`, замер `dir()`); прочие члены опознанного журнала — его
+# методы (ревью WR-13, самопроверка исполнителя 16-23: `logger.parent.info(…)` уходил мимо).
+LOGGER_ATTRIBUTE_LOGGERS = LOGGING_MODULE_LOGGERS | frozenset({"parent"})
+
 # Фабрики журнала (D-17). `get_task_logger` — фабрика журнала Celery: фабрика по смыслу
 # D-17, а не новый получатель (ревью IN-06); в живом дереве её нет.
 # `LoggerAdapter` (класс `logging`, создающий журнал над журналом) и `wrap_logger` (фабрика
@@ -512,12 +518,13 @@ def _is_factory_call(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES
 def _log_method_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
     """Ссылка на ЛЮБОЙ метод опознанного журнала (охват по получателю D-17, ревью WR-13):
     `logger.info`, `logger._log`, `getattr(logger, "makeRecord")` — член опознанного
-    получателя, кроме журнала-атрибута (`root`, атрибут, связанный в модуле с журналом) и
+    получателя, кроме журнала-атрибута (`root`, `parent`, атрибут, связанный в модуле с
+    журналом) и
     фабрики (`logging.getLogger` — фабрика: её вызов — связывание, а не вызов журнала)."""
     member = _member(node)
     return (
         member is not None
-        and member[1] not in LOGGING_MODULE_LOGGERS
+        and member[1] not in LOGGER_ATTRIBUTE_LOGGERS
         and member[1] not in names.receiver_attributes
         and not _is_factory_reference(node, names)
         and _is_log_receiver(member[0], names)
@@ -710,7 +717,7 @@ def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES
         return (
             bool(_LOGGER_NAME.search(attribute))
             or attribute in names.receiver_attributes
-            or (attribute in LOGGING_MODULE_LOGGERS and _is_log_receiver(owner, names))
+            or (attribute in LOGGER_ATTRIBUTE_LOGGERS and _is_log_receiver(owner, names))
         )
     if isinstance(node, ast.Call):
         # `structlog.get_logger(__name__).info(...)`, `gl().info(...)`, `logger.bind(...).info(...)`
