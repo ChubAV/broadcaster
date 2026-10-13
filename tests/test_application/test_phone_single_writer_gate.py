@@ -1724,6 +1724,41 @@ def test_a_planted_backfill_with_attribute_keys_reddens_the_gate(tmp_path):
     ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
 
 
+def test_an_aliased_writer_api_in_the_same_module_is_judged():
+    """Пишущий API под псевдонимом ввоза в том же модуле судится как сам API.
+
+    Гейт уже разрешает псевдонимы модели (`from … import MessengerAccount as
+    Account`, `Model = models.MessengerAccount`) и `functools.partial` в том же
+    модуле (`_module_aliases`), а у пишущих API такого разрешения не было:
+    `from sqlalchemy.orm.attributes import set_committed_value as scv` и
+    `scv(account, "phone", x)` проходили гейт молча (ревью WR-12).
+    """
+    aliased = {
+        "set_committed_value": (
+            "from sqlalchemy.orm.attributes import set_committed_value as scv\n"
+            'scv(account, "phone", x)\n'
+        ),
+        "flag_modified": (
+            "from sqlalchemy.orm.attributes import flag_modified as touch\n"
+            'touch(account, "phone")\n'
+        ),
+    }
+    for api, source in aliased.items():
+        offences = phone_write_offences(source, "app/x.py")
+
+        assert len(offences) == 1, (
+            f"псевдоним пишущего API в том же модуле не опознан: `{api}` под "
+            f"псевдонимом дал {len(offences)} находок вместо одной: {offences}"
+        )
+        _location, found_kind, subject = offences[0].split(" — ", 2)
+        assert found_kind == KIND_SETATTR, (
+            f"псевдоним `{api}`: вид «{found_kind}», ожидался «{KIND_SETATTR}»: {offences}"
+        )
+        assert api in subject and "phone" in subject, (
+            f"предмет находки не называет `{api}` и колонку `phone`: {offences}"
+        )
+
+
 ASSIGNMENT_CASES = [
     pytest.param("account.phone = x\n", "account.phone", id="assign-phone"),
     pytest.param(
@@ -3063,6 +3098,89 @@ LITERAL_FORM_CASES = [
         "phone",
         id="values-table-c-attribute-name",
     ),
+    # Ревью WR-12, верификация раунда 4 (2026-10-12): перечень `from_select` в
+    # литеральном контейнере и пишущий API под псевдонимом того же модуля. До плана
+    # 16-22 гейт давал `[]` у каждой формы; `from_select(["user_id"] + ["phone"], sel)`
+    # пишет колонку (замер верификатора на SQLite в памяти).
+    pytest.param(
+        'stmt = insert(MessengerAccount).from_select(["user_id"] + ["phone"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-concatenation",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).from_select("
+        '["user_id", "phone"] if full else ["user_id"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-conditional",
+    ),
+    pytest.param(
+        'stmt = insert(MessengerAccount).from_select(list(("user_id", "phone")), sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-list-wrapper",
+    ),
+    pytest.param(
+        'stmt = insert(MessengerAccount).from_select((names := ["user_id", "phone"]), sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-walrus",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).from_select("
+        'names=["user_id"] + ["phone"], select=sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-keyword-concatenation",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import set_committed_value as scv\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="import-alias-set-committed-value",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import flag_modified as touch\n"
+        'touch(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="import-alias-flag-modified",
+    ),
+    pytest.param(
+        "bum = Session.bulk_update_mappings\n"
+        'bum(session, MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="assigned-reference-bulk-update",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "scv = set_committed_value\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="assigned-name-set-committed-value",
+    ),
+    pytest.param(
+        "import sqlalchemy.orm.attributes as attrs\n"
+        "touch = attrs.flag_modified\n"
+        'touch(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="assigned-module-attribute-flag-modified",
+    ),
 ]
 
 
@@ -3325,6 +3443,20 @@ LEGITIMATE_CASES = [
         id="values-other-table-column-name",
     ),
     pytest.param("setattr(obj, field_name, x)\n", id="setattr-computed-attribute-name"),
+    # Ревью WR-12 (план 16-22): склейка перечня `from_select` без колонки номера и
+    # псевдонимы пишущих API, которые номер не пишут.
+    pytest.param(
+        'stmt = insert(Group).from_select(["account_id"] + ["title"], sel)\n',
+        id="from-select-other-columns-concatenation",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import set_committed_value as scv\n"
+        'scv(account, "status", x)\n',
+        id="aliased-writer-api-other-attribute",
+    ),
+    pytest.param(
+        'upd = settings.update\nupd(theme="dark")\n', id="assigned-dict-update-other-key"
+    ),
 ]
 
 
