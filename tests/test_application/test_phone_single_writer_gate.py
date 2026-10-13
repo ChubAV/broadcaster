@@ -3823,6 +3823,45 @@ LITERAL_FORM_CASES = [
         "messenger_accounts",
         id="class-attribute-alias-copy-to-table",
     ),
+    # Самопроверка 16-22, заход 1 (ось «как назван API»): дескриптор колонки и
+    # повторный конструктор модели судятся по ПОЛУЧАТЕЛЮ, а псевдоним
+    # `X = MessengerAccount.phone.__set__`, применение `methodcaller(…)(obj)` и вызов
+    # через класс дескриптора его теряли.
+    pytest.param(
+        "set_phone = MessengerAccount.phone.__set__\nset_phone(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="bound-alias-descriptor-set",
+    ),
+    pytest.param(
+        "init = MessengerAccount.__init__\nreinit = init\nreinit(account, phone=x)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="bound-alias-chain-model-init",
+    ),
+    pytest.param(
+        'operator.methodcaller("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-applied-descriptor-set",
+    ),
+    pytest.param(
+        'operator.methodcaller("__init__", account, phone=x)(MessengerAccount)\n',
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="methodcaller-applied-model-init",
+    ),
+    pytest.param(
+        "InstrumentedAttribute.__set__(MessengerAccount.phone, account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="unbound-descriptor-set",
+    ),
 ]
 
 
@@ -4107,6 +4146,15 @@ LEGITIMATE_CASES = [
     pytest.param(
         "stmt = update(Group).values({Group.title.property.key: x})\n",
         id="values-other-property-key",
+    ),
+    # Самопроверка 16-22, заход 1: дескриптор и конструктор чужой колонки / модели.
+    pytest.param(
+        "set_title = Group.title.__set__\nset_title(group, t)\n",
+        id="bound-alias-descriptor-set-other-column",
+    ),
+    pytest.param(
+        'operator.methodcaller("__init__", group, phone=x)(Group)\n',
+        id="methodcaller-applied-other-model-init",
     ),
     # Самопроверка 16-22, заход 1: те же наименования у ЧУЖОЙ колонки.
     pytest.param(
