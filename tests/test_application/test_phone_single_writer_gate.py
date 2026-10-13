@@ -2265,6 +2265,337 @@ def test_every_literal_binding_of_a_judged_parameter_is_judged(row, form):
     )
 
 
+class ColumnNaming(NamedTuple):
+    """Наименование колонки номера в исходнике: `id` строки и выражение `source`."""
+
+    id: str
+    source: str
+
+
+# Ось «как названа колонка» (план 16-22, ревью WR-12; решение владельца О-10 (а)).
+# Каждое выражение статически называет колонку номера или её имя; правило-матрица
+# подаёт каждое в каждый судимый контекст `COLUMN_CONTEXTS`. До плана 16-22 эта ось
+# была закрытым списком самопроверки исполнителя 16-17 (`"phone"`, `M.phone`,
+# `t.c["phone"]`, `getattr`, `column(…)`), и `.key` в него не вошёл.
+COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
+    ColumnNaming("string", '"phone"'),
+    ColumnNaming("string-is-manual", '"phone_is_manual"'),
+    ColumnNaming("model-attribute", "MessengerAccount.phone"),
+    ColumnNaming("model-attribute-is-manual", "MessengerAccount.phone_is_manual"),
+    ColumnNaming("model-attribute-key", "MessengerAccount.phone.key"),
+    ColumnNaming("model-attribute-name", "MessengerAccount.phone.name"),
+    ColumnNaming("table-attribute", "MessengerAccount.__table__.c.phone"),
+    ColumnNaming("table-c-index", 'accounts.c["phone"]'),
+    ColumnNaming("table-c-attribute-name", "accounts.c.phone.name"),
+    ColumnNaming("inspect-c", "inspect(MessengerAccount).c.phone"),
+    ColumnNaming("inspect-columns-index", 'inspect(MessengerAccount).columns["phone"]'),
+    ColumnNaming("getattr", 'getattr(MessengerAccount, "phone")'),
+    ColumnNaming("column", 'column("phone")'),
+    ColumnNaming("module-column", 'sa.column("phone")'),
+    ColumnNaming("literal-column", 'literal_column("phone")'),
+    ColumnNaming("property-key", "MessengerAccount.phone.property.key"),
+    ColumnNaming("property-columns-index", "MessengerAccount.phone.property.columns[0]"),
+    ColumnNaming("expression", "MessengerAccount.phone.expression"),
+    ColumnNaming("table-attribute-key", "MessengerAccount.__table__.c.phone.key"),
+    ColumnNaming("getattr-key", 'getattr(MessengerAccount, "phone").key'),
+)
+
+
+class ColumnContext(NamedTuple):
+    """Судимый контекст: исходник `template` с местом `{column}`, вид и вызов находки."""
+
+    id: str
+    template: str
+    kind: str
+    call: str
+
+
+# Места в черновиках контекстов: колонка, отображение, строка, строки, пары.
+_AT_COLUMN, _AT_MAP, _AT_ROW, _AT_ROWS, _AT_PAIRS = "@COLUMN@", "@MAP@", "@ROW@", "@ROWS@", "@PAIRS@"
+
+# Формы литерального отображения с колонкой ключом (грамматика `_literal_mappings`).
+_MAPPING_FORMS = {
+    "dict": "{@COLUMN@: x}",
+    "dict-comprehension": "{@COLUMN@: v for v in xs}",
+    "dict-call": "dict({@COLUMN@: x})",
+    "nested-double-star": "{**{@COLUMN@: x}}",
+    "merge": "({@COLUMN@: x} | base)",
+}
+
+# Контексты отображения: ключ `values`, `**` у `values` и модели, `Query.update`
+# позицией и `values=`, `set_` при конфликте именем и позицией (PostgreSQL — 4-я
+# позиция, SQLite — 3-я), MySQL `on_duplicate_key_update` позицией и `**`.
+_MAPPING_CONTEXTS = (
+    ("values", "stmt = update(MessengerAccount).values(@MAP@)", KIND_DICT_KEY, "values"),
+    (
+        "values-double-star",
+        "stmt = update(MessengerAccount).values(**@MAP@)",
+        KIND_KEYWORD,
+        "values",
+    ),
+    ("model-double-star", "account = MessengerAccount(**@MAP@)", KIND_KEYWORD, MODEL_NAME),
+    ("query-update", "session.query(MessengerAccount).update(@MAP@)", KIND_DICT_KEY, "update"),
+    (
+        "query-update-values-keyword",
+        "session.query(MessengerAccount).update(values=@MAP@)",
+        KIND_DICT_KEY,
+        "update",
+    ),
+    (
+        "on-conflict-set-keyword",
+        'stmt = insert(MessengerAccount).on_conflict_do_update(index_elements=["id"], '
+        "set_=@MAP@)",
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+    ),
+    (
+        "on-conflict-postgresql-positional",
+        'stmt = insert(MessengerAccount).on_conflict_do_update(None, ["id"], None, @MAP@)',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+    ),
+    (
+        "on-conflict-sqlite-positional",
+        'stmt = insert(MessengerAccount).on_conflict_do_update(["id"], None, @MAP@)',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+    ),
+    (
+        "on-duplicate-key-update",
+        "stmt = insert(MessengerAccount).on_duplicate_key_update(@MAP@)",
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+    ),
+    (
+        "on-duplicate-key-update-double-star",
+        "stmt = insert(MessengerAccount).on_duplicate_key_update(**@MAP@)",
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+    ),
+)
+
+# Строка executemany с колонкой ключом и литеральный контейнер строк.
+_ROW_FORMS = {
+    "dict": '{"id": 1, @COLUMN@: p}',
+    "dict-comprehension": "{@COLUMN@: p for p in ps}",
+    "dict-call": 'dict({"id": 1, @COLUMN@: p})',
+    "nested-double-star": '{**{"id": 1, @COLUMN@: p}}',
+    "merge": '({"id": 1, @COLUMN@: p} | base)',
+}
+_ROW_CONTAINERS = {
+    "bare": "@ROW@",
+    "list": "[@ROW@]",
+    "comprehension": "[@ROW@ for p in ps]",
+    "generator": "(@ROW@ for p in ps)",
+    "tuple": "(@ROW@,)",
+    "concatenation": '[{"id": 0}] + [@ROW@]',
+    "conditional": "[@ROW@] if full else []",
+    "list-wrapper": "list((@ROW@,))",
+}
+
+# Перечень пар «колонка — значение» (`ordered_values(*…)`, `on_duplicate_key_update`,
+# `dict([…])`) и перечень имён `from_select`.
+_PAIR_FORMS = {
+    "list": "[(@COLUMN@, x)]",
+    "tuple": "((@COLUMN@, x),)",
+    "comprehension": "[(@COLUMN@, v) for v in xs]",
+    "concatenation": '[("status", s)] + [(@COLUMN@, x)]',
+    "conditional": "[(@COLUMN@, x)] if full else []",
+    "list-wrapper": "list(((@COLUMN@, x),))",
+}
+_NAMES_FORMS = {
+    "list": '["user_id", @COLUMN@]',
+    "tuple": '("user_id", @COLUMN@)',
+    "concatenation": '["user_id"] + [@COLUMN@]',
+    "conditional": '["user_id", @COLUMN@] if full else ["user_id"]',
+    "list-wrapper": 'list(("user_id", @COLUMN@))',
+    "walrus": '(names := ["user_id", @COLUMN@])',
+}
+
+
+def _column_context(context_id: str, draft: str, kind: str, call: str) -> ColumnContext:
+    """Черновик с `@COLUMN@` → шаблон `str.format` с местом `{column}`."""
+    template = draft.replace("{", "{{").replace("}", "}}").replace(_AT_COLUMN, "{column}")
+    return ColumnContext(context_id, template + "\n", kind, call)
+
+
+def _bound_call(
+    row: JudgedParameter, value: str, form: str, receiver: str, tail: tuple[str, str] = ("", "")
+) -> str:
+    """Вызов API строки `JUDGED_PARAMETERS` со значением судимого параметра формой `form`.
+
+    `tail` — (хвост после позиционного связывания, хвост после именованного): после
+    `name=…` позиционный аргумент — синтаксическая ошибка.
+    """
+    fillers = ["account" if row.kind == KIND_SETATTR else f"a{i}" for i in range(row.call_index)]
+    if form == "positional":
+        arguments = [*fillers, value]
+    elif form == "keyword":
+        arguments = [*fillers, f"{row.parameter}={value}"]
+    elif form == "double-star":
+        arguments = [*fillers, f'**{{"{row.parameter}": {value}}}']
+    else:
+        arguments = ["*[" + ", ".join([*fillers, value]) + "]"]
+    rest = tail[0] if form in ("positional", "starred") else tail[1]
+    if rest:
+        arguments.append(rest)
+    return f"{receiver}{row.call}({', '.join(arguments)})"
+
+
+def _column_contexts() -> tuple[ColumnContext, ...]:
+    """Судимые контексты колонки: каждый параметр `JUDGED_PARAMETERS`, несущий колонку,
+    и API без именованного параметра — × каждая форма контейнера."""
+    contexts: list[ColumnContext] = []
+    for context_id, draft, kind, call in _MAPPING_CONTEXTS:
+        for form, mapping in _MAPPING_FORMS.items():
+            contexts.append(
+                _column_context(f"{context_id}-{form}", draft.replace(_AT_MAP, mapping), kind, call)
+            )
+    # Строки executemany: каждая строка таблицы вида строк × каждая форма связывания
+    # (позиционные формы одного вызова и одной позиции — один раз).
+    row_drafts: dict[str, str] = {}
+    for row in JUDGED_PARAMETERS:
+        if row.kind != KIND_ROW_MAPPING:
+            continue
+        for form in BINDING_FORMS:
+            by_position = form in ("positional", "starred")
+            key = f"{row.call}-{form}" + ("" if by_position else f"-{row.parameter}")
+            receiver = "op." if row.call == "bulk_insert" else "session."
+            row_drafts[key] = _bound_call(row, _AT_ROWS, form, receiver)
+    for reference in ("bulk_update_mappings", "bulk_insert_mappings"):
+        row_drafts[f"run-sync-{reference}"] = (
+            f"session.run_sync(Session.{reference}, MessengerAccount, {_AT_ROWS})"
+        )
+        # `fn=` исполним только без позиционных аргументов: `run_sync(M, rows,
+        # fn=ref)` падает `TypeError: got multiple values for argument 'fn'`.
+        row_drafts[f"run-sync-fn-{reference}"] = (
+            f"session.run_sync(fn=Session.{reference}, mapper=MessengerAccount, "
+            f"mappings={_AT_ROWS})"
+        )
+    # Каждый контейнер строк — со строкой-словарём, каждая форма строки — в списке:
+    # полный крест форм строки и контейнеров — в самопроверке исполнителя (сводка).
+    row_shapes = [(container, "dict") for container in _ROW_CONTAINERS] + [
+        ("list", form) for form in _ROW_FORMS if form != "dict"
+    ]
+    for key, draft in row_drafts.items():
+        call = key.removeprefix("run-sync-fn-").removeprefix("run-sync-").split("-")[0]
+        for container, form in row_shapes:
+            rows = _ROW_CONTAINERS[container].replace(_AT_ROW, _ROW_FORMS[form])
+            contexts.append(
+                _column_context(
+                    f"{key}-{container}-{form}",
+                    draft.replace(_AT_ROWS, rows),
+                    KIND_ROW_MAPPING,
+                    call,
+                )
+            )
+    # Пары: `ordered_values` (пара позицией и `*перечень`), MySQL
+    # `on_duplicate_key_update([…])`, `values(dict([…]))`.
+    contexts.append(
+        _column_context(
+            "ordered-values-pair",
+            "stmt = update(MessengerAccount).ordered_values((@COLUMN@, x))",
+            KIND_POSITIONAL_COLUMN,
+            "ordered_values",
+        )
+    )
+    pair_contexts = (
+        (
+            "ordered-values-starred",
+            "stmt = update(MessengerAccount).ordered_values(*@PAIRS@)",
+            KIND_POSITIONAL_COLUMN,
+            "ordered_values",
+        ),
+        (
+            "on-duplicate-key-update-pairs",
+            "stmt = insert(MessengerAccount).on_duplicate_key_update(@PAIRS@)",
+            KIND_UPSERT_SET,
+            "on_duplicate_key_update",
+        ),
+        (
+            "values-dict-pairs",
+            "stmt = update(MessengerAccount).values(dict(@PAIRS@))",
+            KIND_DICT_KEY,
+            "values",
+        ),
+    )
+    for context_id, draft, kind, call in pair_contexts:
+        for form, pairs in _PAIR_FORMS.items():
+            contexts.append(
+                _column_context(f"{context_id}-{form}", draft.replace(_AT_PAIRS, pairs), kind, call)
+            )
+    # Имя атрибута у писателей по имени и перечень имён `from_select` — каждая строка
+    # таблицы × каждая форма связывания.
+    for row in JUDGED_PARAMETERS:
+        if row.kind == KIND_SETATTR:
+            tail = ("", "") if row.call == "flag_modified" else ("x", "value=x")
+            receiver = BINDING_RECEIVERS.get(row.call, "")
+            for form in BINDING_FORMS:
+                contexts.append(
+                    _column_context(
+                        f"{row.api}-{form}",
+                        _bound_call(row, _AT_COLUMN, form, receiver, tail),
+                        KIND_SETATTR,
+                        row.call,
+                    )
+                )
+        elif row.kind == KIND_POSITIONAL_COLUMN:
+            receiver = "stmt = insert(MessengerAccount)."
+            for form in BINDING_FORMS:
+                for names_form, names in _NAMES_FORMS.items():
+                    contexts.append(
+                        _column_context(
+                            f"from-select-{form}-{names_form}",
+                            _bound_call(row, names, form, receiver, ("select=sel", "select=sel")),
+                            KIND_POSITIONAL_COLUMN,
+                            row.call,
+                        )
+                    )
+    contexts.append(
+        _column_context(
+            "object-setattr-bound", "account.__setattr__(@COLUMN@, x)", KIND_SETATTR, "__setattr__"
+        )
+    )
+    return tuple(contexts)
+
+
+COLUMN_CONTEXTS: tuple[ColumnContext, ...] = _column_contexts()
+
+
+@pytest.mark.parametrize("naming", [pytest.param(n, id=n.id) for n in COLUMN_NAMINGS])
+def test_every_column_naming_in_every_judged_context_is_a_write(naming):
+    """Каждое наименование колонки в каждом судимом контексте — ровно одна находка.
+
+    Ось «как названа колонка» была закрытым списком самопроверки исполнителя 16-17
+    (`"phone"`, `M.phone`, `t.c["phone"]`, `getattr`, `column(…)`), и четвёртый круг
+    одной оси (WR-01 → WR-08 → WR-10 → WR-12) открылся именно на ней:
+    `MessengerAccount.phone.key` в строках `bulk_update_mappings` проходил гейт. Матрица
+    держит ось в суите: каждое наименование `COLUMN_NAMINGS` подаётся в каждый контекст
+    `COLUMN_CONTEXTS` — каждый судимый параметр `JUDGED_PARAMETERS`, несущий колонку, и
+    API без именованного параметра × каждая форма контейнера. Новое наименование или
+    подъём SQLAlchemy дают одну красную строку на наименование со всеми промахами сразу.
+    Решение владельца О-10 (а): заявление шапки прежнее, предикат догоняет его.
+    """
+    assert len(COLUMN_CONTEXTS) >= 500, (
+        f"контекстов матрицы {len(COLUMN_CONTEXTS)} — меньше 500: матрица проверяет почти ничто"
+    )
+    misses: list[str] = []
+    for context in COLUMN_CONTEXTS:
+        source = context.template.format(column=naming.source)
+        offences = phone_write_offences(source, "scripts/x.py")
+        if len(offences) == 1:
+            _location, found_kind, subject = offences[0].split(" — ", 2)
+            if found_kind == context.kind and context.call in subject and "phone" in subject:
+                continue
+        misses.append(f"  {context.id}: `{source.strip()}` → {offences}")
+
+    assert not misses, (
+        f"наименование колонки не опознано: `{naming.source}` ({naming.id}) — "
+        f"{len(misses)} из {len(COLUMN_CONTEXTS)} контекстов дали не ровно одну находку "
+        "ожидаемого вида:\n" + "\n".join(misses)
+    )
+
+
 # Литеральные формы записи из ревью WR-01: (исходник, вид, имя вызова, колонка).
 # Каждая видна в исходнике, а до плана 16-09 проходила гейт молча.
 LITERAL_FORM_CASES = [
@@ -3259,6 +3590,32 @@ LITERAL_FORM_CASES = [
         "phone",
         id="assigned-module-attribute-flag-modified",
     ),
+    # План 16-22, правило-матрица `COLUMN_NAMINGS` × `COLUMN_CONTEXTS`: производная
+    # колонки номера цепочкой атрибутов и индексов. После производной `.key` / `.name`
+    # (задача 1) `MessengerAccount.phone.property.key` и `.expression` ещё проходили.
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.property.key: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-property-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.expression: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-expression",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.execute(update(MessengerAccount), "
+        '[{"id": 1, MessengerAccount.phone.property.columns[0]: p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-property-columns-index",
+    ),
 ]
 
 
@@ -3534,6 +3891,15 @@ LEGITIMATE_CASES = [
     ),
     pytest.param(
         'upd = settings.update\nupd(theme="dark")\n', id="assigned-dict-update-other-key"
+    ),
+    # План 16-22: производная цепочкой у ЧУЖОЙ колонки — не номер.
+    pytest.param(
+        "stmt = update(Group).values({Group.title.expression: x})\n",
+        id="values-other-column-expression",
+    ),
+    pytest.param(
+        "stmt = update(Group).values({Group.title.property.key: x})\n",
+        id="values-other-property-key",
     ),
 ]
 
