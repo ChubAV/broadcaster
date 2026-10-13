@@ -3980,6 +3980,33 @@ LITERAL_FORM_CASES = [
         "phone",
         id="set-committed-value-get-property-keyword",
     ),
+    # Самопроверка 16-22, заход 2 (ось «как назван API»): псевдоним в том же модуле у
+    # самих носителей опознания — `operator.methodcaller` и встроенного `getattr`, —
+    # как у `functools.partial`.
+    pytest.param(
+        "from operator import methodcaller as call_method\n"
+        'call_method("bulk_update_mappings", MessengerAccount, [{"id": 1, "phone": p}])(session)\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="methodcaller-import-alias",
+    ),
+    pytest.param(
+        "call_method = operator.methodcaller\n"
+        'call_method("set_committed_value", account, "phone", x)(attributes)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="methodcaller-assignment-alias",
+    ),
+    pytest.param(
+        "attr = getattr\n"
+        'stmt = attr(update(MessengerAccount), "values")({"phone": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="getattr-assignment-alias",
+    ),
 ]
 
 
@@ -4273,6 +4300,15 @@ LEGITIMATE_CASES = [
     pytest.param(
         'operator.methodcaller("__init__", group, phone=x)(Group)\n',
         id="methodcaller-applied-other-model-init",
+    ),
+    # Самопроверка 16-22, заход 2: псевдонимы носителей без записи номера.
+    pytest.param(
+        'call_method = operator.methodcaller\nnames = map(call_method("strip"), rows)\n',
+        id="methodcaller-alias-other-method",
+    ),
+    pytest.param(
+        'attr = getattr\nlabel = attr(group, "title")\n',
+        id="getattr-alias-other-attribute",
     ),
     # Самопроверка 16-22, заход 1: те же наименования у ЧУЖОЙ колонки.
     pytest.param(
