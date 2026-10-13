@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-11
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`normalize_manual` item 5 names Germany and Israel as the only non-`+7` extra-digit boundary; 36 regions still save an invented \"manual\" number"
   - id: WR-12
     severity: warning
@@ -107,7 +107,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 5
+open: 4
 total: 26
 recorded: 2026-10-12T20:17:45.019Z
 ---
@@ -116,7 +116,7 @@ recorded: 2026-10-12T20:17:45.019Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-11 | warning | open | - |
+| WR-11 | warning | fixed | `16-21` задача 1, GREEN `dd164d6e` — решение владельца О-9 (а): правило О-7 (а) остаётся, пункт 5 докстринга `normalize_manual` называет настоящий остаток — «56 из 976» вводов «образец MOBILE + 1…4 цифры» в 36 регионах, причины по типам аккаунта (сам `MOBILE` — NL, FI, ID, MY, AT; только `VOIP` — TW, ZW; классы `FIXED_LINE` — DE, IL, IT), «15 из 56» действительных по метаданным; правило `test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement` пересчитывает числа и регионы-примеры `MANUAL_BOUNDARY_EXAMPLES` вживую из метаданных; коммит RED — «71957ec1», тексты теста — коммит «93632304»; исправлена узкая формулировка строки WR-09 («граница названа в пункте 5 — Германия … и Израиль …»): это была граница, названная двумя регионами из тридцати шести, а не весь остаток правила О-7 (а); сама строка WR-09 перенесена без изменений |
 | WR-12 | warning | open | - |
 | WR-13 | warning | open | - |
 | IN-11 | info | open | - |
