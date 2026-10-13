@@ -990,6 +990,24 @@ def _expanded_arguments(items: list[ast.expr]) -> list[ast.expr | None]:
     return found
 
 
+def _forwarded_arguments(items: list[ast.expr]) -> list[ast.expr]:
+    """Аргументы, которые ссылка подаёт API: литеральная распаковка раскрыта, прочая — на месте.
+
+    Тот же порядок и та же длина, что у `_expanded_arguments`, но распаковка
+    не-литерала (`*[(…) for …]`, `*rows`) остаётся узлом `Starred`, а не `None`:
+    синтетический вызов API получает её так же, как прямой, — `ordered_values` судит
+    перечень пар в `*[(…) for …]`, а позиции за ней не связываются (самопроверка
+    исполнителя 16-22: до плана распаковка за ссылкой терялась).
+    """
+    found: list[ast.expr] = []
+    for item in items:
+        if isinstance(item, ast.Starred) and isinstance(item.value, (ast.List, ast.Tuple)):
+            found.extend(_forwarded_arguments(list(item.value.elts)))
+        else:
+            found.append(item)
+    return found
+
+
 def _positional_arguments(call: ast.Call) -> list[ast.expr | None]:
     """Позиционные аргументы вызова с раскрытой литеральной распаковкой `*[…]` / `*(…)`.
 
@@ -1143,7 +1161,7 @@ def _bound_reference(
             inner = _bound_reference(positional[0], partial_names)
             if inner is not None:
                 referenced, func, args, keywords = inner
-                rest = [item for item in positional[1:] if item is not None]
+                rest = _forwarded_arguments(list(node.args))[1:]
                 return referenced, func, args + rest, keywords + list(node.keywords)
     return None
 
@@ -1201,12 +1219,13 @@ def _referenced_calls(
             return []
         source, outer_args, outer_keywords = call.func, list(call.args), list(call.keywords)
     positional = _positional_arguments(source)
+    forwarded = _forwarded_arguments(list(source.args))
     keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
         bound = _bound_reference(argument, partial_names)
         if argument is not None and bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
-            after = [item for item in positional[index + 1 :] if item is not None]
+            after = forwarded[index + 1 :]
             synthetic = _synthetic_call(
                 call,
                 func,
@@ -1220,7 +1239,7 @@ def _referenced_calls(
         )
         if bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
-            rest = [item for item in positional if item is not None]
+            rest = forwarded
             synthetic = _synthetic_call(
                 call,
                 func,
