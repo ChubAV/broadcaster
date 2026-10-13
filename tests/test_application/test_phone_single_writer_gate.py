@@ -3776,6 +3776,42 @@ LITERAL_FORM_CASES = [
         "phone",
         id="partial-ordered-values-starred-comprehension",
     ),
+    # Самопроверка 16-22, заход 1 (ось «как назван API»): метод, вызванный через
+    # класс с явным `self` (`Insert.from_select(stmt, names, sel)`), или его псевдоним
+    # из атрибута класса сдвигает позиции на одну, и параметр, судимый ПОЗИЦИЕЙ
+    # (`names` у `from_select`, `table_name` у COPY asyncpg), уходил из-под суда.
+    pytest.param(
+        'stmt = Insert.from_select(insert(MessengerAccount), ["user_id", "phone"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="unbound-from-select",
+    ),
+    pytest.param(
+        "fs = Insert.from_select\n"
+        'stmt = fs(insert(MessengerAccount), ["user_id", "phone"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="class-attribute-alias-from-select",
+    ),
+    pytest.param(
+        "async def f(conn, rows):\n"
+        '    await Connection.copy_records_to_table(conn, "messenger_accounts", records=rows)\n',
+        KIND_RAW_SQL,
+        "copy_records_to_table",
+        "messenger_accounts",
+        id="unbound-copy-records-to-table",
+    ),
+    pytest.param(
+        "copy = Connection.copy_to_table\n"
+        "async def f(conn, src):\n"
+        '    await copy(conn, "messenger_accounts", source=src)\n',
+        KIND_RAW_SQL,
+        "copy_to_table",
+        "messenger_accounts",
+        id="class-attribute-alias-copy-to-table",
+    ),
 ]
 
 
