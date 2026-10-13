@@ -60,8 +60,10 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `values(**{"phone": n for n in …})`; и повторный конструктор модели или её
    псевдонима в модуле — `MessengerAccount.__init__(account, phone=x)`;
 3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"`, атрибут
-   `MessengerAccount.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")` или
-   конструктор колонки `column("phone")` / `literal_column(…)` —
+   `MessengerAccount.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")`,
+   конструктор колонки `column("phone")` / `literal_column(…)` или производная такой
+   колонки — `MessengerAccount.phone.key` / `.name`, `table.c.phone.name`,
+   `MessengerAccount.__table__.c.phone.name` (план 16-22, ревью WR-12) —
    в позиционном аргументе `values(...)` и
    устаревшего `Query.update({...})` (у него — и в параметре `values=`, сигнатура
    `Query.update(self, values, …)`). Отображение — `{…}` (и `{**{…}, …}`),
@@ -74,7 +76,9 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `set_committed_value(obj, "phone_is_manual", …)`, `set_attribute(obj, "phone",
    …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)` —
    имя атрибута позицией или именем `key=` / `name=`
-   (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`);
+   (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`) —
+   строкой, производной колонки (`setattr(account, MessengerAccount.phone.key, x)`,
+   план 16-22, ревью WR-12) или иным наименованием колонки вида 3;
    `flag_modified(account, "phone")` — flush пишет колонку текущим значением
    объекта (после `account.__dict__["phone"] = x` — значение `x`, у устаревшего
    объекта — старый номер поверх ручного; самопроверка исполнителя 16-17, замер);
@@ -135,7 +139,11 @@ x})`), судится как вызов этого API.
 `object.__setattr__(self, name, value, /)` — позиционно-только:
 `setattr(account, name="phone", value=x)` падает `TypeError` и ничего не пишет.
 Гейт судит и эту форму: вызов, который не исполнится, законной формой не является,
-а `key=` / `name=` судятся у каждого писателя по имени одним набором.
+а `key=` / `name=` судятся у каждого писателя по имени одним набором. Имя атрибута
+судится через `_phone_column` (план 16-22, ревью WR-12), поэтому краснеют и
+`setattr(account, MessengerAccount.phone, x)` — имя не строка, `TypeError` при
+исполнении, — и `setattr(target, source.phone, value)`, где значение лежит под
+именем атрибута `phone`: колонка номера названа литералом на месте имени атрибута.
 
 ЦЕНА СТРОГОСТИ ШЕСТОГО ВИДА — та же по природе. `execute` судится по ключам строк,
 а не по первому аргументу: иначе `stmt = update(MessengerAccount);
@@ -326,6 +334,11 @@ PARTIAL_NAMES = frozenset({"partial"})
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
 # отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
 COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
+
+# Производная колонки атрибутом: `MessengerAccount.phone.key` — строковое имя
+# колонки, `table.c.phone.name` — имя колонки таблицы. Колонка названа литералом
+# внутри производной, поэтому производная — та же колонка (план 16-22, ревью WR-12).
+COLUMN_DERIVATIVE_ATTRIBUTES = frozenset({"key", "name"})
 
 # Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
 # `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
@@ -847,9 +860,18 @@ def _judge_call(
             for keyword, value in named
             if keyword in names | NAMED_ATTRIBUTE_KEY_KEYWORDS
         ]
+        # Имя атрибута судится через `_phone_column`, а не только строковой
+        # константой (ревью WR-12): `setattr(account, MessengerAccount.phone.key, x)`
+        # и `set_committed_value(account, MessengerAccount.phone.key, x)` пишут
+        # атрибут `phone` так же, как `"phone"`. Цена строгости — в шапке, вид 4.
         for attribute, prefix in candidates:
-            if isinstance(attribute, ast.Constant) and attribute.value in PHONE_COLUMNS:
-                record(node, KIND_SETATTR, f"{name}({prefix}{attribute.value!r}, …)")
+            if _phone_column(attribute) is not None:
+                shown = (
+                    repr(attribute.value)
+                    if isinstance(attribute, ast.Constant)
+                    else ast.unparse(attribute)
+                )
+                record(node, KIND_SETATTR, f"{name}({prefix}{shown}, …)")
                 break
     receiver = _callee_receiver(node.func)
     if name == DESCRIPTOR_SET and receiver is not None:
@@ -1317,6 +1339,14 @@ def _phone_column(node: ast.AST) -> str | None:
     `column("phone")` / `sa.literal_column("phone_is_manual")`
     (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
     строках executemany пишет колонку — замер на SQLite в памяти).
+
+    И производная такой колонки — атрибут `.key` / `.name` над ней
+    (`COLUMN_DERIVATIVE_ATTRIBUTES`): `MessengerAccount.phone.key`,
+    `MessengerAccount.phone.name`, `table.c.phone.name`,
+    `MessengerAccount.__table__.c.phone.name`. `.key` — штатный способ получить
+    строковый ключ для `bulk_update_mappings` без голого литерала; до плана 16-22
+    такие ключи проходили гейт, хотя пишут колонку (ревью WR-12, замер верификатора
+    раунда 4 на SQLite в памяти). Производная проверяется ПОСЛЕ прямых наименований.
     """
     if (
         isinstance(node, ast.Call)
@@ -1345,6 +1375,10 @@ def _phone_column(node: ast.AST) -> str | None:
         and node.args[1].value in PHONE_COLUMNS
     ):
         return node.args[1].value
+    if isinstance(node, ast.Attribute) and node.attr in COLUMN_DERIVATIVE_ATTRIBUTES:
+        # Производная колонки номера — после всех прямых наименований (ревью WR-12):
+        # `MessengerAccount.phone.key`, `table.c.phone.name` — та же колонка.
+        return _phone_column(node.value)
     return None
 
 
