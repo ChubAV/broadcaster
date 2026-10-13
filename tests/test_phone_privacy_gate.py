@@ -233,6 +233,16 @@ LOG_METHODS = frozenset(
     }
 )
 
+# Асинхронные уровни `structlog.stdlib.BoundLogger` — журнал, которым проект настраивает
+# structlog (`app/logging_config.py`, `wrapper_class=structlog.stdlib.BoundLogger`): замер
+# `dir()`, structlog 25.5.0 — ровно восемь. Проект асинхронный целиком (FastAPI, Celery), и
+# `await logger.ainfo(…, phone=…)` уходит в stdout и Loki так же, как `logger.info` (ревью
+# WR-13). Набор сверяет правило-сторож с установленным structlog: подъём библиотеки,
+# добавивший или убравший асинхронный уровень, краснит суиту, а не оставляет гейт слепым.
+ASYNC_LOG_METHODS = frozenset(
+    {"adebug", "ainfo", "awarning", "aerror", "aexception", "acritical", "afatal", "alog"}
+)
+
 # Привязка к контексту structlog: значение уходит в КАЖДУЮ следующую строку журнала
 # запроса или задачи — тот же довод, по которому в `LOG_METHODS` стоит `bind`. Судится
 # по имени при любом получателе (`structlog.contextvars.…` или голое имя после ввоза):
@@ -1257,6 +1267,63 @@ def test_a_planted_logging_function_import_in_app_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_async_level_call_in_app_reddens_the_gate(tmp_path):
+    """WR-13 (D-11, D-17): асинхронный уровень structlog — вызов журнала.
+
+    Проект настраивает structlog с `structlog.stdlib.BoundLogger` (`app/logging_config.py`),
+    у которого есть асинхронные уровни (`ainfo`, `awarning`, …); проект асинхронный целиком,
+    и писатели номера Фаз 17–20 — асинхронный код (ревью WR-13). Подложенный файл находится
+    тем же обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "planted_async_level.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import structlog\n"
+        "\n"
+        "logger = structlog.get_logger()\n"
+        "\n"
+        "\n"
+        "async def connected(account):\n"
+        '    await logger.ainfo("connected", phone=account.phone)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert any(
+        offence.startswith("app/planted_async_level.py:7 — имя — phone") for offence in offences
+    ), (
+        "асинхронный уровень structlog не распознан: гейт обошёл синтетическое дерево "
+        f"({_render(scans)}) и промолчал о `await logger.ainfo(…, phone=…)`: {offences}"
+    )
+
+
+def test_the_async_level_methods_match_the_installed_structlog():
+    """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
+
+    Асинхронный уровень — имя `dir(structlog.stdlib.BoundLogger)` на `a`, хвост которого —
+    синхронный метод `LOG_METHODS` (`ainfo` → `info`). Подъём structlog, добавивший или
+    убравший такой уровень, краснит суиту, а не оставляет гейт слепым молча.
+    """
+    import structlog
+
+    installed = {
+        method
+        for method in dir(structlog.stdlib.BoundLogger)
+        if method.startswith("a") and method[1:] in (LOG_METHODS - ASYNC_LOG_METHODS)
+    }
+
+    assert installed, "у установленного structlog не найдено ни одного асинхронного уровня — сверка вакуумна"
+    assert ASYNC_LOG_METHODS == installed, (
+        f"набор асинхронных уровней разошёлся с structlog {structlog.__version__}: "
+        f"нет в гейте {sorted(installed - ASYNC_LOG_METHODS)}, "
+        f"нет в structlog {sorted(ASYNC_LOG_METHODS - installed)}"
+    )
+
+
 # --- Отрицательные контроли: каждый краснит чистую функцию ----------------------
 
 NEGATIVE_CONTROLS = [
@@ -1585,6 +1652,53 @@ NEGATIVE_CONTROLS = [
         id="getattr-logging-factory",
     ),
     pytest.param("app/x.py", "import builtins\n\nbuiltins.print(account.phone)\n", "phone", id="builtins-print"),
+    # WR-13 (D-11, D-17): асинхронные уровни structlog (`ASYNC_LOG_METHODS`) — у журнала
+    # модуля, из тела класса через `self.`, через `getattr`-строку, по ссылке, `alog` с
+    # уровнем и `aexception` с `extra`.
+    pytest.param(
+        "app/x.py",
+        "logger = structlog.get_logger()\n"
+        "\n"
+        "\n"
+        "async def f(account):\n"
+        '    await logger.ainfo("connected", phone=account.phone)\n',
+        "phone=",
+        id="async-level-module-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class S:\n"
+        "    logger = structlog.get_logger()\n"
+        "\n"
+        "    async def g(self, a):\n"
+        '        await self.logger.awarning("x", phone=a.phone)\n',
+        "phone=",
+        id="async-level-class-body-self",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await getattr(logger, "aerror")("x %s", account.phone)\n',
+        "phone",
+        id="async-level-getattr",
+    ),
+    pytest.param(
+        "app/x.py",
+        'say = logger.ainfo\n\n\nasync def f(p):\n    await say("x", phone=p)\n',
+        "phone=",
+        id="async-level-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await logger.alog(20, "x %s", account.phone)\n',
+        "phone",
+        id="async-log-with-level",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(p):\n    await log.aexception("x", extra={"phone": p})\n',
+        "'phone'",
+        id="async-exception-extra",
+    ),
 ]
 
 
@@ -1805,6 +1919,20 @@ POSITIVE_CONTROLS = [
         "from logging import info\n\nreport.info(account.phone)\n",
         False,
         id="info-attribute-after-logging-import-is-not-a-log",
+    ),
+    # WR-13: признак наличия через асинхронный уровень не краснит; асинхронное имя уровня у
+    # неопознанного объекта журналом не делает — рамка D-17, гейт не угадывает по имени.
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await logger.ainfo("x", phone_set=account.phone is not None)\n',
+        True,
+        id="async-level-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(client, account):\n    await client.ainfo(account.phone)\n",
+        False,
+        id="async-named-method-of-non-logger",
     ),
 ]
 
