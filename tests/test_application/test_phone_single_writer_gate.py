@@ -2464,6 +2464,12 @@ COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
     ColumnNaming("mapper-get-property-key", 'MessengerAccount.__mapper__.get_property("phone").key'),
     ColumnNaming("constant-concatenation", '"pho" + "ne"'),
     ColumnNaming("constant-f-string", 'f"phone"'),
+    # Самопроверка 16-22, заход 2: имя у конструктора и поиска — любым литеральным
+    # связыванием (`*[…]`, `**{…}`, `key=`), как у судимых параметров.
+    ColumnNaming("column-starred", 'column(*["phone"])'),
+    ColumnNaming("column-double-star", 'column(**{"text": "phone"})'),
+    ColumnNaming("table-c-get-keyword", 'accounts.c.get(key="phone")'),
+    ColumnNaming("get-property-keyword-key", 'inspect(MessengerAccount).get_property(key="phone").key'),
 )
 
 
@@ -3937,6 +3943,37 @@ LITERAL_FORM_CASES = [
         "__set__",
         "phone",
         id="unbound-descriptor-set",
+    ),
+    # Самопроверка 16-22, заход 2 (ось «как названа колонка»): имя у конструктора
+    # колонки и у поиска по имени — литеральной распаковкой и именем `key=`.
+    pytest.param(
+        'stmt = update(MessengerAccount).values({column(*["phone"]): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-starred-name",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({literal_column(**{"text": "phone"}): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-literal-column-double-star-name",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(MessengerAccount, [{"id": 1, accounts.c.get(key="phone"): p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-get-keyword",
+    ),
+    pytest.param(
+        "set_committed_value(account, "
+        'inspect(MessengerAccount).get_property(key="phone").key, x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="set-committed-value-get-property-keyword",
     ),
 ]
 
