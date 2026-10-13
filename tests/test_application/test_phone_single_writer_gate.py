@@ -3738,6 +3738,25 @@ LITERAL_FORM_CASES = [
         "phone",
         id="values-constant-f-string-key",
     ),
+    # Самопроверка 16-22, заход 1 (ось «как назван API»): распаковка comprehension
+    # `*[(…) for …]` после ССЫЛКИ терялась — синтетический вызов брал только
+    # литеральные элементы, и перечень пар `ordered_values` до него не доходил.
+    pytest.param(
+        "async def f(stmt, xs):\n"
+        "    return await asyncio.to_thread(stmt.ordered_values, "
+        "*[(MessengerAccount.phone, v) for v in xs])\n",
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone",
+        id="to-thread-ordered-values-starred-comprehension",
+    ),
+    pytest.param(
+        'stmt = functools.partial(stmt.ordered_values, *[("phone", v) for v in xs])()\n',
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone",
+        id="partial-ordered-values-starred-comprehension",
+    ),
 ]
 
 
