@@ -1835,6 +1835,13 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="partial-of-private-log-method",
     ),
+    # Самопроверка исполнителя 16-23 (перебор 18 490 форм): журнал-атрибут опознанного
+    # журнала — родитель `logger.parent` (`logging.Logger`, `structlog.stdlib.BoundLogger`) и
+    # обёрнутый журнал structlog `logger._logger` (имя по шаблону) — тот же `logger.*`.
+    pytest.param("app/x.py", "logger.parent.info(account.phone)\n", "phone", id="logger-parent-attribute"),
+    pytest.param(
+        "app/x.py", 'logger._logger.info("x", phone=p)\n', "phone=", id="wrapped-structlog-logger-attribute"
+    ),
 ]
 
 
