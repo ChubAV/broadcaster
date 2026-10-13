@@ -394,6 +394,11 @@ COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
 # индекса: `{form.get("phone"): x}` в пишущем вызове тоже судится.
 COLUMN_LOOKUP_METHODS = frozenset({"get", "get_property", "__getitem__"})
 
+# Имя первого параметра у конструкторов и поиска: `column(text, …)` /
+# `literal_column(text, …)`, `ColumnCollection.get(key, default=None)`,
+# `Mapper.get_property(key, …)` (SQLAlchemy 2.0.46).
+COLUMN_NAME_KEYWORDS = frozenset({"text", "key"})
+
 # Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
 # `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
 # в обход присваивания; `MessengerAccount.__init__(account, phone=x)` — повторный
@@ -1473,10 +1478,10 @@ def _phone_column(node: ast.AST) -> str | None:
         or (isinstance(node.func, ast.Attribute) and node.func.attr in COLUMN_LOOKUP_METHODS)
     ):
         # Конструктор колонки — имя первым позиционным или `text=`; поиск колонки по
-        # имени — `t.c.get("phone")`, `mapper.get_property("phone")` (самопроверка
-        # исполнителя 16-22).
-        names = list(node.args[:1]) + [k.value for k in node.keywords if k.arg == "text"]
-        for name in names:
+        # имени — `t.c.get("phone")`, `mapper.get_property("phone")`, имя `key=`
+        # (самопроверка исполнителя 16-22). Связывание — любое литеральное:
+        # позицией, `*["phone"]`, именем и `**{"text": "phone"}` (`_bound_arguments`).
+        for name in _bound_arguments(node, 0, COLUMN_NAME_KEYWORDS):
             if (text := _constant_text(name)) in PHONE_COLUMNS:
                 return text
     if (text := _constant_text(node)) in PHONE_COLUMNS:
