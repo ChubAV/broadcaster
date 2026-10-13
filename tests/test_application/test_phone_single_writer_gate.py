@@ -1651,6 +1651,45 @@ def test_a_planted_backfill_through_run_sync_reddens_the_gate(tmp_path):
     ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
 
 
+def test_a_planted_backfill_with_attribute_keys_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-12: строковый ключ `MessengerAccount.phone.key` в строках `bulk_update_mappings`.
+
+    `.key` — штатный способ получить строковый ключ для `bulk_update_mappings` без
+    голого литерала `"phone"`, то есть форма скрипта дозаполнения Фазы 20. Колонка
+    названа литералом (`MessengerAccount.phone`) в аргументе пишущего вызова, и на
+    SQLite в памяти такая строка пишет колонку (замер верификатора раунда 4,
+    SQLAlchemy 2.0.46). До плана 16-22 гейт её пропускал (ревью WR-12; решение
+    владельца О-10 (а): заявление шапки прежнее, предикат догоняет его). Подложенный
+    файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_attribute_key.py",
+        "def backfill(session, rows):\n"
+        "    session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": a.id, MessengerAccount.phone.key: n} for a, n in rows])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_attribute_key.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_attribute_key.py:2 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "ключ MessengerAccount.phone.key в строках bulk_update_mappings не найден: "
+        "`session.bulk_update_mappings(MessengerAccount, [{MessengerAccount.phone.key: n} "
+        f"for …])` в scripts/backfill_attribute_key.py гейт пропустил: {offences}"
+    )
+    assert all(
+        "bulk_update_mappings" in offence and "phone" in offence for offence in found
+    ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
+
+
 ASSIGNMENT_CASES = [
     pytest.param("account.phone = x\n", "account.phone", id="assign-phone"),
     pytest.param(
@@ -2927,6 +2966,69 @@ LITERAL_FORM_CASES = [
         "phone",
         id="model-attribute-alias",
     ),
+    # Ревью WR-12, верификация раунда 4 (2026-10-12): колонка номера, названная
+    # производной `.key` / `.name`. До плана 16-22 гейт давал `[]` у каждой формы, хотя
+    # `values({MessengerAccount.phone.key: x})` и такой же ключ в строках
+    # `bulk_update_mappings` пишут колонку (замер верификатора на SQLite в памяти).
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.key: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-model-attribute-key",
+    ),
+    pytest.param(
+        "session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": 1, MessengerAccount.phone.key: p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-attribute-key",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.execute(update(MessengerAccount), "
+        '[{"id": 1, MessengerAccount.phone.key: p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-rows-attribute-key",
+    ),
+    pytest.param(
+        "setattr(account, MessengerAccount.phone.key, x)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-attribute-key",
+    ),
+    pytest.param(
+        "set_committed_value(account, MessengerAccount.phone.key, x)\n",
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="set-committed-value-attribute-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.__table__.c.phone.name: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-column-name",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.name: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-model-attribute-name",
+    ),
+    pytest.param(
+        "stmt = update(accounts).values({accounts.c.phone.name: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-c-attribute-name",
+    ),
 ]
 
 
@@ -3178,6 +3280,17 @@ LEGITIMATE_CASES = [
         "    return await asyncio.to_thread(bind(prepare_upload, quality=80), content)\n",
         id="partial-alias-other-function",
     ),
+    # Ревью WR-12 (план 16-22): производная `.key` / `.name` ЧУЖОЙ колонки — не номер;
+    # имя атрибута, вычисленное во время исполнения, — граница (2).
+    pytest.param(
+        "stmt = update(Group).values({Group.title.key: x})\n",
+        id="values-other-model-attribute-key",
+    ),
+    pytest.param(
+        "stmt = update(groups).values({groups.c.title.name: t})\n",
+        id="values-other-table-column-name",
+    ),
+    pytest.param("setattr(obj, field_name, x)\n", id="setattr-computed-attribute-name"),
 ]
 
 
