@@ -2319,6 +2319,18 @@ COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
     ColumnNaming("expression", "MessengerAccount.phone.expression"),
     ColumnNaming("table-attribute-key", "MessengerAccount.__table__.c.phone.key"),
     ColumnNaming("getattr-key", 'getattr(MessengerAccount, "phone").key'),
+    # Самопроверка исполнителя 16-22, заход 1: имя колонки в конструкторе именем
+    # `text=`, поиск колонки по имени-литералу (`.get("phone")`,
+    # `get_property("phone")`) и строковая константа, собранная склейкой `+` или
+    # f-строкой без подстановок.
+    ColumnNaming("column-text-keyword", 'column(text="phone")'),
+    ColumnNaming("literal-column-text-keyword", 'literal_column(text="phone")'),
+    ColumnNaming("table-c-get", 'accounts.c.get("phone")'),
+    ColumnNaming("table-columns-get", 'MessengerAccount.__table__.columns.get("phone")'),
+    ColumnNaming("inspect-get-property-key", 'inspect(MessengerAccount).get_property("phone").key'),
+    ColumnNaming("mapper-get-property-key", 'MessengerAccount.__mapper__.get_property("phone").key'),
+    ColumnNaming("constant-concatenation", '"pho" + "ne"'),
+    ColumnNaming("constant-f-string", 'f"phone"'),
 )
 
 
@@ -3637,6 +3649,68 @@ LITERAL_FORM_CASES = [
         "phone",
         id="rows-property-columns-index",
     ),
+    # Самопроверка исполнителя 16-22, заход 1 (ось «как названа колонка»): каждое
+    # наименование давало `[]` во всех 2114 контекстах полного креста.
+    pytest.param(
+        'stmt = update(MessengerAccount).values({column(text="phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-text-keyword",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({literal_column(text="phone_is_manual"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-literal-column-text-keyword",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.execute(update(MessengerAccount), "
+        '[{"id": 1, accounts.c.get("phone"): p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-table-c-get",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values("
+        '{MessengerAccount.__table__.columns.get("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-columns-get",
+    ),
+    pytest.param(
+        "session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": 1, inspect(MessengerAccount).get_property("phone").key: p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-get-property-key",
+    ),
+    pytest.param(
+        'setattr(account, MessengerAccount.__mapper__.get_property("phone").key, x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-mapper-get-property-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({"pho" + "ne": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-constant-concatenation-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({f"phone": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-constant-f-string-key",
+    ),
 ]
 
 
@@ -3921,6 +3995,19 @@ LEGITIMATE_CASES = [
     pytest.param(
         "stmt = update(Group).values({Group.title.property.key: x})\n",
         id="values-other-property-key",
+    ),
+    # Самопроверка 16-22, заход 1: те же наименования у ЧУЖОЙ колонки.
+    pytest.param(
+        'stmt = update(groups).values({column(text="title"): t})\n',
+        id="values-other-column-text-keyword",
+    ),
+    pytest.param(
+        'stmt = update(groups).values({groups.c.get("title"): t})\n',
+        id="values-other-table-c-get",
+    ),
+    pytest.param(
+        'stmt = update(groups).values({"ti" + "tle": t})\n',
+        id="values-other-constant-concatenation-key",
     ),
 ]
 
