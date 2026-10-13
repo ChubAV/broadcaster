@@ -1,13 +1,12 @@
 ---
 phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel
-reviewed: 2026-10-12T20:15:50Z
+reviewed: 2026-10-13T12:06:15Z
 depth: standard
 review_kind: incremental
-diff_base: 388add7184e27f4b42f2243c116888c6ec31af62
-head: 4bd0276f
-files_reviewed: 6
+diff_base: 6fc1ee91e3b2fabd7309468bab03699019340ddf
+head: 4fc4d870
+files_reviewed: 5
 files_reviewed_list:
-  - app/application/accounts/phone.py
   - app/services/phone.py
   - tests/test_application/test_account_phone_writer.py
   - tests/test_application/test_phone_single_writer_gate.py
@@ -15,195 +14,192 @@ files_reviewed_list:
   - tests/test_services/test_phone.py
 findings:
   critical: 0
-  warning: 3
+  warning: 4
   info: 2
-  total: 5
+  total: 6
 carried_forward: 0
 closed_prior: 5
 status: issues_found
 ---
 
-# Phase 16: Code Review Report (incremental re-review after gap batch 16-16…16-20)
+# Phase 16: Code Review Report (incremental re-review after gap batch 16-21…16-25)
 
-**Reviewed:** 2026-10-12T20:15:50Z
+**Reviewed:** 2026-10-13T12:06:15Z
 **Depth:** standard
-**Files Reviewed:** 6
+**Files Reviewed:** 5
 **Status:** issues_found
 
 ## Summary
 
-This is an incremental re-review. The diff base is `388add71`, the commit of the prior review, and `HEAD` is `4bd0276f`. It covers the six files changed by gap batch round 3:
-- account-type refusal on the manual path and the auto-path header (16-16);
-- single-writer gate: `JUDGED_PARAMETERS`, writer API by reference, kind 1 by `Store` grammar (16-17);
-- privacy gate: imported `logging` functions, class-body loggers, `:=`, aliases, wrappers, `partial` (16-18);
-- the writer's two refusal constants and the foreign-session row (16-19).
+This is an incremental re-review. The diff base is `6fc1ee91` and `HEAD` is `4fc4d870`. It covers the five files changed by gap batch round 4:
+- the measured remainder in item 5 of `normalize_manual` and its live-recount rule (16-21);
+- single-writer gate: column derivatives, `from_select` containers, same-module aliases of writer APIs, the `COLUMN_NAMINGS` × `COLUMN_CONTEXTS` matrix (16-22);
+- privacy gate: structlog async levels, any method of an identified logger, `getChild` / `unbind` / `parent` (16-23);
+- the writer-test import (16-24).
 
 This report replaces the prior `16-REVIEW.md`. Each prior finding appears once, in the disposition table below.
 
 What I checked:
-- **Tests.** The four test files pass: `705 passed`. I ran them under the shared flock with `-p no:randomly`.
-- **Commits.** Every GREEN commit that `16-REVIEW-DISPOSITION.md` cites for round 3 is an ancestor of `HEAD` (checked with `git merge-base --is-ancestor`): `333bf8e0`, `5c3ffb94`, `9b074697`, `417229e7`, `282c16d7`, `b7a1e127`, `e3f46b63`, `e53d9320`, `38727536`, `5a7cc660`, `b2758f43`, and the test commit `27cfc105`.
-- **Probes.** I called `normalize_manual`, `phone_write_offences` and `python_log_offences` directly from scratch scripts. I confirmed SQLAlchemy 2.0.46 write behaviour on a throwaway in-memory SQLite engine. Every new finding below was reproduced, not inferred.
-- **Library path.** I read `phonenumbers` 9.0.41 `_test_number_length`. A type with no metadata description returns `INVALID_LENGTH`; it does not fall back to the general lengths. So `ACCOUNT_NUMBER_TYPES` is not vacuous for the 149 regions without a `VOIP` description.
+- **Tests.** The four test files pass: `831 passed` (225 + 24 + 412 + 170), run with `-p no:randomly`.
+- **Commits.** Every claimed fixing commit is an ancestor of `HEAD` (`git merge-base --is-ancestor`), and each has the expected subject: `dd164d6e`, `71957ec1`, `93632304`, `9711cb39`, `ecd1be76`, `4d6f286e`, `9f50ed19`, `878b4679`, `dbe22dcc`, `a973ea55`, `ddbb33f7`, `a4c49b66`, `80153e32`, `1852b951`, `e54fd6e3`, `978a9408`, `d9cfd6c4`.
+- **Live numbers.** I re-ran the item-5 enumeration from a scratch script and got `976 / 56 / 36 / 15`. All ten example regions fall in the cause class item 5 gives them. The privacy gate's `-s -k live_trees` prints `221 / 68 / 93`, 0 findings. The matrix is `32 × 714` (`len(COLUMN_NAMINGS)`, `len(COLUMN_CONTEXTS)`).
+- **Probes.** I called `phone_write_offences` and `python_log_offences` directly on planted sources. Every single-writer form reported below was also run on SQLAlchemy 2.0.46 against an in-memory SQLite engine, and each one wrote the column (`+71` … `+76` persisted). Every new finding was reproduced, not inferred.
 
 What the batch got right:
 - All five prior findings are closed (table below).
-- The 16-19 writer change is minimal and correct.
-- The header measurement rule (`test_the_module_header_names_the_auto_path_boundary_with_its_measurement`) recomputes both numbers live. A metadata bump will now turn the suite red instead of leaving the header stale.
+- The item-5 text is now true. The rule recounts every number item 5 states, so a metadata bump (IN-02) will turn the suite red.
+- The privacy gate's guard against the installed structlog is not vacuous. It derives the expected set from `dir(BoundLogger)` minus the async set itself, so an added `amsg` or `awarn` would fail it.
 
 New problems:
-- **The manual-path boundary is named too narrowly.** Docstring item 5 says only Germany and Israel still accept a non-`+7` number with extra digits. Measured: 36 regions do, including Italy, Netherlands, Finland, Ireland, Austria, Serbia and Indonesia (WR-11).
-- **The single-writer gate's mechanism claim is wider than the predicate for a fourth time.** `MessengerAccount.phone.key` and container forms of `from_select` names both write the column and pass. So does a same-module import alias of a writer API (WR-12).
-- **The privacy gate misses structlog's async level methods.** `await logger.ainfo(…, phone=…)` passes, and the project's configured wrapper provides that method (WR-13).
-- Two small hygiene items (IN-11, IN-12).
+- **The single-writer gate's alias claim is wider than `_module_aliases`.** Tuple unpacking, `:=`, `self.x = …` in a method, and an alias bound to a `getattr`-string all pass. All four write the column (WR-14).
+- **Column namings do not compose.** A naming inside a lookup (`t.c[M.phone.key]`, `t.c.get(M.phone.key)`, `column(M.phone.key)`) passes, and so does a `getattr` derivative (`getattr(M.phone, "key")`) (WR-15).
+- **Raw-SQL kind 5(а) treats the first `WHERE` anywhere as the statement's `WHERE`.** A subquery placed before `phone` in `SET` hides the write (WR-16).
+- **The privacy gate misses a log method handed by reference to another call** (`asyncio.to_thread(logger.info, …, a.phone)`). Its sibling gate catches exactly this shape, and the boundary does not name it (WR-17).
+- Two small items in the 16-21 texts and rule (IN-13, IN-14).
 
 ## Prior findings — disposition
 
-Titles are copied verbatim from the prior `16-REVIEW.md`. Older ledger rows (WR-01…WR-08, CR-01, IN-01…IN-07) are not repeated: my re-derivation does not contradict their ledger state.
+Titles are copied verbatim from the prior `16-REVIEW.md`. Older ledger rows (CR-01, WR-01…WR-10, IN-01…IN-10) are not repeated: my re-derivation does not contradict their ledger state. That includes the owner-`deferred` IN-01…IN-05; for example, the `phonenumberslite==9.0.41` pin behind IN-02 is unchanged at `pyproject.toml:21`.
 
-| ID | Prior title | State | Evidence (current tree `4bd0276f`) |
+| ID | Prior title | State | Evidence (current tree `4fc4d870`) |
 |----|-------------|-------|------------------------------------|
-| WR-09 | Manual input of a non-`+7` number plus extra digits is still saved as an invented "manual" number (BY, UA, KG, TR, IL, CN, DE) | closed (GREEN `333bf8e0`, ancestor of HEAD) | `ACCOUNT_NUMBER_TYPES` is at `app/services/phone.py:142-147` and `_is_possible_for_an_account_type` at `:216-229`; the refusal is at `:318-319`. Probe results: every BY, UA, KG, TR and CN input in the prior table is refused, as is IL +1 (`PHONE_ERROR_NOT_A_NUMBER`). IL +2/+3 and DE +1/+2 are still accepted, and item 5 names them. Pinned by the `wr09_*` rows (`tests/test_services/test_phone.py:615-646`), the `FOREIGN_EXTRA_DIGIT_BASES` 5×5 enumeration (`:750-800`) and the 830-example guard (`:805`). The fix the prior review proposed was implemented as written. The boundary text it introduced is too narrow; that is new **WR-11**, a defect in the new item-5 text, not a reopening. |
-| WR-10 | The single-writer gate's new "through the mechanism" claim is again wider than the predicate: `Query.update(values=…)`, keyword `set_attribute`, and `run_sync(Session.bulk_*_mappings, …)` pass | closed (GREEN `9b074697`, `417229e7`, `282c16d7`, `b7a1e127`, `e3f46b63`, `e53d9320`, ancestors of HEAD) | Each of the five forms in the prior WR-10 code block now produces exactly one offence (probe): `Query.update(values=…)`, `set_attribute(…, key=…)`, `set_committed_value(…, key=…)`, `run_sync(Session.bulk_update_mappings, …)` and `values(**{"phone": n for …})`. `JUDGED_PARAMETERS` is at `tests/test_application/test_phone_single_writer_gate.py:454-587`; the signature guard at `:1952` and the binding matrix at `:2054` pass. The new mechanism claim is again wider than the predicate in other places; that is new **WR-12**. |
-| IN-08 | The auto-path boundary paragraph says "besides real numbers" the only extra acceptance is `TOO_SHORT`; 400 of the 558 `IS_POSSIBLE` values accepted in the same enumeration are not valid numbers | closed (GREEN `5c3ffb94`, ancestor of HEAD) | `app/services/phone.py:37-56` names both classes: possible values including invalid ones ("400 из 558") and `TOO_SHORT` outside code 7 ("583 из 1935"). The rule `test_the_module_header_names_the_auto_path_boundary_with_its_measurement` (`tests/test_services/test_phone.py:334`) recomputes both numbers live and passes. |
-| IN-09 | The privacy gate neither catches nor names two logger forms that are identifiable by import or module binding | closed (GREEN `38727536`, `5a7cc660`, ancestors of HEAD) | `module_log_names` (`tests/test_phone_privacy_gate.py:560-638`) handles both forms. A `from logging import <LOG_METHOD>` becomes a `log_functions` entry; a class-body binding also goes into the attributes (`_bind`, `:541-557`). `NamedExpr` is collected. Probe: `from logging import info`, `warning as warn_`, class-body `lg` through `self.`/`cls.`, and `if (lg := logging.getLogger()):` each produce an offence. |
-| IN-10 | The other-session case of `record_reported_phone` is left untested on a false premise, and the refusal text gives wrong advice for it | closed (GREEN `b2758f43`, test `27cfc105`, ancestors of HEAD) | `ACCOUNT_NOT_IN_SESSION` is neutral (`app/application/accounts/phone.py:73`). The post-flush line has its own `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` (`:75`, `:189`). The `"foreign"` row adds the object to an unbound `AsyncSession()` and has an anti-vacuum assert (`tests/test_application/test_account_phone_writer.py:371-413`). The false premise is gone from the docstring. `test_each_refusal_of_the_recorder_names_its_own_cause` is at `:444`. |
+| WR-11 | `normalize_manual` item 5 names Germany and Israel as the only non-`+7` extra-digit boundary; 36 regions still save an invented "manual" number | closed (GREEN `dd164d6e`, ancestor of HEAD; RED `71957ec1`, texts `93632304`) | Item 5 (`app/services/phone.py:266-291`) now names the class by mechanism: "где длину … допускает какой-либо тип", with «56 из 976», «36 регионах» and «15 из 56». My recount from a scratch script matches exactly. The ten example regions fall in the cause class item 5 gives them: MOBILE, 22 regions including NL/FI/ID/MY/AT; VOIP only, exactly TW and ZW; fixed-line only, 12 regions including DE/IL/IT. DE with 3 and 4 extra digits is refused with `PHONE_ERROR_TOO_LONG` (item 8), as stated. `test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement` (`tests/test_services/test_phone.py:946`) recomputes the numbers live. The code is unchanged apart from IN-11. The rule has a gap in the other direction; that is new **IN-13**. |
+| WR-12 | The single-writer gate's mechanism claim is again wider than the predicate: `MessengerAccount.phone.key`, container forms of `from_select` names, and same-module import aliases of writer APIs pass | closed (GREEN `ecd1be76`, `4d6f286e`, `9f50ed19`, `878b4679`, `dbe22dcc`, `a973ea55`, `ddbb33f7`, `a4c49b66`, `80153e32`, ancestors of HEAD) | Probe: each of the ten forms in the prior WR-12 code block now gives exactly one offence. These are `values({M.phone.key: x})`, `bulk_update_mappings`/`execute` rows keyed by `M.phone.key`, `setattr`/`set_committed_value` with `M.phone.key`, `from_select` over `+` / conditional / `list(…)`, and `set_committed_value as scv`, `flag_modified as touch`. The fixes are in `_phone_column` (`tests/test_application/test_phone_single_writer_gate.py:1467-1527`), `_positional_phone_columns` (`:1588-1628`), and `_api_aliases`/`_canonical_call` (`:1686-1768`). The matrix `test_every_column_naming_in_every_judged_context_is_a_write` (`:2770`) runs 32 × 714. On the same two axes, the claim is still wider than the predicate; those are new **WR-14** and **WR-15**. |
+| WR-13 | The privacy gate misses structlog's async level methods (`ainfo`, `awarning`, …) that the project's configured logger provides | closed (GREEN `1852b951`, `e54fd6e3`, `978a9408`, ancestors of HEAD) | `ASYNC_LOG_METHODS` (`tests/test_phone_privacy_gate.py:253-255`) is part of `LOG_METHODS` (`:273`). The guard `test_the_async_level_methods_match_the_installed_structlog` (`:1380`) compares it with `dir(structlog.stdlib.BoundLogger)`. Probe: `await logger.ainfo(…, phone=account.phone)`, `await self.logger.awarning(…)`, `getattr(logger, "ainfo")(…)`, `partial(logger.ainfo, …)`, `logger.bind(…).ainfo(…)` and the prior `getChild` sibling each produce offences. The D-17 attribution is gone from the boundary (`:178-211`). Live trees: 221/68/93, 0 findings. A remaining receiver gap on the "by reference" axis is new **WR-17**. |
+| IN-11 | Missing space after `=` in `normalize_manual` | closed (`9711cb39`, ancestor of HEAD) | `app/services/phone.py:337` reads `e164 = phonenumbers.format_number(number, PhoneNumberFormat.E164)`. |
+| IN-12 | The writer test reaches the new constant through the module object while its sibling is imported by name | closed (`d9cfd6c4`, ancestor of HEAD) | `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` is imported by name (`tests/test_application/test_account_phone_writer.py:31`). `writer_module` no longer occurs in the file (grep: 0 hits). The assertion at `:485` compares with the by-name constant. |
 
 ## Narrative Findings (AI reviewer)
 
 ## Warnings
 
-### WR-11: `normalize_manual` item 5 names Germany and Israel as the only non-`+7` extra-digit boundary; 36 regions still save an invented "manual" number
-
-**File:** `app/services/phone.py:266-274` (item 5, "У кодов, отличных от 7, класс … закрывает пункт 7, КРОМЕ названной границы: Германия … и Израиль …") and `:278-282` (item 7); `tests/test_services/test_phone.py:45-53` (module docstring) and the `FOREIGN_EXTRA_DIGIT_BASES` docstring (`:745-749`, `:780-784`)
-
-**Issue:** Item 5 says the "number plus extra digits" class outside code 7 is closed by item 7 *except* for Germany and Israel, "because their `FIXED_LINE` / `FIXED_LINE_OR_MOBILE` length is variable". The test module repeats the claim. I enumerated it: for every region, the metadata `MOBILE` example in E.164 with `1`, `12`, `123` and `1234` appended (976 inputs over 244 regions). **56 inputs in 36 regions are accepted** and stored with `phone_is_manual=true`, so no auto source can correct them (D-07). Examples (`normalize_manual` output):
-
-| Typed | Stored | Type that admits the length |
-|---|---|---|
-| `+39 312 345 6789 1` (Italy) | `+3931234567891` | FIXED_LINE |
-| `+31 6 12345678 12` (Netherlands) | `+3161234567812` | **MOBILE** |
-| `+358 41 2345678 1` (Finland) | `+3584123456781` | **MOBILE** |
-| `+353 85 012 3456 1` (Ireland) | `+3538501234561` | FIXED_LINE |
-| `+381 60 1234567 123` (Serbia) | `+381601234567123` | FIXED_LINE |
-| `+62 812 345 678 123` (Indonesia) | `+62812345678123` | **MOBILE** |
-| `+886 912 345 678 1` (Taiwan) | `+8869123456781` | **VOIP** |
-| `+60 12 345 6789 1` (Malaysia) | `+601234567891` | MOBILE / VOIP |
-
-The other regions: AD, AT (all four counts), AX, BA, BG, BQ, CD, CU, GA, GM, IS, KH, LU, MM, MN, NZ, PM, SM, SO, TK, TV, VA, VN, WS, XK, ZW, plus the named DE and IL.
-
-Two problems:
-- **The named boundary is about 1/18 of the real one.** It names 2 of the 36 regions.
-- **The stated reason is wrong for part of the set.** For NL, FI, ID and MY the *mobile* length itself is variable, and for TW it is `VOIP`. No length-only rule can close those, so the boundary is permanent there, not an artefact of `FIXED_LINE`.
-
-This is the same "named boundary narrower than the measured one" shape the phase has been closing (IN-08, WR-07). The disposition ledger repeats the narrow wording ("граница названа в пункте 5 … Германия … и Израиль").
-
-**Fix:** Name the class with a live measurement instead of two countries, and pin it the way the auto-path header is pinned:
-```python
-# tests/test_services/test_phone.py
-def _manual_extra_digit_enumeration() -> tuple[int, int, set[str]]:
-    total = accepted = 0
-    regions: set[str] = set()
-    for region in sorted(phonenumbers.SUPPORTED_REGIONS):
-        example = phonenumbers.example_number_for_type(region, phonenumbers.PhoneNumberType.MOBILE)
-        if example is None:
-            continue
-        base = phonenumbers.format_number(example, phonenumbers.PhoneNumberFormat.E164)
-        for tail in ("1", "12", "123", "1234"):
-            total += 1
-            try:
-                normalize_manual(base + tail)
-            except PhoneError:
-                continue
-            accepted += 1
-            regions.add(region)
-    return total, accepted, regions
-```
-Then:
-- Assert that item 5 contains `f"{accepted} из {total}"` and the region count.
-- Reword item 5: "outside code 7 the class is closed only where no account type's length admits the extra digits; where MOBILE/VOIP length is itself variable (NL, FI, ID, MY, TW, AT, …) no length rule can close it" (D-05 forbids the validity check).
-- If the owner wants a tighter rule, that is a new decision (O-x). It is not something to word around.
-
-### WR-12: The single-writer gate's mechanism claim is again wider than the predicate: `MessengerAccount.phone.key`, container forms of `from_select` names, and same-module import aliases of writer APIs pass
+### WR-14: The single-writer gate's alias claim covers "присваивание", but `_module_aliases` sees only `Name = Name|Attribute`: tuple, `:=`, `self.x =` and `getattr`-string aliases of writer APIs pass
 
 **File:** `tests/test_application/test_phone_single_writer_gate.py`:
-- `:152-160`: the boundary. "Ловится всякая запись, в которой колонка номера … названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика `_literal_mappings` …)".
-- `:1312-1348`: `_phone_column` accepts `X.phone` but not `X.phone.key`.
-- `:1418-1428`: `from_select` names only as a bare `List`/`Tuple`.
-- `:659`, `:675`: aliases are resolved only for the model and `partial`.
-- `:173-177`: boundary (4) names only "псевдоним модели, заведённый в чужом файле".
+- `:29-35`, `:195-198`: the claim. "по псевдониму такого имени, связанному в том же модуле ввозом `as` или присваиванием имени либо атрибута".
+- `:1636-1668` (`_module_aliases`) and `:1699-1707` (`_api_aliases`, the `bound` pre-filter): the predicate.
+- `:201-207`, `:217-224`: boundaries (1) and (4).
 
-**Issue:** `phone_write_offences` returns `[]` for each form below. I ran the starred ones on SQLAlchemy 2.0.46 against an in-memory SQLite engine; each wrote the column (`+71`, `+72`, `+74` persisted):
+**Issue:** `_module_aliases` accepts only an `Assign`/`AnnAssign` whose target is a bare `Name` and whose value is a `Name`, or an `Attribute` with the right `.attr`. `phone_write_offences(…, "scripts/x.py")` returns `[]` for each form below. I ran the starred ones on SQLAlchemy 2.0.46 / SQLite in memory, and each wrote the column:
 ```python
-stmt = update(MessengerAccount).values({MessengerAccount.phone.key: x})                      # * writes
-session.bulk_update_mappings(MessengerAccount, [{"id": 1, MessengerAccount.phone.key: p}])  # * writes
-await session.execute(update(MessengerAccount), [{"id": 1, MessengerAccount.phone.key: p}])
-setattr(account, MessengerAccount.phone.key, x)
-set_committed_value(account, MessengerAccount.phone.key, x)
-stmt = insert(MessengerAccount).from_select(["user_id"] + ["phone"], sel)                    # * writes
-stmt = insert(MessengerAccount).from_select(["user_id", "phone"] if full else ["user_id"], sel)
-stmt = insert(MessengerAccount).from_select(list(("user_id", "phone")), sel)
-from sqlalchemy.orm.attributes import set_committed_value as scv; scv(account, "phone", x)
-from sqlalchemy.orm.attributes import flag_modified as touch; touch(account, "phone")
-```
-- **`Model.attr.key`.** It is the standard way to build the *string* keys that `bulk_update_mappings` requires without a bare literal. That is exactly the Phase 20 backfill shape. The column is named literally (`MessengerAccount.phone`) inside the writing call's argument, and `_phone_column` already treats `X.phone` as literal naming. No boundary item covers it: (1) is "name or result of another call" and (2) is "computed at run time", and `.key` is neither in any sense that `X.phone` is not.
-- **`from_select` names.** The header promises the `_literal_mappings` container grammar (`+`, conditional, `list(…)`), but this kind is judged only on a bare list or tuple.
-- **Import aliases.** The gate already resolves same-module import aliases for the model and for `partial` (`_module_aliases`). Writer APIs get no such resolution, and boundary (4) names only the model alias from another file. If the intent is to file this under (1) ("reference in a variable"), (1) has to say so: today it names only `fn = s.bulk_update_mappings`.
+bum = getattr(session, "bulk_update_mappings")                 # * writes (+71)
+bum(MessengerAccount, [{"id": 1, "phone": p}])
 
-This is the WR-01 → WR-08 → WR-10 pattern a fourth time. The header's own rule (`:185-187`) says such a form is "слепота предиката, а не граница средства" ("a blindness of the predicate, not a boundary of the tool").
+scv, touch = set_committed_value, flag_modified                 # * writes (+74, via setattr)
+scv(account, "phone", x)
+
+if (scv := set_committed_value):
+    scv(account, "phone", x)
+
+class W:
+    def __init__(self, s):
+        self.bum = s.bulk_update_mappings                       # * writes (+75)
+    def go(self):
+        self.bum(MessengerAccount, [{"id": 1, "phone": p}])
+```
+Why each form is under the claim and not in a boundary:
+- **`getattr`-string.** The header lists a "`getattr`-строка" as a literal identification of the API (`:36`, `:196`), and `getattr(session, "bulk_update_mappings")(…)` is caught when called inline. Binding the same expression to a name makes it pass. Boundary (1) says "результатом другого вызова". If `getattr` counts as "another call" here, it contradicts the header treating `getattr`-strings as literal everywhere else.
+- **Tuple unpacking and `:=`.** Both are assignments of a name. The sibling privacy gate resolves both forms for loggers (`_binding_pairs`, `NamedExpr`, `tests/test_phone_privacy_gate.py:588-601`, `:675`).
+- **`self.bum =` inside a method.** The same binding in the class body is caught, because the flat-scope `Assign` has a `Name` target. Inside `__init__` it passes. The privacy gate treats `self.lg = …` from `__init__` as an attribute binding.
+
+None of these is named in (1) or (4). By the header's own rule (`:232-234`), this is "слепота предиката, а не граница средства" ("a blindness of the predicate, not a boundary of the tool"). This is the fifth round on this axis: WR-01 → WR-08 → WR-10 → WR-12 → here.
 
 **Fix:**
-- In `_phone_column`, accept `ast.Attribute(attr in {"key", "name"})` whose `.value` is itself a phone-column node (`MessengerAccount.phone.key`, `table.c.phone.name`). For the `NAMED_ATTRIBUTE_WRITERS` branch (`:850-853`), test `_phone_column(attribute)` instead of `isinstance(attribute, ast.Constant)`.
-- In `_positional_phone_columns`, run the bound `names` value through `_pair_candidates` (which already implements the list/tuple/`+`/`IfExp`/`:=`/wrapper grammar) instead of requiring `List`/`Tuple`.
-- Build `write_names` / `judged_names` with `_module_aliases(tree, n)` for every name in `_judged_call_names(...)`, the same way it is done for `MessengerAccount` and `partial`.
-- Plant each form above as a `LITERAL_FORM_CASES` row, and keep `Group.title.key` in `LEGITIMATE_CASES` as the negative control.
+- Reuse the privacy gate's binding grammar in `_module_aliases`:
+  - pair tuple targets with tuple values (`_binding_pairs`);
+  - collect `ast.NamedExpr`;
+  - record `Attribute` targets as attribute aliases, called through `self.<attr>` / `cls.<attr>`.
+- Treat a `getattr(<obj>, "<api>")` value as `Attribute(<obj>, "<api>")`: in `_module_aliases` and the `bound` pre-filter use `_getattr_literal(value)`, and in `_api_alias_targets` keep the receiver `<obj>`.
+- Plant all four forms as `LITERAL_FORM_CASES` rows, and add the alias-binding forms to the 16-22 self-check's axis B.
+- If any form is meant to stay outside, name it in (1) with its real reason ("`getattr` bound to a name"), not under "результатом другого вызова".
 
-### WR-13: The privacy gate misses structlog's async level methods (`ainfo`, `awarning`, …) that the project's configured logger provides
+### WR-15: Column namings do not compose: a naming inside an index, lookup or constructor, and a `getattr` derivative, pass although the column is named literally in the writing call
 
-**File:** `tests/test_phone_privacy_gate.py:218-235` (`LOG_METHODS`), `:12-14` (header: "метод — уровень журнала или `bind`/`new`"), `:177-181` (boundary bullet attributing the method list to D-17); `app/logging_config.py:35` (`wrapper_class=structlog.stdlib.BoundLogger`)
+**File:** `tests/test_application/test_phone_single_writer_gate.py`:
+- `:76-86`, `:191-194`: the claim. Kind 3 lists the index, lookup and constructor forms, and «"названа литералом" включает производную колонки любой цепочкой атрибутов и индексов».
+- `:1497-1499`: constructor/lookup names go through `_constant_text` only.
+- `:1505-1510`: an index needs a constant slice.
+- `:1511-1519`: `getattr` needs the constant to be the column itself.
+- `:1520-1526`: a derivative must be an `ast.Attribute`/`ast.Subscript`.
 
-**Issue:** The project configures structlog with `structlog.stdlib.BoundLogger`. In structlog 25.5.0 that class exposes `adebug`, `ainfo`, `awarning`, `aerror`, `aexception`, `acritical`, `afatal` and `alog` (checked with `dir()`). These are the level methods for `async` code, and this is an async FastAPI + Celery codebase. None of them is in `LOG_METHODS`. Probe:
+**Issue:** `_phone_column` recognises each naming in `COLUMN_NAMINGS`, but it never runs `_phone_column` on the *name argument* of another naming. It also does not treat `getattr(<column>, "<const>")` as attribute access. The gate does treat it that way for the column itself (`getattr(M, "phone")`) and for API identification. Probe, `[]` for each; the starred ones wrote the column on SQLAlchemy 2.0.46:
 ```python
-logger = structlog.get_logger()
-async def g(account):
-    await logger.ainfo("connected", phone=account.phone)      # python_log_offences -> []
-class S:
-    async def g(self, a):
-        await self.logger.awarning("x", phone=a.phone)         # -> []
+update(MessengerAccount).values({MessengerAccount.__table__.c[MessengerAccount.phone.key]: x})   # * +72
+session.bulk_update_mappings(MessengerAccount, [{"id": 1, getattr(MessengerAccount.phone, "key"): p}])  # * +73
+update(MessengerAccount).values({MessengerAccount.__table__.c.get(MessengerAccount.phone.key): x})
+update(MessengerAccount).values({column(MessengerAccount.phone.key): x})
+setattr(account, getattr(getattr(MessengerAccount, "phone"), "key"), x)
 ```
-The number goes to stdout, then Loki, exactly like `logger.info`.
-
-The boundary bullet says "методы журнала вне `LOG_METHODS` … D-17 задаёт гейт списком получателей и методов". But D-17 (`16-CONTEXT.md:90-94`) reads "Python — `logger.*`/`log.*`/`logging.*`/`print(`": a wildcard over methods, not a method list. The header also says the gate judges "вызовы уровней" ("level calls"), and `ainfo` is a level call. So this is a blindness of the predicate, not an owner frame. `ainfo` is not mentioned anywhere in `.planning/` or `tests/`.
-
-A smaller sibling: `lg = logging.getLogger(__name__).getChild("x"); lg.info(a.phone)` also passes. `getChild` returns a logger, as `bind` does, but it is neither a factory nor in `LOG_METHODS`.
+`Model.__table__.c[Model.attr.key]` is the ordinary idiom for going from an ORM attribute to its `Table` column. `getattr(M, "phone").key` is caught (row `getattr-key`), while the mirror form `getattr(M.phone, "key")` is not. This is a hole on the naming axis that the 32 × 714 matrix cannot see: the matrix varies the *context* of each naming, not a naming nested inside another naming. Boundary (2) ("вычисленные во время исполнения … результат вызова над строкой") does not cover these: no part is computed from a non-literal.
 
 **Fix:**
+- In the constructor/lookup branch (`:1497`) and the index branch (`:1505`), accept the name if `_phone_column(name)` is not `None`, not only `_constant_text(name) in PHONE_COLUMNS`.
+- Treat `getattr(X, "<const>")` like `ast.Attribute(X, "<const>")` in the derivative branch (`:1520`): recurse into `node.args[0]` when it is a `getattr`-literal.
+- Add rows `table-c-index-by-key`, `table-c-get-by-key`, `column-by-key` and `getattr-derivative` to `COLUMN_NAMINGS`. The matrix will then hold them in every context.
+
+### WR-16: Raw-SQL kind 5(а) takes the first `WHERE` anywhere as the statement's `WHERE`; a subquery placed before `phone` in `SET` hides the write
+
+**File:** `tests/test_application/test_phone_single_writer_gate.py:110-112` (kind 5 (а): "присваивание колонки номера в `SET` до `WHERE`"), `:438-440`, `:451-454` (`RAW_SQL_PHONE_WRITE`, first alternative `(?:(?!\bwhere\b)[\s\S])*?`)
+
+**Issue:** The negative look-ahead stops the scan at the first `where` token after `SET`, including one inside a parenthesised subquery that belongs to an earlier assignment. `phone_write_offences` returns `[]` for:
 ```python
-ASYNC_LOG_METHODS = frozenset({"adebug", "ainfo", "awarning", "aerror", "aexception",
-                               "acritical", "afatal", "alog"})
-LOG_METHODS = frozenset({...existing..., *ASYNC_LOG_METHODS})
+await s.execute(text(
+    "UPDATE messenger_accounts SET user_id = (SELECT id FROM users WHERE id = 1), phone = :p"
+), {"p": p})
 ```
-- Add a guard rule that compares `ASYNC_LOG_METHODS` with `{m for m in dir(structlog.stdlib.BoundLogger) if m.startswith("a") and m[1:] in LOG_METHODS}`, so a structlog bump turns the suite red.
-- Plant `await logger.ainfo(…, phone=…)` as a positive case.
-- Optionally treat `getChild` like `bind` when classifying a binding's value (`module_log_names`).
-- If the owner does want a closed method list, fix the boundary bullet's attribution to D-17 instead.
+On SQLite this statement writes the column: the row reads `+79991234567` after it, and `+76` in the SQLAlchemy probe. `(б)` and `(в)` do not apply, because the statement is a plain `UPDATE` with no row constructor. The header promises "по механизму записи" for SQL in a string constant, and this is an assignment to the column in `SET`.
+
+**Fix:** Stop the (а) scan only at a top-level `WHERE`. A regex cannot balance parentheses, so do it in code. Either:
+- strip parenthesised groups from the `SET … WHERE` slice before matching `\bphone(?:_is_manual)?\b["`\]]?\s*=`; or
+- split at the first `where` whose parenthesis depth is 0.
+
+Plant the statement above as a `LITERAL_FORM_CASES` row. Keep `SELECT … WHERE phone = :p` in `LEGITIMATE_CASES` as the negative control.
+
+### WR-17: The privacy gate misses a log method handed by reference to another call (`asyncio.to_thread(logger.info, …, a.phone)`); its boundary does not name the form
+
+**File:** `tests/test_phone_privacy_gate.py`:
+- `:54-59`: "ПО ССЫЛКЕ НА МЕТОД ОПОЗНАННОГО ЖУРНАЛА". This covers only a name or attribute *bound* to a log method, plus `functools.partial(<log callable>, …)`.
+- `:564-571` (`_is_log_partial`) and `:782-799` (`python_log_calls`): the only reference carrier is `partial`.
+- `:178-211`: the boundary list, which names no such form.
+
+**Issue:** `python_log_offences(…, "app/x.py")` returns `[]` for each of:
+```python
+await asyncio.to_thread(logger.info, "connected %s", account.phone)
+await loop.run_in_executor(None, logger.info, "connected %s", account.phone)
+list(map(logger.info, [a.phone for a in accounts]))
+contextvars.copy_context().run(logger.info, account.phone)
+```
+Each call makes the logger emit the number. `asyncio.to_thread` is already in `app/` (`app/services/image_upload.py:444`). The project is async, so offloading a blocking call is an idiom its authors use. The `phone` name is right there in the call, so the boundary bullet "значение … без имени `phone`" does not apply. The sibling single-writer gate treats exactly this shape as identification by reference: `run_sync`, `to_thread` and `run_in_executor` (`tests/test_application/test_phone_single_writer_gate.py:36-46`, `_referenced_calls`). The privacy gate accepts `partial(logger.info, …)` but not the same reference handed to `to_thread`. That asymmetry is a blindness of the predicate, not an owner frame.
+
+**Fix:** Treat any call that has a log callable (`_is_log_callable`) among its positional arguments as a log call, and judge the arguments after that reference. This is the same rule as `partial`, applied to every carrier:
+```python
+def _is_log_reference_carrier(call: ast.Call, names: ModuleLogNames) -> bool:
+    return any(
+        not isinstance(arg, ast.Starred) and _is_log_callable(arg, names)
+        for arg in call.args
+    )
+```
+Add it to `python_log_calls`. Plant the four forms as `NEGATIVE_CONTROLS`. Add `asyncio.to_thread(prepare_upload, content)` as a `POSITIVE_CONTROLS` row, so a non-log reference stays clean. Re-run `-s -k live_trees` to confirm the call counts move only where expected.
 
 ## Info
 
-### IN-11: Missing space after `=` in `normalize_manual`
+### IN-13: The item-5 recount rule pins that each table region is *named*, not that the prose files it under the right cause; the "region named in prose must be in the table" obligation is not enforced
 
-**File:** `app/services/phone.py:320`
-**Issue:** `e164 =phonenumbers.format_number(number, PhoneNumberFormat.E164)` was introduced by `333bf8e0`. The project has no formatter in the toolchain (`uv run ruff` is not installed), so nothing catches it.
-**Fix:** `e164 = phonenumbers.format_number(number, PhoneNumberFormat.E164)`.
+**File:** `tests/test_services/test_phone.py:888-895` (comment: "Регион, названный прозой пункта 5, обязан стоять здесь (запрет №3 плана 16-21)"), `:930-944`, `:981-990`
+**Issue:**
+- **Where a region sits is not checked.** The rule checks `re.search(region, item)` over the whole item, and it checks each region's cause from `MANUAL_BOUNDARY_EXAMPLES`. It never checks which parenthesis the prose puts a region in. Moving `TW` into "сам `MOBILE` (NL, FI, ID, MY, AT, TW)" would stay green, though the prose would then be false.
+- **The converse is not checked.** A region added to the prose but not to the table, such as `RS` under "только `VOIP`", is never measured. The comment states an obligation the rule does not enforce.
 
-### IN-12: The writer test reaches the new constant through the module object while its sibling is imported by name
+**Fix:** Parse the three parenthesised groups from item 5 (after "сам `MOBILE` (", "только `VOIP` (", "у … —"). Assert that each group equals the table's regions with that cause, so the set comparison runs in both directions.
 
-**File:** `tests/test_application/test_account_phone_writer.py:29`, `:31`, `:485`
-**Issue:** `ACCOUNT_NOT_IN_SESSION` is imported from `app.application.accounts.phone`. `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` is read as `writer_module.ACCOUNT_WITHOUT_ID_AFTER_FLUSH` through an extra `import … as writer_module`. This is a leftover of the RED commit, where the constant did not yet exist and a by-name import would have broken collection. Now it is only an inconsistent second import path.
-**Fix:** Add `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` to the `from app.application.accounts.phone import (...)` list and drop `writer_module`.
+### IN-14: Item 7, the rule that closes the non-`+7` class, gives no pointer to its remainder, which lives in item 5 (the code-7 item)
+
+**File:** `app/services/phone.py:246-291` (item 5, "код страны 7 …", which carries the non-7 remainder at `:266-291`), `:295-310` (item 7)
+**Issue:** Item 7 reads as a full closure: "так выглядит настоящий номер чужой зоны с лишними цифрами …", and its chronicle says the class "был закрыт только у кода 7" before 16-16. A Phase 18 reader who looks up the account-type rule learns of the «56 из 976» remainder only by reading the code-7 item. The placement predates this batch, but 16-21 doubled the remainder text in place. `_manual_item_five` (`tests/test_services/test_phone.py:909-927`) now pins the text to item 5, so moving it means changing the rule too.
+**Fix:** Move the non-7 remainder paragraph to item 7, and point `_manual_item_five` at item 7 (rename it accordingly). If that churn is unwanted, add one sentence to item 7: "остаток класса — пункт 5, замер «56 из 976»".
 
 ---
 
-_Reviewed: 2026-10-12T20:15:50Z_
+_Reviewed: 2026-10-13T12:06:15Z_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: standard (incremental, diff base `388add71`, head `4bd0276f`)_
+_Depth: standard (incremental, diff base `6fc1ee91`, head `4fc4d870`)_
