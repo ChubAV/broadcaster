@@ -1704,6 +1704,73 @@ NEGATIVE_CONTROLS = [
         "'phone'",
         id="async-exception-extra",
     ),
+    # WR-13 (D-17 `logger.*`): охват по получателю — любой метод опознанного журнала,
+    # низкоуровневый (`_log`, `makeRecord`, `handle`, `callHandlers`, `_proxy_to_logger`),
+    # функция модуля `logging`, метод обёртки и настройка с номером; ссылка на любой метод;
+    # методы, возвращающие журнал (`getChild`, `unbind`, `try_unbind`), — привязки.
+    pytest.param(
+        "app/x.py",
+        'import logging\n\nlogger = logging.getLogger(__name__)\nlogger._log(20, "x %s", (account.phone,))\n',
+        "phone",
+        id="private-log-method",
+    ),
+    pytest.param(
+        "app/x.py",
+        'logger.makeRecord("n", 20, "f", 1, "x %s", (account.phone,), None)\n',
+        "phone",
+        id="make-record",
+    ),
+    pytest.param("app/x.py", "logger.handle(make_record(account.phone))\n", "phone", id="handle-record"),
+    pytest.param("app/x.py", "logger.callHandlers(make_record(account.phone))\n", "phone", id="call-handlers"),
+    pytest.param(
+        "app/x.py", 'logger._proxy_to_logger("info", "x", phone=p)\n', "phone=", id="proxy-to-logger"
+    ),
+    pytest.param(
+        "app/x.py", 'logging.makeLogRecord({"msg": account.phone})\n', "phone", id="logging-make-log-record"
+    ),
+    pytest.param(
+        "app/x.py",
+        "adapter = logging.LoggerAdapter(logger, {})\nadapter.process(account.phone, {})\n",
+        "phone",
+        id="adapter-process",
+    ),
+    pytest.param("app/x.py", "logger.setLevel(account.phone)\n", "phone", id="configuration-method-with-a-number"),
+    pytest.param(
+        "app/x.py",
+        'import logging\n\nlg = logging.getLogger(__name__).getChild("x")\nlg.info(account.phone)\n',
+        "phone",
+        id="getchild-binding",
+    ),
+    pytest.param(
+        "app/x.py",
+        'logging.getLogger(__name__).getChild("x").info(account.phone)\n',
+        "phone",
+        id="getchild-chain",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger().unbind("k")\nlg.info("x", phone=p)\n',
+        "phone=",
+        id="unbind-binding",
+    ),
+    pytest.param(
+        "app/x.py",
+        'lg = structlog.get_logger().try_unbind("k")\nlg.info("x", phone=p)\n',
+        "phone=",
+        id="try-unbind-binding",
+    ),
+    pytest.param(
+        "app/x.py",
+        'emit = logger._log\nemit(20, "x %s", (account.phone,))\n',
+        "phone",
+        id="private-log-method-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'functools.partial(logger._log, 20)("x %s", (account.phone,))\n',
+        "phone",
+        id="partial-of-private-log-method",
+    ),
 ]
 
 
@@ -1767,6 +1834,30 @@ def test_a_logger_bound_in_a_class_body_is_found_through_self_and_cls():
     )
 
 
+def test_any_method_of_an_identified_logger_is_a_log_call():
+    """WR-13 (D-17): охват по получателю — любой метод опознанного журнала судится.
+
+    D-17 пишет `logger.*` / `log.*` / `logging.*`: это охват по получателю, а не список
+    методов. Прежний пункт границы приписывал D-17 закрытый список методов и отпускал
+    `logger._log(…)`, `logger.makeRecord(…)`, `logger.handle(…)` (ревью WR-13); журнал из
+    `getChild` — привязка, как `bind`, и тоже уходил мимо гейта.
+    """
+    prefix = "import logging\n\nlogger = logging.getLogger(__name__)\n"
+    sources = [
+        prefix + 'logger._log(20, "x %s", (account.phone,))\n',
+        prefix + 'logger.makeRecord("n", 20, "f", 1, "x %s", (account.phone,), None)\n',
+        prefix + "logger.handle(make_record(account.phone))\n",
+        'import logging\n\nlg = logging.getLogger(__name__).getChild("x")\nlg.info(account.phone)\n',
+    ]
+
+    for source in sources:
+        offences = python_log_offences(source, "app/x.py")
+        assert any(offence.startswith("app/x.py:4 — имя — phone") for offence in offences), (
+            "метод опознанного журнала вне списка уровней не судится: "
+            f"{source!r} прошёл мимо гейта: {offences}"
+        )
+
+
 # --- Положительные контроли: ничего не найдено ---------------------------------
 
 POSITIVE_CONTROLS = [
@@ -1788,8 +1879,14 @@ POSITIVE_CONTROLS = [
         False,
         id="send-log-record-named-log",
     ),
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
     pytest.param(
-        "app/x.py", 'logging.getLogger("x").setLevel(logging.WARNING)\n', False, id="set-level-is-not-a-log"
+        "app/x.py",
+        'logging.getLogger("x").setLevel(logging.WARNING)\n',
+        True,
+        id="set-level-is-judged-without-a-finding",
     ),
     pytest.param(
         "app/x.py",
@@ -1843,11 +1940,14 @@ POSITIVE_CONTROLS = [
         False,
         id="factory-assigned-receiver-configuration-is-not-a-log",
     ),
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
     pytest.param(
         "app/x.py",
         'lg = logging.getLogger("x")\nlg.setLevel(logging.WARNING)\n',
-        False,
-        id="factory-assigned-receiver-set-level-is-not-a-log",
+        True,
+        id="factory-assigned-receiver-set-level-is-judged-without-a-finding",
     ),
     pytest.param(
         "app/x.py",
@@ -1858,11 +1958,14 @@ POSITIVE_CONTROLS = [
     # IN-09 (D-17): ввоз из `logging` того, что не функция журнала, вызовом журнала не
     # делает; признак наличия через ввезённую функцию не краснит; одноимённая функция без
     # ввоза из `logging` журналом не считается — гейт не угадывает по имени.
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
     pytest.param(
         "app/x.py",
         'from logging import getLogger, INFO\n\ngetLogger("x").setLevel(INFO)\n',
-        False,
-        id="logging-config-import-is-not-a-log",
+        True,
+        id="logging-config-import-set-level-is-judged-without-a-finding",
     ),
     pytest.param(
         "app/x.py",
@@ -1910,7 +2013,15 @@ POSITIVE_CONTROLS = [
         False,
         id="partial-of-another-function",
     ),
-    pytest.param("app/x.py", 'getattr(logger, "setLevel")(10)\n', False, id="getattr-configuration-method"),
+    # Летопись WR-13: до плана 16-23 настройка опознанного журнала вызовом журнала не
+    # считалась, и строка утверждала закрытый список методов; D-17 пишет `logger.*` — охват
+    # по получателю: настройка судится теми же правилами и без номера находок не даёт.
+    pytest.param(
+        "app/x.py",
+        'getattr(logger, "setLevel")(10)\n',
+        True,
+        id="getattr-configuration-method-is-judged-without-a-finding",
+    ),
     pytest.param(
         "app/x.py", "lg = structlog.get_logger(__name__)\n", False, id="factory-without-initial-values"
     ),
@@ -1938,6 +2049,21 @@ POSITIVE_CONTROLS = [
         "async def f(client, account):\n    await client.ainfo(account.phone)\n",
         False,
         id="async-named-method-of-non-logger",
+    ),
+    # WR-13 (D-17): журнал из `getChild` — привязка, признак наличия через него не краснит;
+    # метод любого объекта с именем журнала (запись `SendLog` под именем `log`) судится —
+    # цена строгости охвата по получателю, находок нет (на живом дереве таких вызовов ноль).
+    pytest.param(
+        "app/x.py",
+        'lg = logging.getLogger(__name__).getChild("x")\nlg.info("x", phone_set=account.phone is not None)\n',
+        True,
+        id="getchild-presence-flag",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(db, i):\n    log = await db.get(SendLog, i)\n    log.mark_failed("timeout")\n',
+        True,
+        id="send-log-record-method-is-judged-without-a-finding",
     ),
 ]
 
