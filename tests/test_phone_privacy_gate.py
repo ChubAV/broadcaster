@@ -10,8 +10,9 @@
 
 ЧТО СЧИТАЕТСЯ ВЫЗОВОМ ЖУРНАЛА (Python, деревья `app/`, `scripts/`, `max_worker/`).
 `print(...)` (и `builtins.print(...)`) — в контейнере он уходит в тот же stdout, что и
-журнал; и `X.<метод>(...)` или `getattr(X, "<метод>")(...)`, где метод — уровень журнала
-или `bind`/`new` (`LOG_METHODS`), а получатель `X` — имя `logger`/`log`/`logging`/`_log`/
+журнал; и `X.<метод>(...)` или `getattr(X, "<метод>")(...)`, где метод — уровень журнала,
+синхронный или асинхронный structlog (`ainfo`, `awarning`, …, `ASYNC_LOG_METHODS`, сверены
+сторожем с установленным structlog), или `bind`/`new` (`LOG_METHODS`), а получатель `X` — имя `logger`/`log`/`logging`/`_log`/
 `_logger` (и любое имя, оканчивающееся на `_log`/`_logger`), атрибут с тем же окончанием
 (`self.log`), корневой журнал `logging.root` (`.root` любого журнала), вызов фабрики
 (`LOGGER_FACTORIES`: `get_logger`/`getLogger`/`get_task_logger`, обёртки-фабрики
@@ -93,7 +94,9 @@ IN-09 (`from logging import info`, журнал из тела класса че�
 пойманы формы той же оси, которых не называли ни охват, ни граница: `logging.root`,
 классы журнала, созданные напрямую, вызываемое журнала, связанное с атрибутом или в
 теле класса, попарное связывание кортежем, ссылка на фабрику без вызова, фабрика через
-`getattr`, `builtins.print`.
+`getattr`, `builtins.print`. До плана 16-23 асинхронные уровни structlog в `LOG_METHODS`
+не входили, и `await logger.ainfo(…, phone=…)` уходил мимо гейта (ревью WR-13,
+верификация раунда 4, 2026-10-12).
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -215,6 +218,16 @@ PHONE_LOG_EXCEPTIONS_CEILING = 0
 # в рабочей копии воркера — тысячи чужих файлов, и их журналы — граница гейта.
 SKIPPED_DIR_NAMES = frozenset({"node_modules", "__pycache__"})
 
+# Асинхронные уровни `structlog.stdlib.BoundLogger` — журнал, которым проект настраивает
+# structlog (`app/logging_config.py`, `wrapper_class=structlog.stdlib.BoundLogger`): замер
+# `dir()`, structlog 25.5.0 — ровно восемь. Проект асинхронный целиком (FastAPI, Celery), и
+# `await logger.ainfo(…, phone=…)` уходит в stdout и Loki так же, как `logger.info` (ревью
+# WR-13). Набор сверяет правило-сторож с установленным structlog: подъём библиотеки,
+# добавивший или убравший асинхронный уровень, краснит суиту, а не оставляет гейт слепым.
+ASYNC_LOG_METHODS = frozenset(
+    {"adebug", "ainfo", "awarning", "aerror", "aexception", "acritical", "afatal", "alog"}
+)
+
 LOG_METHODS = frozenset(
     {
         "debug",
@@ -230,17 +243,9 @@ LOG_METHODS = frozenset(
         # `bind` и `new` — НАМЕРЕННО: привязанное значение уходит во все строки.
         "bind",
         "new",
+        # Асинхронные уровни structlog — те же уровни для `async`-кода (ревью WR-13).
+        *ASYNC_LOG_METHODS,
     }
-)
-
-# Асинхронные уровни `structlog.stdlib.BoundLogger` — журнал, которым проект настраивает
-# structlog (`app/logging_config.py`, `wrapper_class=structlog.stdlib.BoundLogger`): замер
-# `dir()`, structlog 25.5.0 — ровно восемь. Проект асинхронный целиком (FastAPI, Celery), и
-# `await logger.ainfo(…, phone=…)` уходит в stdout и Loki так же, как `logger.info` (ревью
-# WR-13). Набор сверяет правило-сторож с установленным structlog: подъём библиотеки,
-# добавивший или убравший асинхронный уровень, краснит суиту, а не оставляет гейт слепым.
-ASYNC_LOG_METHODS = frozenset(
-    {"adebug", "ainfo", "awarning", "aerror", "aexception", "acritical", "afatal", "alog"}
 )
 
 # Привязка к контексту structlog: значение уходит в КАЖДУЮ следующую строку журнала
