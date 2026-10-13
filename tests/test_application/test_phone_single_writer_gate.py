@@ -27,7 +27,12 @@ UPDATE «записать, если номера нет и он не ручно�
 только формы, которые действительно пишут в колонку.
 
 ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ (восемь). Пишущий вызов опознаётся по имени,
-названному литералом, где бы оно ни стояло: последнее звено вызываемого
+названному литералом, ИЛИ по псевдониму, связанному с таким именем в том же модуле —
+ввозом `from sqlalchemy.orm.attributes import set_committed_value as scv`,
+присваиванием имени `scv = set_committed_value` или атрибута
+`bum = Session.bulk_update_mappings`, `touch = attrs.flag_modified` (`_api_aliases`
+— тем же разрешением `_module_aliases`, что у модели и `functools.partial`; план
+16-22, ревью WR-12), — где бы имя ни стояло: последнее звено вызываемого
 (`stmt.values(…)`); строка вызываемого `getattr(obj, "bulk_update_mappings")(…)`;
 ссылка на пишущий API, поданная другому вызову вместе с его аргументами, —
 `session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
@@ -39,7 +44,16 @@ import partial as bind`, `bind = functools.partial`), поданного дру�
 вместе с остальными аргументами (`run_in_executor(None, partial(s.
 bulk_update_mappings, M), rows)`) — тогда первыми идут привязанные `partial`
 аргументы; строка в
-`operator.methodcaller("bulk_update_mappings", …)`. У `AsyncSession` нет `bulk_*`
+`operator.methodcaller("bulk_update_mappings", …)` (применение `methodcaller(…)(obj)`
+подаёт получателя `obj`); псевдонимы самих носителей в том же модуле —
+`from operator import methodcaller as mc`, `attr = getattr` — разрешаются так же,
+как у `functools.partial` (`IDENTIFICATION_CARRIERS`). Псевдоним, связанный с атрибутом
+(`set_phone = MessengerAccount.phone.__set__`), вызывается этим атрибутом — с
+получателем; метод, вызванный через класс с явным `self`
+(`Insert.from_select(stmt, names, sel)`, `Connection.copy_records_to_table(conn,
+…)`), судится так же: перечень `from_select` и таблица COPY ищутся в каждом
+позиционном аргументе, а распаковка не-литерала за ссылкой подаётся API как есть
+(самопроверка исполнителя 16-22). У `AsyncSession` нет `bulk_*`
 вовсе, поэтому `run_sync` — естественный путь асинхронного скрипта к ним (план
 16-17, ревью WR-10). Судимый параметр берётся при любом литеральном связывании:
 позицией, именем, литеральной распаковкой `*[…]` / `*(…)` и `**{"имя": …}` /
@@ -59,9 +73,19 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `values(**{"phone": x})`, `MessengerAccount(**{…})`, `values(**({…} | base))`,
    `values(**{"phone": n for n in …})`; и повторный конструктор модели или её
    псевдонима в модуле — `MessengerAccount.__init__(account, phone=x)`;
-3. ключ литерального отображения — строка `"phone"` / `"phone_is_manual"`, атрибут
-   `MessengerAccount.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")` или
-   конструктор колонки `column("phone")` / `literal_column(…)` —
+3. ключ литерального отображения — колонка номера, названная литералом одним из
+   наименований (`_phone_column`): строка `"phone"` / `"phone_is_manual"` (и
+   склейка `+` строковых констант, f-строка без подстановок); атрибут модели или
+   таблицы (`MessengerAccount.phone`, `MessengerAccount.__table__.c.phone`,
+   `t.c.phone`, `inspect(M).c.phone`); индекс (`t.c["phone"]`,
+   `inspect(M).columns["phone"]`) и поиск по имени (`t.c.get("phone")`,
+   `inspect(M).get_property("phone")`); `getattr(M, "phone")`; конструктор колонки
+   `column("phone")` / `literal_column(…)`, имя позицией или `text=`; и любая
+   производная такой колонки доступом
+   к атрибуту или индексу (`.key`, `.name`, `.expression`, `.property.key`,
+   `.property.columns[0]`; план 16-22, ревью WR-12). Источник перечня —
+   `COLUMN_NAMINGS`, и правило-матрица держит его в суите по каждому судимому
+   контексту `COLUMN_CONTEXTS`; те же наименования судятся в видах 4, 6, 7 и 8 —
    в позиционном аргументе `values(...)` и
    устаревшего `Query.update({...})` (у него — и в параметре `values=`, сигнатура
    `Query.update(self, values, …)`). Отображение — `{…}` (и `{**{…}, …}`),
@@ -74,12 +98,15 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `set_committed_value(obj, "phone_is_manual", …)`, `set_attribute(obj, "phone",
    …)`, `object.__setattr__(obj, "phone", …)` и `obj.__setattr__("phone", …)` —
    имя атрибута позицией или именем `key=` / `name=`
-   (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`);
+   (`NAMED_ATTRIBUTE_KEY_KEYWORDS`: `set_attribute(account, key="phone", value=x)`) —
+   строкой, производной колонки (`setattr(account, MessengerAccount.phone.key, x)`,
+   план 16-22, ревью WR-12) или иным наименованием колонки вида 3;
    `flag_modified(account, "phone")` — flush пишет колонку текущим значением
    объекта (после `account.__dict__["phone"] = x` — значение `x`, у устаревшего
    объекта — старый номер поверх ручного; самопроверка исполнителя 16-17, замер);
    и дескриптор колонки номера `MessengerAccount.phone.__set__(account, x)` /
-   `type(account).phone_is_manual.__set__(…)`;
+   `type(account).phone_is_manual.__set__(…)` — и через класс дескриптора
+   `InstrumentedAttribute.__set__(MessengerAccount.phone, account, x)`;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
    строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
    (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
@@ -115,7 +142,9 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 8. колонка номера, названная ПОЗИЦИЕЙ: пара `(MessengerAccount.phone, x)` /
    `("phone_is_manual", x)` / `(table.c["phone"], x)` в `ordered_values(...)` (и
    `ordered_values(*[…])`) и имя колонки номера в перечне `from_select([…,
-   "phone"], select)` — позицией или `names=` (план 16-12, ревью WR-08).
+   "phone"], select)` — позицией или `names=` (план 16-12, ревью WR-08); перечень
+   `from_select` — в той же грамматике контейнера: склейка `["user_id"] +
+   ["phone"]`, условное выражение, `list((…))`, `:=` (план 16-22, ревью WR-12).
 Перечень пар (виды 3, 7, 8: `dict([…])`, `on_duplicate_key_update([…])`,
 `ordered_values(*[…])`) разбирается той же грамматикой контейнера, что
 отображения, — список, кортеж, `*`, comprehension, `+`, условное выражение.
@@ -127,15 +156,21 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 срабатывание здесь снимается переименованием ключа, тогда как пропущенный второй
 писатель снимается только потерей ручного номера у пользователя. Псевдоним модели
 разрешается по всему модулю, без учёта областей видимости: имя, однажды связанное
-с `MessengerAccount`, считается моделью в любой функции того же файла. Та же цена у
-ссылки: имя пишущего API, поданное другому вызову (`handler(update, {"phone":
-x})`), судится как вызов этого API.
+с `MessengerAccount`, считается моделью в любой функции того же файла. Так же
+разрешается псевдоним пишущего API (план 16-22): имя, однажды связанное с
+`set_committed_value`, судится как он и по последнему звену (`obj.scv(…)`). Та же
+цена у ссылки: имя пишущего API, поданное другому вызову (`handler(update,
+{"phone": x})`), судится как вызов этого API.
 
 ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА. `setattr(obj, name, value, /)` и
 `object.__setattr__(self, name, value, /)` — позиционно-только:
 `setattr(account, name="phone", value=x)` падает `TypeError` и ничего не пишет.
 Гейт судит и эту форму: вызов, который не исполнится, законной формой не является,
-а `key=` / `name=` судятся у каждого писателя по имени одним набором.
+а `key=` / `name=` судятся у каждого писателя по имени одним набором. Имя атрибута
+судится через `_phone_column` (план 16-22, ревью WR-12), поэтому краснеют и
+`setattr(account, MessengerAccount.phone, x)` — имя не строка, `TypeError` при
+исполнении, — и `setattr(target, source.phone, value)`, где значение лежит под
+именем атрибута `phone`: колонка номера названа литералом на месте имени атрибута.
 
 ЦЕНА СТРОГОСТИ ШЕСТОГО ВИДА — та же по природе. `execute` судится по ключам строк,
 а не по первому аргументу: иначе `stmt = update(MessengerAccount);
@@ -154,27 +189,39 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика
 `_literal_mappings`, включая `{"phone": v for …}` с постоянным ключом и
 `column("phone")`) или в строковой константе SQL (и в склейке `+` констант);
+«названа литералом» включает производную колонки любой цепочкой атрибутов и
+индексов (`MessengerAccount.phone.key`, `.property.key`, `.expression`) — перечень
+наименований `COLUMN_NAMINGS` (вид 3);
 пишущий вызов опознаётся по имени, названному литералом (последнее звено,
-`getattr`-строка, ссылка с аргументами, `methodcaller`); судимый параметр — при
-любом литеральном связывании (`JUDGED_PARAMETERS`); атрибут номера — в любой
-позиции цели присваивания. Вне охвата, каждая форма с правдивой причиной:
-(1) значение или ссылка, пришедшие в пишущий вызов ИМЕНЕМ или результатом
-    другого вызова, — переменная, параметр, `build_rows()`, `values(**fields)`,
-    распаковка не-литерала `*args` / `**kw`, `{k: v for …}` с вычисленным ключом,
-    ссылка на пишущий API в переменной (`fn = s.bulk_update_mappings; fn(…)`,
-    `w = partial(…); w(rows)`): поток данных предикат не прослеживает, даже когда
-    литерал стоит строкой выше в том же файле;
+`getattr`-строка, ссылка с аргументами, `methodcaller`), и по псевдониму такого
+имени, связанному в том же модуле ввозом `as` или присваиванием имени либо
+атрибута; судимый параметр — при любом литеральном связывании
+(`JUDGED_PARAMETERS`); атрибут номера — в любой позиции цели присваивания. Вне
+охвата, каждая форма с правдивой причиной:
+(1) значение или ссылка, пришедшие в пишущий вызов ПАРАМЕТРОМ, из контейнера или
+    результатом другого вызова, — переменная со значением, параметр функции,
+    `build_rows()`, `values(**fields)`, распаковка не-литерала `*args` / `**kw`,
+    `{k: v for …}` с вычисленным ключом, ссылка на пишущий API, пришедшая
+    параметром, из контейнера (`writers["bulk"](…)`) или результатом другого вызова
+    (`w = partial(…); w(rows)`, `fn = make_writer(); fn(…)`): поток данных
+    предикат не прослеживает, даже когда литерал стоит строкой выше в том же файле;
 (2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
     name, …)`, `getattr(s, name)(…)`, f-строка с колонкой в подстановке,
-    `.format(col)`, склейка с переменной;
+    `.format(col)`, склейка с переменной, результат вызова над строкой
+    (`"PHONE".lower()`, `"{}".format("phone")`, `"".join([…])`, `str("phone")`):
+    предикат вызовов не исполняет (самопроверка исполнителя 16-22 — 8 456 форм,
+    ни одна не поймана, и это граница, а не слепота);
 (3) вставка позиционным кортежем значений без имён колонок —
     `insert(MessengerAccount).values((…))`: колонку по исходнику не назвать,
     порядок колонок живёт в модели;
 (4) пишущий API без имени или неизвестного типа — `type(account)(phone=…)`,
     `obj.__init__(phone=…)` у объекта, тип которого по исходнику не назван (без
     типов неотличим от `super().__init__(phone=…)` любого класса с параметром
-    `phone`), псевдоним модели, заведённый в чужом файле: без типов он неотличим от
-    законного `render(…, phone=…)`;
+    `phone`), псевдоним модели или пишущего API, заведённый в ЧУЖОМ файле и
+    ввезённый оттуда под своим именем (`from app.db import Account`, `from
+    app.helpers import scv`): поток данных между модулями предикат не
+    прослеживает, а без типов такое имя неотличимо от законного `render(…,
+    phone=…)`;
 (5) НЕ запись в колонку — `account.__dict__["phone"] = …`, `vars(account)[…] = …`,
     `instance_dict(account)[…] = …` сами по себе: обход инструментовки ORM,
     оператора UPDATE не порождает (и с `flag_dirty(account)` — тоже); а также
@@ -202,7 +249,23 @@ WR-08 (2026-10-09) — ещё девять (`parameters=`, comprehension и ге
 `values(**{"phone": n for …})`; это третий круг одного класса (WR-01 → WR-08 →
 WR-10). План 16-17 перебрал сигнатуры каждого судимого API (`JUDGED_PARAMETERS`,
 сторож и матрица), научил предикат опознавать API по ссылке и по строке и судить
-вид 1 по грамматике, а заявление расширил ровно на то, что предикат видит.
+вид 1 по грамматике, а заявление расширил ровно на то, что предикат видит. До
+плана 16-22 пункт (1) границы называл «ссылкой на пишущий API в переменной» и
+форму `fn = s.bulk_update_mappings; fn(…)`; план 16-22 разрешил псевдонимы пишущих
+API в том же модуле (`_api_aliases`), такая ссылка теперь ловится, и из пункта (1)
+она убрана. До плана 16-22 заявление «через механизм» в четвёртый раз было шире
+предиката: ревью WR-12 (2026-10-12) нашло одиннадцать форм — колонку через `.key` /
+`.name` (`MessengerAccount.phone.key` в ключе `values`, в строках
+`bulk_update_mappings` и `execute`, в `setattr` и `set_committed_value`;
+`MessengerAccount.__table__.c.phone.name`), перечень `from_select` в контейнере
+(`+`, условное выражение, `list(…)`) и псевдоним ввоза пишущего API
+(`set_committed_value as scv`, `flag_modified as touch`); четвёртый круг одной оси
+(WR-01 → WR-08 → WR-10 → WR-12): ось «как названа колонка» была закрытым списком
+самопроверки 16-17. План 16-22 сделал её таблицей `COLUMN_NAMINGS` с
+правилом-матрицей, производную колонки — грамматикой, псевдонимы пишущих API — тем
+же помощником, что у модели и `partial`; решение владельца О-10 (а), 2026-10-13:
+заявление прежнее, вариант (б) «сузить заявление до перечня грамматики и снять
+запреты записью в `overrides`» ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -323,9 +386,25 @@ REFERENCE_KEYWORDS = frozenset({"fn"})
 # в модуле добавляются при разборе исходника (`_module_aliases(tree, "partial")`).
 PARTIAL_NAMES = frozenset({"partial"})
 
+# Носители опознания пишущего API по строке: `operator.methodcaller("<имя>", …)` и
+# встроенный `getattr(obj, "<имя>")(…)`. Их псевдонимы в том же модуле разрешаются
+# так же, как у `functools.partial` (самопроверка исполнителя 16-22).
+IDENTIFICATION_CARRIERS = ("methodcaller", "getattr")
+
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
 # отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
 COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
+
+# Поиск колонки по имени-литералу: `t.c.get("phone")`, `t.columns.get("phone")`,
+# `inspect(M).get_property("phone")`, `t.c.__getitem__("phone")` — та же колонка, что
+# индекс `t.c["phone"]` (самопроверка исполнителя 16-22). Цена строгости та же, что у
+# индекса: `{form.get("phone"): x}` в пишущем вызове тоже судится.
+COLUMN_LOOKUP_METHODS = frozenset({"get", "get_property", "__getitem__"})
+
+# Имя первого параметра у конструкторов и поиска: `column(text, …)` /
+# `literal_column(text, …)`, `ColumnCollection.get(key, default=None)`,
+# `Mapper.get_property(key, …)` (SQLAlchemy 2.0.46).
+COLUMN_NAME_KEYWORDS = frozenset({"text", "key"})
 
 # Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
 # `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
@@ -646,6 +725,12 @@ def _format(path: str, write: tuple[int, int, str, str]) -> str:
 def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     """Записи номера видов шапки: (строка, столбец, вид, предмет), по порядку в файле."""
     tree = ast.parse(source, filename=path)
+    # Носители опознания под псевдонимом в том же модуле — `from operator import
+    # methodcaller as mc`, `mc = operator.methodcaller`, `attr = getattr` —
+    # переименовываются в исходное имя до разбора (самопроверка исполнителя 16-22).
+    for carrier in IDENTIFICATION_CARRIERS:
+        if carrier in source:
+            _rename_aliases(tree, carrier)
     docstrings = _docstring_nodes(tree)
     # Звенья склейки строк внутри более длинной склейки: судится только внешняя.
     inner_concatenations = {
@@ -659,12 +744,30 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     write_names = WRITE_CALL_NAMES | _module_model_aliases(tree)
     # Имена, которые судятся у ссылки: всякий пишущий API, который судит `_judge_call`.
     judged_names = _judged_call_names(write_names)
+    # Псевдонимы пишущих API в том же модуле — ввоз `as`, присваивание имени или
+    # атрибута (ревью WR-12): вызов и ссылка псевдонима судятся как исходный API.
+    api_aliases = _api_aliases(tree, judged_names)
+    alias_targets = _api_alias_targets(tree, api_aliases)
+    referable = judged_names | frozenset(api_aliases)
     # Вызовы, чей результат тут же вызывается (`partial(ref, …)(…)`): ссылка в них
     # судится один раз — у применения, с аргументами обоих вызовов.
     applied = {
         id(node.func)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
+    }
+    # Получатель `methodcaller(…)` — объект его применения `methodcaller(…)(obj)`:
+    # вызов `obj.<имя>(…)` судится с получателем, по которому судятся дескриптор
+    # колонки и повторный конструктор модели (самопроверка исполнителя 16-22).
+    methodcaller_receivers = {
+        id(node.func): node.args[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Call)
+        and _call_name(node.func) == "methodcaller"
+        and len(node.args) == 1
+        and not isinstance(node.args[0], ast.Starred)
+        and not node.keywords
     }
     # Ссылки у каждого вызова (`_referenced_calls`). `partial(ref, …)`, поданный
     # другому вызову и разобранный им как носитель ссылки, сам не судится: его
@@ -674,7 +777,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # as bind`, `bind = functools.partial`) — обёртка ссылки у `_bound_reference`.
     partial_names = PARTIAL_NAMES | _module_aliases(tree, "partial")
     references = {
-        id(node): _referenced_calls(node, judged_names, partial_names)
+        id(node): _referenced_calls(node, referable, partial_names)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (id(node) not in applied or _call_name(node) == "methodcaller")
@@ -707,12 +810,26 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         elif isinstance(node, ast.Call):
             name = _call_name(node)
             if name is not None:
-                _judge_call(node, name, write_names, record)
+                _judge_call(
+                    *_canonical_call(node, name, api_aliases, alias_targets), write_names, record
+                )
             # `methodcaller("…", …)` судится у себя: его применение подаёт объект,
             # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
             if id(node) not in consumed:
                 for synthetic, referenced, _carrier in references.get(id(node), []):
-                    _judge_call(synthetic, referenced, write_names, record)
+                    if (holder := methodcaller_receivers.get(id(node))) is not None:
+                        func = ast.copy_location(
+                            ast.Attribute(value=holder, attr=referenced, ctx=ast.Load()),
+                            synthetic,
+                        )
+                        synthetic = _synthetic_call(
+                            synthetic, func, list(synthetic.args), list(synthetic.keywords)
+                        )
+                    _judge_call(
+                        *_canonical_call(synthetic, referenced, api_aliases, alias_targets),
+                        write_names,
+                        record,
+                    )
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -847,17 +964,32 @@ def _judge_call(
             for keyword, value in named
             if keyword in names | NAMED_ATTRIBUTE_KEY_KEYWORDS
         ]
+        # Имя атрибута судится через `_phone_column`, а не только строковой
+        # константой (ревью WR-12): `setattr(account, MessengerAccount.phone.key, x)`
+        # и `set_committed_value(account, MessengerAccount.phone.key, x)` пишут
+        # атрибут `phone` так же, как `"phone"`. Цена строгости — в шапке, вид 4.
         for attribute, prefix in candidates:
-            if isinstance(attribute, ast.Constant) and attribute.value in PHONE_COLUMNS:
-                record(node, KIND_SETATTR, f"{name}({prefix}{attribute.value!r}, …)")
+            if (column := _phone_column(attribute)) is not None:
+                shown = (
+                    repr(column)
+                    if _constant_text(attribute) is not None
+                    else ast.unparse(attribute)
+                )
+                record(node, KIND_SETATTR, f"{name}({prefix}{shown}, …)")
                 break
     receiver = _callee_receiver(node.func)
-    if name == DESCRIPTOR_SET and receiver is not None:
+    if name == DESCRIPTOR_SET:
         # `MessengerAccount.phone.__set__(account, x)`,
         # `type(account).phone_is_manual.__set__(account, True)`: дескриптор колонки
-        # номера пишет атрибут в обход присваивания.
-        if _phone_column(receiver) is not None:
-            record(node, KIND_SETATTR, f"{ast.unparse(receiver)}.__set__(…)")
+        # номера пишет атрибут в обход присваивания. Вызов через класс дескриптора —
+        # `InstrumentedAttribute.__set__(MessengerAccount.phone, account, x)` —
+        # подаёт дескриптор первым позиционным (самопроверка исполнителя 16-22).
+        descriptors = [receiver] if receiver is not None else []
+        descriptors += positional[:1]
+        for descriptor in descriptors:
+            if _phone_column(descriptor) is not None:
+                record(node, KIND_SETATTR, f"{ast.unparse(descriptor)}.__set__(…)")
+                break
     if (
         name == MODEL_INIT
         and isinstance(receiver, ast.Name)
@@ -877,8 +1009,12 @@ def _judge_call(
                         text = _mapping_key_text(key, column)
                         record(key, KIND_KEYWORD, f"{shown}(**{text})")
     if name in ROW_COPY_CALL_NAMES:
-        # Таблица — позицией или `table_name=` (`JUDGED_PARAMETERS`).
-        for table in _bound_arguments(node, min(indices, default=0), names):
+        # Таблица — любым позиционным аргументом или `table_name=`: у COPY asyncpg
+        # прочие параметры только именованные, а метод через класс с явным `self`
+        # (`Connection.copy_records_to_table(conn, "messenger_accounts", …)`) сдвигает
+        # позицию таблицы на одну (самопроверка исполнителя 16-22).
+        tables = positional + [value for keyword, value in named if keyword in names]
+        for table in tables:
             if (
                 isinstance(table, ast.Constant)
                 and isinstance(table.value, str)
@@ -909,6 +1045,24 @@ def _expanded_arguments(items: list[ast.expr]) -> list[ast.expr | None]:
                 found.extend(_expanded_arguments(list(item.value.elts)))
             else:
                 found.append(None)
+        else:
+            found.append(item)
+    return found
+
+
+def _forwarded_arguments(items: list[ast.expr]) -> list[ast.expr]:
+    """Аргументы, которые ссылка подаёт API: литеральная распаковка раскрыта, прочая — на месте.
+
+    Тот же порядок и та же длина, что у `_expanded_arguments`, но распаковка
+    не-литерала (`*[(…) for …]`, `*rows`) остаётся узлом `Starred`, а не `None`:
+    синтетический вызов API получает её так же, как прямой, — `ordered_values` судит
+    перечень пар в `*[(…) for …]`, а позиции за ней не связываются (самопроверка
+    исполнителя 16-22: до плана распаковка за ссылкой терялась).
+    """
+    found: list[ast.expr] = []
+    for item in items:
+        if isinstance(item, ast.Starred) and isinstance(item.value, (ast.List, ast.Tuple)):
+            found.extend(_forwarded_arguments(list(item.value.elts)))
         else:
             found.append(item)
     return found
@@ -1067,7 +1221,7 @@ def _bound_reference(
             inner = _bound_reference(positional[0], partial_names)
             if inner is not None:
                 referenced, func, args, keywords = inner
-                rest = [item for item in positional[1:] if item is not None]
+                rest = _forwarded_arguments(list(node.args))[1:]
                 return referenced, func, args + rest, keywords + list(node.keywords)
     return None
 
@@ -1125,12 +1279,13 @@ def _referenced_calls(
             return []
         source, outer_args, outer_keywords = call.func, list(call.args), list(call.keywords)
     positional = _positional_arguments(source)
+    forwarded = _forwarded_arguments(list(source.args))
     keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
         bound = _bound_reference(argument, partial_names)
         if argument is not None and bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
-            after = [item for item in positional[index + 1 :] if item is not None]
+            after = forwarded[index + 1 :]
             synthetic = _synthetic_call(
                 call,
                 func,
@@ -1144,7 +1299,7 @@ def _referenced_calls(
         )
         if bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
-            rest = [item for item in positional if item is not None]
+            rest = forwarded
             synthetic = _synthetic_call(
                 call,
                 func,
@@ -1312,22 +1467,39 @@ def _mapping_phone_keys(mapping: ast.expr) -> list[tuple[ast.AST, str]]:
 def _phone_column(node: ast.AST) -> str | None:
     """Колонка номера, названная узлом литералом.
 
-    Строка `"phone"`, атрибут `X.phone`, индекс `table.c["phone"]`,
-    `getattr(X, "phone")` с именем-константой и конструктор колонки
-    `column("phone")` / `sa.literal_column("phone_is_manual")`
+    Строка `"phone"` (и склейка `"pho" + "ne"`, f-строка без подстановок), атрибут
+    `X.phone`, индекс `table.c["phone"]`, `getattr(X, "phone")` с именем-константой,
+    поиск по имени `table.c.get("phone")` / `mapper.get_property("phone")`
+    (`COLUMN_LOOKUP_METHODS`) и конструктор колонки `column("phone")` /
+    `sa.literal_column("phone_is_manual")` / `column(text="phone")`
     (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
     строках executemany пишет колонку — замер на SQLite в памяти).
+
+    И производная такой колонки — любая цепочка доступа к атрибуту или индексу над
+    ней: `MessengerAccount.phone.key`, `MessengerAccount.phone.name`,
+    `table.c.phone.name`, `MessengerAccount.__table__.c.phone.name`,
+    `MessengerAccount.phone.property.key`, `MessengerAccount.phone.expression`,
+    `MessengerAccount.phone.property.columns[0]`, `getattr(M, "phone").key`.
+    `.key` — штатный способ получить строковый ключ для `bulk_update_mappings` без
+    голого литерала; до плана 16-22 такие ключи проходили гейт, хотя пишут колонку
+    (ревью WR-12, замер верификатора раунда 4 на SQLite в памяти). Производная
+    проверяется ПОСЛЕ прямых наименований. Перечень наименований держит в суите
+    правило-матрица `COLUMN_NAMINGS` × `COLUMN_CONTEXTS`.
     """
-    if (
-        isinstance(node, ast.Call)
-        and _call_name(node) in COLUMN_CONSTRUCTORS
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value in PHONE_COLUMNS
+    if isinstance(node, ast.Call) and (
+        _call_name(node) in COLUMN_CONSTRUCTORS
+        or (isinstance(node.func, ast.Attribute) and node.func.attr in COLUMN_LOOKUP_METHODS)
     ):
-        return node.args[0].value
-    if isinstance(node, ast.Constant) and node.value in PHONE_COLUMNS:
-        return node.value
+        # Конструктор колонки — имя первым позиционным или `text=`; поиск колонки по
+        # имени — `t.c.get("phone")`, `mapper.get_property("phone")`, имя `key=`
+        # (самопроверка исполнителя 16-22). Связывание — любое литеральное:
+        # позицией, `*["phone"]`, именем и `**{"text": "phone"}` (`_bound_arguments`).
+        for name in _bound_arguments(node, 0, COLUMN_NAME_KEYWORDS):
+            if (text := _constant_text(name)) in PHONE_COLUMNS:
+                return text
+    if (text := _constant_text(node)) in PHONE_COLUMNS:
+        # Строка — константа, склейка `+` констант или f-строка без подстановок.
+        return text
     if isinstance(node, ast.Attribute) and node.attr in PHONE_COLUMNS:
         return node.attr
     if (
@@ -1345,7 +1517,23 @@ def _phone_column(node: ast.AST) -> str | None:
         and node.args[1].value in PHONE_COLUMNS
     ):
         return node.args[1].value
+    if isinstance(node, (ast.Attribute, ast.Subscript)):
+        # Производная колонки номера любой цепочкой атрибутов и индексов — ПОСЛЕ всех
+        # прямых наименований (ревью WR-12, план 16-22): иначе индекс `t.c["phone"]`
+        # ушёл бы в рекурсию по `value` и перестал бы быть наименованием (ловушка
+        # порядка, замер планирования). `MessengerAccount.phone.key`,
+        # `.property.key`, `.expression`, `.property.columns[0]` — та же колонка.
+        return _phone_column(node.value)
     return None
+
+
+def _constant_text(node: ast.AST) -> str | None:
+    """Строка, названная литералом: константа, склейка `+` констант, f-строка без подстановок."""
+    if isinstance(node, ast.JoinedStr) and all(
+        isinstance(part, ast.Constant) and isinstance(part.value, str) for part in node.values
+    ):
+        return "".join(part.value for part in node.values if isinstance(part, ast.Constant))
+    return _folded_string(node)
 
 
 def _pair_candidates(node: ast.AST) -> list[ast.AST]:
@@ -1403,7 +1591,12 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
     У `ordered_values` — каждый позиционный аргумент-пара, чей первый элемент —
     колонка номера; у `from_select` — элементы параметра `names`, связанного
     позицией, именем, `**{"names": …}` или `*[…]` (`JUDGED_PARAMETERS`), являющиеся
-    колонкой номера.
+    колонкой номера. Перечень `names` разбирается грамматикой литерального
+    контейнера `_pair_candidates` — список, кортеж, набор, `*`, склейка `+`,
+    условное выражение, `:=`, обёртки `list(…)` и подобные, элемент comprehension:
+    до плана 16-22 судились только голые список и кортеж, и
+    `from_select(["user_id"] + ["phone"], sel)` проходил, хотя пишет колонку (ревью
+    WR-12, замер верификатора на SQLite в памяти).
     """
     name = _call_name(call)
     if name == "ordered_values":
@@ -1416,15 +1609,21 @@ def _positional_phone_columns(call: ast.Call) -> list[tuple[ast.AST, str]]:
                 candidates.append(argument)
         return _phone_pairs_among(candidates)
     if name == "from_select":
-        indices, parameters = _judged_bindings(name)
+        # Перечень — в КАЖДОМ позиционном аргументе, а не только на позиции из
+        # `JUDGED_PARAMETERS`: метод через класс с явным `self` —
+        # `Insert.from_select(stmt, names, sel)` и псевдоним `fs = Insert.from_select`
+        # — сдвигает позиции на одну (самопроверка исполнителя 16-22). Второй
+        # параметр, `select`, перечнем имён не бывает.
+        _indices, parameters = _judged_bindings(name)
         found: list[tuple[ast.AST, str]] = []
-        for names in _bound_arguments(call, min(indices, default=0), parameters):
-            if isinstance(names, (ast.List, ast.Tuple)):
-                found.extend(
-                    (item, column)
-                    for item in names.elts
-                    if (column := _phone_column(item)) is not None
-                )
+        bound = [argument for argument in _positional_arguments(call) if argument is not None]
+        bound += [value for keyword, value in _named_arguments(call) if keyword in parameters]
+        for names in bound:
+            found.extend(
+                (item, column)
+                for item in _pair_candidates(names)
+                if (column := _phone_column(item)) is not None
+            )
         return found
     return []
 
@@ -1467,6 +1666,106 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
                         known.add(target.id)
                         changed = True
     return frozenset(known - {name})
+
+
+def _rename_aliases(tree: ast.AST, name: str) -> None:
+    """Имя каждого псевдонима `name` в том же модуле (`_module_aliases`) — в `name`.
+
+    Только узлы `Name` в контексте чтения: присваивание псевдонима остаётся, а его
+    использования читаются как исходное имя всеми ветками, опознающими носитель по
+    имени (`_call_name`, `_getattr_literal`, `_referenced_calls`).
+    """
+    aliases = _module_aliases(tree, name)
+    if not aliases:
+        return
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
+            node.id = name
+
+
+def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
+    """Псевдонимы пишущих API в ТОМ ЖЕ модуле: «псевдоним → исходное имя».
+
+    Для каждого имени из `judged_names` (`_judged_call_names`) — его псевдонимы
+    `_module_aliases`: ввоз `from … import <имя> as X`, присваивание `X = <имя>` и
+    `X = <объект>.<имя>`, цепочка `Y = X`, — тот же помощник, что у модели и
+    `functools.partial`. Псевдоним, который сам судимое имя, не переводится. До плана
+    16-22 у пишущих API разрешения псевдонимов не было: `set_committed_value as scv`
+    и `bum = Session.bulk_update_mappings` проходили гейт (ревью WR-12).
+
+    `_module_aliases` зовётся только для имён, которые в модуле вообще ввозятся под
+    псевдонимом или стоят значением присваивания, — итог тот же, обход короче.
+    """
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            bound.update(alias.name for alias in node.names if alias.asname)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            if isinstance(node.value, ast.Name):
+                bound.add(node.value.id)
+            elif isinstance(node.value, ast.Attribute):
+                bound.add(node.value.attr)
+    aliases: dict[str, str] = {}
+    for name in sorted(judged_names & bound):
+        for alias in sorted(_module_aliases(tree, name)):
+            if alias not in judged_names:
+                aliases.setdefault(alias, name)
+    return aliases
+
+
+def _api_alias_targets(tree: ast.AST, api_aliases: dict[str, str]) -> dict[str, ast.expr]:
+    """Атрибут, с которым псевдоним пишущего API связан присваиванием: «псевдоним → узел».
+
+    `set_phone = MessengerAccount.phone.__set__` → `MessengerAccount.phone.__set__`
+    (и цепочкой `Y = X`). Синтетический вызов псевдонима берёт этот узел вызываемым и
+    сохраняет ПОЛУЧАТЕЛЯ, по которому судятся дескриптор колонки и повторный
+    конструктор модели (самопроверка исполнителя 16-22). Ввоз `as` атрибута не даёт.
+    """
+    bindings: dict[str, ast.expr] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if isinstance(value, (ast.Name, ast.Attribute)):
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, value)
+    found: dict[str, ast.expr] = {}
+    for alias, original in api_aliases.items():
+        value, seen = bindings.get(alias), {alias}
+        while isinstance(value, ast.Name) and value.id in bindings and value.id not in seen:
+            seen.add(value.id)
+            value = bindings[value.id]
+        if isinstance(value, ast.Attribute) and value.attr == original:
+            found[alias] = value
+    return found
+
+
+def _canonical_call(
+    call: ast.Call,
+    name: str,
+    api_aliases: dict[str, str],
+    alias_targets: dict[str, ast.expr] | None = None,
+) -> tuple[ast.Call, str]:
+    """Вызов псевдонима пишущего API как вызов самого API: (вызов, имя).
+
+    `scv(account, "phone", x)` при `set_committed_value as scv` — синтетический
+    `set_committed_value(account, "phone", x)` на месте исходного: ветки
+    `_judge_call`, которые берут имя у самого узла (`_values_dict_keys`,
+    `_positional_phone_columns`), видят исходное имя. Псевдоним, связанный с
+    атрибутом (`_api_alias_targets`), вызывается этим атрибутом — с получателем.
+    Имя без псевдонима — как есть.
+    """
+    original = api_aliases.get(name)
+    if original is None:
+        return call, name
+    func = (alias_targets or {}).get(name)
+    if func is None:
+        func = ast.copy_location(ast.Name(id=original, ctx=ast.Load()), call.func)
+    return _synthetic_call(call, func, list(call.args), list(call.keywords)), original
 
 
 def _mapping_key_text(key: ast.AST, column: str) -> str:
@@ -1649,6 +1948,80 @@ def test_a_planted_backfill_through_run_sync_reddens_the_gate(tmp_path):
     assert all(
         "bulk_update_mappings" in offence and "phone" in offence for offence in found
     ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
+
+
+def test_a_planted_backfill_with_attribute_keys_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-12: строковый ключ `MessengerAccount.phone.key` в строках `bulk_update_mappings`.
+
+    `.key` — штатный способ получить строковый ключ для `bulk_update_mappings` без
+    голого литерала `"phone"`, то есть форма скрипта дозаполнения Фазы 20. Колонка
+    названа литералом (`MessengerAccount.phone`) в аргументе пишущего вызова, и на
+    SQLite в памяти такая строка пишет колонку (замер верификатора раунда 4,
+    SQLAlchemy 2.0.46). До плана 16-22 гейт её пропускал (ревью WR-12; решение
+    владельца О-10 (а): заявление шапки прежнее, предикат догоняет его). Подложенный
+    файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_attribute_key.py",
+        "def backfill(session, rows):\n"
+        "    session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": a.id, MessengerAccount.phone.key: n} for a, n in rows])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_attribute_key.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_attribute_key.py:2 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "ключ MessengerAccount.phone.key в строках bulk_update_mappings не найден: "
+        "`session.bulk_update_mappings(MessengerAccount, [{MessengerAccount.phone.key: n} "
+        f"for …])` в scripts/backfill_attribute_key.py гейт пропустил: {offences}"
+    )
+    assert all(
+        "bulk_update_mappings" in offence and "phone" in offence for offence in found
+    ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
+
+
+def test_an_aliased_writer_api_in_the_same_module_is_judged():
+    """Пишущий API под псевдонимом ввоза в том же модуле судится как сам API.
+
+    Гейт уже разрешает псевдонимы модели (`from … import MessengerAccount as
+    Account`, `Model = models.MessengerAccount`) и `functools.partial` в том же
+    модуле (`_module_aliases`), а у пишущих API такого разрешения не было:
+    `from sqlalchemy.orm.attributes import set_committed_value as scv` и
+    `scv(account, "phone", x)` проходили гейт молча (ревью WR-12).
+    """
+    aliased = {
+        "set_committed_value": (
+            "from sqlalchemy.orm.attributes import set_committed_value as scv\n"
+            'scv(account, "phone", x)\n'
+        ),
+        "flag_modified": (
+            "from sqlalchemy.orm.attributes import flag_modified as touch\n"
+            'touch(account, "phone")\n'
+        ),
+    }
+    for api, source in aliased.items():
+        offences = phone_write_offences(source, "app/x.py")
+
+        assert len(offences) == 1, (
+            f"псевдоним пишущего API в том же модуле не опознан: `{api}` под "
+            f"псевдонимом дал {len(offences)} находок вместо одной: {offences}"
+        )
+        _location, found_kind, subject = offences[0].split(" — ", 2)
+        assert found_kind == KIND_SETATTR, (
+            f"псевдоним `{api}`: вид «{found_kind}», ожидался «{KIND_SETATTR}»: {offences}"
+        )
+        assert api in subject and "phone" in subject, (
+            f"предмет находки не называет `{api}` и колонку `phone`: {offences}"
+        )
 
 
 ASSIGNMENT_CASES = [
@@ -2076,6 +2449,355 @@ def test_every_literal_binding_of_a_judged_parameter_is_judged(row, form):
     )
     assert row.call in subject, (
         f"`{source.strip()}`: предмет находки не называет `{row.call}`: {offences}"
+    )
+
+
+class ColumnNaming(NamedTuple):
+    """Наименование колонки номера в исходнике: `id` строки и выражение `source`."""
+
+    id: str
+    source: str
+
+
+# Ось «как названа колонка» (план 16-22, ревью WR-12; решение владельца О-10 (а)).
+# Каждое выражение статически называет колонку номера или её имя; правило-матрица
+# подаёт каждое в каждый судимый контекст `COLUMN_CONTEXTS`. До плана 16-22 эта ось
+# была закрытым списком самопроверки исполнителя 16-17 (`"phone"`, `M.phone`,
+# `t.c["phone"]`, `getattr`, `column(…)`), и `.key` в него не вошёл.
+COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
+    ColumnNaming("string", '"phone"'),
+    ColumnNaming("string-is-manual", '"phone_is_manual"'),
+    ColumnNaming("model-attribute", "MessengerAccount.phone"),
+    ColumnNaming("model-attribute-is-manual", "MessengerAccount.phone_is_manual"),
+    ColumnNaming("model-attribute-key", "MessengerAccount.phone.key"),
+    ColumnNaming("model-attribute-name", "MessengerAccount.phone.name"),
+    ColumnNaming("table-attribute", "MessengerAccount.__table__.c.phone"),
+    ColumnNaming("table-c-index", 'accounts.c["phone"]'),
+    ColumnNaming("table-c-attribute-name", "accounts.c.phone.name"),
+    ColumnNaming("inspect-c", "inspect(MessengerAccount).c.phone"),
+    ColumnNaming("inspect-columns-index", 'inspect(MessengerAccount).columns["phone"]'),
+    ColumnNaming("getattr", 'getattr(MessengerAccount, "phone")'),
+    ColumnNaming("column", 'column("phone")'),
+    ColumnNaming("module-column", 'sa.column("phone")'),
+    ColumnNaming("literal-column", 'literal_column("phone")'),
+    ColumnNaming("property-key", "MessengerAccount.phone.property.key"),
+    ColumnNaming("property-columns-index", "MessengerAccount.phone.property.columns[0]"),
+    ColumnNaming("expression", "MessengerAccount.phone.expression"),
+    ColumnNaming("table-attribute-key", "MessengerAccount.__table__.c.phone.key"),
+    ColumnNaming("getattr-key", 'getattr(MessengerAccount, "phone").key'),
+    # Самопроверка исполнителя 16-22, заход 1: имя колонки в конструкторе именем
+    # `text=`, поиск колонки по имени-литералу (`.get("phone")`,
+    # `get_property("phone")`) и строковая константа, собранная склейкой `+` или
+    # f-строкой без подстановок.
+    ColumnNaming("column-text-keyword", 'column(text="phone")'),
+    ColumnNaming("literal-column-text-keyword", 'literal_column(text="phone")'),
+    ColumnNaming("table-c-get", 'accounts.c.get("phone")'),
+    ColumnNaming("table-columns-get", 'MessengerAccount.__table__.columns.get("phone")'),
+    ColumnNaming("inspect-get-property-key", 'inspect(MessengerAccount).get_property("phone").key'),
+    ColumnNaming("mapper-get-property-key", 'MessengerAccount.__mapper__.get_property("phone").key'),
+    ColumnNaming("constant-concatenation", '"pho" + "ne"'),
+    ColumnNaming("constant-f-string", 'f"phone"'),
+    # Самопроверка 16-22, заход 2: имя у конструктора и поиска — любым литеральным
+    # связыванием (`*[…]`, `**{…}`, `key=`), как у судимых параметров.
+    ColumnNaming("column-starred", 'column(*["phone"])'),
+    ColumnNaming("column-double-star", 'column(**{"text": "phone"})'),
+    ColumnNaming("table-c-get-keyword", 'accounts.c.get(key="phone")'),
+    ColumnNaming("get-property-keyword-key", 'inspect(MessengerAccount).get_property(key="phone").key'),
+)
+
+
+class ColumnContext(NamedTuple):
+    """Судимый контекст: исходник `template` с местом `{column}`, вид и вызов находки."""
+
+    id: str
+    template: str
+    kind: str
+    call: str
+
+
+# Места в черновиках контекстов: колонка, отображение, строка, строки, пары.
+_AT_COLUMN, _AT_MAP, _AT_ROW, _AT_ROWS, _AT_PAIRS = "@COLUMN@", "@MAP@", "@ROW@", "@ROWS@", "@PAIRS@"
+
+# Формы литерального отображения с колонкой ключом (грамматика `_literal_mappings`).
+_MAPPING_FORMS = {
+    "dict": "{@COLUMN@: x}",
+    "dict-comprehension": "{@COLUMN@: v for v in xs}",
+    "dict-call": "dict({@COLUMN@: x})",
+    "nested-double-star": "{**{@COLUMN@: x}}",
+    "merge": "({@COLUMN@: x} | base)",
+}
+
+# Контексты отображения: ключ `values`, `**` у `values` и модели, `Query.update`
+# позицией и `values=`, `set_` при конфликте именем и позицией (PostgreSQL — 4-я
+# позиция, SQLite — 3-я), MySQL `on_duplicate_key_update` позицией и `**`.
+_MAPPING_CONTEXTS = (
+    ("values", "stmt = update(MessengerAccount).values(@MAP@)", KIND_DICT_KEY, "values"),
+    (
+        "values-double-star",
+        "stmt = update(MessengerAccount).values(**@MAP@)",
+        KIND_KEYWORD,
+        "values",
+    ),
+    ("model-double-star", "account = MessengerAccount(**@MAP@)", KIND_KEYWORD, MODEL_NAME),
+    ("query-update", "session.query(MessengerAccount).update(@MAP@)", KIND_DICT_KEY, "update"),
+    (
+        "query-update-values-keyword",
+        "session.query(MessengerAccount).update(values=@MAP@)",
+        KIND_DICT_KEY,
+        "update",
+    ),
+    (
+        "on-conflict-set-keyword",
+        'stmt = insert(MessengerAccount).on_conflict_do_update(index_elements=["id"], '
+        "set_=@MAP@)",
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+    ),
+    (
+        "on-conflict-postgresql-positional",
+        'stmt = insert(MessengerAccount).on_conflict_do_update(None, ["id"], None, @MAP@)',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+    ),
+    (
+        "on-conflict-sqlite-positional",
+        'stmt = insert(MessengerAccount).on_conflict_do_update(["id"], None, @MAP@)',
+        KIND_UPSERT_SET,
+        "on_conflict_do_update",
+    ),
+    (
+        "on-duplicate-key-update",
+        "stmt = insert(MessengerAccount).on_duplicate_key_update(@MAP@)",
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+    ),
+    (
+        "on-duplicate-key-update-double-star",
+        "stmt = insert(MessengerAccount).on_duplicate_key_update(**@MAP@)",
+        KIND_UPSERT_SET,
+        "on_duplicate_key_update",
+    ),
+)
+
+# Строка executemany с колонкой ключом и литеральный контейнер строк.
+_ROW_FORMS = {
+    "dict": '{"id": 1, @COLUMN@: p}',
+    "dict-comprehension": "{@COLUMN@: p for p in ps}",
+    "dict-call": 'dict({"id": 1, @COLUMN@: p})',
+    "nested-double-star": '{**{"id": 1, @COLUMN@: p}}',
+    "merge": '({"id": 1, @COLUMN@: p} | base)',
+}
+_ROW_CONTAINERS = {
+    "bare": "@ROW@",
+    "list": "[@ROW@]",
+    "comprehension": "[@ROW@ for p in ps]",
+    "generator": "(@ROW@ for p in ps)",
+    "tuple": "(@ROW@,)",
+    "concatenation": '[{"id": 0}] + [@ROW@]',
+    "conditional": "[@ROW@] if full else []",
+    "list-wrapper": "list((@ROW@,))",
+}
+
+# Перечень пар «колонка — значение» (`ordered_values(*…)`, `on_duplicate_key_update`,
+# `dict([…])`) и перечень имён `from_select`.
+_PAIR_FORMS = {
+    "list": "[(@COLUMN@, x)]",
+    "tuple": "((@COLUMN@, x),)",
+    "comprehension": "[(@COLUMN@, v) for v in xs]",
+    "concatenation": '[("status", s)] + [(@COLUMN@, x)]',
+    "conditional": "[(@COLUMN@, x)] if full else []",
+    "list-wrapper": "list(((@COLUMN@, x),))",
+}
+_NAMES_FORMS = {
+    "list": '["user_id", @COLUMN@]',
+    "tuple": '("user_id", @COLUMN@)',
+    "concatenation": '["user_id"] + [@COLUMN@]',
+    "conditional": '["user_id", @COLUMN@] if full else ["user_id"]',
+    "list-wrapper": 'list(("user_id", @COLUMN@))',
+    "walrus": '(names := ["user_id", @COLUMN@])',
+}
+
+
+def _column_context(context_id: str, draft: str, kind: str, call: str) -> ColumnContext:
+    """Черновик с `@COLUMN@` → шаблон `str.format` с местом `{column}`."""
+    template = draft.replace("{", "{{").replace("}", "}}").replace(_AT_COLUMN, "{column}")
+    return ColumnContext(context_id, template + "\n", kind, call)
+
+
+def _bound_call(
+    row: JudgedParameter, value: str, form: str, receiver: str, tail: tuple[str, str] = ("", "")
+) -> str:
+    """Вызов API строки `JUDGED_PARAMETERS` со значением судимого параметра формой `form`.
+
+    `tail` — (хвост после позиционного связывания, хвост после именованного): после
+    `name=…` позиционный аргумент — синтаксическая ошибка.
+    """
+    fillers = ["account" if row.kind == KIND_SETATTR else f"a{i}" for i in range(row.call_index)]
+    if form == "positional":
+        arguments = [*fillers, value]
+    elif form == "keyword":
+        arguments = [*fillers, f"{row.parameter}={value}"]
+    elif form == "double-star":
+        arguments = [*fillers, f'**{{"{row.parameter}": {value}}}']
+    else:
+        arguments = ["*[" + ", ".join([*fillers, value]) + "]"]
+    rest = tail[0] if form in ("positional", "starred") else tail[1]
+    if rest:
+        arguments.append(rest)
+    return f"{receiver}{row.call}({', '.join(arguments)})"
+
+
+def _column_contexts() -> tuple[ColumnContext, ...]:
+    """Судимые контексты колонки: каждый параметр `JUDGED_PARAMETERS`, несущий колонку,
+    и API без именованного параметра — × каждая форма контейнера."""
+    contexts: list[ColumnContext] = []
+    for context_id, draft, kind, call in _MAPPING_CONTEXTS:
+        for form, mapping in _MAPPING_FORMS.items():
+            contexts.append(
+                _column_context(f"{context_id}-{form}", draft.replace(_AT_MAP, mapping), kind, call)
+            )
+    # Строки executemany: каждая строка таблицы вида строк × каждая форма связывания
+    # (позиционные формы одного вызова и одной позиции — один раз).
+    row_drafts: dict[str, str] = {}
+    for row in JUDGED_PARAMETERS:
+        if row.kind != KIND_ROW_MAPPING:
+            continue
+        for form in BINDING_FORMS:
+            by_position = form in ("positional", "starred")
+            key = f"{row.call}-{form}" + ("" if by_position else f"-{row.parameter}")
+            receiver = "op." if row.call == "bulk_insert" else "session."
+            row_drafts[key] = _bound_call(row, _AT_ROWS, form, receiver)
+    for reference in ("bulk_update_mappings", "bulk_insert_mappings"):
+        row_drafts[f"run-sync-{reference}"] = (
+            f"session.run_sync(Session.{reference}, MessengerAccount, {_AT_ROWS})"
+        )
+        # `fn=` исполним только без позиционных аргументов: `run_sync(M, rows,
+        # fn=ref)` падает `TypeError: got multiple values for argument 'fn'`.
+        row_drafts[f"run-sync-fn-{reference}"] = (
+            f"session.run_sync(fn=Session.{reference}, mapper=MessengerAccount, "
+            f"mappings={_AT_ROWS})"
+        )
+    # Каждый контейнер строк — со строкой-словарём, каждая форма строки — в списке:
+    # полный крест форм строки и контейнеров — в самопроверке исполнителя (сводка).
+    row_shapes = [(container, "dict") for container in _ROW_CONTAINERS] + [
+        ("list", form) for form in _ROW_FORMS if form != "dict"
+    ]
+    for key, draft in row_drafts.items():
+        call = key.removeprefix("run-sync-fn-").removeprefix("run-sync-").split("-")[0]
+        for container, form in row_shapes:
+            rows = _ROW_CONTAINERS[container].replace(_AT_ROW, _ROW_FORMS[form])
+            contexts.append(
+                _column_context(
+                    f"{key}-{container}-{form}",
+                    draft.replace(_AT_ROWS, rows),
+                    KIND_ROW_MAPPING,
+                    call,
+                )
+            )
+    # Пары: `ordered_values` (пара позицией и `*перечень`), MySQL
+    # `on_duplicate_key_update([…])`, `values(dict([…]))`.
+    contexts.append(
+        _column_context(
+            "ordered-values-pair",
+            "stmt = update(MessengerAccount).ordered_values((@COLUMN@, x))",
+            KIND_POSITIONAL_COLUMN,
+            "ordered_values",
+        )
+    )
+    pair_contexts = (
+        (
+            "ordered-values-starred",
+            "stmt = update(MessengerAccount).ordered_values(*@PAIRS@)",
+            KIND_POSITIONAL_COLUMN,
+            "ordered_values",
+        ),
+        (
+            "on-duplicate-key-update-pairs",
+            "stmt = insert(MessengerAccount).on_duplicate_key_update(@PAIRS@)",
+            KIND_UPSERT_SET,
+            "on_duplicate_key_update",
+        ),
+        (
+            "values-dict-pairs",
+            "stmt = update(MessengerAccount).values(dict(@PAIRS@))",
+            KIND_DICT_KEY,
+            "values",
+        ),
+    )
+    for context_id, draft, kind, call in pair_contexts:
+        for form, pairs in _PAIR_FORMS.items():
+            contexts.append(
+                _column_context(f"{context_id}-{form}", draft.replace(_AT_PAIRS, pairs), kind, call)
+            )
+    # Имя атрибута у писателей по имени и перечень имён `from_select` — каждая строка
+    # таблицы × каждая форма связывания.
+    for row in JUDGED_PARAMETERS:
+        if row.kind == KIND_SETATTR:
+            tail = ("", "") if row.call == "flag_modified" else ("x", "value=x")
+            receiver = BINDING_RECEIVERS.get(row.call, "")
+            for form in BINDING_FORMS:
+                contexts.append(
+                    _column_context(
+                        f"{row.api}-{form}",
+                        _bound_call(row, _AT_COLUMN, form, receiver, tail),
+                        KIND_SETATTR,
+                        row.call,
+                    )
+                )
+        elif row.kind == KIND_POSITIONAL_COLUMN:
+            receiver = "stmt = insert(MessengerAccount)."
+            for form in BINDING_FORMS:
+                for names_form, names in _NAMES_FORMS.items():
+                    contexts.append(
+                        _column_context(
+                            f"from-select-{form}-{names_form}",
+                            _bound_call(row, names, form, receiver, ("select=sel", "select=sel")),
+                            KIND_POSITIONAL_COLUMN,
+                            row.call,
+                        )
+                    )
+    contexts.append(
+        _column_context(
+            "object-setattr-bound", "account.__setattr__(@COLUMN@, x)", KIND_SETATTR, "__setattr__"
+        )
+    )
+    return tuple(contexts)
+
+
+COLUMN_CONTEXTS: tuple[ColumnContext, ...] = _column_contexts()
+
+
+@pytest.mark.parametrize("naming", [pytest.param(n, id=n.id) for n in COLUMN_NAMINGS])
+def test_every_column_naming_in_every_judged_context_is_a_write(naming):
+    """Каждое наименование колонки в каждом судимом контексте — ровно одна находка.
+
+    Ось «как названа колонка» была закрытым списком самопроверки исполнителя 16-17
+    (`"phone"`, `M.phone`, `t.c["phone"]`, `getattr`, `column(…)`), и четвёртый круг
+    одной оси (WR-01 → WR-08 → WR-10 → WR-12) открылся именно на ней:
+    `MessengerAccount.phone.key` в строках `bulk_update_mappings` проходил гейт. Матрица
+    держит ось в суите: каждое наименование `COLUMN_NAMINGS` подаётся в каждый контекст
+    `COLUMN_CONTEXTS` — каждый судимый параметр `JUDGED_PARAMETERS`, несущий колонку, и
+    API без именованного параметра × каждая форма контейнера. Новое наименование или
+    подъём SQLAlchemy дают одну красную строку на наименование со всеми промахами сразу.
+    Решение владельца О-10 (а): заявление шапки прежнее, предикат догоняет его.
+    """
+    assert len(COLUMN_CONTEXTS) >= 500, (
+        f"контекстов матрицы {len(COLUMN_CONTEXTS)} — меньше 500: матрица проверяет почти ничто"
+    )
+    misses: list[str] = []
+    for context in COLUMN_CONTEXTS:
+        source = context.template.format(column=naming.source)
+        offences = phone_write_offences(source, "scripts/x.py")
+        if len(offences) == 1:
+            _location, found_kind, subject = offences[0].split(" — ", 2)
+            if found_kind == context.kind and context.call in subject and "phone" in subject:
+                continue
+        misses.append(f"  {context.id}: `{source.strip()}` → {offences}")
+
+    assert not misses, (
+        f"наименование колонки не опознано: `{naming.source}` ({naming.id}) — "
+        f"{len(misses)} из {len(COLUMN_CONTEXTS)} контекстов дали не ровно одну находку "
+        "ожидаемого вида:\n" + "\n".join(misses)
     )
 
 
@@ -2927,6 +3649,392 @@ LITERAL_FORM_CASES = [
         "phone",
         id="model-attribute-alias",
     ),
+    # Ревью WR-12, верификация раунда 4 (2026-10-12): колонка номера, названная
+    # производной `.key` / `.name`. До плана 16-22 гейт давал `[]` у каждой формы, хотя
+    # `values({MessengerAccount.phone.key: x})` и такой же ключ в строках
+    # `bulk_update_mappings` пишут колонку (замер верификатора на SQLite в памяти).
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.key: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-model-attribute-key",
+    ),
+    pytest.param(
+        "session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": 1, MessengerAccount.phone.key: p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-attribute-key",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.execute(update(MessengerAccount), "
+        '[{"id": 1, MessengerAccount.phone.key: p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="execute-rows-attribute-key",
+    ),
+    pytest.param(
+        "setattr(account, MessengerAccount.phone.key, x)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-attribute-key",
+    ),
+    pytest.param(
+        "set_committed_value(account, MessengerAccount.phone.key, x)\n",
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="set-committed-value-attribute-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.__table__.c.phone.name: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-column-name",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.name: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-model-attribute-name",
+    ),
+    pytest.param(
+        "stmt = update(accounts).values({accounts.c.phone.name: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-c-attribute-name",
+    ),
+    # Ревью WR-12, верификация раунда 4 (2026-10-12): перечень `from_select` в
+    # литеральном контейнере и пишущий API под псевдонимом того же модуля. До плана
+    # 16-22 гейт давал `[]` у каждой формы; `from_select(["user_id"] + ["phone"], sel)`
+    # пишет колонку (замер верификатора на SQLite в памяти).
+    pytest.param(
+        'stmt = insert(MessengerAccount).from_select(["user_id"] + ["phone"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-concatenation",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).from_select("
+        '["user_id", "phone"] if full else ["user_id"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-conditional",
+    ),
+    pytest.param(
+        'stmt = insert(MessengerAccount).from_select(list(("user_id", "phone")), sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-list-wrapper",
+    ),
+    pytest.param(
+        'stmt = insert(MessengerAccount).from_select((names := ["user_id", "phone"]), sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-walrus",
+    ),
+    pytest.param(
+        "stmt = insert(MessengerAccount).from_select("
+        'names=["user_id"] + ["phone"], select=sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="from-select-names-keyword-concatenation",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import set_committed_value as scv\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="import-alias-set-committed-value",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import flag_modified as touch\n"
+        'touch(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="import-alias-flag-modified",
+    ),
+    pytest.param(
+        "bum = Session.bulk_update_mappings\n"
+        'bum(session, MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="assigned-reference-bulk-update",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "scv = set_committed_value\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="assigned-name-set-committed-value",
+    ),
+    pytest.param(
+        "import sqlalchemy.orm.attributes as attrs\n"
+        "touch = attrs.flag_modified\n"
+        'touch(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="assigned-module-attribute-flag-modified",
+    ),
+    # План 16-22, правило-матрица `COLUMN_NAMINGS` × `COLUMN_CONTEXTS`: производная
+    # колонки номера цепочкой атрибутов и индексов. После производной `.key` / `.name`
+    # (задача 1) `MessengerAccount.phone.property.key` и `.expression` ещё проходили.
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.property.key: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-property-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({MessengerAccount.phone.expression: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-expression",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.execute(update(MessengerAccount), "
+        '[{"id": 1, MessengerAccount.phone.property.columns[0]: p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-property-columns-index",
+    ),
+    # Самопроверка исполнителя 16-22, заход 1 (ось «как названа колонка»): каждое
+    # наименование давало `[]` во всех 2114 контекстах полного креста.
+    pytest.param(
+        'stmt = update(MessengerAccount).values({column(text="phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-text-keyword",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({literal_column(text="phone_is_manual"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-literal-column-text-keyword",
+    ),
+    pytest.param(
+        "async def f(session, p):\n"
+        "    await session.execute(update(MessengerAccount), "
+        '[{"id": 1, accounts.c.get("phone"): p}])\n',
+        KIND_ROW_MAPPING,
+        "execute",
+        "phone",
+        id="rows-table-c-get",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values("
+        '{MessengerAccount.__table__.columns.get("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-columns-get",
+    ),
+    pytest.param(
+        "session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": 1, inspect(MessengerAccount).get_property("phone").key: p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-get-property-key",
+    ),
+    pytest.param(
+        'setattr(account, MessengerAccount.__mapper__.get_property("phone").key, x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-mapper-get-property-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({"pho" + "ne": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-constant-concatenation-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({f"phone": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-constant-f-string-key",
+    ),
+    # Самопроверка 16-22, заход 1 (ось «как назван API»): распаковка comprehension
+    # `*[(…) for …]` после ССЫЛКИ терялась — синтетический вызов брал только
+    # литеральные элементы, и перечень пар `ordered_values` до него не доходил.
+    pytest.param(
+        "async def f(stmt, xs):\n"
+        "    return await asyncio.to_thread(stmt.ordered_values, "
+        "*[(MessengerAccount.phone, v) for v in xs])\n",
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone",
+        id="to-thread-ordered-values-starred-comprehension",
+    ),
+    pytest.param(
+        'stmt = functools.partial(stmt.ordered_values, *[("phone", v) for v in xs])()\n',
+        KIND_POSITIONAL_COLUMN,
+        "ordered_values",
+        "phone",
+        id="partial-ordered-values-starred-comprehension",
+    ),
+    # Самопроверка 16-22, заход 1 (ось «как назван API»): метод, вызванный через
+    # класс с явным `self` (`Insert.from_select(stmt, names, sel)`), или его псевдоним
+    # из атрибута класса сдвигает позиции на одну, и параметр, судимый ПОЗИЦИЕЙ
+    # (`names` у `from_select`, `table_name` у COPY asyncpg), уходил из-под суда.
+    pytest.param(
+        'stmt = Insert.from_select(insert(MessengerAccount), ["user_id", "phone"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="unbound-from-select",
+    ),
+    pytest.param(
+        "fs = Insert.from_select\n"
+        'stmt = fs(insert(MessengerAccount), ["user_id", "phone"], sel)\n',
+        KIND_POSITIONAL_COLUMN,
+        "from_select",
+        "phone",
+        id="class-attribute-alias-from-select",
+    ),
+    pytest.param(
+        "async def f(conn, rows):\n"
+        '    await Connection.copy_records_to_table(conn, "messenger_accounts", records=rows)\n',
+        KIND_RAW_SQL,
+        "copy_records_to_table",
+        "messenger_accounts",
+        id="unbound-copy-records-to-table",
+    ),
+    pytest.param(
+        "copy = Connection.copy_to_table\n"
+        "async def f(conn, src):\n"
+        '    await copy(conn, "messenger_accounts", source=src)\n',
+        KIND_RAW_SQL,
+        "copy_to_table",
+        "messenger_accounts",
+        id="class-attribute-alias-copy-to-table",
+    ),
+    # Самопроверка 16-22, заход 1 (ось «как назван API»): дескриптор колонки и
+    # повторный конструктор модели судятся по ПОЛУЧАТЕЛЮ, а псевдоним
+    # `X = MessengerAccount.phone.__set__`, применение `methodcaller(…)(obj)` и вызов
+    # через класс дескриптора его теряли.
+    pytest.param(
+        "set_phone = MessengerAccount.phone.__set__\nset_phone(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="bound-alias-descriptor-set",
+    ),
+    pytest.param(
+        "init = MessengerAccount.__init__\nreinit = init\nreinit(account, phone=x)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="bound-alias-chain-model-init",
+    ),
+    pytest.param(
+        'operator.methodcaller("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-applied-descriptor-set",
+    ),
+    pytest.param(
+        'operator.methodcaller("__init__", account, phone=x)(MessengerAccount)\n',
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="methodcaller-applied-model-init",
+    ),
+    pytest.param(
+        "InstrumentedAttribute.__set__(MessengerAccount.phone, account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="unbound-descriptor-set",
+    ),
+    # Самопроверка 16-22, заход 2 (ось «как названа колонка»): имя у конструктора
+    # колонки и у поиска по имени — литеральной распаковкой и именем `key=`.
+    pytest.param(
+        'stmt = update(MessengerAccount).values({column(*["phone"]): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-starred-name",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).values({literal_column(**{"text": "phone"}): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-literal-column-double-star-name",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(MessengerAccount, [{"id": 1, accounts.c.get(key="phone"): p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-get-keyword",
+    ),
+    pytest.param(
+        "set_committed_value(account, "
+        'inspect(MessengerAccount).get_property(key="phone").key, x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="set-committed-value-get-property-keyword",
+    ),
+    # Самопроверка 16-22, заход 2 (ось «как назван API»): псевдоним в том же модуле у
+    # самих носителей опознания — `operator.methodcaller` и встроенного `getattr`, —
+    # как у `functools.partial`.
+    pytest.param(
+        "from operator import methodcaller as call_method\n"
+        'call_method("bulk_update_mappings", MessengerAccount, [{"id": 1, "phone": p}])(session)\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="methodcaller-import-alias",
+    ),
+    pytest.param(
+        "call_method = operator.methodcaller\n"
+        'call_method("set_committed_value", account, "phone", x)(attributes)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="methodcaller-assignment-alias",
+    ),
+    pytest.param(
+        "attr = getattr\n"
+        'stmt = attr(update(MessengerAccount), "values")({"phone": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="getattr-assignment-alias",
+    ),
 ]
 
 
@@ -3177,6 +4285,71 @@ LEGITIMATE_CASES = [
         "async def f(content):\n"
         "    return await asyncio.to_thread(bind(prepare_upload, quality=80), content)\n",
         id="partial-alias-other-function",
+    ),
+    # Ревью WR-12 (план 16-22): производная `.key` / `.name` ЧУЖОЙ колонки — не номер;
+    # имя атрибута, вычисленное во время исполнения, — граница (2).
+    pytest.param(
+        "stmt = update(Group).values({Group.title.key: x})\n",
+        id="values-other-model-attribute-key",
+    ),
+    pytest.param(
+        "stmt = update(groups).values({groups.c.title.name: t})\n",
+        id="values-other-table-column-name",
+    ),
+    pytest.param("setattr(obj, field_name, x)\n", id="setattr-computed-attribute-name"),
+    # Ревью WR-12 (план 16-22): склейка перечня `from_select` без колонки номера и
+    # псевдонимы пишущих API, которые номер не пишут.
+    pytest.param(
+        'stmt = insert(Group).from_select(["account_id"] + ["title"], sel)\n',
+        id="from-select-other-columns-concatenation",
+    ),
+    pytest.param(
+        "from sqlalchemy.orm.attributes import set_committed_value as scv\n"
+        'scv(account, "status", x)\n',
+        id="aliased-writer-api-other-attribute",
+    ),
+    pytest.param(
+        'upd = settings.update\nupd(theme="dark")\n', id="assigned-dict-update-other-key"
+    ),
+    # План 16-22: производная цепочкой у ЧУЖОЙ колонки — не номер.
+    pytest.param(
+        "stmt = update(Group).values({Group.title.expression: x})\n",
+        id="values-other-column-expression",
+    ),
+    pytest.param(
+        "stmt = update(Group).values({Group.title.property.key: x})\n",
+        id="values-other-property-key",
+    ),
+    # Самопроверка 16-22, заход 1: дескриптор и конструктор чужой колонки / модели.
+    pytest.param(
+        "set_title = Group.title.__set__\nset_title(group, t)\n",
+        id="bound-alias-descriptor-set-other-column",
+    ),
+    pytest.param(
+        'operator.methodcaller("__init__", group, phone=x)(Group)\n',
+        id="methodcaller-applied-other-model-init",
+    ),
+    # Самопроверка 16-22, заход 2: псевдонимы носителей без записи номера.
+    pytest.param(
+        'call_method = operator.methodcaller\nnames = map(call_method("strip"), rows)\n',
+        id="methodcaller-alias-other-method",
+    ),
+    pytest.param(
+        'attr = getattr\nlabel = attr(group, "title")\n',
+        id="getattr-alias-other-attribute",
+    ),
+    # Самопроверка 16-22, заход 1: те же наименования у ЧУЖОЙ колонки.
+    pytest.param(
+        'stmt = update(groups).values({column(text="title"): t})\n',
+        id="values-other-column-text-keyword",
+    ),
+    pytest.param(
+        'stmt = update(groups).values({groups.c.get("title"): t})\n',
+        id="values-other-table-c-get",
+    ),
+    pytest.param(
+        'stmt = update(groups).values({"ti" + "tle": t})\n',
+        id="values-other-constant-concatenation-key",
     ),
 ]
 
