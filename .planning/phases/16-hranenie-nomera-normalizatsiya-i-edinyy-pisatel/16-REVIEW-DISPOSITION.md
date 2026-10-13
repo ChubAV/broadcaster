@@ -9,19 +9,19 @@ findings:
     title: "`normalize_manual` item 5 names Germany and Israel as the only non-`+7` extra-digit boundary; 36 regions still save an invented \"manual\" number"
   - id: WR-12
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The single-writer gate's mechanism claim is again wider than the predicate: `MessengerAccount.phone.key`, container forms of `from_select` names, and same-module import aliases of writer APIs pass"
   - id: WR-13
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The privacy gate misses structlog's async level methods (`ainfo`, `awarning`, …) that the project's configured logger provides"
   - id: IN-11
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Missing space after `=` in `normalize_manual`"
   - id: IN-12
     severity: info
-    disposition: open
+    disposition: fixed
     title: "The writer test reaches the new constant through the module object while its sibling is imported by name"
   - id: WR-09
     severity: warning
@@ -107,7 +107,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 4
+open: 0
 total: 26
 recorded: 2026-10-12T20:17:45.019Z
 ---
@@ -117,10 +117,10 @@ recorded: 2026-10-12T20:17:45.019Z
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
 | WR-11 | warning | fixed | `16-21` задача 1, GREEN `dd164d6e` — решение владельца О-9 (а): правило О-7 (а) остаётся, пункт 5 докстринга `normalize_manual` называет настоящий остаток — «56 из 976» вводов «образец MOBILE + 1…4 цифры» в 36 регионах, причины по типам аккаунта (сам `MOBILE` — NL, FI, ID, MY, AT; только `VOIP` — TW, ZW; классы `FIXED_LINE` — DE, IL, IT), «15 из 56» действительных по метаданным; правило `test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement` пересчитывает числа и регионы-примеры `MANUAL_BOUNDARY_EXAMPLES` вживую из метаданных; коммит RED — «71957ec1», тексты теста — коммит «93632304»; исправлена узкая формулировка строки WR-09 («граница названа в пункте 5 — Германия … и Израиль …»): это была граница, названная двумя регионами из тридцати шести, а не весь остаток правила О-7 (а); сама строка WR-09 перенесена без изменений |
-| WR-12 | warning | open | - |
-| WR-13 | warning | open | - |
-| IN-11 | info | open | - |
-| IN-12 | info | open | - |
+| WR-12 | warning | fixed | `16-22` задачи 1–3, GREEN `ecd1be76`, `4d6f286e`, `9f50ed19`, и шесть циклов самопроверки исполнителя, GREEN `878b4679`, `dbe22dcc`, `a973ea55`, `ddbb33f7`, `a4c49b66`, `80153e32` — решение владельца О-10 (а): заявление шапки «через механизм» прежнее; колонка номера опознаётся в производной (`MessengerAccount.phone.key`, `.name`, `.expression`, `.property.key`, `.property.columns[0]` и любая цепочка), в поиске по имени, в конструкторе при любом литеральном связывании и в константной склейке; перечень `from_select` — в любом литеральном контейнере и любом позиционном аргументе; псевдоним пишущего API в том же модуле (ввоз и присваивание, в том числе псевдонимы `methodcaller` и `getattr`) судится как сам API; ось «как названа колонка» — таблица `COLUMN_NAMINGS` («32» наименования) с правилом-матрицей против `COLUMN_CONTEXTS` («714» контекстов); самопроверка исполнителя по обеим осям — «205 680» форм, ноль промахов; имя колонки, вычисленное вызовом («"PHONE".lower()», «"{}".format("phone")», «8 456» форм), не ловится — граница (2) шапки с причиной «предикат вызовов не исполняет»; сообщение RED-коммита «37ec629e» называет «140» форм самопроверки, замер — «120» (сводка 16-22) |
+| WR-13 | warning | fixed | `16-23` задачи 1–2, GREEN `1852b951`, `e54fd6e3`, и цикл самопроверки исполнителя, GREEN `978a9408` — умолчание прохода: `ASYNC_LOG_METHODS` (восемь асинхронных уровней structlog) входит в `LOG_METHODS`, сторож `test_the_async_level_methods_match_the_installed_structlog` сверяет набор с установленным structlog «25.5.0»; охват по получателю (D-17 `logger.*`) — любой метод опознанного журнала судится как вызов журнала, `getChild` / `unbind` / `try_unbind` — привязки (`LOGGER_RETURNING_METHODS`), `root` и `parent` — журналы-члены (`parent` найден самопроверкой); член опознанного журнала остаётся и получателем по шаблону имени, так что «logger._logger.info(…)» по-прежнему ловится (строже буквы плана, сводка 16-23); граница больше не приписывает D-17 список методов; самопроверка — «18 490» форм, ноль промахов; живые деревья — «221/68/93» вызовов и 0 находок (было «215/68/89»: прибавились вызовы настройки журнала в app/logging_config.py и max_worker/main.py); число строк выше буквы критерия («OK 90 39», «170» тестов файла) — из-за строк самопроверки |
+| IN-11 | info | fixed | `16-21` задача 2, коммит `9711cb39` (тема `refactor(16-21): add the missing space after = in normalize_manual (IN-11)`) — решение владельца О-11: пробел после `=` в `normalize_manual` («e164 = phonenumbers.format_number(…)»); код функции по дереву разбора прежний (AST совпадает с «cce988cb») |
+| IN-12 | info | fixed | `16-24` задача 1, коммит `d9cfd6c4` (тема `refactor(16-24): import ACCOUNT_WITHOUT_ID_AFTER_FLUSH by name in the writer test`) — решение владельца О-11: `ACCOUNT_WITHOUT_ID_AFTER_FLUSH` ввезена по имени рядом с `ACCOUNT_NOT_IN_SESSION`, второй путь ввоза (объект модуля под псевдонимом `writer_module`) снят вместе с единственным использованием; утверждения прежние, модуль писателя и тест гонки не тронуты |
 | WR-09 | warning | fixed | `16-16` задача 1, GREEN `333bf8e0` — решение владельца О-7 (а): ручной номер принимается, только если его длина возможна хотя бы для одного типа аккаунта (`ACCOUNT_NUMBER_TYPES`: `MOBILE`, `FIXED_LINE`, `FIXED_LINE_OR_MOBILE`, `VOIP`; пункт 7 докстринга `normalize_manual`): «+375 29 123 45 67 1» и «+380 50 123 4567 1» — отказ `PHONE_ERROR_NOT_A_NUMBER`; класс «чужой номер плюс лишние цифры» закреплён перебором 5 баз × 1–5 лишних цифр (до плана сохранялись 7 из 25 строк, замер исполнения), а не отдельными вводами; граница названа в пункте 5 докстринга — Германия «+49 151 23456789» с одной и двумя лишними цифрами (с тремя и четырьмя её отвергает предел E.164) и Израиль «+972 50 123 4567» с двумя и тремя остаются принятыми (not in the current review) |
 | WR-10 | warning | fixed | `16-17` задачи 1–3, GREEN `9b074697`, `417229e7`, `282c16d7`, и три цикла самопроверки исполнителя, GREEN `b7a1e127`, `e3f46b63`, `e53d9320` — пишущий API опознаётся по ссылке, `getattr`-строке, `methodcaller` и `partial` (в том числе `run_sync(Session.bulk_update_mappings, …)` и `partial` внутри другого вызова); таблица `JUDGED_PARAMETERS` из перебора сигнатур (34 строки: 33 запланированные и `flag_modified`; сверена с `inspect.signature` правилом-сторожем) судит каждый параметр позицией, именем, `**{…}` и `*[…]` — `Query.update(values=…)`, `set_attribute(…, key=…)`, `set_committed_value(…, key=…)`, comprehension с ключом номера; вид 1 судится по грамматике `Store`, `__set__` дескриптора, `__init__` модели и ключам `column()`; самопроверка нашла и закрыла три класса сверх плана — `flag_modified` (замер: запись, план числил его не-записью), `partial` внутри другого вызова, псевдонимы `partial` и модели в модуле; шапка гейта — граница только с правдивой причиной (not in the current review) |
 | IN-08 | info | fixed | `16-16` задача 3, GREEN `5c3ffb94` — решение владельца О-8: абзац «ГРАНИЦА ПРАВИЛА АВТОПУТИ» шапки `app/services/phone.py` называет оба принимаемых класса — значения, которые метаданные считают возможными, в том числе недействительные («400 из 558», примеры «+72345678901», «+10000000000»), и вердикт `TOO_SHORT` у кода не 7 («583 из 1935»); асимметрия «+7 0…» против «+1 0…» названа следствием О-5 (а); правило `test_the_module_header_names_the_auto_path_boundary_with_its_measurement` сверяет оба числа с перебором вживую (not in the current review) |
