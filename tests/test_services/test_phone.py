@@ -891,7 +891,13 @@ def _manual_extra_digit_enumeration() -> ManualExtraDigitEnumeration:
 # которой правило по длинам не закрывает у них класс «номер плюс лишние цифры»:
 # `MOBILE` — длину допускает сам `MOBILE`; `VOIP_ONLY` — только `VOIP`;
 # `FIXED_LINE` — только `FIXED_LINE` / `FIXED_LINE_OR_MOBILE`. Регион, названный
-# прозой пункта 5, обязан стоять здесь (запрет №3 плана 16-21).
+# прозой пункта 5, обязан стоять здесь (запрет №3 плана 16-21). Эту обязанность
+# держит `_item_five_boundary_problems` (ревью IN-13, решение владельца О-13,
+# план 16-26): каждая из трёх скобок пункта 5 равна множеству регионов таблицы с
+# той же причиной, в обе стороны, и каждый код региона в предложении остатка —
+# ключ таблицы. Летопись: до плана 16-26 правило проверяло только называние
+# региона и его причину по таблице, а не скобку, и обратного вложения не
+# проверяло.
 MANUAL_BOUNDARY_EXAMPLES: dict[str, str] = {
     "NL": "MOBILE",
     "FI": "MOBILE",
@@ -943,6 +949,31 @@ def _boundary_cause_holds(cause: str, admitting: list[frozenset[str]]) -> bool:
     return False
 
 
+# Три перечня регионов пункта 5 по классу причины `MANUAL_BOUNDARY_EXAMPLES`:
+# скобка после «сам `MOBILE` (», скобка после «только `VOIP` (» и перечень между
+# «у » и « — `FIXED_LINE`» (ревью IN-13, план 16-26).
+ITEM_FIVE_GROUP_PATTERNS: dict[str, str] = {
+    "MOBILE": r"сам `MOBILE` \(([^)]*)\)",
+    "VOIP_ONLY": r"только `VOIP` \(([^)]*)\)",
+    "FIXED_LINE": r"\bу ((?:[A-Z]{2}, )*[A-Z]{2}) — `FIXED_LINE`",
+}
+
+# Отрезок пункта 5, где стоит предложение остатка вне кода 7: от первого якоря до
+# второго. Каждый код региона в нём — ключ `MANUAL_BOUNDARY_EXAMPLES`. Отрезок, а
+# не пункт целиком: выше в пункте стоят `RU` («регионом `RU`») и `CR` (из «CR-01»).
+ITEM_FIVE_REMAINDER_ANCHORS = ("У кодов, отличных от 7", "Замер:")
+
+
+def _item_five_groups(item: str) -> dict[str, frozenset[str]]:
+    """Перечни регионов пункта 5 по классу причины; ненайденный перечень в словаре отсутствует."""
+    groups: dict[str, frozenset[str]] = {}
+    for cause, pattern in ITEM_FIVE_GROUP_PATTERNS.items():
+        match = re.search(pattern, item)
+        if match is not None:
+            groups[cause] = frozenset(code.strip() for code in match.group(1).split(","))
+    return groups
+
+
 def _item_five_boundary_problems(
     item: str, enumeration: ManualExtraDigitEnumeration
 ) -> list[str]:
@@ -952,8 +983,37 @@ def _item_five_boundary_problems(
     правила-контроли — на тексте, мутированном в памяти (зубы правила
     доказываются контролями, а не правкой настоящего файла). Пустой список —
     проза верна.
+
+    Проверки: три числа замера; каждый регион таблицы назван, принят перебором,
+    и его причина подтверждена замером по типам; каждая скобка пункта найдена и
+    равна множеству регионов таблицы с той же причиной, в обе стороны; каждый код
+    региона в отрезке остатка — ключ таблицы (ревью IN-13, решение владельца О-13).
     """
     problems: list[str] = []
+    groups = _item_five_groups(item)
+    for cause in ITEM_FIVE_GROUP_PATTERNS:
+        expected = {region for region, kind in MANUAL_BOUNDARY_EXAMPLES.items() if kind == cause}
+        if cause not in groups:
+            problems.append(f"скобка причины {cause} не найдена в пункте 5")
+            continue
+        extra = sorted(groups[cause] - expected)
+        missing = sorted(expected - groups[cause])
+        if extra:
+            problems.append(f"в скобке причины {cause} лишние против таблицы: {extra}")
+        if missing:
+            problems.append(f"в скобке причины {cause} недостаёт регионов таблицы: {missing}")
+    start_anchor, end_anchor = ITEM_FIVE_REMAINDER_ANCHORS
+    start = item.find(start_anchor)
+    end = item.find(end_anchor, start) if start >= 0 else -1
+    if end < 0:
+        problems.append("отрезок остатка пункта 5 не найден")
+    else:
+        for code in sorted(set(re.findall(r"(?<!\w)[A-Z]{2}(?!\w)", item[start:end]))):
+            if code in phonenumbers.SUPPORTED_REGIONS and code not in MANUAL_BOUNDARY_EXAMPLES:
+                problems.append(
+                    f"регион {code} назван в отрезке остатка пункта 5, но строки "
+                    "MANUAL_BOUNDARY_EXAMPLES у него нет"
+                )
     for claim in (
         f"{enumeration.accepted} из {enumeration.total}",
         f"{len(enumeration.regions)} регион",
@@ -986,7 +1046,10 @@ def test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement():
     перебора `_manual_extra_digit_enumeration` — «{принято} из {всего}» вводов,
     «{число регионов} регион…», «{действительных} из {принято}», — и что каждый
     регион `MANUAL_BOUNDARY_EXAMPLES` назван пунктом и его причина подтверждена
-    замером по типам.
+    замером по типам. В какой скобке прозы стоит каждый регион и есть ли у
+    региона прозы строка таблицы, судит `_item_five_boundary_problems` — три
+    скобки равны таблице по причине в обе стороны (ревью IN-13, решение
+    владельца О-13, план 16-26).
 
     Зачем живой пересчёт: подъём пина `phonenumberslite` (IN-02, отложено
     владельцем) изменит числа — и правило покраснеет, а не оставит прозу
