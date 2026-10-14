@@ -4537,6 +4537,52 @@ LITERAL_FORM_CASES = [
         "phone",
         id="context-run-bulk-update",
     ),
+    # Самопроверка исполнителя 16-27, заход 1: `methodcaller` API, который судится по
+    # получателю (дескриптор колонки `__set__`, повторный конструктор модели `__init__`),
+    # получает получателя позже — применением связанного имени или носителем, который
+    # подаёт его следующим аргументом. Прямое применение `methodcaller(…)(obj)` ловилось.
+    pytest.param(
+        'set_phone = operator.methodcaller("__set__", account, x)\n'
+        "set_phone(MessengerAccount.phone)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-bound-descriptor-set",
+    ),
+    pytest.param(
+        'asyncio.to_thread(operator.methodcaller("__set__", account, x), MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-to-thread-descriptor-set",
+    ),
+    pytest.param(
+        "loop.run_in_executor(None, functools.partial("
+        'operator.methodcaller("__set__", account, x), MessengerAccount.phone))\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-partial-in-carrier-descriptor-set",
+    ),
+    pytest.param(
+        'list(map(operator.methodcaller("__init__", account, phone=x), [MessengerAccount]))\n',
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="methodcaller-map-model-init",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self, account, x):\n"
+        '        self.init = operator.methodcaller("__init__", account, phone=x)\n'
+        "\n"
+        "    def go(self):\n"
+        "        self.init(MessengerAccount)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="methodcaller-method-bound-model-init",
+    ),
 ]
 
 
@@ -4879,6 +4925,15 @@ LEGITIMATE_CASES = [
         "w = functools.partial(session.bulk_update_mappings, Group)\n"
         'w([{"id": 1, "title": t}])\n',
         id="partial-bound-writer-alias-other-model",
+    ),
+    # Самопроверка 16-27, заход 1: `methodcaller` с получателем — чужая колонка и модель.
+    pytest.param(
+        'set_title = operator.methodcaller("__set__", group, t)\nset_title(Group.title)\n',
+        id="methodcaller-bound-descriptor-set-other-column",
+    ),
+    pytest.param(
+        'asyncio.to_thread(operator.methodcaller("__init__", group, phone=x), Group)\n',
+        id="methodcaller-to-thread-other-model-init",
     ),
 ]
 
