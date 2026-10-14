@@ -5235,6 +5235,17 @@ LITERAL_FORM_CASES = [
         "phone",
         id="raw-sql-line-comment-with-where-before-phone",
     ),
+    # Самопроверка 16-28, ось SQL, заход 2: один оператор, разрезанный склейкой `+` так,
+    # что каждая константа пишет сама (`MERGE INTO <таблица>` и `UPDATE SET phone`),
+    # давал две находки — по одной у каждой константы.
+    pytest.param(
+        'SQL = "MERGE INTO messenger_accounts USING (SELECT 1 AS id) s ON (s.id = '
+        'messenger_accounts.id) " + "WHEN MATCHED THEN UPDATE SET phone = :p"\n',
+        KIND_RAW_SQL,
+        "«MERGE",
+        "phone",
+        id="raw-sql-concatenation-with-a-write-in-each-part",
+    ),
 ]
 
 
