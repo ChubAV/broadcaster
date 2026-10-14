@@ -99,9 +99,17 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `column("phone")` / `literal_column(…)`, имя позицией или `text=`; и любая
    производная такой колонки доступом
    к атрибуту или индексу (`.key`, `.name`, `.expression`, `.property.key`,
-   `.property.columns[0]`; план 16-22, ревью WR-12). Источник перечня —
-   `COLUMN_NAMINGS`, и правило-матрица держит его в суите по каждому судимому
-   контексту `COLUMN_CONTEXTS`; те же наименования судятся в видах 4, 6, 7 и 8 —
+   `.property.columns[0]`; план 16-22, ревью WR-12) и `getattr`-строкой
+   (`getattr(M.phone, "key")` — то же, что `M.phone.key`). Наименования КОМПОЗИЦИОННЫ
+   (план 16-28, ревью WR-15): имя в позиции имени индекса, поиска, конструктора и
+   `getattr` — любое наименование колонки номера, любой глубины:
+   `M.__table__.c[M.phone.key]` (обычная идиома перехода от атрибута ORM к колонке
+   `Table`), `t.c.get(M.phone.key)`, `column(M.phone.key)`, `getattr(M, M.phone.key)`.
+   Источник перечня — `COLUMN_NAMINGS`, и правило-матрица держит его в суите по
+   каждому судимому контексту `COLUMN_CONTEXTS`; позиции имени — `NAME_POSITIONS`, их
+   держит правило композиции (каждое наименование в каждой позиции); цена строгости
+   — `{form.get(M.phone.key): x}` в пишущем вызове судится, как `form.get("phone")`;
+   те же наименования судятся в видах 4, 6, 7 и 8 —
    в позиционном аргументе `values(...)` и
    устаревшего `Query.update({...})` (у него — и в параметре `values=`, сигнатура
    `Query.update(self, values, …)`). Отображение — `{…}` (и `{**{…}, …}`),
@@ -124,14 +132,24 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `type(account).phone_is_manual.__set__(…)` — и через класс дескриптора
    `InstrumentedAttribute.__set__(MessengerAccount.phone, account, x)`;
 5. сырой SQL в строковой константе, НЕ являющейся докстрингом, и в склейке `+`
-   строковых констант — по механизму записи (`RAW_SQL_PHONE_WRITE`):
-   (а) присваивание колонки номера в `SET` до `WHERE`, имя в кавычках или без;
-   (б) строчный конструктор `SET (…, phone, …) =`; (в) голова пишущего оператора
+   строковых констант (один оператор — одна находка, у склейки) — по механизму
+   записи: (а) присваивание колонки номера в предложении `SET` до `WHERE`
+   ОПЕРАТОРА, имя в кавычках или без, и (б) строчный конструктор с колонкой номера
+   `(…, phone, …) =` в ЛЮБОЙ позиции списка `SET` — судит КОД `_raw_sql_set_writes` на
+   НУЛЕВОЙ глубине скобок: подзапрос со своим `WHERE`, строковый литерал `'…'`,
+   комментарий SQL и идентификатор в кавычках перед колонкой предложение не обрывают
+   (план 16-28, ревью WR-16); фильтр по номеру — в `WHERE` оператора и в подзапросе
+   (`SET user_id = (SELECT id FROM users WHERE phone = :p)`) — записью не является;
+   (в) голова пишущего оператора
    перед таблицей аккаунтов — `INSERT [OR …] INTO`, `REPLACE INTO`, `UPSERT INTO`,
    `MERGE INTO`, таблица в кавычках или без и с префиксом схемы; (г) загрузка —
    `COPY <таблица аккаунтов> … FROM` и `LOAD DATA … INTO TABLE <таблица
-   аккаунтов>` (`COPY … TO` — выгрузка, чтение). Кавычки идентификатора — `"…"`,
-   `` `…` `` и `[…]`: SQLite принимает все три. Сюда же
+   аккаунтов>` (`COPY … TO` — выгрузка, чтение); (в) и (г) — выражением
+   `RAW_SQL_PHONE_WRITE`. Кавычки идентификатора — `"…"`,
+   `` `…` `` и `[…]`: SQLite принимает все три. Цена строгости (а): сравнение с
+   колонкой номера на нулевой глубине `SET` вне подзапроса — `SET status = CASE WHEN
+   phone = :p THEN … END` — тоже судится: выражений SQL предикат не разбирает, и на
+   нулевой глубине оно неотличимо от присваивания. Сюда же
    COPY asyncpg в обход SQLAlchemy — `copy_records_to_table("messenger_accounts",
    …)` / `copy_to_table` (таблица позицией или `table_name=`). Голое слово
    `phone_is_manual` в строке не судится — на нём
@@ -139,6 +157,9 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    Летопись: до плана 16-12 вид звучал «`UPDATE … SET … phone… =` либо `INSERT
    INTO messenger_accounts`», и шаблон требовал голые идентификаторы — кавычки,
    префикс схемы, `INSERT OR REPLACE`, `MERGE` и склейка проходили (ревью WR-08).
+   До плана 16-28 (а) и (б) были альтернативами регулярного выражения: (а) обрывалась
+   на первом `where` на любой глубине скобок, (б) требовала `SET (` сразу после `SET`
+   (ревью WR-16, замер планирования 16-28).
 6. ключ номера в строках исполняющих вызовов `execute` / `scalar` / `scalars` /
    `stream` / `stream_scalars` / `exec_driver_sql` и bulk-API
    `bulk_update_mappings` / `bulk_insert_mappings` / Alembic `op.bulk_insert` —
@@ -206,10 +227,13 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 которой колонка номера — или таблица аккаунтов во вставке, загрузке и слиянии —
 названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика
 `_literal_mappings`, включая `{"phone": v for …}` с постоянным ключом и
-`column("phone")`) или в строковой константе SQL (и в склейке `+` констант);
+`column("phone")`) или в строковой константе SQL (и в склейке `+` констант) — у
+`SET` присваиванием или строчным конструктором на нулевой глубине скобок (вид 5);
 «названа литералом» включает производную колонки любой цепочкой атрибутов и
-индексов (`MessengerAccount.phone.key`, `.property.key`, `.expression`) — перечень
-наименований `COLUMN_NAMINGS` (вид 3);
+индексов (`MessengerAccount.phone.key`, `.property.key`, `.expression`) и
+`getattr`-строкой (`getattr(M.phone, "key")`), и наименование внутри позиции имени
+другого наименования любой глубины (`M.__table__.c[M.phone.key]`) — перечень
+наименований `COLUMN_NAMINGS` и позиций имени `NAME_POSITIONS` (вид 3);
 пишущий вызов опознаётся по имени, названному литералом (последнее звено,
 `getattr`-строка, ссылка с аргументами, `methodcaller`), и по псевдониму такого
 имени, связанному в том же модуле ввозом `as` или любой формой общей грамматики
@@ -310,7 +334,18 @@ WR-10 → WR-12 → WR-14 / WR-15 / WR-16); самопроверка 16-22 пе�
 поэлементному `map` и сделал ось B правилом-матрицей `BINDING_FORMS` ×
 `API_IDENTIFICATION_VALUES` × (прямой вызов и `REFERENCE_CARRIERS`); решение владельца
 О-12 (а), 2026-10-13: заявление прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ (второй раз,
-после О-10). Ось «как названа колонка» и сырой SQL пятого круга дописывает план 16-28.
+после О-10). До плана 16-28 матрица 32 × 714 плана 16-22 варьировала контекст
+наименования, но не вкладывала наименование в наименование, и ревью WR-15
+(2026-10-13) нашло пять форм — `t.c[M.phone.key]`, `t.c.get(M.phone.key)`,
+`column(M.phone.key)`, `getattr(M.phone, "key")`, вложенный `getattr`; а вид 5 (а)
+брал первое `where` на любой глубине скобок, и подзапрос перед колонкой прятал запись
+(ревью WR-16); строчный конструктор не первым в `SET` проходил (замер планирования
+16-28). План 16-28 сделал `_phone_column` композиционным, ось «позиция имени» —
+таблицей `NAME_POSITIONS` с правилом, вид 5 (а) и (б) — кодом на нулевой глубине;
+самопроверка исполнителя нашла ещё `where` в комментарии SQL и в идентификаторе или
+строке в кавычках перед колонкой и две находки у оператора, разрезанного склейкой;
+решение владельца О-12 (а), 2026-10-13: заявление прежнее, вариант (б) ОТВЕРГНУТ
+ВЛАДЕЛЬЦЕМ (второй раз, после О-10).
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -490,10 +525,9 @@ _ACCOUNTS_TABLE_SQL = (
     + _SQL_QUOTE + r"messenger_accounts\b" + _SQL_QUOTE
 )
 
-# Пишущий SQL — по МЕХАНИЗМУ записи, четырьмя альтернативами (без учёта регистра):
-# (а) присваивание колонки номера в `SET` до `WHERE` (фильтр по номеру записью не
-#     является) — имя `phone` / `phone_is_manual` в кавычках или без;
-# (б) строчный конструктор `SET (…, phone, …) = (…)`;
+# Пишущий SQL — по МЕХАНИЗМУ записи (без учёта регистра). Виды 5 (а) и (б) — запись
+# колонки номера в предложении `SET` — судит КОД `_raw_sql_set_writes`, а не это
+# выражение: регулярное выражение скобки не считает. Здесь — две альтернативы:
 # (в) голова пишущего оператора перед таблицей аккаунтов — `INSERT [OR <конфликт>]
 #     INTO`, `INSERT IGNORE INTO`, `REPLACE INTO`, `UPSERT INTO`, `MERGE INTO`;
 # (г) загрузка в таблицу аккаунтов — `COPY <таблица> [(колонки)] FROM` и MySQL
@@ -502,13 +536,14 @@ _ACCOUNTS_TABLE_SQL = (
 # Летопись: до плана 16-12 шаблон требовал голое `phone =` и голую
 # `messenger_accounts` после `INSERT INTO`, и кавычки у идентификатора, префикс
 # схемы, `INSERT OR REPLACE`, `REPLACE` / `MERGE INTO`, `COPY … FROM` и строчный
-# конструктор проводили запись мимо гейта (ревью WR-08, 2026-10-09).
+# конструктор проводили запись мимо гейта (ревью WR-08, 2026-10-09). До плана 16-28
+# (а) и (б) были альтернативами этого выражения: (а) обрывалась на первом слове
+# `where` на ЛЮБОЙ глубине скобок, и подзапрос со своим `WHERE` или строковый литерал
+# со словом `where` перед колонкой прятал запись (ревью WR-16, 2026-10-13), а (б)
+# требовала `SET (` сразу после `SET`, и строчный конструктор не первым в списке
+# проходил (замер планирования 16-28: такой оператор на SQLite пишет колонку).
 RAW_SQL_PHONE_WRITE = re.compile(
-    r"\bupdate\b[\s\S]*?\bset\b(?:(?!\bwhere\b)[\s\S])*?\bphone(?:_is_manual)?\b"
-    + _SQL_QUOTE
-    + r"\s*="
-    + r"|\bupdate\b[\s\S]*?\bset\s*\([^)]*\bphone(?:_is_manual)?\b[^)]*\)\s*="
-    + r"|\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
+    r"\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
     + _ACCOUNTS_TABLE_SQL
     + r"|\bcopy\s+"
     + _ACCOUNTS_TABLE_SQL
@@ -516,6 +551,16 @@ RAW_SQL_PHONE_WRITE = re.compile(
     + r"|\bload\s+data\b[\s\S]*?\binto\s+table\s+"
     + _ACCOUNTS_TABLE_SQL,
     re.IGNORECASE,
+)
+
+# Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)). Ключевое слово —
+# не идентификатор в кавычках из одного слова (`"where"`, `[set]`).
+_SQL_UPDATE = re.compile(r'(?<!["`\[])\bupdate\b(?!["`\]])', re.IGNORECASE)
+_SQL_SET = re.compile(r'(?<!["`\[])\bset\b(?!["`\]])', re.IGNORECASE)
+_SQL_WHERE = re.compile(r'(?<!["`\[])\bwhere\b(?!["`\]])', re.IGNORECASE)
+_SQL_PHONE_NAME = re.compile(r"\bphone(?:_is_manual)?\b", re.IGNORECASE)
+_SQL_PHONE_ASSIGNMENT = re.compile(
+    r"\bphone(?:_is_manual)?\b" + _SQL_QUOTE + r"\s*=", re.IGNORECASE
 )
 
 # COPY asyncpg в обход SQLAlchemy: `conn.copy_records_to_table("messenger_accounts",
@@ -795,6 +840,17 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for child in (node.left, node.right)
         if _is_concatenation(child)
     }
+    # Константы склейки `+` из одних строковых констант судятся у самой склейки: один
+    # оператор — одна находка, даже если каждая константа пишет сама (`"MERGE INTO
+    # messenger_accounts …" + "… UPDATE SET phone = :p"`; самопроверка исполнителя
+    # 16-28, ось SQL, заход 2 — до неё такой оператор давал две находки).
+    concatenated = {
+        id(part)
+        for node in ast.walk(tree)
+        if _is_concatenation(node) and _folded_string(node) is not None
+        for part in ast.walk(node)
+        if isinstance(part, ast.Constant)
+    }
     # Пишущие вызовы этого исходника: общий набор плюс псевдонимы модели в модуле.
     write_names = WRITE_CALL_NAMES | _module_model_aliases(tree)
     # Имена, которые судятся у ссылки: всякий пишущий API, который судит `_judge_call`.
@@ -902,24 +958,27 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in docstrings
-            and RAW_SQL_PHONE_WRITE.search(node.value)
+            and id(node) not in concatenated
+            and _raw_sql_write(node.value)
         ):
-            snippet = " ".join(node.value.split())[:60]
-            record(node, KIND_RAW_SQL, f"«{snippet}»")
+            # Вид 5: (а) и (б) — кодом на нулевой глубине скобок (`_raw_sql_set_writes`,
+            # план 16-28, ревью WR-16), (в) и (г) — `RAW_SQL_PHONE_WRITE`.
+            record(node, KIND_RAW_SQL, _raw_sql_subject(node.value))
         elif (
             _is_concatenation(node)
             and id(node) not in inner_concatenations
             and (folded := _folded_string(node)) is not None
-            # Если константа склейки совпала сама, находка у неё уже есть.
-            and not any(
-                RAW_SQL_PHONE_WRITE.search(part.value)
-                for part in ast.walk(node)
-                if isinstance(part, ast.Constant)
+            # Склейка пишет, если пишет весь оператор или хотя бы одна её константа.
+            and (
+                _raw_sql_write(folded)
+                or any(
+                    _raw_sql_write(part.value)
+                    for part in ast.walk(node)
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                )
             )
-            and RAW_SQL_PHONE_WRITE.search(folded)
         ):
-            snippet = " ".join(folded.split())[:60]
-            record(node, KIND_RAW_SQL, f"«{snippet}»")
+            record(node, KIND_RAW_SQL, _raw_sql_subject(folded))
 
     return sorted(found)
 
@@ -1041,7 +1100,7 @@ def _judge_call(
                 shown = (
                     repr(column)
                     if _constant_text(attribute) is not None
-                    else ast.unparse(attribute)
+                    else _naming_text(attribute, column)
                 )
                 record(node, KIND_SETATTR, f"{name}({prefix}{shown}, …)")
                 break
@@ -1055,8 +1114,8 @@ def _judge_call(
         descriptors = [receiver] if receiver is not None else []
         descriptors += positional[:1]
         for descriptor in descriptors:
-            if _phone_column(descriptor) is not None:
-                record(node, KIND_SETATTR, f"{ast.unparse(descriptor)}.__set__(…)")
+            if (column := _phone_column(descriptor)) is not None:
+                record(node, KIND_SETATTR, f"{_naming_text(descriptor, column)}.__set__(…)")
                 break
     if (
         name == MODEL_INIT
@@ -1637,6 +1696,154 @@ def _folded_string(node: ast.AST) -> str | None:
     return None
 
 
+def _raw_sql_write(text: str) -> bool:
+    """Пишущий SQL вида 5: (а) и (б) — кодом `_raw_sql_set_writes`, (в) и (г) — выражением."""
+    return bool(_raw_sql_set_writes(text)) or RAW_SQL_PHONE_WRITE.search(text) is not None
+
+
+def _raw_sql_subject(text: str) -> str:
+    """Предмет находки сырого SQL: начало оператора и, если запись дальше, — она сама."""
+    snippet = " ".join(text.split())[:60]
+    writes = _raw_sql_set_writes(text)
+    head = RAW_SQL_PHONE_WRITE.search(text)
+    fragment = writes[0] if writes else " ".join(head.group(0).split()) if head else ""
+    if fragment and fragment not in snippet:
+        snippet = f"{snippet} … {fragment}"
+    return f"«{snippet}»"
+
+
+def _raw_sql_set_writes(text: str) -> list[str]:
+    """Записи колонки номера в предложении `SET` сырого SQL — виды 5 (а) и (б), КОДОМ.
+
+    Для каждого `UPDATE … SET` (без учёта регистра; и `ON CONFLICT DO UPDATE SET`)
+    предложение `SET` — текст после `SET` до первого `WHERE` на НУЛЕВОЙ глубине скобок
+    относительно `SET`, до `;` на нулевой глубине, до закрывающей скобки, уводящей
+    глубину ниже нуля (оператор внутри скобок), либо до конца строки. Строковые
+    литералы SQL `'…'`, комментарии и кавычки не из одного слова пропускаются целиком
+    (`_sql_visible`): слово `where`, скобки и `;` внутри них предложение не обрывают.
+    На нулевой глубине предложения запись — (а) колонка
+    номера `phone` / `phone_is_manual` (в кавычке идентификатора `_SQL_QUOTE` или без),
+    за которой следует `=`; (б) строчный конструктор — скобка нулевой глубины, на своём
+    уровне называющая колонку номера, и за ней `=`, в ЛЮБОЙ позиции списка `SET`.
+    Присваивание внутри скобок — фильтр подзапроса `SET user_id = (SELECT id FROM users
+    WHERE phone = :p)` — записью не является, как и фильтр по номеру в `WHERE`
+    оператора (ревью WR-16, план 16-28; решение владельца О-12 (а)).
+
+    Возвращает найденные записи текстом (`phone =`, `(status, phone) =`); пустой
+    список — записи в `SET` нет.
+    """
+    plain = _sql_visible(text)
+    wheres = {match.start() for match in _SQL_WHERE.finditer(plain)}
+    writes: list[str] = []
+    for update in _SQL_UPDATE.finditer(plain):
+        head = _SQL_SET.search(plain, update.end())
+        if head is None:
+            continue
+        start = head.end()
+        clause = plain[start : _sql_set_clause_end(plain, start, wheres)]
+        for match in _SQL_PHONE_ASSIGNMENT.finditer(_sql_depth_zero(clause)):
+            writes.append(" ".join(text[start + match.start() : start + match.end()].split()))
+        for group_start, group_end in _sql_groups(clause):
+            inner = clause[group_start + 1 : group_end - 1]
+            if clause[group_end:].lstrip().startswith("=") and _SQL_PHONE_NAME.search(
+                _sql_depth_zero(inner)
+            ):
+                shown = text[start + group_start : start + group_end]
+                writes.append(" ".join(shown.split()) + " =")
+    return writes
+
+
+def _sql_visible(text: str) -> str:
+    """SQL, в котором видна только структура; длина и позиции прежние.
+
+    Пробелами заменяются строковые литералы `'…'` (удвоенная кавычка `''` закрывает и
+    тут же открывает литерал — итог тот же), комментарии `-- …` до конца строки и
+    `/* … */`, и идентификатор или строка в кавычках `"…"`, `` `…` ``, `[…]`, если
+    внутри не одно слово: слово `where`, скобки и `;` внутри них предложение `SET` не
+    обрывают и глубину не меняют. Идентификатор из одного слова (`"phone"`,
+    `` `phone_is_manual` ``, `[messenger_accounts]`) виден как есть — он может быть
+    колонкой номера (самопроверка исполнителя 16-28, ось SQL, заход 1: на SQLite
+    `SET [a where b] = 1, phone = :p` пишет колонку).
+    """
+    closers = {'"': '"', "`": "`", "[": "]"}
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char == "'":
+            end = text.find("'", index + 1)
+            end = len(text) if end < 0 else end + 1
+        elif text.startswith("--", index):
+            end = text.find("\n", index)
+            end = len(text) if end < 0 else end
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = len(text) if end < 0 else end + 2
+        elif char in closers and (close := text.find(closers[char], index + 1)) >= 0:
+            end = close + 1
+            if re.fullmatch(r"\w+", text[index + 1 : close]):
+                out.append(text[index:end])
+                index = end
+                continue
+        else:
+            out.append(char)
+            index += 1
+            continue
+        out.append(" " * (end - index))
+        index = end
+    return "".join(out)
+
+
+def _sql_set_clause_end(plain: str, start: int, wheres: set[int]) -> int:
+    """Конец предложения `SET`, начатого на `start`: `WHERE` или `;` на нулевой глубине,
+    скобка, уводящая глубину ниже нуля, или конец строки."""
+    depth = 0
+    for index in range(start, len(plain)):
+        char = plain[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return index
+        elif depth == 0 and (char == ";" or index in wheres):
+            return index
+    return len(plain)
+
+
+def _sql_depth_zero(segment: str) -> str:
+    """Отрезок SQL с пробелами на месте скобок и всего, что внутри них."""
+    depth = 0
+    out: list[str] = []
+    for char in segment:
+        if char == "(":
+            depth += 1
+            out.append(" ")
+        elif char == ")":
+            depth = max(depth - 1, 0)
+            out.append(" ")
+        else:
+            out.append(char if depth == 0 else " ")
+    return "".join(out)
+
+
+def _sql_groups(segment: str) -> list[tuple[int, int]]:
+    """Скобки нулевой глубины отрезка: (начало, конец за закрывающей скобкой)."""
+    depth = 0
+    opened = 0
+    groups: list[tuple[int, int]] = []
+    for index, char in enumerate(segment):
+        if char == "(":
+            if depth == 0:
+                opened = index
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                groups.append((opened, index + 1))
+    return groups
+
+
 def _docstring_nodes(tree: ast.AST) -> set[int]:
     """Узлы-докстринги модуля, классов и функций: прозу о SQL гейт не судит."""
     found: set[int] = set()
@@ -1792,6 +1999,21 @@ def _phone_column(node: ast.AST) -> str | None:
     (ревью WR-12, замер верификатора раунда 4 на SQLite в памяти). Производная
     проверяется ПОСЛЕ прямых наименований. Перечень наименований держит в суите
     правило-матрица `COLUMN_NAMINGS` × `COLUMN_CONTEXTS`.
+
+    КОМПОЗИЦИЯ (план 16-28, ревью WR-15; решение владельца О-12 (а)). Имя в позиции
+    имени — в индексе, в поиске, в конструкторе колонки и в `getattr` — принимается,
+    если оно само наименование колонки номера по `_phone_column`, а не только строковая
+    константа; глубина любая: `MessengerAccount.__table__.c[MessengerAccount.phone.key]`
+    (обычная идиома перехода от атрибута ORM к колонке `Table`),
+    `t.c.get(M.phone.key)`, `column(M.phone.key)`, `getattr(M, M.phone.key)`. И
+    `getattr`-производная: `getattr(X, "<строка>")` читается как `X.<строка>` и, ПОСЛЕ
+    прямых наименований, судится производной `X` — `getattr(MessengerAccount.phone,
+    "key")` то же, что `MessengerAccount.phone.key`. До плана 16-28 позиция имени
+    принимала только строку, и такие ключи проходили гейт (замер верификатора раунда 5 на
+    SQLite: каждая форма пишет колонку). Ось держит в суите правило
+    `NAME_POSITIONS` × `COLUMN_NAMINGS`. Цена строгости та же, что у `form.get("phone")`
+    (`COLUMN_LOOKUP_METHODS`): `{form.get(MessengerAccount.phone.key): x}` и
+    `{rows[MessengerAccount.phone.key]: x}` в пишущем вызове тоже судятся.
     """
     if isinstance(node, ast.Call) and (
         _call_name(node) in COLUMN_CONSTRUCTORS
@@ -1801,29 +2023,27 @@ def _phone_column(node: ast.AST) -> str | None:
         # имени — `t.c.get("phone")`, `mapper.get_property("phone")`, имя `key=`
         # (самопроверка исполнителя 16-22). Связывание — любое литеральное:
         # позицией, `*["phone"]`, именем и `**{"text": "phone"}` (`_bound_arguments`).
+        # Имя — любое наименование колонки номера (композиция, план 16-28).
         for name in _bound_arguments(node, 0, COLUMN_NAME_KEYWORDS):
-            if (text := _constant_text(name)) in PHONE_COLUMNS:
-                return text
+            if (column := _phone_column(name)) is not None:
+                return column
     if (text := _constant_text(node)) in PHONE_COLUMNS:
         # Строка — константа, склейка `+` констант или f-строка без подстановок.
         return text
     if isinstance(node, ast.Attribute) and node.attr in PHONE_COLUMNS:
         return node.attr
-    if (
-        isinstance(node, ast.Subscript)
-        and isinstance(node.slice, ast.Constant)
-        and node.slice.value in PHONE_COLUMNS
-    ):
-        return node.slice.value
+    if isinstance(node, ast.Subscript) and (column := _phone_column(node.slice)) is not None:
+        # Индекс `t.c["phone"]` — и по любому наименованию: `t.c[M.phone.key]`.
+        return column
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
         and node.func.id == "getattr"
         and len(node.args) >= 2
-        and isinstance(node.args[1], ast.Constant)
-        and node.args[1].value in PHONE_COLUMNS
+        and (column := _phone_column(node.args[1])) is not None
     ):
-        return node.args[1].value
+        # `getattr(M, "phone")` — и по любому наименованию: `getattr(M, M.phone.key)`.
+        return column
     if isinstance(node, (ast.Attribute, ast.Subscript)):
         # Производная колонки номера любой цепочкой атрибутов и индексов — ПОСЛЕ всех
         # прямых наименований (ревью WR-12, план 16-22): иначе индекс `t.c["phone"]`
@@ -1831,7 +2051,19 @@ def _phone_column(node: ast.AST) -> str | None:
         # порядка, замер планирования). `MessengerAccount.phone.key`,
         # `.property.key`, `.expression`, `.property.columns[0]` — та же колонка.
         return _phone_column(node.value)
+    if _getattr_literal(node) is not None:
+        # `getattr`-производная (план 16-28, ревью WR-15): `getattr(X, "<строка>")` —
+        # это `X.<строка>`, тоже ПОСЛЕ прямых наименований.
+        assert isinstance(node, ast.Call)
+        return _phone_column(node.args[0])
     return None
+
+
+def _naming_text(node: ast.AST, column: str) -> str:
+    """Наименование колонки в предмете находки: исходник узла, а если колонки в нём не
+    видно (склейка `"pho" + "ne"` в позиции имени другого наименования), — с колонкой."""
+    text = ast.unparse(node)
+    return text if column in text else f"{text} (колонка {column!r})"
 
 
 def _constant_text(node: ast.AST) -> str | None:
@@ -2098,7 +2330,7 @@ def _mapping_key_text(key: ast.AST, column: str) -> str:
     if isinstance(key, ast.keyword):
         return f"dict({column}=…)"
     if isinstance(key, (ast.Attribute, ast.Subscript, ast.Call)):
-        return f"{{{ast.unparse(key)}: …}}"
+        return f"{{{_naming_text(key, column)}: …}}"
     return f"{{{column!r}: …}}"
 
 
@@ -2357,6 +2589,47 @@ def test_a_planted_backfill_with_a_method_bound_writer_alias_reddens_the_gate(tm
     ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
 
 
+def test_a_planted_backfill_with_a_nested_column_naming_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-15: ключ `MessengerAccount.__table__.c[MessengerAccount.phone.key]` в `values`.
+
+    `Model.__table__.c[Model.attr.key]` — обычная идиома перехода от атрибута ORM к его
+    колонке `Table`, то есть естественная форма скрипта дозаполнения Фазы 20 (D-13),
+    который пишет оператором Core над таблицей. На SQLite в памяти такая запись пишет
+    колонку (замер верификатора раунда 5, `+72`, SQLAlchemy 2.0.46). До плана 16-28 гейт
+    её пропускал: наименование колонки внутри индекса другого наименования не судилось
+    (ревью WR-15; решение владельца О-12 (а): заявление шапки прежнее, предикат догоняет
+    его). Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_table_column.py",
+        "async def backfill(session, rows):\n"
+        "    for account_id, number in rows:\n"
+        "        await session.execute(update(MessengerAccount.__table__)"
+        ".where(MessengerAccount.__table__.c.id == account_id)"
+        ".values({MessengerAccount.__table__.c[MessengerAccount.phone.key]: number}))\n",
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_table_column.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_table_column.py:3 — {KIND_DICT_KEY} — ")
+    ]
+    assert found, (
+        "колонка, названная внутри другого наименования, не опознана: "
+        "`values({MessengerAccount.__table__.c[MessengerAccount.phone.key]: number})` в "
+        f"scripts/backfill_table_column.py гейт пропустил: {offences}"
+    )
+    assert all("values" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет `values` и колонку `phone`: {found}"
+    )
+
+
 def test_an_aliased_writer_api_in_the_same_module_is_judged():
     """Пишущий API под псевдонимом ввоза в том же модуле судится как сам API.
 
@@ -2611,6 +2884,36 @@ def test_a_raw_sql_phone_write_in_a_string_constant_is_a_write(source):
     assert len(offences) == 1 and offences[0].startswith(
         f"app/x.py:1 — {KIND_RAW_SQL} — "
     ), f"сырой SQL с номером в строковой константе гейт не нашёл: {offences}"
+
+
+def test_a_raw_sql_write_after_a_subquery_in_set_is_a_write():
+    """Присваивание колонки номера в `SET` после подзапроса со своим `WHERE` — запись (WR-16).
+
+    Вид 5 (а) обещает присваивание колонки номера в `SET` до `WHERE` ОПЕРАТОРА, а
+    регулярное выражение до плана 16-28 брало первое слово `where` на любой глубине
+    скобок: подзапрос перед колонкой обрывал срез, и запись проходила гейт. На SQLite
+    оператор пишет колонку (замер верификатора раунда 5, `+7S`). Ревью WR-16; решение
+    владельца О-12 (а): заявление шапки прежнее, предикат догоняет его. Та же запись в
+    склейке `+` двух констант, разрезанной перед `phone`, — одна находка у склейки.
+    """
+    statement = "UPDATE messenger_accounts SET user_id = (SELECT id FROM users WHERE id = 1), "
+    sources = {
+        "константа": (
+            "async def f(s, p):\n"
+            f'    await s.execute(text("{statement}phone = :p"), {{"p": p}})\n'
+        ),
+        "склейка": (
+            "async def f(s, p):\n"
+            f'    await s.execute(text("{statement}" + "phone = :p"), {{"p": p}})\n'
+        ),
+    }
+    for shape, source in sources.items():
+        offences = phone_write_offences(source, "scripts/x.py")
+
+        assert len(offences) == 1 and offences[0].split(" — ")[1] == KIND_RAW_SQL, (
+            f"запись колонки в SET после подзапроса с WHERE не опознана ({shape}): "
+            f"`{source.strip()}` → {offences}"
+        )
 
 
 def test_an_upsert_set_of_a_phone_column_is_a_write():
@@ -2874,6 +3177,19 @@ COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
     ColumnNaming("column-double-star", 'column(**{"text": "phone"})'),
     ColumnNaming("table-c-get-keyword", 'accounts.c.get(key="phone")'),
     ColumnNaming("get-property-keyword-key", 'inspect(MessengerAccount).get_property(key="phone").key'),
+    # Ревью WR-15 (план 16-28): наименование внутри наименования — колонка `Table`,
+    # полученная из атрибута ORM (`Model.__table__.c[Model.attr.key]`, обычная идиома),
+    # поиск и конструктор по ключу атрибута и `getattr` над колонкой. До плана 16-28
+    # каждое давало `[]`, хотя колонка названа литералом (замер верификатора раунда 5
+    # на SQLite: `+76`…`+79`).
+    ColumnNaming(
+        "table-c-index-by-key", "MessengerAccount.__table__.c[MessengerAccount.phone.key]"
+    ),
+    ColumnNaming(
+        "table-c-get-by-key", "MessengerAccount.__table__.c.get(MessengerAccount.phone.key)"
+    ),
+    ColumnNaming("column-by-key", "column(MessengerAccount.phone.key)"),
+    ColumnNaming("getattr-derivative", 'getattr(MessengerAccount.phone, "key")'),
 )
 
 
@@ -3168,6 +3484,89 @@ def test_every_column_naming_in_every_judged_context_is_a_write(naming):
     assert not misses, (
         f"наименование колонки не опознано: `{naming.source}` ({naming.id}) — "
         f"{len(misses)} из {len(COLUMN_CONTEXTS)} контекстов дали не ровно одну находку "
+        "ожидаемого вида:\n" + "\n".join(misses)
+    )
+
+
+class NamePosition(NamedTuple):
+    """Позиция имени в наименовании колонки: `id` строки и выражение с местом `{name}`."""
+
+    id: str
+    template: str
+
+
+# Ось A, композиция (план 16-28, ревью WR-15; решение владельца О-12 (а)): позиции, в
+# которых наименование колонки называет её ИМЕНЕМ — индекс, поиск, конструктор, `getattr`
+# — и `getattr`-производная над колонкой. Матрица 32 × 714 плана 16-22 варьировала
+# контекст наименования, но не вкладывала наименование в наименование, и пятый круг
+# одной оси открылся именно там: `t.c[M.phone.key]`, `t.c.get(M.phone.key)`,
+# `column(M.phone.key)`, `getattr(M.phone, "key")` проходили гейт.
+NAME_POSITIONS: tuple[NamePosition, ...] = (
+    NamePosition("table-c-index", "accounts.c[{name}]"),
+    NamePosition("table-attribute-c-index", "MessengerAccount.__table__.c[{name}]"),
+    NamePosition("inspect-columns-index", "inspect(MessengerAccount).columns[{name}]"),
+    NamePosition("table-c-get", "accounts.c.get({name})"),
+    NamePosition("get-property-key", "inspect(MessengerAccount).get_property({name}).key"),
+    NamePosition("column", "column({name})"),
+    NamePosition("literal-column", "literal_column({name})"),
+    NamePosition("column-text-keyword", "column(text={name})"),
+    NamePosition("getattr-name", "getattr(MessengerAccount, {name})"),
+    NamePosition("getattr-derivative", 'getattr({name}, "key")'),
+)
+
+# Контексты правила композиции: (id, исходник с местом `@COLUMN@`, вид, вызов).
+_NESTED_NAMING_CONTEXTS = (
+    ("values-key", "stmt = update(MessengerAccount).values({@COLUMN@: x})\n", KIND_DICT_KEY, "values"),
+    (
+        "bulk-update-mappings-row-key",
+        'session.bulk_update_mappings(MessengerAccount, [{"id": 1, @COLUMN@: p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+    ),
+    ("setattr-name", "setattr(account, @COLUMN@, x)\n", KIND_SETATTR, "setattr"),
+)
+
+
+@pytest.mark.parametrize("position", [pytest.param(p, id=p.id) for p in NAME_POSITIONS])
+def test_every_column_naming_nested_in_every_name_position_is_a_write(position: NamePosition):
+    """Каждое наименование колонки в позиции имени каждого наименования — ровно одна находка.
+
+    Наименование, вложенное в позицию имени другого наименования, называет ту же колонку
+    литералом: `MessengerAccount.__table__.c[MessengerAccount.phone.key]` — колонка `Table`
+    по ключу атрибута ORM, `getattr(MessengerAccount.phone, "key")` — то же, что
+    `MessengerAccount.phone.key`. До плана 16-28 `_phone_column` принимал в позиции имени
+    только строковую константу, и такие ключи проходили гейт (ревью WR-15). Правило
+    подаёт каждое наименование `COLUMN_NAMINGS` в позицию имени и в три контекста —
+    ключ `values`, ключ строки `bulk_update_mappings`, имя `setattr`; новая позиция или
+    наименование дают одну красную строку на позицию со всеми промахами сразу. Решение
+    владельца О-12 (а): заявление шапки прежнее, предикат догоняет его.
+    """
+    forms = [
+        (
+            naming,
+            context_id,
+            draft.replace(_AT_COLUMN, position.template.format(name=naming.source)),
+            kind,
+            call,
+        )
+        for naming in COLUMN_NAMINGS
+        for context_id, draft, kind, call in _NESTED_NAMING_CONTEXTS
+    ]
+    assert len(forms) >= 90, (
+        f"форм позиции {len(forms)} — меньше 90: правило проверяет почти ничто"
+    )
+    misses: list[str] = []
+    for naming, context_id, source, kind, call in forms:
+        offences = phone_write_offences(source, "scripts/x.py")
+        if len(offences) == 1:
+            _location, found_kind, subject = offences[0].split(" — ", 2)
+            if found_kind == kind and call in subject and "phone" in subject:
+                continue
+        misses.append(f"  {naming.id} / {context_id}: `{source.strip()}` → {offences}")
+
+    assert not misses, (
+        f"наименование колонки внутри позиции имени не опознано: `{position.template}` "
+        f"({position.id}) — {len(misses)} из {len(forms)} форм дали не ровно одну находку "
         "ожидаемого вида:\n" + "\n".join(misses)
     )
 
@@ -4766,6 +5165,138 @@ LITERAL_FORM_CASES = [
         "phone",
         id="starred-tuple-bound-suffix-alias",
     ),
+    # Ревью WR-15 (верификация раунда 5, 2026-10-13): наименование колонки внутри
+    # индекса, поиска и конструктора другого наименования и `getattr` над колонкой. До
+    # плана 16-28 гейт давал `[]` на каждой из пяти форм, хотя колонка названа литералом
+    # (замер верификатора на SQLite: `+76`…`+79`, `+70`).
+    pytest.param(
+        "stmt = update(MessengerAccount).values("
+        "{MessengerAccount.__table__.c[MessengerAccount.phone.key]: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-c-index-by-key",
+    ),
+    pytest.param(
+        "session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": 1, getattr(MessengerAccount.phone, "key"): p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-getattr-derivative-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values("
+        "{MessengerAccount.__table__.c.get(MessengerAccount.phone.key): x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-c-get-by-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({column(MessengerAccount.phone.key): x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-by-key",
+    ),
+    pytest.param(
+        'setattr(account, getattr(getattr(MessengerAccount, "phone"), "key"), x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-nested-getattr-key",
+    ),
+    # Ревью WR-16 (верификация раунда 5) и замер планирования 16-28: подзапрос со своим
+    # `WHERE` или строковый литерал со словом `where` перед колонкой в `SET` обрывали
+    # вид 5 (а), а строчный конструктор не первым в списке `SET` вид 5 (б) не видел. На
+    # SQLite каждый такой оператор пишет колонку (`+7S`, `+7ROW`).
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET user_id = '
+        '(SELECT id FROM users WHERE id = 1), phone = :p"), {"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-subquery-before-phone",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"UPDATE messenger_accounts SET note = 'a where b', "
+        'phone = :p"), {"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-literal-with-where-before-phone",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text('UPDATE messenger_accounts SET user_id = "
+        "(SELECT id FROM users WHERE id = 1), \"phone_is_manual\" = 1'), {\"p\": p})\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-subquery-before-quoted-phone-is-manual",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET user_id = '
+        "(SELECT id FROM users WHERE id = 1), (status, phone) = ('x', :p)\"), {\"p\": p})\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-row-constructor-after-assignment",
+    ),
+    # Самопроверка исполнителя 16-28, ось SQL, заход 1: слово `where` внутри
+    # идентификатора в кавычках (`` `…` ``, `[…]`, `"…"` — у SQLite и строка) или внутри
+    # комментария SQL перед колонкой обрывало предложение `SET`. На SQLite 3.53 каждый
+    # такой оператор пишет колонку (замер исполнителя: `+7NEW`).
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET `a where b` = 1, phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-backtick-identifier-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET [a where b] = 1, phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-bracket-identifier-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = \"a where b\", phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-double-quoted-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = 1 /* where */, phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-block-comment-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = 1, -- where\\nphone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-line-comment-with-where-before-phone",
+    ),
+    # Самопроверка 16-28, ось SQL, заход 2: один оператор, разрезанный склейкой `+` так,
+    # что каждая константа пишет сама (`MERGE INTO <таблица>` и `UPDATE SET phone`),
+    # давал две находки — по одной у каждой константы.
+    pytest.param(
+        'SQL = "MERGE INTO messenger_accounts USING (SELECT 1 AS id) s ON (s.id = '
+        'messenger_accounts.id) " + "WHEN MATCHED THEN UPDATE SET phone = :p"\n',
+        KIND_RAW_SQL,
+        "«MERGE",
+        "phone",
+        id="raw-sql-concatenation-with-a-write-in-each-part",
+    ),
 ]
 
 
@@ -5136,6 +5667,41 @@ LEGITIMATE_CASES = [
         "scv, *rest = set_committed_value, None\n"
         'scv(account, "status", x)\n',
         id="starred-tuple-bound-writer-alias-other-attribute",
+    ),
+    # Ревью WR-15 (план 16-28): вложенное наименование и `getattr`-производная ЧУЖОЙ
+    # колонки — не номер.
+    pytest.param(
+        "stmt = update(Group).values({Group.__table__.c[Group.title.key]: t})\n",
+        id="values-other-table-c-index-by-key",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(Group, [{"id": 1, getattr(Group.title, "key"): t}])\n',
+        id="rows-other-getattr-derivative-key",
+    ),
+    # Ревью WR-16 (план 16-28): фильтр по номеру в `WHERE` оператора и в подзапросе
+    # `SET` записью колонки не является (контроль владельца О-12 (а)).
+    pytest.param(
+        "async def f(s, n, number):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET name = :n WHERE phone = :number"), '
+        '{"n": n, "number": number})\n',
+        id="raw-sql-filter-by-number-in-where",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET user_id = '
+        '(SELECT id FROM users WHERE phone = :p)"), {"p": p})\n',
+        id="raw-sql-subquery-filter-in-set",
+    ),
+    # Самопроверка 16-28, ось SQL, заход 1: текст `phone = …` внутри строки в двойных
+    # кавычках и внутри комментария SQL колонку не пишет (замер на SQLite 3.53: номер
+    # прежний).
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = \"phone = 1\"'\n",
+        id="raw-sql-double-quoted-text-with-phone-assignment",
+    ),
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note = 'n' /* phone = :p */ WHERE id = 1\"\n",
+        id="raw-sql-comment-with-phone-assignment",
     ),
 ]
 
