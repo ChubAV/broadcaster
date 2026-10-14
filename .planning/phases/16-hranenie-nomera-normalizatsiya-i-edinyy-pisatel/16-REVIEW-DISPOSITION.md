@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-14
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "The single-writer gate's alias claim covers \"присваивание\", but `_module_aliases` sees only `Name = Name|Attribute`: tuple, `:=`, `self.x =` and `getattr`-string aliases of writer APIs pass"
   - id: WR-15
     severity: warning
@@ -131,7 +131,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 6
+open: 5
 total: 32
 recorded: 2026-10-13T12:08:30.551Z
 ---
@@ -140,7 +140,7 @@ recorded: 2026-10-13T12:08:30.551Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-14 | warning | open | - |
+| WR-14 | warning | fixed | `16-27` задачи 1–3, GREEN `25f2bb5e`, `8aaded0d`, `d9323cd0`, и четыре цикла самопроверки исполнителя, GREEN `b8c84eb3`, `18e13784`, `e5df9047`, `0ea91ee8`; гейт приватности на той же грамматике — `16-29` задача 1, GREEN `9df72956`; правило-паритет `tests/test_phone_gates_parity.py` — `16-29` задача 2, GREEN `29249009` — решение владельца О-12 (а): заявление шапки прежнее; общая грамматика связывания `tests/phone_gate_grammar.py` (распаковка кортежа, в том числе со звёздной целью, `:=`, цель-атрибут `self.<x>` / `cls.<x>` в любом методе, тело класса, `getattr`-строка как атрибут, связанный `partial`) и один перечень носителей с гейтом приватности (`run_sync`, `to_thread`, `run_in_executor`, `map` поэлементно, `Context.run`); получатель `methodcaller` судится у любого применения; правило-матрица оси B `test_every_binding_form_of_a_writer_api_alias_is_judged` («270» ячеек: «9» форм × «5» значений опознания × прямой вызов и «5» носителей); самопроверка исполнителя — «63 688» форм, ноль промахов; связывание вызовом или через пространство имён («setattr(self, "f", api)», «globals()["f"] = api») не ловится — названо в пункте (1) шапки с причиной «поток данных через контейнер»; подготовительное переименование таблицы гейта `BINDING_FORMS` в `PARAMETER_BINDING_FORMS` — коммит «a12ad73c» (refactor) |
 | WR-15 | warning | open | - |
 | WR-16 | warning | open | - |
 | WR-17 | warning | open | - |
