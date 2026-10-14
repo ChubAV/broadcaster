@@ -224,11 +224,13 @@ import pytest
 
 from tests.phone_gate_grammar import (
     BINDING_FORMS,
+    ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
     REFERENCE_KEYWORDS,
     BindingForm,
     IdentificationValue,
     binding_form_source,
+    binding_name,
     module_bindings,
 )
 
@@ -367,6 +369,11 @@ FACTORY_CONFIGURATION_KEYWORDS = frozenset(
 # `functools.partial(<вызываемое журнала>, …)` — по последнему имени вызова.
 PARTIAL_NAMES = frozenset({"partial"})
 
+# `operator.methodcaller("<метод>", …)` — по последнему имени вызова; применённый к
+# опознанному журналу, он зовёт `<журнал>.<метод>(…)` (ревью WR-17, замер планирования
+# 16-29: гейт писателя опознаёт API по `methodcaller` с плана 16-17).
+METHODCALLER_NAMES = frozenset({"methodcaller"})
+
 # Модули, через которые зовут встроенный `print` (`builtins.print(…)`).
 PRINT_MODULES = frozenset({"builtins"})
 
@@ -459,6 +466,12 @@ class ModuleLogNames:
     сверяются по последнему имени вызова, как и `LOGGER_FACTORIES`.
     `log_function_attributes` — атрибуты, связанные со ссылкой на вызываемое журнала
     (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`.
+    `methodcaller_names` — имена, под которыми модуль зовёт `operator.methodcaller`
+    (`from operator import methodcaller as mc`, `mc = operator.methodcaller`,
+    `self.mc = operator.methodcaller`); `methodcallers` — пары «имя → вызов
+    `methodcaller(…)`», связанные любой формой общей грамматики (`emit =
+    operator.methodcaller("info", …)`, `self.emit = …`, цепочка `g = emit`) — по имени их
+    зовут `emit(logger)` / `self.emit(logger)` (ревью WR-17).
     Область видимости — весь модуль. Новые поля — с умолчаниями, чтобы позиционное
     создание по трём прежним полям не ломалось.
     """
@@ -469,6 +482,8 @@ class ModuleLogNames:
     log_functions: frozenset[str] = frozenset()
     factories: frozenset[str] = frozenset()
     log_function_attributes: frozenset[str] = frozenset()
+    methodcaller_names: frozenset[str] = METHODCALLER_NAMES
+    methodcallers: tuple[tuple[str, ast.Call], ...] = ()
 
 
 NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
@@ -638,13 +653,17 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     log_functions: set[str] = set()
     log_function_attributes: set[str] = set()
     factories: set[str] = set()
+    methodcaller_names: set[str] = set(METHODCALLER_NAMES)
     bindings = module_bindings(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             from_logging = node.level == 0 and node.module in LOGGING_MODULES
             for alias in node.names:
                 local = alias.asname or alias.name
-                if from_logging and alias.name in LOG_METHODS:
+                if alias.name in METHODCALLER_NAMES and alias.asname:
+                    # `from operator import methodcaller as mc` — тот же `methodcaller` (WR-17).
+                    methodcaller_names.add(alias.asname)
+                elif from_logging and alias.name in LOG_METHODS:
                     # `from logging import info` / `warning as warn_` — функция журнала (IN-09).
                     log_functions.add(local)
                 elif from_logging and alias.name in LOGGING_MODULE_LOGGERS:
@@ -686,6 +705,31 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
                 changed |= _bind(target, in_class_body, receiver_names, receiver_attributes)
             if _is_log_callable(value, known):
                 changed |= _bind(target, in_class_body, log_functions, log_function_attributes)
+    # `methodcaller` под другим именем и имена, связанные с вызовом `methodcaller(…)`, —
+    # той же общей грамматикой, до неподвижной точки (`mc = operator.methodcaller`,
+    # `emit = mc("info", …)`, `g = emit`). Имя — последнее звено цели (`binding_name`):
+    # `self.emit = …` зовут `self.emit(…)`.
+    methodcallers: dict[str, list[ast.Call]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for target, value, _in_class_body in bindings:
+            name = binding_name(target)
+            if name is None:
+                continue
+            if isinstance(value, (ast.Name, ast.Attribute)) and _last_name(value) in methodcaller_names:
+                if name not in methodcaller_names:
+                    methodcaller_names.add(name)
+                    changed = True
+                continue
+            found = _methodcaller_calls(value, frozenset(methodcaller_names), methodcallers)
+            if not found:
+                continue
+            known_calls = methodcallers.setdefault(name, [])
+            for call in found:
+                if all(call is not known for known in known_calls):
+                    known_calls.append(call)
+                    changed = True
     return ModuleLogNames(
         frozenset(binders),
         frozenset(receiver_names),
@@ -693,7 +737,24 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
         log_functions=frozenset(log_functions),
         factories=frozenset(factories),
         log_function_attributes=frozenset(log_function_attributes),
+        methodcaller_names=frozenset(methodcaller_names),
+        methodcallers=tuple(
+            (name, call) for name, calls in sorted(methodcallers.items()) for call in calls
+        ),
     )
+
+
+def _methodcaller_calls(
+    node: ast.expr, methodcaller_names: frozenset[str], methodcallers: Mapping[str, list[ast.Call]]
+) -> list[ast.Call]:
+    """Вызовы `methodcaller(…)`, которые называет выражение: сам вызов или имя, связанное с ним."""
+    if isinstance(node, ast.Call) and _last_name(node.func) in methodcaller_names:
+        return [node]
+    if isinstance(node, ast.Name):
+        return list(methodcallers.get(node.id, ()))
+    if isinstance(node, ast.Attribute):
+        return list(methodcallers.get(node.attr, ()))
+    return []
 
 
 def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -817,11 +878,85 @@ def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
     return [ast.copy_location(ast.Call(func=reference, args=arguments, keywords=keywords), call)]
 
 
+def _iterable_elements(node: ast.expr) -> list[ast.expr]:
+    """Элементы литеральной итерируемой, которые поэлементный носитель подаст функции.
+
+    Список, кортеж, набор — их элементы (кроме `*`-распаковки); comprehension и
+    генератор — его элемент. Иначе — ничего: элементы решает поток данных.
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return [element for element in node.elts if not isinstance(element, ast.Starred)]
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        return [node.elt]
+    return []
+
+
+def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> ast.Call | None:
+    """Вызов журнала, который сделает `operator.methodcaller`, применённый к журналу (WR-17).
+
+    `methodcaller("<метод>", *a, **k)` зовёт `obj.<метод>(*a, **k)` у объекта, к которому
+    его применили. Применение — прямое `methodcaller(…)(R)`; вызов имени или атрибута,
+    связанных с `methodcaller(…)` любой формой общей грамматики (`emit(R)`,
+    `self.emit(R)`); носитель, которому `methodcaller` подан ссылкой вместе с получателем
+    ЗА ней (`to_thread(mc, R)`, `run_in_executor(None, mc, R)`, `partial(mc, R)`), а у
+    поэлементного носителя (`ELEMENTWISE_CARRIERS`) — элементы литеральной итерируемой за
+    ним (`map(mc, [R])`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
+    — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
+    `methodcaller` после имени метода. Без опознанного получателя — `None`: имя метода
+    объект журналом не делает (D-17, угадывания по имени нет).
+    """
+    candidates: list[tuple[ast.Call, ast.expr]] = []
+    grouped = _grouped(names.methodcallers)
+    applied = _methodcaller_calls(call.func, names.methodcaller_names, grouped)
+    if applied:
+        if len(call.args) == 1 and not isinstance(call.args[0], ast.Starred) and not call.keywords:
+            candidates = [(methodcaller, call.args[0]) for methodcaller in applied]
+    elif _last_name(call.func) not in names.methodcaller_names:
+        for index, argument in enumerate(call.args):
+            if isinstance(argument, ast.Starred):
+                continue
+            methodcallers = _methodcaller_calls(argument, names.methodcaller_names, grouped)
+            if not methodcallers:
+                continue
+            after = call.args[index + 1 :]
+            if after and not isinstance(after[0], ast.Starred):
+                receivers = (
+                    _iterable_elements(after[0])
+                    if _last_name(call.func) in ELEMENTWISE_CARRIERS
+                    else [after[0]]
+                )
+                candidates = [(methodcaller, receiver) for methodcaller in methodcallers for receiver in receivers]
+            break
+    for methodcaller, receiver in candidates:
+        if not _is_log_receiver(receiver, names):
+            continue
+        method = methodcaller.args[0] if methodcaller.args else None
+        attribute = (
+            method.value
+            if isinstance(method, ast.Constant) and isinstance(method.value, str)
+            else "<метод>"
+        )
+        func = ast.copy_location(ast.Attribute(value=receiver, attr=attribute, ctx=ast.Load()), call)
+        synthetic = ast.Call(func=func, args=list(methodcaller.args[1:]), keywords=list(methodcaller.keywords))
+        return ast.copy_location(synthetic, call)
+    return None
+
+
+def _grouped(pairs: tuple[tuple[str, ast.Call], ...]) -> dict[str, list[ast.Call]]:
+    """Пары «имя → вызов» — словарём «имя → вызовы»."""
+    grouped: dict[str, list[ast.Call]] = {}
+    for name, call in pairs:
+        grouped.setdefault(name, []).append(call)
+    return grouped
+
+
 def python_log_calls(source: str) -> list[ast.Call]:
     """Вызовы журнала в исходнике Python, в порядке строк.
 
     Прежние вызовы журнала (`_is_identified_log_call`) и синтетические вызовы, которые
-    сделает носитель ссылки на вызываемое журнала (`_carried_log_calls`, ревью WR-17).
+    сделает носитель ссылки на вызываемое журнала (`_carried_log_calls`) и
+    `operator.methodcaller`, применённый к опознанному журналу
+    (`_applied_log_methodcaller`), — ревью WR-17.
     """
     tree = ast.parse(source)
     names = module_log_names(tree)
@@ -831,8 +966,11 @@ def python_log_calls(source: str) -> list[ast.Call]:
             continue
         if _is_identified_log_call(node, names):
             calls.append(node)
-        else:
-            calls.extend(_carried_log_calls(node, names))
+            continue
+        calls.extend(_carried_log_calls(node, names))
+        applied = _applied_log_methodcaller(node, names)
+        if applied is not None:
+            calls.append(applied)
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
