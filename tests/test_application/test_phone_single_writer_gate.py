@@ -2357,6 +2357,47 @@ def test_a_planted_backfill_with_a_method_bound_writer_alias_reddens_the_gate(tm
     ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
 
 
+def test_a_planted_backfill_with_a_nested_column_naming_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-15: ключ `MessengerAccount.__table__.c[MessengerAccount.phone.key]` в `values`.
+
+    `Model.__table__.c[Model.attr.key]` — обычная идиома перехода от атрибута ORM к его
+    колонке `Table`, то есть естественная форма скрипта дозаполнения Фазы 20 (D-13),
+    который пишет оператором Core над таблицей. На SQLite в памяти такая запись пишет
+    колонку (замер верификатора раунда 5, `+72`, SQLAlchemy 2.0.46). До плана 16-28 гейт
+    её пропускал: наименование колонки внутри индекса другого наименования не судилось
+    (ревью WR-15; решение владельца О-12 (а): заявление шапки прежнее, предикат догоняет
+    его). Подложенный файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_table_column.py",
+        "async def backfill(session, rows):\n"
+        "    for account_id, number in rows:\n"
+        "        await session.execute(update(MessengerAccount.__table__)"
+        ".where(MessengerAccount.__table__.c.id == account_id)"
+        ".values({MessengerAccount.__table__.c[MessengerAccount.phone.key]: number}))\n",
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_table_column.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_table_column.py:3 — {KIND_DICT_KEY} — ")
+    ]
+    assert found, (
+        "колонка, названная внутри другого наименования, не опознана: "
+        "`values({MessengerAccount.__table__.c[MessengerAccount.phone.key]: number})` в "
+        f"scripts/backfill_table_column.py гейт пропустил: {offences}"
+    )
+    assert all("values" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет `values` и колонку `phone`: {found}"
+    )
+
+
 def test_an_aliased_writer_api_in_the_same_module_is_judged():
     """Пишущий API под псевдонимом ввоза в том же модуле судится как сам API.
 
@@ -2874,6 +2915,19 @@ COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
     ColumnNaming("column-double-star", 'column(**{"text": "phone"})'),
     ColumnNaming("table-c-get-keyword", 'accounts.c.get(key="phone")'),
     ColumnNaming("get-property-keyword-key", 'inspect(MessengerAccount).get_property(key="phone").key'),
+    # Ревью WR-15 (план 16-28): наименование внутри наименования — колонка `Table`,
+    # полученная из атрибута ORM (`Model.__table__.c[Model.attr.key]`, обычная идиома),
+    # поиск и конструктор по ключу атрибута и `getattr` над колонкой. До плана 16-28
+    # каждое давало `[]`, хотя колонка названа литералом (замер верификатора раунда 5
+    # на SQLite: `+76`…`+79`).
+    ColumnNaming(
+        "table-c-index-by-key", "MessengerAccount.__table__.c[MessengerAccount.phone.key]"
+    ),
+    ColumnNaming(
+        "table-c-get-by-key", "MessengerAccount.__table__.c.get(MessengerAccount.phone.key)"
+    ),
+    ColumnNaming("column-by-key", "column(MessengerAccount.phone.key)"),
+    ColumnNaming("getattr-derivative", 'getattr(MessengerAccount.phone, "key")'),
 )
 
 
@@ -3168,6 +3222,89 @@ def test_every_column_naming_in_every_judged_context_is_a_write(naming):
     assert not misses, (
         f"наименование колонки не опознано: `{naming.source}` ({naming.id}) — "
         f"{len(misses)} из {len(COLUMN_CONTEXTS)} контекстов дали не ровно одну находку "
+        "ожидаемого вида:\n" + "\n".join(misses)
+    )
+
+
+class NamePosition(NamedTuple):
+    """Позиция имени в наименовании колонки: `id` строки и выражение с местом `{name}`."""
+
+    id: str
+    template: str
+
+
+# Ось A, композиция (план 16-28, ревью WR-15; решение владельца О-12 (а)): позиции, в
+# которых наименование колонки называет её ИМЕНЕМ — индекс, поиск, конструктор, `getattr`
+# — и `getattr`-производная над колонкой. Матрица 32 × 714 плана 16-22 варьировала
+# контекст наименования, но не вкладывала наименование в наименование, и пятый круг
+# одной оси открылся именно там: `t.c[M.phone.key]`, `t.c.get(M.phone.key)`,
+# `column(M.phone.key)`, `getattr(M.phone, "key")` проходили гейт.
+NAME_POSITIONS: tuple[NamePosition, ...] = (
+    NamePosition("table-c-index", "accounts.c[{name}]"),
+    NamePosition("table-attribute-c-index", "MessengerAccount.__table__.c[{name}]"),
+    NamePosition("inspect-columns-index", "inspect(MessengerAccount).columns[{name}]"),
+    NamePosition("table-c-get", "accounts.c.get({name})"),
+    NamePosition("get-property-key", "inspect(MessengerAccount).get_property({name}).key"),
+    NamePosition("column", "column({name})"),
+    NamePosition("literal-column", "literal_column({name})"),
+    NamePosition("column-text-keyword", "column(text={name})"),
+    NamePosition("getattr-name", "getattr(MessengerAccount, {name})"),
+    NamePosition("getattr-derivative", 'getattr({name}, "key")'),
+)
+
+# Контексты правила композиции: (id, исходник с местом `@COLUMN@`, вид, вызов).
+_NESTED_NAMING_CONTEXTS = (
+    ("values-key", "stmt = update(MessengerAccount).values({@COLUMN@: x})\n", KIND_DICT_KEY, "values"),
+    (
+        "bulk-update-mappings-row-key",
+        'session.bulk_update_mappings(MessengerAccount, [{"id": 1, @COLUMN@: p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+    ),
+    ("setattr-name", "setattr(account, @COLUMN@, x)\n", KIND_SETATTR, "setattr"),
+)
+
+
+@pytest.mark.parametrize("position", [pytest.param(p, id=p.id) for p in NAME_POSITIONS])
+def test_every_column_naming_nested_in_every_name_position_is_a_write(position: NamePosition):
+    """Каждое наименование колонки в позиции имени каждого наименования — ровно одна находка.
+
+    Наименование, вложенное в позицию имени другого наименования, называет ту же колонку
+    литералом: `MessengerAccount.__table__.c[MessengerAccount.phone.key]` — колонка `Table`
+    по ключу атрибута ORM, `getattr(MessengerAccount.phone, "key")` — то же, что
+    `MessengerAccount.phone.key`. До плана 16-28 `_phone_column` принимал в позиции имени
+    только строковую константу, и такие ключи проходили гейт (ревью WR-15). Правило
+    подаёт каждое наименование `COLUMN_NAMINGS` в позицию имени и в три контекста —
+    ключ `values`, ключ строки `bulk_update_mappings`, имя `setattr`; новая позиция или
+    наименование дают одну красную строку на позицию со всеми промахами сразу. Решение
+    владельца О-12 (а): заявление шапки прежнее, предикат догоняет его.
+    """
+    forms = [
+        (
+            naming,
+            context_id,
+            draft.replace(_AT_COLUMN, position.template.format(name=naming.source)),
+            kind,
+            call,
+        )
+        for naming in COLUMN_NAMINGS
+        for context_id, draft, kind, call in _NESTED_NAMING_CONTEXTS
+    ]
+    assert len(forms) >= 90, (
+        f"форм позиции {len(forms)} — меньше 90: правило проверяет почти ничто"
+    )
+    misses: list[str] = []
+    for naming, context_id, source, kind, call in forms:
+        offences = phone_write_offences(source, "scripts/x.py")
+        if len(offences) == 1:
+            _location, found_kind, subject = offences[0].split(" — ", 2)
+            if found_kind == kind and call in subject and "phone" in subject:
+                continue
+        misses.append(f"  {naming.id} / {context_id}: `{source.strip()}` → {offences}")
+
+    assert not misses, (
+        f"наименование колонки внутри позиции имени не опознано: `{position.template}` "
+        f"({position.id}) — {len(misses)} из {len(forms)} форм дали не ровно одну находку "
         "ожидаемого вида:\n" + "\n".join(misses)
     )
 
@@ -4766,6 +4903,48 @@ LITERAL_FORM_CASES = [
         "phone",
         id="starred-tuple-bound-suffix-alias",
     ),
+    # Ревью WR-15 (верификация раунда 5, 2026-10-13): наименование колонки внутри
+    # индекса, поиска и конструктора другого наименования и `getattr` над колонкой. До
+    # плана 16-28 гейт давал `[]` на каждой из пяти форм, хотя колонка названа литералом
+    # (замер верификатора на SQLite: `+76`…`+79`, `+70`).
+    pytest.param(
+        "stmt = update(MessengerAccount).values("
+        "{MessengerAccount.__table__.c[MessengerAccount.phone.key]: x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-c-index-by-key",
+    ),
+    pytest.param(
+        "session.bulk_update_mappings(MessengerAccount, "
+        '[{"id": 1, getattr(MessengerAccount.phone, "key"): p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="bulk-update-mappings-getattr-derivative-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values("
+        "{MessengerAccount.__table__.c.get(MessengerAccount.phone.key): x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-table-c-get-by-key",
+    ),
+    pytest.param(
+        "stmt = update(MessengerAccount).values({column(MessengerAccount.phone.key): x})\n",
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-by-key",
+    ),
+    pytest.param(
+        'setattr(account, getattr(getattr(MessengerAccount, "phone"), "key"), x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-nested-getattr-key",
+    ),
 ]
 
 
@@ -5136,6 +5315,16 @@ LEGITIMATE_CASES = [
         "scv, *rest = set_committed_value, None\n"
         'scv(account, "status", x)\n',
         id="starred-tuple-bound-writer-alias-other-attribute",
+    ),
+    # Ревью WR-15 (план 16-28): вложенное наименование и `getattr`-производная ЧУЖОЙ
+    # колонки — не номер.
+    pytest.param(
+        "stmt = update(Group).values({Group.__table__.c[Group.title.key]: t})\n",
+        id="values-other-table-c-index-by-key",
+    ),
+    pytest.param(
+        'session.bulk_update_mappings(Group, [{"id": 1, getattr(Group.title, "key"): t}])\n',
+        id="rows-other-getattr-derivative-key",
     ),
 ]
 
