@@ -223,6 +223,15 @@ OUT_OF_GRAMMAR_BINDING_FORMS: tuple[OutOfGrammarForm, ...] = (
 )
 
 
+# Именованный параметр ССЫЛКИ на функцию: `fn` у `AsyncSession.run_sync` /
+# `AsyncConnection.run_sync` — `(self, fn, *arg, **kw)`, замер `inspect.signature`,
+# SQLAlchemy 2.0.46. У `asyncio.to_thread` и `functools.partial` ссылка
+# позиционно-только (`partial(func=…)` и `to_thread(func=…)` падают `TypeError`,
+# замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
+# (план 16-17, ревью WR-10). Перенесён из гейта писателя планом 16-27: перечень
+# носителей и их ключ — общие для обоих гейтов (О-12 (а)).
+REFERENCE_KEYWORDS = frozenset({"fn"})
+
 # Носитель, который подаёт функции ЭЛЕМЕНТЫ итерируемых, а не сами итерируемые:
 # функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
 # [x])` зовёт `setattr(account, "phone", x)`).

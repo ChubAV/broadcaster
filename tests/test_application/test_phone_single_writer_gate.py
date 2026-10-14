@@ -292,7 +292,9 @@ import pytest
 
 from tests.phone_gate_grammar import (
     BINDING_FORMS,
+    ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
+    REFERENCE_KEYWORDS,
     BindingForm,
     IdentificationValue,
     binding_form_source,
@@ -384,13 +386,10 @@ ROW_MAPPING_CALL_NAMES = frozenset(
 # плана 16-17 `op.bulk_insert(table, rows=[…])` проходил (ревью WR-10).
 ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters", "rows"})
 
-# Именованный параметр ССЫЛКИ на функцию: `fn` у `AsyncSession.run_sync` /
-# `AsyncConnection.run_sync` — `(self, fn, *arg, **kw)`, замер `inspect.signature`,
-# SQLAlchemy 2.0.46. У `asyncio.to_thread` и `functools.partial` ссылка
-# позиционно-только (`partial(func=…)` и `to_thread(func=…)` падают `TypeError`,
-# замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
-# (план 16-17, ревью WR-10).
-REFERENCE_KEYWORDS = frozenset({"fn"})
+# Именованный параметр ССЫЛКИ на функцию (`fn` у `run_sync`) — `REFERENCE_KEYWORDS`,
+# и носитель, подающий функции элементы итерируемых (`map`), — `ELEMENTWISE_CARRIERS`:
+# ввозом из общего модуля `tests/phone_gate_grammar.py` вместе с перечнем носителей
+# `REFERENCE_CARRIERS` (план 16-27, решение владельца О-12 (а)).
 
 # Обёртка ссылки с привязанными аргументами: `functools.partial(ref, …)`; её псевдонимы
 # в модуле добавляются при разборе исходника (`_module_aliases(tree, "partial")`).
@@ -786,8 +785,11 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # `functools.partial` и его псевдонимы в модуле (`from functools import partial
     # as bind`, `bind = functools.partial`) — обёртка ссылки у `_bound_reference`.
     partial_names = PARTIAL_NAMES | _module_aliases(tree, "partial")
+    # Имена, связанные с `partial(<API>, …)` любой формой общей грамматики (ревью
+    # WR-14, план 16-27): вызов и ссылка такого имени судятся как `partial(…)(…)`.
+    partial_aliases = _partial_aliases(tree, referable, partial_names)
     references = {
-        id(node): _referenced_calls(node, referable, partial_names)
+        id(node): _referenced_calls(node, referable, partial_names, partial_aliases)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (id(node) not in applied or _call_name(node) == "methodcaller")
@@ -798,6 +800,15 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for _synthetic, _referenced, carrier in triples
         if isinstance(carrier, ast.Call)
     }
+    # `partial(…)`, связанный с именем, которое модуль зовёт или подаёт, судится у
+    # использования — с аргументами применения, — а не на месте связывания: иначе
+    # `w = partial(setattr, account, "phone"); w(x)` дал бы две находки.
+    used = {
+        node.id if isinstance(node, ast.Name) else node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load)
+    }
+    consumed |= {id(value) for alias, value in partial_aliases.items() if alias in used}
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -1211,7 +1222,10 @@ BoundReference = tuple[str, ast.expr, list[ast.expr], list[ast.keyword]]
 
 
 def _bound_reference(
-    node: ast.expr | None, partial_names: frozenset[str] = PARTIAL_NAMES
+    node: ast.expr | None,
+    partial_names: frozenset[str] = PARTIAL_NAMES,
+    partial_aliases: dict[str, ast.expr] | None = None,
+    seen: frozenset[str] = frozenset(),
 ) -> BoundReference | None:
     """Ссылка на функцию — голая или внутри `functools.partial(…)` с аргументами.
 
@@ -1220,15 +1234,24 @@ def _bound_reference(
     `M` и `mapper=…`; `partial(partial(ref, a), b)` — рекурсивно (самопроверка
     исполнителя 16-17: `run_in_executor(None, partial(ref, M), rows)` — обычная
     форма, у `run_in_executor` нет именованных аргументов).
+
+    Имя, связанное с `functools.partial(<ссылка>, …)` в том же модуле
+    (`partial_aliases`, `_partial_aliases`), — та же ссылка с привязанными
+    аргументами: `w = partial(s.bulk_update_mappings, M); to_thread(w, rows)` (ревью
+    WR-14, план 16-27; гейт приватности ту же форму у журнала ловил).
     """
     name = _reference_name(node)
     if name is not None:
         assert node is not None
+        if partial_aliases and name in partial_aliases and name not in seen:
+            return _bound_reference(
+                partial_aliases[name], partial_names, partial_aliases, seen | {name}
+            )
         return name, node, [], []
     if isinstance(node, ast.Call) and _call_name(node) in partial_names:
         positional = _positional_arguments(node)
         if positional and positional[0] is not None:
-            inner = _bound_reference(positional[0], partial_names)
+            inner = _bound_reference(positional[0], partial_names, partial_aliases, seen)
             if inner is not None:
                 referenced, func, args, keywords = inner
                 rest = _forwarded_arguments(list(node.args))[1:]
@@ -1243,10 +1266,113 @@ def _synthetic_call(
     return ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), origin)
 
 
+def _partial_aliases(
+    tree: ast.AST, judged_names: frozenset[str], partial_names: frozenset[str]
+) -> dict[str, ast.expr]:
+    """Имена, связанные с `functools.partial(<судимый API>, …)` в том же модуле: «имя → `partial`».
+
+    Связывание — любой формой общей грамматики (`module_bindings`): `=`,
+    аннотированное, распаковка, `:=`, `self.<x>` / `cls.<x>` в любом методе, тело
+    класса; и цепочкой `g = w`. Значение — литеральный `partial` (или его псевдоним в
+    модуле) над ссылкой, которую `_bound_reference` опознаёт как судимый API. До плана
+    16-27 пункт (1) границы называл `w = partial(…); w(rows)` «результатом другого
+    вызова», а гейт приватности ту же форму у журнала ловил — асимметрия, которую
+    запрещает решение владельца О-12 (а) (ревью WR-14). Имя, которое само судимо, не
+    переводится.
+    """
+    bindings = module_bindings(tree)
+    found: dict[str, ast.expr] = {}
+    changed = True
+    while changed:
+        changed = False
+        for binding in bindings:
+            name = binding_name(binding.target)
+            if name is None or name in found or name in judged_names:
+                continue
+            value = binding.value
+            if isinstance(value, ast.Call) and _call_name(value) in partial_names:
+                bound = _bound_reference(value, partial_names, found)
+                if bound is not None and bound[0] in judged_names:
+                    found[name] = value
+                    changed = True
+            elif (
+                isinstance(value, (ast.Name, ast.Attribute))
+                and (reference := _reference_name(value)) in found
+            ):
+                found[name] = found[reference]
+                changed = True
+    return found
+
+
+# Место элемента итерируемой, которую предикат не раскрывает (параметр, вызов):
+# аргумент API на этой позиции не судится, как параметр функции, но позиция цела.
+_UNJUDGED_ELEMENT = "<элемент не-литерала>"
+
+
+def _iterable_elements(node: ast.expr) -> tuple[list[ast.expr], bool] | None:
+    """Элементы литеральной итерируемой: (элементы, повторяется ли один элемент).
+
+    Список, кортеж, набор (литеральная `*`-распаковка раскрыта) — их элементы по
+    позициям; comprehension и генератор — его элемент, одинаковый на каждой позиции;
+    обёртки `list(…)` и подобные — их аргумент. Иначе — `None`: длину и элементы решает
+    поток данных.
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        elements = _expanded_arguments(list(node.elts))
+        if any(element is None for element in elements):
+            return None
+        return [element for element in elements if element is not None], False
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        return [node.elt], True
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in LITERAL_CONTAINER_WRAPPERS
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return _iterable_elements(node.args[0])
+    return None
+
+
+def _elementwise_arguments(iterables: list[ast.expr]) -> list[list[ast.expr]]:
+    """Аргументы каждого вызова функции поэлементного носителя (`map(fn, *iterables)`).
+
+    `map` зовёт функцию с элементом КАЖДОЙ итерируемой на одной позиции и
+    останавливается на самой короткой: литеральные список, кортеж и набор зипуются
+    (одна позиция — один вызов), у comprehension и генератора — его элемент на каждой
+    позиции, итерируемая не-литерал даёт на своей позиции аргумент вне суда. Распаковка
+    не-литерала `*rows` среди итерируемых обрывает перечень: сколько итерируемых она
+    подаст, решает поток данных. Число вызовов — длина самой короткой литеральной
+    итерируемой фиксированной длины, иначе один.
+    """
+    columns: list[tuple[list[ast.expr], bool] | None] = []
+    for iterable in iterables:
+        if isinstance(iterable, ast.Starred):
+            break
+        columns.append(_iterable_elements(iterable))
+    fixed = [len(column[0]) for column in columns if column is not None and not column[1]]
+    count = min(fixed) if fixed else 1
+    calls: list[list[ast.expr]] = []
+    for position in range(count):
+        arguments: list[ast.expr] = []
+        for iterable, column in zip(iterables, columns):
+            if column is None:
+                arguments.append(
+                    ast.copy_location(ast.Name(id=_UNJUDGED_ELEMENT, ctx=ast.Load()), iterable)
+                )
+            else:
+                elements, repeated = column
+                arguments.append(elements[0] if repeated else elements[position])
+        calls.append(arguments)
+    return calls
+
+
 def _referenced_calls(
     call: ast.Call,
     judged_names: frozenset[str],
     partial_names: frozenset[str] = PARTIAL_NAMES,
+    partial_aliases: dict[str, ast.expr] | None = None,
 ) -> list[tuple[ast.Call, str, ast.expr | None]]:
     """Вызовы пишущего API, названного в `call` ссылкой или строкой.
 
@@ -1261,7 +1387,13 @@ def _referenced_calls(
       `functools.partial(ref, …)` — тогда первыми идут его привязанные аргументы
       (`_bound_reference`);
     - `partial(ref, …)(…)` — к ним добавляются аргументы применения; судится у
-      применения (`call` с `func`-вызовом), а у самого `partial` — нет.
+      применения (`call` с `func`-вызовом), а у самого `partial` — нет;
+    - вызов имени, связанного с `partial(<API>, …)` (`partial_aliases`), — вызов API с
+      привязанными аргументами впереди, как у `partial(…)(…)`; поданное носителю, такое
+      имя — ссылка с привязанными аргументами (ревью WR-14, план 16-27);
+    - у поэлементного носителя (`ELEMENTWISE_CARRIERS`: `map`) аргументы после ссылки —
+      итерируемые, и функция получает их ЭЛЕМЕНТЫ (`_elementwise_arguments`): одна
+      позиция — один синтетический вызов (план 16-27).
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
     """
     name = _call_name(call)
@@ -1279,6 +1411,20 @@ def _referenced_calls(
         return []
     if name in judged_names or name == "getattr":
         return []
+    if partial_aliases and name in partial_aliases:
+        # `w = partial(s.bulk_update_mappings, M); w(rows)` — как `partial(…)(rows)`.
+        bound = _bound_reference(
+            partial_aliases[name], partial_names, partial_aliases, frozenset({name})
+        )
+        if bound is not None and bound[0] in judged_names:
+            referenced, func, bound_args, bound_keywords = bound
+            synthetic = _synthetic_call(
+                call,
+                func,
+                bound_args + _forwarded_arguments(list(call.args)),
+                bound_keywords + list(call.keywords),
+            )
+            return [(synthetic, referenced, None)]
     source, outer_args, outer_keywords = call, [], []
     if isinstance(call.func, ast.Call) and _call_name(call.func) not in (
         "getattr",
@@ -1292,10 +1438,23 @@ def _referenced_calls(
     forwarded = _forwarded_arguments(list(source.args))
     keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
-        bound = _bound_reference(argument, partial_names)
+        bound = _bound_reference(argument, partial_names, partial_aliases)
         if argument is not None and bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
             after = forwarded[index + 1 :]
+            if name in ELEMENTWISE_CARRIERS:
+                # `map(setattr, [account], ["phone"], [x])` зовёт
+                # `setattr(account, "phone", x)`: функция получает элементы.
+                return [
+                    (
+                        _synthetic_call(
+                            call, func, bound_args + elements, bound_keywords + keywords
+                        ),
+                        referenced,
+                        argument,
+                    )
+                    for elements in _elementwise_arguments(after)
+                ]
             synthetic = _synthetic_call(
                 call,
                 func,
@@ -1305,7 +1464,9 @@ def _referenced_calls(
             return [(synthetic, referenced, argument)]
     for keyword, value in _named_arguments(source):
         bound = (
-            _bound_reference(value, partial_names) if keyword in REFERENCE_KEYWORDS else None
+            _bound_reference(value, partial_names, partial_aliases)
+            if keyword in REFERENCE_KEYWORDS
+            else None
         )
         if bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
