@@ -2442,7 +2442,10 @@ BINDING_RECEIVERS = {
     "__setattr__": "object.",
 }
 
-BINDING_FORMS = ("positional", "keyword", "double-star", "starred")
+# Формы литерального связывания судимого ПАРАМЕТРА в вызове API (сторож сигнатур и
+# матрица наименований). Не путать с формами связывания ИМЕНИ — `BINDING_FORMS` общего
+# модуля `tests/phone_gate_grammar.py` (план 16-27).
+PARAMETER_BINDING_FORMS = ("positional", "keyword", "double-star", "starred")
 
 
 def _binding_source(row: JudgedParameter, form: str) -> str:
@@ -2466,7 +2469,7 @@ BINDING_CASES = [
     pytest.param(row, form, id=f"{row.api}-{form}")
     for row in JUDGED_PARAMETERS
     if row.parameter not in REFERENCE_KEYWORDS
-    for form in BINDING_FORMS
+    for form in PARAMETER_BINDING_FORMS
 ]
 
 
@@ -2709,7 +2712,7 @@ def _column_contexts() -> tuple[ColumnContext, ...]:
     for row in JUDGED_PARAMETERS:
         if row.kind != KIND_ROW_MAPPING:
             continue
-        for form in BINDING_FORMS:
+        for form in PARAMETER_BINDING_FORMS:
             by_position = form in ("positional", "starred")
             key = f"{row.call}-{form}" + ("" if by_position else f"-{row.parameter}")
             receiver = "op." if row.call == "bulk_insert" else "session."
@@ -2782,7 +2785,7 @@ def _column_contexts() -> tuple[ColumnContext, ...]:
         if row.kind == KIND_SETATTR:
             tail = ("", "") if row.call == "flag_modified" else ("x", "value=x")
             receiver = BINDING_RECEIVERS.get(row.call, "")
-            for form in BINDING_FORMS:
+            for form in PARAMETER_BINDING_FORMS:
                 contexts.append(
                     _column_context(
                         f"{row.api}-{form}",
@@ -2793,7 +2796,7 @@ def _column_contexts() -> tuple[ColumnContext, ...]:
                 )
         elif row.kind == KIND_POSITIONAL_COLUMN:
             receiver = "stmt = insert(MessengerAccount)."
-            for form in BINDING_FORMS:
+            for form in PARAMETER_BINDING_FORMS:
                 for names_form, names in _NAMES_FORMS.items():
                     contexts.append(
                         _column_context(
