@@ -490,10 +490,9 @@ _ACCOUNTS_TABLE_SQL = (
     + _SQL_QUOTE + r"messenger_accounts\b" + _SQL_QUOTE
 )
 
-# Пишущий SQL — по МЕХАНИЗМУ записи, четырьмя альтернативами (без учёта регистра):
-# (а) присваивание колонки номера в `SET` до `WHERE` (фильтр по номеру записью не
-#     является) — имя `phone` / `phone_is_manual` в кавычках или без;
-# (б) строчный конструктор `SET (…, phone, …) = (…)`;
+# Пишущий SQL — по МЕХАНИЗМУ записи (без учёта регистра). Виды 5 (а) и (б) — запись
+# колонки номера в предложении `SET` — судит КОД `_raw_sql_set_writes`, а не это
+# выражение: регулярное выражение скобки не считает. Здесь — две альтернативы:
 # (в) голова пишущего оператора перед таблицей аккаунтов — `INSERT [OR <конфликт>]
 #     INTO`, `INSERT IGNORE INTO`, `REPLACE INTO`, `UPSERT INTO`, `MERGE INTO`;
 # (г) загрузка в таблицу аккаунтов — `COPY <таблица> [(колонки)] FROM` и MySQL
@@ -502,13 +501,14 @@ _ACCOUNTS_TABLE_SQL = (
 # Летопись: до плана 16-12 шаблон требовал голое `phone =` и голую
 # `messenger_accounts` после `INSERT INTO`, и кавычки у идентификатора, префикс
 # схемы, `INSERT OR REPLACE`, `REPLACE` / `MERGE INTO`, `COPY … FROM` и строчный
-# конструктор проводили запись мимо гейта (ревью WR-08, 2026-10-09).
+# конструктор проводили запись мимо гейта (ревью WR-08, 2026-10-09). До плана 16-28
+# (а) и (б) были альтернативами этого выражения: (а) обрывалась на первом слове
+# `where` на ЛЮБОЙ глубине скобок, и подзапрос со своим `WHERE` или строковый литерал
+# со словом `where` перед колонкой прятал запись (ревью WR-16, 2026-10-13), а (б)
+# требовала `SET (` сразу после `SET`, и строчный конструктор не первым в списке
+# проходил (замер планирования 16-28: такой оператор на SQLite пишет колонку).
 RAW_SQL_PHONE_WRITE = re.compile(
-    r"\bupdate\b[\s\S]*?\bset\b(?:(?!\bwhere\b)[\s\S])*?\bphone(?:_is_manual)?\b"
-    + _SQL_QUOTE
-    + r"\s*="
-    + r"|\bupdate\b[\s\S]*?\bset\s*\([^)]*\bphone(?:_is_manual)?\b[^)]*\)\s*="
-    + r"|\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
+    r"\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
     + _ACCOUNTS_TABLE_SQL
     + r"|\bcopy\s+"
     + _ACCOUNTS_TABLE_SQL
@@ -516,6 +516,15 @@ RAW_SQL_PHONE_WRITE = re.compile(
     + r"|\bload\s+data\b[\s\S]*?\binto\s+table\s+"
     + _ACCOUNTS_TABLE_SQL,
     re.IGNORECASE,
+)
+
+# Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)).
+_SQL_UPDATE = re.compile(r"\bupdate\b", re.IGNORECASE)
+_SQL_SET = re.compile(r"\bset\b", re.IGNORECASE)
+_SQL_WHERE = re.compile(r"\bwhere\b", re.IGNORECASE)
+_SQL_PHONE_NAME = re.compile(r"\bphone(?:_is_manual)?\b", re.IGNORECASE)
+_SQL_PHONE_ASSIGNMENT = re.compile(
+    r"\bphone(?:_is_manual)?\b" + _SQL_QUOTE + r"\s*=", re.IGNORECASE
 )
 
 # COPY asyncpg в обход SQLAlchemy: `conn.copy_records_to_table("messenger_accounts",
@@ -902,24 +911,24 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in docstrings
-            and RAW_SQL_PHONE_WRITE.search(node.value)
+            and _raw_sql_write(node.value)
         ):
-            snippet = " ".join(node.value.split())[:60]
-            record(node, KIND_RAW_SQL, f"«{snippet}»")
+            # Вид 5: (а) и (б) — кодом на нулевой глубине скобок (`_raw_sql_set_writes`,
+            # план 16-28, ревью WR-16), (в) и (г) — `RAW_SQL_PHONE_WRITE`.
+            record(node, KIND_RAW_SQL, _raw_sql_subject(node.value))
         elif (
             _is_concatenation(node)
             and id(node) not in inner_concatenations
             and (folded := _folded_string(node)) is not None
             # Если константа склейки совпала сама, находка у неё уже есть.
             and not any(
-                RAW_SQL_PHONE_WRITE.search(part.value)
+                _raw_sql_write(part.value)
                 for part in ast.walk(node)
-                if isinstance(part, ast.Constant)
+                if isinstance(part, ast.Constant) and isinstance(part.value, str)
             )
-            and RAW_SQL_PHONE_WRITE.search(folded)
+            and _raw_sql_write(folded)
         ):
-            snippet = " ".join(folded.split())[:60]
-            record(node, KIND_RAW_SQL, f"«{snippet}»")
+            record(node, KIND_RAW_SQL, _raw_sql_subject(folded))
 
     return sorted(found)
 
@@ -1635,6 +1644,126 @@ def _folded_string(node: ast.AST) -> str | None:
         if left is not None and right is not None:
             return left + right
     return None
+
+
+def _raw_sql_write(text: str) -> bool:
+    """Пишущий SQL вида 5: (а) и (б) — кодом `_raw_sql_set_writes`, (в) и (г) — выражением."""
+    return bool(_raw_sql_set_writes(text)) or RAW_SQL_PHONE_WRITE.search(text) is not None
+
+
+def _raw_sql_subject(text: str) -> str:
+    """Предмет находки сырого SQL: начало оператора и, если запись дальше, — она сама."""
+    snippet = " ".join(text.split())[:60]
+    writes = _raw_sql_set_writes(text)
+    if writes and writes[0] not in snippet:
+        snippet = f"{snippet} … {writes[0]}"
+    return f"«{snippet}»"
+
+
+def _raw_sql_set_writes(text: str) -> list[str]:
+    """Записи колонки номера в предложении `SET` сырого SQL — виды 5 (а) и (б), КОДОМ.
+
+    Для каждого `UPDATE … SET` (без учёта регистра; и `ON CONFLICT DO UPDATE SET`)
+    предложение `SET` — текст после `SET` до первого `WHERE` на НУЛЕВОЙ глубине скобок
+    относительно `SET`, до `;` на нулевой глубине, до закрывающей скобки, уводящей
+    глубину ниже нуля (оператор внутри скобок), либо до конца строки. Строковые
+    литералы SQL `'…'` пропускаются целиком: слово `where` и скобки внутри них
+    предложение не обрывают. На нулевой глубине предложения запись — (а) колонка
+    номера `phone` / `phone_is_manual` (в кавычке идентификатора `_SQL_QUOTE` или без),
+    за которой следует `=`; (б) строчный конструктор — скобка нулевой глубины, на своём
+    уровне называющая колонку номера, и за ней `=`, в ЛЮБОЙ позиции списка `SET`.
+    Присваивание внутри скобок — фильтр подзапроса `SET user_id = (SELECT id FROM users
+    WHERE phone = :p)` — записью не является, как и фильтр по номеру в `WHERE`
+    оператора (ревью WR-16, план 16-28; решение владельца О-12 (а)).
+
+    Возвращает найденные записи текстом (`phone =`, `(status, phone) =`); пустой
+    список — записи в `SET` нет.
+    """
+    plain = _sql_without_literals(text)
+    wheres = {match.start() for match in _SQL_WHERE.finditer(plain)}
+    writes: list[str] = []
+    for update in _SQL_UPDATE.finditer(plain):
+        head = _SQL_SET.search(plain, update.end())
+        if head is None:
+            continue
+        start = head.end()
+        clause = plain[start : _sql_set_clause_end(plain, start, wheres)]
+        for match in _SQL_PHONE_ASSIGNMENT.finditer(_sql_depth_zero(clause)):
+            writes.append(" ".join(text[start + match.start() : start + match.end()].split()))
+        for group_start, group_end in _sql_groups(clause):
+            inner = clause[group_start + 1 : group_end - 1]
+            if clause[group_end:].lstrip().startswith("=") and _SQL_PHONE_NAME.search(
+                _sql_depth_zero(inner)
+            ):
+                shown = text[start + group_start : start + group_end]
+                writes.append(" ".join(shown.split()) + " =")
+    return writes
+
+
+def _sql_without_literals(text: str) -> str:
+    """SQL с пробелами на месте строковых литералов `'…'`; длина и позиции прежние.
+
+    Удвоенная кавычка `''` внутри литерала закрывает и тут же открывает его — итог тот же.
+    """
+    out: list[str] = []
+    inside = False
+    for char in text:
+        if char == "'":
+            inside = not inside
+            out.append(" ")
+        else:
+            out.append(" " if inside else char)
+    return "".join(out)
+
+
+def _sql_set_clause_end(plain: str, start: int, wheres: set[int]) -> int:
+    """Конец предложения `SET`, начатого на `start`: `WHERE` или `;` на нулевой глубине,
+    скобка, уводящая глубину ниже нуля, или конец строки."""
+    depth = 0
+    for index in range(start, len(plain)):
+        char = plain[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return index
+        elif depth == 0 and (char == ";" or index in wheres):
+            return index
+    return len(plain)
+
+
+def _sql_depth_zero(segment: str) -> str:
+    """Отрезок SQL с пробелами на месте скобок и всего, что внутри них."""
+    depth = 0
+    out: list[str] = []
+    for char in segment:
+        if char == "(":
+            depth += 1
+            out.append(" ")
+        elif char == ")":
+            depth = max(depth - 1, 0)
+            out.append(" ")
+        else:
+            out.append(char if depth == 0 else " ")
+    return "".join(out)
+
+
+def _sql_groups(segment: str) -> list[tuple[int, int]]:
+    """Скобки нулевой глубины отрезка: (начало, конец за закрывающей скобкой)."""
+    depth = 0
+    opened = 0
+    groups: list[tuple[int, int]] = []
+    for index, char in enumerate(segment):
+        if char == "(":
+            if depth == 0:
+                opened = index
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                groups.append((opened, index + 1))
+    return groups
 
 
 def _docstring_nodes(tree: ast.AST) -> set[int]:
