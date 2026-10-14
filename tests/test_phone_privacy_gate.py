@@ -78,7 +78,8 @@
   (`methodcaller(…)(logger)`), через имя или атрибут, связанные с ним общей грамматикой
   (`emit = methodcaller(…); emit(logger)`, `self.emit(logger)`), или поданный носителю
   вместе с получателем за ним (`to_thread(mc, logger)`, у `map` — элементом литеральной
-  итерируемой: `map(mc, [logger])`), — вызов `<получатель>.<метод>(…)`: судятся аргументы
+  итерируемой: `map(mc, [logger])`, у `fn=` — первым позиционным: `call(logger, fn=mc)`),
+  — вызов `<получатель>.<метод>(…)`: судятся аргументы
   `methodcaller` после имени метода; `methodcaller` под псевдонимом ввоза или связывания —
   тот же. Без опознанного получателя `methodcaller` вызовом журнала не считается: имя
   метода объект журналом не делает (угадывания по имени нет, D-17).
@@ -948,9 +949,10 @@ def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> ast.Call
     его применили. Применение — прямое `methodcaller(…)(R)`; вызов имени или атрибута,
     связанных с `methodcaller(…)` любой формой общей грамматики (`emit(R)`,
     `self.emit(R)`); носитель, которому `methodcaller` подан ссылкой вместе с получателем
-    ЗА ней (`to_thread(mc, R)`, `run_in_executor(None, mc, R)`, `partial(mc, R)`), а у
+    ЗА ней (`to_thread(mc, R)`, `run_in_executor(None, mc, R)`, `partial(mc, R)`), у
     поэлементного носителя (`ELEMENTWISE_CARRIERS`) — элементы литеральной итерируемой за
-    ним (`map(mc, [R])`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
+    ним (`map(mc, [R])`), а у ключа ссылки `fn=` — первый позиционный аргумент носителя
+    (`call(R, fn=mc)`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
     — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
     `methodcaller` после имени метода. Без опознанного получателя — `None`: имя метода
     объект журналом не делает (D-17, угадывания по имени нет).
@@ -977,6 +979,17 @@ def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> ast.Call
                 )
                 candidates = [(methodcaller, receiver) for methodcaller in methodcallers for receiver in receivers]
             break
+        else:
+            # Ключ ссылки `fn=` (`REFERENCE_KEYWORDS`): носитель подаёт ссылке свои
+            # позиционные аргументы, как у вызываемого журнала под `fn=`; получатель —
+            # первый из них (самопроверка исполнителя 16-29, заход 1).
+            first = call.args[0] if call.args and not isinstance(call.args[0], ast.Starred) else None
+            for keyword in call.keywords:
+                if keyword.arg in REFERENCE_KEYWORDS and first is not None:
+                    methodcallers = _methodcaller_calls(keyword.value, names.methodcaller_names, grouped)
+                    candidates = [(methodcaller, first) for methodcaller in methodcallers]
+                    if candidates:
+                        break
     for methodcaller, receiver in candidates:
         if not _is_log_receiver(receiver, names):
             continue
