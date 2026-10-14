@@ -805,6 +805,17 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for child in (node.left, node.right)
         if _is_concatenation(child)
     }
+    # Константы склейки `+` из одних строковых констант судятся у самой склейки: один
+    # оператор — одна находка, даже если каждая константа пишет сама (`"MERGE INTO
+    # messenger_accounts …" + "… UPDATE SET phone = :p"`; самопроверка исполнителя
+    # 16-28, ось SQL, заход 2 — до неё такой оператор давал две находки).
+    concatenated = {
+        id(part)
+        for node in ast.walk(tree)
+        if _is_concatenation(node) and _folded_string(node) is not None
+        for part in ast.walk(node)
+        if isinstance(part, ast.Constant)
+    }
     # Пишущие вызовы этого исходника: общий набор плюс псевдонимы модели в модуле.
     write_names = WRITE_CALL_NAMES | _module_model_aliases(tree)
     # Имена, которые судятся у ссылки: всякий пишущий API, который судит `_judge_call`.
@@ -912,6 +923,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
             and id(node) not in docstrings
+            and id(node) not in concatenated
             and _raw_sql_write(node.value)
         ):
             # Вид 5: (а) и (б) — кодом на нулевой глубине скобок (`_raw_sql_set_writes`,
@@ -921,13 +933,15 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             _is_concatenation(node)
             and id(node) not in inner_concatenations
             and (folded := _folded_string(node)) is not None
-            # Если константа склейки совпала сама, находка у неё уже есть.
-            and not any(
-                _raw_sql_write(part.value)
-                for part in ast.walk(node)
-                if isinstance(part, ast.Constant) and isinstance(part.value, str)
+            # Склейка пишет, если пишет весь оператор или хотя бы одна её константа.
+            and (
+                _raw_sql_write(folded)
+                or any(
+                    _raw_sql_write(part.value)
+                    for part in ast.walk(node)
+                    if isinstance(part, ast.Constant) and isinstance(part.value, str)
+                )
             )
-            and _raw_sql_write(folded)
         ):
             record(node, KIND_RAW_SQL, _raw_sql_subject(folded))
 
@@ -1656,8 +1670,10 @@ def _raw_sql_subject(text: str) -> str:
     """Предмет находки сырого SQL: начало оператора и, если запись дальше, — она сама."""
     snippet = " ".join(text.split())[:60]
     writes = _raw_sql_set_writes(text)
-    if writes and writes[0] not in snippet:
-        snippet = f"{snippet} … {writes[0]}"
+    head = RAW_SQL_PHONE_WRITE.search(text)
+    fragment = writes[0] if writes else " ".join(head.group(0).split()) if head else ""
+    if fragment and fragment not in snippet:
+        snippet = f"{snippet} … {fragment}"
     return f"«{snippet}»"
 
 
