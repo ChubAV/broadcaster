@@ -2266,6 +2266,54 @@ def test_every_binding_form_of_a_log_reference_is_judged(form: BindingForm):
     )
 
 
+def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
+    """Шапка обещает ровно то, что видит предикат по оси «как опознан журнал».
+
+    Четвёртый круг оси (IN-06 → IN-09 → WR-13 → WR-17) открылся там, где шапка признавала
+    `functools.partial(logger.info, …)` вызовом журнала, потому что «его аргументы уйдут в
+    журнал», а тот же довод для `asyncio.to_thread` и `loop.run_in_executor` шапка не
+    называла и граница не называла тоже. Правило держит шапку, общий модуль и предикат
+    вместе: шапка называет общую грамматику `tests/phone_gate_grammar.py` и правило-паритет,
+    каждый носитель `REFERENCE_CARRIERS`, `methodcaller`, правило «судятся аргументы после
+    ссылки» и цену строгости носителя местами живого дерева; прежние пункты «ГРАНИЦЫ
+    СРЕДСТВА» не стёрты (решение владельца О-12 (а); запреты 16-09 №2, 16-18 №2, 16-23 №2).
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    missing: list[str] = []
+    for needle in (
+        "phone_gate_grammar",
+        "test_phone_gates_parity",
+        "methodcaller",
+        "app/pages/history.py",
+        "WR-17",
+        "О-12 (а)",
+        *(f"`{carrier.name}`" for carrier in REFERENCE_CARRIERS),
+    ):
+        if needle not in flat:
+            missing.append(f"нет «{needle}»")
+    carrier_start = flat.find("ПО НОСИТЕЛЮ ССЫЛКИ")
+    carrier_end = flat.find("* ", carrier_start + 1)
+    paragraph = flat[carrier_start:carrier_end] if 0 <= carrier_start < carrier_end else ""
+    if not paragraph:
+        missing.append("нет абзаца «ПО НОСИТЕЛЮ ССЫЛКИ»")
+    elif "аргументы после ссылки" not in paragraph:
+        missing.append("абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не говорит, что судятся аргументы после ссылки")
+    boundary_start = flat.find("ГРАНИЦА СРЕДСТВА")
+    boundary = flat[boundary_start:] if boundary_start >= 0 else ""
+    if not boundary:
+        missing.append("нет «ГРАНИЦА СРЕДСТВА»")
+    for needle in ("взятый из контейнера", "`with … as lg`"):
+        if needle not in boundary:
+            missing.append(f"граница стёрла прежний пункт: нет «{needle}»")
+
+    assert not missing, (
+        "шапка гейта приватности не называет носителя ссылки и общую грамматику "
+        f"({len(missing)}):\n" + "\n".join(f"  {item}" for item in missing)
+    )
+
+
 # --- Положительные контроли: ничего не найдено ---------------------------------
 
 POSITIVE_CONTROLS = [
