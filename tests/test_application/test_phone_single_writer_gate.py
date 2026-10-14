@@ -28,17 +28,33 @@ UPDATE «записать, если номера нет и он не ручно�
 
 ВИДЫ ЗАПИСИ, КОТОРЫЕ ГЕЙТ ЛОВИТ (восемь). Пишущий вызов опознаётся по имени,
 названному литералом, ИЛИ по псевдониму, связанному с таким именем в том же модуле —
-ввозом `from sqlalchemy.orm.attributes import set_committed_value as scv`,
+ввозом `from sqlalchemy.orm.attributes import set_committed_value as scv` или
+связыванием по ОБЩЕЙ грамматике обоих гейтов номера `tests/phone_gate_grammar.py`
+(`module_bindings`; план 16-27, ревью WR-14, решение владельца О-12 (а)):
 присваиванием имени `scv = set_committed_value` или атрибута
-`bum = Session.bulk_update_mappings`, `touch = attrs.flag_modified` (`_api_aliases`
-— тем же разрешением `_module_aliases`, что у модели и `functools.partial`; план
-16-22, ревью WR-12), — где бы имя ни стояло: последнее звено вызываемого
-(`stmt.values(…)`); строка вызываемого `getattr(obj, "bulk_update_mappings")(…)`;
-ссылка на пишущий API, поданная другому вызову вместе с его аргументами, —
-`session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
-`functools.partial(s.bulk_update_mappings, M)(rows)`, `asyncio.to_thread(…)`,
-`loop.run_in_executor(None, …)`: судится вызов этого API с аргументами после
-ссылки (и аргументами применения у `partial(…)(…)`); ссылка может стоять и внутри
+`bum = Session.bulk_update_mappings`, `touch = attrs.flag_modified`, аннотированным
+присваиванием, распаковкой кортежа на кортеж попарно (`w, touch = setattr,
+flag_modified`; и со звёздной целью — `w, *rest = setattr, None`: позиции до и после
+звезды), оператором `:=` (`if (w := setattr): …`), целью-атрибутом `self.<x>`
+/ `cls.<x>` в любом методе (`self.bum = s.bulk_update_mappings` в `__init__` и
+`self.bum(…)` в другом методе) и именем в теле класса; значение связывания — имя,
+атрибут, `getattr(<obj>, "<api>")` (читается как атрибут `<obj>.<api>`, с
+получателем), `functools.partial(<api>, …)` — псевдоним с привязанными аргументами
+(`_partial_aliases`: `w = partial(s.bulk_update_mappings, M); w(rows)` судится как
+`partial(…)(rows)`), `operator.methodcaller("<api>", …)` (судится у себя)
+(`_api_aliases` — тем же разрешением `_module_aliases`, что у модели и
+`functools.partial`; план 16-22, ревью WR-12), — где бы имя ни стояло: последнее
+звено вызываемого (`stmt.values(…)`, `self.bum(…)`); строка вызываемого
+`getattr(obj, "bulk_update_mappings")(…)`; ссылка на пишущий API, поданная другому
+вызову вместе с его аргументами, — носителям перечня `REFERENCE_CARRIERS` (один с
+гейтом приватности; паритет гейтов держит правило `tests/test_phone_gates_parity.py`,
+план 16-29): `session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
+`asyncio.to_thread(…)`, `loop.run_in_executor(None, …)`, `map(…)` — поэлементно,
+функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
+[x])` — вызов `setattr(account, "phone", x)`), `contextvars.copy_context().run(…)`
+(`Context.run`), — и по-прежнему любому другому вызову (цена строгости ниже), и
+`functools.partial(s.bulk_update_mappings, M)(rows)`: судится вызов этого API с
+аргументами после ссылки (и аргументами применения у `partial(…)(…)`); ссылка может стоять и внутри
 `functools.partial(ref, …)` (или его псевдонима в том же модуле — `from functools
 import partial as bind`, `bind = functools.partial`), поданного другому вызову
 вместе с остальными аргументами (`run_in_executor(None, partial(s.
@@ -158,7 +174,9 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 разрешается по всему модулю, без учёта областей видимости: имя, однажды связанное
 с `MessengerAccount`, считается моделью в любой функции того же файла. Так же
 разрешается псевдоним пишущего API (план 16-22): имя, однажды связанное с
-`set_committed_value`, судится как он и по последнему звену (`obj.scv(…)`). Та же
+`set_committed_value`, судится как он и по последнему звену (`obj.scv(…)`); цель-атрибут
+`self.bum = …` связывает имя последнего звена `bum`, и `other.bum(…)` любого объекта
+того же файла судится так же (план 16-27). Та же
 цена у ссылки: имя пишущего API, поданное другому вызову (`handler(update,
 {"phone": x})`), судится как вызов этого API.
 
@@ -194,17 +212,31 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 наименований `COLUMN_NAMINGS` (вид 3);
 пишущий вызов опознаётся по имени, названному литералом (последнее звено,
 `getattr`-строка, ссылка с аргументами, `methodcaller`), и по псевдониму такого
-имени, связанному в том же модуле ввозом `as` или присваиванием имени либо
-атрибута; судимый параметр — при любом литеральном связывании
+имени, связанному в том же модуле ввозом `as` или любой формой общей грамматики
+связывания `tests/phone_gate_grammar.py` — присваивание имени либо атрибута,
+аннотированное, распаковка кортежа на кортеж попарно, `:=`, цель-атрибут `self.<x>` /
+`cls.<x>` в любом методе, тело класса; значение — имя, атрибут, `getattr(<obj>,
+"<api>")`, `functools.partial(<api>, …)` с привязанными аргументами; ссылка —
+поданная любому вызову, носители `REFERENCE_CARRIERS` включительно (`map` —
+поэлементно); судимый параметр — при любом литеральном связывании
 (`JUDGED_PARAMETERS`); атрибут номера — в любой позиции цели присваивания. Вне
 охвата, каждая форма с правдивой причиной:
 (1) значение или ссылка, пришедшие в пишущий вызов ПАРАМЕТРОМ, из контейнера или
-    результатом другого вызова, — переменная со значением, параметр функции,
+    результатом не-`partial` вызова, — переменная со значением, параметр функции,
     `build_rows()`, `values(**fields)`, распаковка не-литерала `*args` / `**kw`,
     `{k: v for …}` с вычисленным ключом, ссылка на пишущий API, пришедшая
-    параметром, из контейнера (`writers["bulk"](…)`) или результатом другого вызова
-    (`w = partial(…); w(rows)`, `fn = make_writer(); fn(…)`): поток данных
-    предикат не прослеживает, даже когда литерал стоит строкой выше в том же файле;
+    параметром, из контейнера (`writers["bulk"](…)`; так же цель `for` над
+    контейнером — `for f in [setattr]: f(…)`: цель `for` получает элемент контейнера,
+    а не выражение) или результатом не-`partial` вызова (`fn = make_writer();
+    fn(…)`), итерируемая не-литерал у `map` (`map(setattr, accounts, names, values)`
+    — элементы решает поток данных): поток данных предикат не прослеживает, даже
+    когда литерал стоит строкой выше в том же файле. Так же вне грамматики связывания
+    `with … as f`: имя связывается с результатом `__enter__`, а не с выражением после
+    `with`, и псевдонимом этого выражения не является (`OUT_OF_GRAMMAR_BINDING_FORMS`
+    общего модуля, одни и те же у обоих гейтов). И связывание не оператором, а вызовом
+    или через пространство имён — `setattr(self, "f", api)`, `globals()["f"] = api`,
+    `vars(obj)["f"] = api`: ссылка кладётся в контейнер объекта или модуля и читается
+    оттуда, это поток данных через контейнер (зонд самопроверки исполнителя 16-27);
 (2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
     name, …)`, `getattr(s, name)(…)`, f-строка с колонкой в подстановке,
     `.format(col)`, склейка с переменной, результат вызова над строкой
@@ -265,7 +297,20 @@ API в том же модуле (`_api_aliases`), такая ссылка теп
 правилом-матрицей, производную колонки — грамматикой, псевдонимы пишущих API — тем
 же помощником, что у модели и `partial`; решение владельца О-10 (а), 2026-10-13:
 заявление прежнее, вариант (б) «сузить заявление до перечня грамматики и снять
-запреты записью в `overrides`» ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ.
+запреты записью в `overrides`» ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ. До плана 16-27 заявление «через
+механизм» в пятый раз было шире предиката по оси «как назван API»: ревью WR-14
+(2026-10-13) нашло псевдонимы пишущего API, связанные распаковкой кортежа, `:=`,
+`self.<x> =` в методе и `getattr`-строкой; пятый круг одной оси (WR-01 → WR-08 →
+WR-10 → WR-12 → WR-14 / WR-15 / WR-16); самопроверка 16-22 перебирала формы связывания
+перечнем, и кроме `X = …` в нём не было ни одной. Пункт (1) границы называл
+связанный `partial` — `w = partial(…); w(rows)` — «результатом другого вызова», хотя
+гейт приватности ту же форму у журнала ловил; теперь она ловится (`_partial_aliases`)
+и из пункта (1) убрана. План 16-27 вынес грамматику связывания и перечень носителей
+ссылки в общий модуль обоих гейтов `tests/phone_gate_grammar.py`, научил предикат
+поэлементному `map` и сделал ось B правилом-матрицей `BINDING_FORMS` ×
+`API_IDENTIFICATION_VALUES` × (прямой вызов и `REFERENCE_CARRIERS`); решение владельца
+О-12 (а), 2026-10-13: заявление прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ (второй раз,
+после О-10). Ось «как названа колонка» и сырой SQL пятого круга дописывает план 16-28.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -289,6 +334,19 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+
+from tests.phone_gate_grammar import (
+    BINDING_FORMS,
+    ELEMENTWISE_CARRIERS,
+    OUT_OF_GRAMMAR_BINDING_FORMS,
+    REFERENCE_CARRIERS,
+    REFERENCE_KEYWORDS,
+    BindingForm,
+    IdentificationValue,
+    binding_form_source,
+    binding_name,
+    module_bindings,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -374,13 +432,10 @@ ROW_MAPPING_CALL_NAMES = frozenset(
 # плана 16-17 `op.bulk_insert(table, rows=[…])` проходил (ревью WR-10).
 ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters", "rows"})
 
-# Именованный параметр ССЫЛКИ на функцию: `fn` у `AsyncSession.run_sync` /
-# `AsyncConnection.run_sync` — `(self, fn, *arg, **kw)`, замер `inspect.signature`,
-# SQLAlchemy 2.0.46. У `asyncio.to_thread` и `functools.partial` ссылка
-# позиционно-только (`partial(func=…)` и `to_thread(func=…)` падают `TypeError`,
-# замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
-# (план 16-17, ревью WR-10).
-REFERENCE_KEYWORDS = frozenset({"fn"})
+# Именованный параметр ССЫЛКИ на функцию (`fn` у `run_sync`) — `REFERENCE_KEYWORDS`,
+# и носитель, подающий функции элементы итерируемых (`map`), — `ELEMENTWISE_CARRIERS`:
+# ввозом из общего модуля `tests/phone_gate_grammar.py` вместе с перечнем носителей
+# `REFERENCE_CARRIERS` (план 16-27, решение владельца О-12 (а)).
 
 # Обёртка ссылки с привязанными аргументами: `functools.partial(ref, …)`; её псевдонимы
 # в модуле добавляются при разборе исходника (`_module_aliases(tree, "partial")`).
@@ -756,19 +811,12 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
     }
-    # Получатель `methodcaller(…)` — объект его применения `methodcaller(…)(obj)`:
+    # Получатели `methodcaller(…)` — объекты его применения: `methodcaller(…)(obj)`
+    # (самопроверка исполнителя 16-22), вызов связанного имени `f(obj)` и носитель,
+    # который применяет его к следующему аргументу (самопроверка исполнителя 16-27):
     # вызов `obj.<имя>(…)` судится с получателем, по которому судятся дескриптор
-    # колонки и повторный конструктор модели (самопроверка исполнителя 16-22).
-    methodcaller_receivers = {
-        id(node.func): node.args[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Call)
-        and _call_name(node.func) == "methodcaller"
-        and len(node.args) == 1
-        and not isinstance(node.args[0], ast.Starred)
-        and not node.keywords
-    }
+    # колонки и повторный конструктор модели.
+    methodcaller_receivers = _methodcaller_receivers(tree, referable)
     # Ссылки у каждого вызова (`_referenced_calls`). `partial(ref, …)`, поданный
     # другому вызову и разобранный им как носитель ссылки, сам не судится: его
     # аргументы уже стоят в синтетическом вызове внешнего (иначе
@@ -776,8 +824,11 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # `functools.partial` и его псевдонимы в модуле (`from functools import partial
     # as bind`, `bind = functools.partial`) — обёртка ссылки у `_bound_reference`.
     partial_names = PARTIAL_NAMES | _module_aliases(tree, "partial")
+    # Имена, связанные с `partial(<API>, …)` любой формой общей грамматики (ревью
+    # WR-14, план 16-27): вызов и ссылка такого имени судятся как `partial(…)(…)`.
+    partial_aliases = _partial_aliases(tree, referable, partial_names)
     references = {
-        id(node): _referenced_calls(node, referable, partial_names)
+        id(node): _referenced_calls(node, referable, partial_names, partial_aliases)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (id(node) not in applied or _call_name(node) == "methodcaller")
@@ -788,6 +839,15 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for _synthetic, _referenced, carrier in triples
         if isinstance(carrier, ast.Call)
     }
+    # `partial(…)`, связанный с именем, которое модуль зовёт или подаёт, судится у
+    # использования — с аргументами применения, — а не на месте связывания: иначе
+    # `w = partial(setattr, account, "phone"); w(x)` дал бы две находки.
+    used = {
+        node.id if isinstance(node, ast.Name) else node.attr
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load)
+    }
+    consumed |= {id(value) for alias, value in partial_aliases.items() if alias in used}
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -817,19 +877,27 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
             if id(node) not in consumed:
                 for synthetic, referenced, _carrier in references.get(id(node), []):
-                    if (holder := methodcaller_receivers.get(id(node))) is not None:
-                        func = ast.copy_location(
-                            ast.Attribute(value=holder, attr=referenced, ctx=ast.Load()),
+                    holders = methodcaller_receivers.get(id(node), [])
+                    # Без известного применения `methodcaller` судится без получателя;
+                    # каждое применение — свой вызов `obj.<имя>(…)`.
+                    variants = [synthetic] if not holders else [
+                        _synthetic_call(
                             synthetic,
+                            ast.copy_location(
+                                ast.Attribute(value=holder, attr=referenced, ctx=ast.Load()),
+                                synthetic,
+                            ),
+                            list(synthetic.args),
+                            list(synthetic.keywords),
                         )
-                        synthetic = _synthetic_call(
-                            synthetic, func, list(synthetic.args), list(synthetic.keywords)
+                        for holder in holders
+                    ]
+                    for variant in variants:
+                        _judge_call(
+                            *_canonical_call(variant, referenced, api_aliases, alias_targets),
+                            write_names,
+                            record,
                         )
-                    _judge_call(
-                        *_canonical_call(synthetic, referenced, api_aliases, alias_targets),
-                        write_names,
-                        record,
-                    )
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -1201,7 +1269,10 @@ BoundReference = tuple[str, ast.expr, list[ast.expr], list[ast.keyword]]
 
 
 def _bound_reference(
-    node: ast.expr | None, partial_names: frozenset[str] = PARTIAL_NAMES
+    node: ast.expr | None,
+    partial_names: frozenset[str] = PARTIAL_NAMES,
+    partial_aliases: dict[str, ast.expr] | None = None,
+    seen: frozenset[str] = frozenset(),
 ) -> BoundReference | None:
     """Ссылка на функцию — голая или внутри `functools.partial(…)` с аргументами.
 
@@ -1210,15 +1281,24 @@ def _bound_reference(
     `M` и `mapper=…`; `partial(partial(ref, a), b)` — рекурсивно (самопроверка
     исполнителя 16-17: `run_in_executor(None, partial(ref, M), rows)` — обычная
     форма, у `run_in_executor` нет именованных аргументов).
+
+    Имя, связанное с `functools.partial(<ссылка>, …)` в том же модуле
+    (`partial_aliases`, `_partial_aliases`), — та же ссылка с привязанными
+    аргументами: `w = partial(s.bulk_update_mappings, M); to_thread(w, rows)` (ревью
+    WR-14, план 16-27; гейт приватности ту же форму у журнала ловил).
     """
     name = _reference_name(node)
     if name is not None:
         assert node is not None
+        if partial_aliases and name in partial_aliases and name not in seen:
+            return _bound_reference(
+                partial_aliases[name], partial_names, partial_aliases, seen | {name}
+            )
         return name, node, [], []
     if isinstance(node, ast.Call) and _call_name(node) in partial_names:
         positional = _positional_arguments(node)
         if positional and positional[0] is not None:
-            inner = _bound_reference(positional[0], partial_names)
+            inner = _bound_reference(positional[0], partial_names, partial_aliases, seen)
             if inner is not None:
                 referenced, func, args, keywords = inner
                 rest = _forwarded_arguments(list(node.args))[1:]
@@ -1233,10 +1313,202 @@ def _synthetic_call(
     return ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), origin)
 
 
+def _partial_aliases(
+    tree: ast.AST, judged_names: frozenset[str], partial_names: frozenset[str]
+) -> dict[str, ast.expr]:
+    """Имена, связанные с `functools.partial(<судимый API>, …)` в том же модуле: «имя → `partial`».
+
+    Связывание — любой формой общей грамматики (`module_bindings`): `=`,
+    аннотированное, распаковка, `:=`, `self.<x>` / `cls.<x>` в любом методе, тело
+    класса; и цепочкой `g = w`. Значение — литеральный `partial` (или его псевдоним в
+    модуле) над ссылкой, которую `_bound_reference` опознаёт как судимый API. До плана
+    16-27 пункт (1) границы называл `w = partial(…); w(rows)` «результатом другого
+    вызова», а гейт приватности ту же форму у журнала ловил — асимметрия, которую
+    запрещает решение владельца О-12 (а) (ревью WR-14). Имя, которое само судимо, не
+    переводится.
+    """
+    bindings = module_bindings(tree)
+    found: dict[str, ast.expr] = {}
+    changed = True
+    while changed:
+        changed = False
+        for binding in bindings:
+            name = binding_name(binding.target)
+            if name is None or name in found or name in judged_names:
+                continue
+            value = binding.value
+            if isinstance(value, ast.Call) and _call_name(value) in partial_names:
+                bound = _bound_reference(value, partial_names, found)
+                if bound is not None and bound[0] in judged_names:
+                    found[name] = value
+                    changed = True
+            elif (
+                isinstance(value, (ast.Name, ast.Attribute))
+                and (reference := _reference_name(value)) in found
+            ):
+                found[name] = found[reference]
+                changed = True
+    return found
+
+
+def _methodcaller_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, ast.expr]:
+    """Имена, связанные с `operator.methodcaller(…)` любой формой общей грамматики: «имя → вызов».
+
+    `set_phone = methodcaller("__set__", account, x)`, `self.init = methodcaller(…)`, и
+    цепочкой `g = f`. Имя, которое само судимо, не переводится.
+    """
+    bindings = module_bindings(tree)
+    found: dict[str, ast.expr] = {}
+    changed = True
+    while changed:
+        changed = False
+        for binding in bindings:
+            name = binding_name(binding.target)
+            if name is None or name in found or name in judged_names:
+                continue
+            value = binding.value
+            if isinstance(value, ast.Call) and _call_name(value) == "methodcaller":
+                found[name] = value
+                changed = True
+            elif (
+                isinstance(value, (ast.Name, ast.Attribute))
+                and (reference := _reference_name(value)) in found
+            ):
+                found[name] = found[reference]
+                changed = True
+    return found
+
+
+def _methodcaller_receivers(
+    tree: ast.AST, judged_names: frozenset[str]
+) -> dict[int, list[ast.expr]]:
+    """Получатели каждого `operator.methodcaller(…)` модуля: «id вызова → объекты применения».
+
+    `methodcaller("<имя>", …)` зовёт `obj.<имя>(…)` у объекта, к которому его применили,
+    и дескриптор колонки (`__set__`) и повторный конструктор модели (`__init__`)
+    судятся по этому получателю. Применение — прямое `methodcaller(…)(obj)`, вызов
+    имени, связанного с ним любой формой общей грамматики (`f(obj)`, `self.f(obj)`), и
+    носитель, которому `methodcaller` подан ссылкой вместе с получателем: судится
+    СЛЕДУЮЩИЙ за ним позиционный аргумент (`to_thread(mc, obj)`,
+    `run_in_executor(None, mc, obj)`, `partial(mc, obj)`), у поэлементного носителя
+    — элементы первой итерируемой (`map(mc, [obj])`). До самопроверки исполнителя
+    16-27 получатель брался только у прямого применения: `set_phone =
+    methodcaller("__set__", account, x); set_phone(MessengerAccount.phone)` проходил.
+    """
+    aliases = _methodcaller_aliases(tree, judged_names)
+
+    def methodcaller_of(node: ast.expr) -> ast.expr | None:
+        if isinstance(node, ast.Call) and _call_name(node) == "methodcaller":
+            return node
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            return aliases.get(_reference_name(node) or "")
+        return None
+
+    found: dict[int, dict[int, ast.expr]] = {}
+
+    def add(methodcaller: ast.expr, receiver: ast.expr) -> None:
+        found.setdefault(id(methodcaller), {}).setdefault(id(receiver), receiver)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        applied = methodcaller_of(node.func)
+        if (
+            applied is not None
+            and len(node.args) == 1
+            and not isinstance(node.args[0], ast.Starred)
+            and not node.keywords
+        ):
+            add(applied, node.args[0])
+            continue
+        if _call_name(node) == "methodcaller":
+            continue
+        positional = _forwarded_arguments(list(node.args))
+        for index, argument in enumerate(positional):
+            methodcaller = methodcaller_of(argument)
+            if methodcaller is None:
+                continue
+            after = positional[index + 1 :]
+            if after and not isinstance(after[0], ast.Starred):
+                if _call_name(node) in ELEMENTWISE_CARRIERS:
+                    column = _iterable_elements(after[0])
+                    for element in column[0] if column is not None else []:
+                        add(methodcaller, element)
+                else:
+                    add(methodcaller, after[0])
+            break
+    return {key: list(receivers.values()) for key, receivers in found.items()}
+
+
+# Место элемента итерируемой, которую предикат не раскрывает (параметр, вызов):
+# аргумент API на этой позиции не судится, как параметр функции, но позиция цела.
+_UNJUDGED_ELEMENT = "<элемент не-литерала>"
+
+
+def _iterable_elements(node: ast.expr) -> tuple[list[ast.expr], bool] | None:
+    """Элементы литеральной итерируемой: (элементы, повторяется ли один элемент).
+
+    Список, кортеж, набор (литеральная `*`-распаковка раскрыта) — их элементы по
+    позициям; comprehension и генератор — его элемент, одинаковый на каждой позиции;
+    обёртки `list(…)` и подобные — их аргумент. Иначе — `None`: длину и элементы решает
+    поток данных.
+    """
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        elements = _expanded_arguments(list(node.elts))
+        if any(element is None for element in elements):
+            return None
+        return [element for element in elements if element is not None], False
+    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+        return [node.elt], True
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in LITERAL_CONTAINER_WRAPPERS
+        and len(node.args) == 1
+        and not node.keywords
+    ):
+        return _iterable_elements(node.args[0])
+    return None
+
+
+def _elementwise_arguments(iterables: list[ast.expr]) -> list[list[ast.expr]]:
+    """Аргументы каждого вызова функции поэлементного носителя (`map(fn, *iterables)`).
+
+    `map` зовёт функцию с элементом КАЖДОЙ итерируемой на одной позиции и
+    останавливается на самой короткой: литеральные список, кортеж и набор зипуются
+    (одна позиция — один вызов), у comprehension и генератора — его элемент на каждой
+    позиции, итерируемая не-литерал даёт на своей позиции аргумент вне суда. Распаковка
+    не-литерала `*rows` среди итерируемых обрывает перечень: сколько итерируемых она
+    подаст, решает поток данных. Число вызовов — длина самой короткой литеральной
+    итерируемой фиксированной длины, иначе один.
+    """
+    columns: list[tuple[list[ast.expr], bool] | None] = []
+    for iterable in iterables:
+        if isinstance(iterable, ast.Starred):
+            break
+        columns.append(_iterable_elements(iterable))
+    fixed = [len(column[0]) for column in columns if column is not None and not column[1]]
+    count = min(fixed) if fixed else 1
+    calls: list[list[ast.expr]] = []
+    for position in range(count):
+        arguments: list[ast.expr] = []
+        for iterable, column in zip(iterables, columns):
+            if column is None:
+                arguments.append(
+                    ast.copy_location(ast.Name(id=_UNJUDGED_ELEMENT, ctx=ast.Load()), iterable)
+                )
+            else:
+                elements, repeated = column
+                arguments.append(elements[0] if repeated else elements[position])
+        calls.append(arguments)
+    return calls
+
+
 def _referenced_calls(
     call: ast.Call,
     judged_names: frozenset[str],
     partial_names: frozenset[str] = PARTIAL_NAMES,
+    partial_aliases: dict[str, ast.expr] | None = None,
 ) -> list[tuple[ast.Call, str, ast.expr | None]]:
     """Вызовы пишущего API, названного в `call` ссылкой или строкой.
 
@@ -1251,7 +1523,13 @@ def _referenced_calls(
       `functools.partial(ref, …)` — тогда первыми идут его привязанные аргументы
       (`_bound_reference`);
     - `partial(ref, …)(…)` — к ним добавляются аргументы применения; судится у
-      применения (`call` с `func`-вызовом), а у самого `partial` — нет.
+      применения (`call` с `func`-вызовом), а у самого `partial` — нет;
+    - вызов имени, связанного с `partial(<API>, …)` (`partial_aliases`), — вызов API с
+      привязанными аргументами впереди, как у `partial(…)(…)`; поданное носителю, такое
+      имя — ссылка с привязанными аргументами (ревью WR-14, план 16-27);
+    - у поэлементного носителя (`ELEMENTWISE_CARRIERS`: `map`) аргументы после ссылки —
+      итерируемые, и функция получает их ЭЛЕМЕНТЫ (`_elementwise_arguments`): одна
+      позиция — один синтетический вызов (план 16-27).
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
     """
     name = _call_name(call)
@@ -1269,6 +1547,20 @@ def _referenced_calls(
         return []
     if name in judged_names or name == "getattr":
         return []
+    if partial_aliases and name in partial_aliases:
+        # `w = partial(s.bulk_update_mappings, M); w(rows)` — как `partial(…)(rows)`.
+        bound = _bound_reference(
+            partial_aliases[name], partial_names, partial_aliases, frozenset({name})
+        )
+        if bound is not None and bound[0] in judged_names:
+            referenced, func, bound_args, bound_keywords = bound
+            synthetic = _synthetic_call(
+                call,
+                func,
+                bound_args + _forwarded_arguments(list(call.args)),
+                bound_keywords + list(call.keywords),
+            )
+            return [(synthetic, referenced, None)]
     source, outer_args, outer_keywords = call, [], []
     if isinstance(call.func, ast.Call) and _call_name(call.func) not in (
         "getattr",
@@ -1282,10 +1574,23 @@ def _referenced_calls(
     forwarded = _forwarded_arguments(list(source.args))
     keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
-        bound = _bound_reference(argument, partial_names)
+        bound = _bound_reference(argument, partial_names, partial_aliases)
         if argument is not None and bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
             after = forwarded[index + 1 :]
+            if name in ELEMENTWISE_CARRIERS:
+                # `map(setattr, [account], ["phone"], [x])` зовёт
+                # `setattr(account, "phone", x)`: функция получает элементы.
+                return [
+                    (
+                        _synthetic_call(
+                            call, func, bound_args + elements, bound_keywords + keywords
+                        ),
+                        referenced,
+                        argument,
+                    )
+                    for elements in _elementwise_arguments(after)
+                ]
             synthetic = _synthetic_call(
                 call,
                 func,
@@ -1295,7 +1600,9 @@ def _referenced_calls(
             return [(synthetic, referenced, argument)]
     for keyword, value in _named_arguments(source):
         bound = (
-            _bound_reference(value, partial_names) if keyword in REFERENCE_KEYWORDS else None
+            _bound_reference(value, partial_names, partial_aliases)
+            if keyword in REFERENCE_KEYWORDS
+            else None
         )
         if bound is not None and bound[0] in judged_names:
             referenced, func, bound_args, bound_keywords = bound
@@ -1636,11 +1943,18 @@ def _module_model_aliases(tree: ast.AST) -> frozenset[str]:
 def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
     """Псевдонимы имени `name` в ТОМ ЖЕ модуле.
 
-    `from … import <name> as X`, присваивание `X = <name>` и `X = module.<name>`
-    (план 16-17: `Model = models.MessengerAccount`, `bind = functools.partial`), и
-    цепочкой `Y = X`. Область видимости плоская — весь модуль, без учёта функций и
-    классов; псевдоним, заведённый в другом модуле, — поток данных между модулями,
-    и это названная граница предиката.
+    `from … import <name> as X` и связывание по ОБЩЕЙ грамматике обоих гейтов номера
+    (`module_bindings` из `tests/phone_gate_grammar.py`, решение владельца О-12 (а)):
+    присваивание, аннотированное присваивание, распаковка кортежа на кортеж попарно,
+    `:=`, цель-атрибут `self.<x>` / `cls.<x>` в любом методе, тело класса; значение —
+    `<name>`, `module.<name>` или `getattr(<obj>, "<name>")` (читается как атрибут) —
+    план 16-17: `Model = models.MessengerAccount`, `bind = functools.partial`; и
+    цепочкой `Y = X`. Цель-атрибут даёт имя последнего звена (`binding_name`): `self.bum
+    = s.bulk_update_mappings` зовут `self.bum(…)`. До плана 16-27 связывание видело
+    только цель-имя у `=` и аннотированного: распаковка, `:=`, `self.<x> =` в методе
+    и `getattr`-строка проходили гейт (ревью WR-14). Область видимости плоская — весь
+    модуль, без учёта функций и классов; псевдоним, заведённый в другом модуле, —
+    поток данных между модулями, и это названная граница предиката.
     """
     known = {name}
     for node in ast.walk(tree):
@@ -1648,39 +1962,51 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
             for alias in node.names:
                 if alias.name == name and alias.asname:
                     known.add(alias.asname)
+    bindings = module_bindings(tree)
     changed = True
     while changed:
         changed = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                targets, value = node.targets, node.value
-            elif isinstance(node, ast.AnnAssign) and node.value is not None:
-                targets, value = [node.target], node.value
-            else:
-                continue
+        for binding in bindings:
+            value = binding.value
             if (isinstance(value, ast.Name) and value.id in known) or (
                 isinstance(value, ast.Attribute) and value.attr == name
             ):
-                for target in targets:
-                    if isinstance(target, ast.Name) and target.id not in known:
-                        known.add(target.id)
-                        changed = True
+                target = binding_name(binding.target)
+                if target is not None and target not in known:
+                    known.add(target)
+                    changed = True
     return frozenset(known - {name})
 
 
 def _rename_aliases(tree: ast.AST, name: str) -> None:
     """Имя каждого псевдонима `name` в том же модуле (`_module_aliases`) — в `name`.
 
-    Только узлы `Name` в контексте чтения: присваивание псевдонима остаётся, а его
+    Только узлы в контексте чтения: присваивание псевдонима остаётся, а его
     использования читаются как исходное имя всеми ветками, опознающими носитель по
-    имени (`_call_name`, `_getattr_literal`, `_referenced_calls`).
+    имени (`_call_name`, `_getattr_literal`, `_referenced_calls`). Имя `Name` — на
+    месте; атрибут `<obj>.<псевдоним>` — узлом `Name(name)` вместо атрибута: псевдоним,
+    связанный целью-атрибутом `self.mc = operator.methodcaller` или в теле класса
+    (`attr = getattr`), зовут через атрибут — `self.mc(…)`, `K.attr(…)`, — и до
+    самопроверки исполнителя 16-27 такой вызов носителем не опознавался. Область
+    видимости плоская, по последнему звену, как у псевдонимов пишущих API.
     """
     aliases = _module_aliases(tree, name)
     if not aliases:
         return
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
-            node.id = name
+
+    class _Rename(ast.NodeTransformer):
+        def visit_Name(self, node: ast.Name) -> ast.AST:
+            if isinstance(node.ctx, ast.Load) and node.id in aliases:
+                node.id = name
+            return node
+
+        def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+            self.generic_visit(node)
+            if isinstance(node.ctx, ast.Load) and node.attr in aliases:
+                return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
+            return node
+
+    _Rename().visit(tree)
 
 
 def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
@@ -1694,17 +2020,19 @@ def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
     и `bum = Session.bulk_update_mappings` проходили гейт (ревью WR-12).
 
     `_module_aliases` зовётся только для имён, которые в модуле вообще ввозятся под
-    псевдонимом или стоят значением присваивания, — итог тот же, обход короче.
+    псевдонимом или стоят значением связывания общей грамматики (`module_bindings`
+    из `tests/phone_gate_grammar.py`: распаковка, `:=`, `self.<x> =`, `getattr`-строка
+    — ревью WR-14, план 16-27), — итог тот же, обход короче.
     """
     bound: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             bound.update(alias.name for alias in node.names if alias.asname)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-            if isinstance(node.value, ast.Name):
-                bound.add(node.value.id)
-            elif isinstance(node.value, ast.Attribute):
-                bound.add(node.value.attr)
+    for binding in module_bindings(tree):
+        if isinstance(binding.value, ast.Name):
+            bound.add(binding.value.id)
+        elif isinstance(binding.value, ast.Attribute):
+            bound.add(binding.value.attr)
     aliases: dict[str, str] = {}
     for name in sorted(judged_names & bound):
         for alias in sorted(_module_aliases(tree, name)):
@@ -1720,19 +2048,16 @@ def _api_alias_targets(tree: ast.AST, api_aliases: dict[str, str]) -> dict[str, 
     (и цепочкой `Y = X`). Синтетический вызов псевдонима берёт этот узел вызываемым и
     сохраняет ПОЛУЧАТЕЛЯ, по которому судятся дескриптор колонки и повторный
     конструктор модели (самопроверка исполнителя 16-22). Ввоз `as` атрибута не даёт.
+
+    Связывания — по общей грамматике `module_bindings` (`tests/phone_gate_grammar.py`,
+    ревью WR-14, план 16-27): «`binding_name(цель)` → значение»; у значения
+    `getattr(<obj>, "<api>")` атрибут сохраняет получателя `<obj>`.
     """
     bindings: dict[str, ast.expr] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets, value = [node.target], node.value
-        else:
-            continue
-        if isinstance(value, (ast.Name, ast.Attribute)):
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    bindings.setdefault(target.id, value)
+    for binding in module_bindings(tree):
+        target = binding_name(binding.target)
+        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+            bindings.setdefault(target, binding.value)
     found: dict[str, ast.expr] = {}
     for alias, original in api_aliases.items():
         value, seen = bindings.get(alias), {alias}
@@ -1983,6 +2308,49 @@ def test_a_planted_backfill_with_attribute_keys_reddens_the_gate(tmp_path):
         "ключ MessengerAccount.phone.key в строках bulk_update_mappings не найден: "
         "`session.bulk_update_mappings(MessengerAccount, [{MessengerAccount.phone.key: n} "
         f"for …])` в scripts/backfill_attribute_key.py гейт пропустил: {offences}"
+    )
+    assert all(
+        "bulk_update_mappings" in offence and "phone" in offence for offence in found
+    ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
+
+
+def test_a_planted_backfill_with_a_method_bound_writer_alias_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-14: класс-исполнитель с `self.bum = session.bulk_update_mappings` в `__init__`.
+
+    Класс-исполнитель, который в `__init__` запоминает пишущий API сессии атрибутом, а
+    в другом методе зовёт его через `self.`, — естественная форма скрипта дозаполнения
+    Фазы 20 (D-13). На SQLite в памяти такая запись пишет колонку (замер верификатора
+    раунда 5, `+75`, SQLAlchemy 2.0.46). До плана 16-27 гейт её пропускал: псевдоним
+    пишущего API связывался только присваиванием имени (ревью WR-14; решение владельца
+    О-12 (а): заявление шапки прежнее, предикат догоняет его). Подложенный файл
+    находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_bound_writer.py",
+        "class Backfill:\n"
+        "    def __init__(self, session):\n"
+        "        self.bum = session.bulk_update_mappings\n"
+        "\n"
+        "    def run(self, rows):\n"
+        '        self.bum(MessengerAccount, [{"id": a, "phone": n} for a, n in rows])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_bound_writer.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_bound_writer.py:6 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "псевдоним пишущего API, связанный атрибутом в методе, не опознан: "
+        "`self.bum = session.bulk_update_mappings` в `__init__` и "
+        "`self.bum(MessengerAccount, [{'phone': n} for …])` в `run` в "
+        f"scripts/backfill_bound_writer.py гейт пропустил: {offences}"
     )
     assert all(
         "bulk_update_mappings" in offence and "phone" in offence for offence in found
@@ -2395,7 +2763,10 @@ BINDING_RECEIVERS = {
     "__setattr__": "object.",
 }
 
-BINDING_FORMS = ("positional", "keyword", "double-star", "starred")
+# Формы литерального связывания судимого ПАРАМЕТРА в вызове API (сторож сигнатур и
+# матрица наименований). Не путать с формами связывания ИМЕНИ — `BINDING_FORMS` общего
+# модуля `tests/phone_gate_grammar.py` (план 16-27).
+PARAMETER_BINDING_FORMS = ("positional", "keyword", "double-star", "starred")
 
 
 def _binding_source(row: JudgedParameter, form: str) -> str:
@@ -2419,7 +2790,7 @@ BINDING_CASES = [
     pytest.param(row, form, id=f"{row.api}-{form}")
     for row in JUDGED_PARAMETERS
     if row.parameter not in REFERENCE_KEYWORDS
-    for form in BINDING_FORMS
+    for form in PARAMETER_BINDING_FORMS
 ]
 
 
@@ -2662,7 +3033,7 @@ def _column_contexts() -> tuple[ColumnContext, ...]:
     for row in JUDGED_PARAMETERS:
         if row.kind != KIND_ROW_MAPPING:
             continue
-        for form in BINDING_FORMS:
+        for form in PARAMETER_BINDING_FORMS:
             by_position = form in ("positional", "starred")
             key = f"{row.call}-{form}" + ("" if by_position else f"-{row.parameter}")
             receiver = "op." if row.call == "bulk_insert" else "session."
@@ -2735,7 +3106,7 @@ def _column_contexts() -> tuple[ColumnContext, ...]:
         if row.kind == KIND_SETATTR:
             tail = ("", "") if row.call == "flag_modified" else ("x", "value=x")
             receiver = BINDING_RECEIVERS.get(row.call, "")
-            for form in BINDING_FORMS:
+            for form in PARAMETER_BINDING_FORMS:
                 contexts.append(
                     _column_context(
                         f"{row.api}-{form}",
@@ -2746,7 +3117,7 @@ def _column_contexts() -> tuple[ColumnContext, ...]:
                 )
         elif row.kind == KIND_POSITIONAL_COLUMN:
             receiver = "stmt = insert(MessengerAccount)."
-            for form in BINDING_FORMS:
+            for form in PARAMETER_BINDING_FORMS:
                 for names_form, names in _NAMES_FORMS.items():
                     contexts.append(
                         _column_context(
@@ -2798,6 +3169,143 @@ def test_every_column_naming_in_every_judged_context_is_a_write(naming):
         f"наименование колонки не опознано: `{naming.source}` ({naming.id}) — "
         f"{len(misses)} из {len(COLUMN_CONTEXTS)} контекстов дали не ровно одну находку "
         "ожидаемого вида:\n" + "\n".join(misses)
+    )
+
+
+# Значения опознания пишущего API для оси B (`id` — общие с гейтом приватности, план
+# 16-29): как ячейка матрицы называет `set_committed_value` и с какими аргументами его
+# применяет. `methodcaller` применяется к получателю — модулю `attributes`.
+API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
+    IdentificationValue("name", "set_committed_value", '(account, "phone", x)'),
+    IdentificationValue("attribute", "attributes.set_committed_value", '(account, "phone", x)'),
+    IdentificationValue(
+        "getattr-string", 'getattr(attributes, "set_committed_value")', '(account, "phone", x)'
+    ),
+    IdentificationValue("partial", "functools.partial(set_committed_value, account)", '("phone", x)'),
+    IdentificationValue(
+        "methodcaller",
+        'operator.methodcaller("set_committed_value", account, "phone", x)',
+        "(attributes)",
+    ),
+)
+
+
+@pytest.mark.parametrize("form", [pytest.param(f, id=f.id) for f in BINDING_FORMS])
+def test_every_binding_form_of_a_writer_api_alias_is_judged(form: BindingForm):
+    """Каждая форма связывания × каждое значение опознания × каждый способ вызова — находка.
+
+    Ось B («как назван API») была закрытым перечнем самопроверки исполнителя 16-22, и
+    форм связывания, кроме `X = …`, в нём не было: пятый круг одной оси (WR-01 → WR-08
+    → WR-10 → WR-12 → WR-14) открылся именно на ней — `self.bum = s.bulk_update_mappings`
+    в `__init__`, распаковка кортежа, `:=` и `getattr`-строка проходили гейт. Матрица
+    держит ось в суите: каждая форма `BINDING_FORMS` общего модуля подаётся с каждым
+    значением `API_IDENTIFICATION_VALUES` прямым вызовом и через каждый носитель
+    `REFERENCE_CARRIERS` (у `map` аргументы — одноэлементными списками), и ячейка
+    обязана дать ровно одну находку вида `KIND_SETATTR`, предмет которой называет
+    `set_committed_value` и `phone`. Новая форма связывания, значение или носитель дают
+    одну красную строку на форму со всеми промахами сразу. Решение владельца О-12 (а).
+    """
+    cells = [
+        (value, carrier)
+        for value in API_IDENTIFICATION_VALUES
+        for carrier in (None, *REFERENCE_CARRIERS)
+    ]
+    assert len(cells) >= 25, (
+        f"ячеек формы {len(cells)} — меньше 25: матрица проверяет почти ничто"
+    )
+    misses: list[str] = []
+    for value, carrier in cells:
+        source = binding_form_source(form, value, carrier)
+        offences = phone_write_offences(source, "scripts/x.py")
+        if len(offences) == 1:
+            _location, found_kind, subject = offences[0].split(" — ", 2)
+            if (
+                found_kind == KIND_SETATTR
+                and "set_committed_value" in subject
+                and "phone" in subject
+            ):
+                continue
+        way = carrier.name if carrier is not None else "прямой вызов"
+        shown = " ⏎ ".join(line.strip() for line in source.strip().splitlines())
+        misses.append(f"  {value.id} / {way}: `{shown}` → {offences}")
+
+    assert not misses, (
+        f"форма связывания пишущего API не опознана: `{form.id}` — {len(misses)} из "
+        f"{len(cells)} ячеек дали не ровно одну находку «{KIND_SETATTR}»:\n" + "\n".join(misses)
+    )
+
+
+def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
+    """Шапка обещает ровно то, что видит предикат по оси «как назван API».
+
+    Пятый круг одной оси (WR-01 → WR-08 → WR-10 → WR-12 → WR-14) открылся там, где шапка
+    обещала псевдоним, «связанный присваиванием», а предикат видел только `X = …`.
+    Правило держит шапку и общий модуль вместе: шапка называет общую грамматику
+    связывания `tests/phone_gate_grammar.py` и каждую её форму, каждый носитель
+    `REFERENCE_CARRIERS`, формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`) — в
+    «ГРАНИЦЕ ПРЕДИКАТА» с причиной, а пойманный теперь связанный `partial` — не в пункте
+    (1). Заявление не сужено (решение владельца О-12 (а); запреты 16-09 №2, 16-12 №2,
+    16-17 №2, 16-22 №2).
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    missing: list[str] = []
+    for needle in (
+        "phone_gate_grammar",
+        "распаковк",
+        "`:=`",
+        "`self.<x>`",
+        "`cls.<x>`",
+        '`getattr(<obj>, "<api>")`',
+        *(carrier.name for carrier in REFERENCE_CARRIERS),
+    ):
+        if needle not in flat:
+            missing.append(f"нет «{needle}»")
+    if "тело класса" not in flat and "теле класса" not in flat:
+        missing.append("нет «тело класса»")
+    boundary_start = flat.find("ГРАНИЦА ПРЕДИКАТА")
+    boundary_end = flat.find("Летопись границы", boundary_start)
+    if boundary_start < 0 or boundary_end < 0:
+        missing.append("нет «ГРАНИЦА ПРЕДИКАТА» или «Летопись границы»")
+    else:
+        boundary = flat[boundary_start:boundary_end]
+        item_start = boundary.find("(1) ")
+        item_end = boundary.find("(2) ", item_start)
+        item = boundary[item_start:item_end] if 0 <= item_start < item_end else ""
+        if not item:
+            missing.append("в «ГРАНИЦЕ ПРЕДИКАТА» нет пунктов (1) и (2)")
+        elif "w = partial(" in item:
+            missing.append("пункт (1) всё ещё называет пойманный связанный `partial` (`w = partial(`)")
+        # Как граница называет каждую форму вне грамматики и её причину.
+        named = {
+            "for-target-over-container": ("цель `for`", "элемент контейнера"),
+            "with-as": ("`with … as", "`__enter__`"),
+        }
+        unnamed = {form.id for form in OUT_OF_GRAMMAR_BINDING_FORMS} - set(named)
+        if unnamed:
+            missing.append(f"форма вне грамматики без слов границы в этом правиле: {sorted(unnamed)}")
+        for form, needles in named.items():
+            for needle in needles:
+                if needle not in boundary:
+                    missing.append(f"граница не называет форму вне грамматики {form}: нет «{needle}»")
+        # Связывание не оператором, а вызовом или через пространство имён (самопроверка
+        # исполнителя 16-27, зонд после захода 4): вне грамматики, названо с причиной.
+        for needle in ('`setattr(self, "f", api)`', '`globals()["f"] = api`'):
+            if needle not in boundary:
+                missing.append(f"граница не называет связывание вне оператора: нет «{needle}»")
+    if "звёздной целью" not in flat:
+        missing.append("нет распаковки со звёздной целью («звёздной целью»)")
+    for claim in (
+        "Ловится всякая запись, в которой колонка номера",
+        "слепота предиката, а не граница средства",
+    ):
+        if claim not in flat:
+            missing.append(f"заявление сужено: нет «{claim}»")
+
+    assert not missing, (
+        "шапка гейта писателя не называет общую грамматику связывания, носителей или "
+        "правдивую границу:\n" + "\n".join(f"  {item}" for item in missing)
     )
 
 
@@ -4035,6 +4543,229 @@ LITERAL_FORM_CASES = [
         "phone",
         id="getattr-assignment-alias",
     ),
+    # Ревью WR-14, верификация раунда 5 (2026-10-13): пишущий API, связанный
+    # `getattr`-строкой, распаковкой кортежа, `:=`, атрибутом `self.<x>` в методе и
+    # `getattr`-строкой в теле класса. До плана 16-27 гейт давал `[]` на каждой форме,
+    # а на SQLite в памяти каждая записала колонку (замер верификатора, `+71`…`+75`).
+    pytest.param(
+        'bum = getattr(session, "bulk_update_mappings")\n'
+        'bum(MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="getattr-bound-writer-alias",
+    ),
+    pytest.param(
+        "w, touch = setattr, flag_modified\n"
+        'w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="tuple-bound-setattr-alias",
+    ),
+    pytest.param(
+        "w, touch = setattr, flag_modified\n"
+        'account.__dict__["phone"] = x\n'
+        'touch(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="tuple-bound-flag-modified-alias",
+    ),
+    pytest.param(
+        "scv, touch = set_committed_value, flag_modified\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="tuple-bound-set-committed-value-alias",
+    ),
+    pytest.param(
+        "if (w := setattr):\n"
+        '    w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="walrus-bound-setattr-alias",
+    ),
+    pytest.param(
+        "if (scv := set_committed_value):\n"
+        '    scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="walrus-bound-set-committed-value-alias",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self, s):\n"
+        "        self.bum = s.bulk_update_mappings\n"
+        "\n"
+        "    def go(self, p):\n"
+        '        self.bum(MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="method-bound-attribute-alias",
+    ),
+    pytest.param(
+        "class W:\n"
+        '    scv = getattr(attributes, "set_committed_value")\n'
+        "\n"
+        "    def go(self, account, x):\n"
+        '        self.scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="class-body-getattr-bound-alias",
+    ),
+    # Ревью WR-14, план 16-27 (ось B): псевдоним, связанный с `functools.partial(<API>, …)`
+    # (гейт приватности ту же форму у журнала ловил — асимметрия, которую запрещает
+    # О-12 (а)); `map` подаёт функции элементы итерируемых; `Context.run` — носитель
+    # перечня `REFERENCE_CARRIERS` (закрепка: ловится и до плана).
+    pytest.param(
+        "w = functools.partial(session.bulk_update_mappings, MessengerAccount)\n"
+        'w([{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-bound-writer-alias",
+    ),
+    pytest.param(
+        'list(map(setattr, [account], ["phone"], [x]))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="map-elementwise-setattr",
+    ),
+    pytest.param(
+        "list(map(functools.partial(session.bulk_update_mappings, MessengerAccount), "
+        '[[{"id": 1, "phone": p}]]))\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="map-elementwise-partial-bulk-update",
+    ),
+    pytest.param(
+        "contextvars.copy_context().run(session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="context-run-bulk-update",
+    ),
+    # Самопроверка исполнителя 16-27, заход 1: `methodcaller` API, который судится по
+    # получателю (дескриптор колонки `__set__`, повторный конструктор модели `__init__`),
+    # получает получателя позже — применением связанного имени или носителем, который
+    # подаёт его следующим аргументом. Прямое применение `methodcaller(…)(obj)` ловилось.
+    pytest.param(
+        'set_phone = operator.methodcaller("__set__", account, x)\n'
+        "set_phone(MessengerAccount.phone)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-bound-descriptor-set",
+    ),
+    pytest.param(
+        'asyncio.to_thread(operator.methodcaller("__set__", account, x), MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-to-thread-descriptor-set",
+    ),
+    pytest.param(
+        "loop.run_in_executor(None, functools.partial("
+        'operator.methodcaller("__set__", account, x), MessengerAccount.phone))\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-partial-in-carrier-descriptor-set",
+    ),
+    pytest.param(
+        'list(map(operator.methodcaller("__init__", account, phone=x), [MessengerAccount]))\n',
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="methodcaller-map-model-init",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self, account, x):\n"
+        '        self.init = operator.methodcaller("__init__", account, phone=x)\n'
+        "\n"
+        "    def go(self):\n"
+        "        self.init(MessengerAccount)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="methodcaller-method-bound-model-init",
+    ),
+    # Самопроверка 16-27, заход 3: псевдоним самого носителя опознания
+    # (`operator.methodcaller`, встроенного `getattr`), связанный целью-атрибутом или в
+    # теле класса, зовут через атрибут — `self.mc(…)`, `K.attr(…)`.
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, session, p):\n"
+        '        self.mc("bulk_update_mappings", MessengerAccount, [{"id": 1, "phone": p}])(session)\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="methodcaller-self-attribute-carrier-alias",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    mc = operator.methodcaller\n"
+        "\n"
+        'K.mc("set_committed_value", account, "phone", x)(attributes)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="methodcaller-class-body-carrier-alias",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.attr = getattr\n"
+        "\n"
+        "    def go(self, x):\n"
+        '        return self.attr(update(MessengerAccount), "values")({"phone": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="getattr-self-attribute-carrier-alias",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    attr = getattr\n"
+        "\n"
+        "    def go(self, session, p):\n"
+        '        self.attr(session, "bulk_update_mappings")(MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="getattr-class-body-carrier-alias",
+    ),
+    # Самопроверка 16-27, зонд после захода 4: распаковка кортежа со звёздной целью —
+    # позиции до и после звезды связываются попарно, как у распаковки без неё.
+    pytest.param(
+        "w, *rest = setattr, flag_modified, None\n"
+        'w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="starred-tuple-bound-setattr-alias",
+    ),
+    pytest.param(
+        "*rest, scv = None, set_committed_value\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="starred-tuple-bound-suffix-alias",
+    ),
 ]
 
 
@@ -4350,6 +5081,61 @@ LEGITIMATE_CASES = [
     pytest.param(
         'stmt = update(groups).values({"ti" + "tle": t})\n',
         id="values-other-constant-concatenation-key",
+    ),
+    # Ревью WR-14 (план 16-27): псевдонимы пишущих API, связанные распаковкой,
+    # атрибутом в методе и `getattr`-строкой, которые номер не пишут.
+    pytest.param(
+        "scv, touch = set_committed_value, flag_modified\n"
+        'scv(account, "status", x)\n',
+        id="tuple-bound-writer-alias-other-attribute",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self, s):\n"
+        "        self.bum = s.bulk_update_mappings\n"
+        "\n"
+        "    def go(self, t):\n"
+        '        self.bum(Group, [{"id": 1, "title": t}])\n',
+        id="method-bound-writer-alias-other-model",
+    ),
+    pytest.param(
+        'strip = getattr(text, "strip")\nlabel = strip()\n',
+        id="getattr-bound-other-method",
+    ),
+    # План 16-27 (ось B): `map` над чужой функцией и связанный `partial` чужой модели.
+    pytest.param("names = list(map(str.strip, rows))\n", id="map-other-function"),
+    pytest.param(
+        "w = functools.partial(session.bulk_update_mappings, Group)\n"
+        'w([{"id": 1, "title": t}])\n',
+        id="partial-bound-writer-alias-other-model",
+    ),
+    # Самопроверка 16-27, заход 1: `methodcaller` с получателем — чужая колонка и модель.
+    pytest.param(
+        'set_title = operator.methodcaller("__set__", group, t)\nset_title(Group.title)\n',
+        id="methodcaller-bound-descriptor-set-other-column",
+    ),
+    pytest.param(
+        'asyncio.to_thread(operator.methodcaller("__init__", group, phone=x), Group)\n',
+        id="methodcaller-to-thread-other-model-init",
+    ),
+    # Самопроверка 16-27, заход 3: псевдонимы носителей через атрибут без записи номера.
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.attr = getattr\n"
+        "\n"
+        "    def go(self, group):\n"
+        '        return self.attr(group, "title")\n',
+        id="getattr-self-attribute-carrier-alias-other-attribute",
+    ),
+    pytest.param(
+        'class K:\n    mc = operator.methodcaller\n\nnames = map(K.mc("strip"), rows)\n',
+        id="methodcaller-class-body-carrier-alias-other-method",
+    ),
+    pytest.param(
+        "scv, *rest = set_committed_value, None\n"
+        'scv(account, "status", x)\n',
+        id="starred-tuple-bound-writer-alias-other-attribute",
     ),
 ]
 
