@@ -222,6 +222,8 @@ from typing import Mapping
 
 import pytest
 
+from tests.phone_gate_grammar import REFERENCE_KEYWORDS, module_bindings
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Деревья D-09: всё, что пишет журналы приложения и воркеров.
@@ -585,22 +587,6 @@ def _is_log_callable(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES
     )
 
 
-def _binding_pairs(target: ast.expr, value: ast.expr) -> list[tuple[ast.expr, ast.expr]]:
-    """Пары «цель — значение» одного связывания; кортеж на кортеж той же длины — попарно."""
-    if (
-        isinstance(target, (ast.Tuple, ast.List))
-        and isinstance(value, (ast.Tuple, ast.List))
-        and len(target.elts) == len(value.elts)
-        and not any(isinstance(elt, ast.Starred) for elt in (*target.elts, *value.elts))
-    ):
-        return [
-            pair
-            for sub_target, sub_value in zip(target.elts, value.elts)
-            for pair in _binding_pairs(sub_target, sub_value)
-        ]
-    return [(target, value)]
-
-
 def _bind(target: ast.expr, in_class_body: bool, names: set[str], attributes: set[str]) -> bool:
     """Записать цель связывания; `True`, если множество выросло.
 
@@ -623,8 +609,11 @@ def _bind(target: ast.expr, in_class_body: bool, names: set[str], attributes: se
 def module_log_names(tree: ast.AST) -> ModuleLogNames:
     """Имена журнала, которые модуль `tree` связывает ввозом или связыванием.
 
-    Связывания — присваивание, аннотированное присваивание, оператор `:=` и присваивание
-    в теле класса; кортеж на кортеж той же длины разбирается попарно. Они разбираются до
+    Связывания — по общей грамматике обоих гейтов номера (`module_bindings` модуля
+    `tests/phone_gate_grammar.py`, решение владельца О-12 (а)): присваивание,
+    аннотированное присваивание, оператор `:=` и присваивание в теле класса; кортеж на
+    кортеж разбирается попарно (и со звёздной целью), `getattr(<obj>, "<const>")` приходит
+    атрибутом. Они разбираются до
     неподвижной точки: `lg = logging.getLogger()` делает журналом `lg`, и тогда
     `bound = lg.bind(...)` и `a = lg` — тоже журнал. Значение связывания решает, кем
     становится цель: ссылка на фабрику без вызова — фабрикой (проверяется первой:
@@ -641,8 +630,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     log_functions: set[str] = set()
     log_function_attributes: set[str] = set()
     factories: set[str] = set()
-    class_body = {id(stmt) for node in ast.walk(tree) if isinstance(node, ast.ClassDef) for stmt in node.body}
-    bindings: list[tuple[ast.expr, ast.expr, bool]] = []
+    bindings = module_bindings(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             from_logging = node.level == 0 and node.module in LOGGING_MODULES
@@ -666,14 +654,6 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             for alias in node.names:
                 if alias.name in LOGGING_MODULES and alias.asname:
                     receiver_names.add(alias.asname)
-        elif isinstance(node, ast.Assign):
-            in_class_body = id(node) in class_body
-            for target in node.targets:
-                bindings.extend((sub, value, in_class_body) for sub, value in _binding_pairs(target, node.value))
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            bindings.append((node.target, node.value, id(node) in class_body))
-        elif isinstance(node, ast.NamedExpr):
-            bindings.append((node.target, node.value, False))
 
     changed = True
     while changed:
@@ -779,23 +759,72 @@ def _carries_initial_values(call: ast.Call, names: ModuleLogNames) -> bool:
     )
 
 
+def _is_identified_log_call(call: ast.Call, names: ModuleLogNames) -> bool:
+    """Вызов, который сам — вызов журнала: `print`, метод опознанного получателя, привязка к
+    контексту, вызов функции журнала, `partial(<вызываемое журнала>, …)`, фабрика с
+    начальными значениями."""
+    return (
+        _is_print(call)
+        or _is_log_method_call(call, names)
+        or _is_context_binding(call, names)
+        or _is_log_function_call(call, names)
+        or _is_log_partial(call, names)
+        or _carries_initial_values(call, names)
+    )
+
+
+def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
+    """Вызов журнала, который носитель ссылки сделает за автора (ревью WR-17).
+
+    Носитель — ЛЮБОЙ вызов, который сам вызовом журнала не опознан: `asyncio.to_thread`,
+    `loop.run_in_executor`, `map`, `Context.run`, `run_sync` (`REFERENCE_CARRIERS` общего
+    модуля — словарь шапок и матриц, а не закрытый перечень). Ссылка — первый слева
+    позиционный аргумент без `*`, являющийся вызываемым журнала (`_is_log_callable`), или
+    именованный аргумент из `REFERENCE_KEYWORDS` (`fn=`). Носитель подаёт ссылке аргументы,
+    стоящие ЗА ней (у `fn=` — все позиционные), и именованные, кроме `fn`, — тот же довод,
+    что у `functools.partial`: эти аргументы уйдут в журнал. Синтетический вызов
+    `<ссылка>(<аргументы после неё>, <именованные, кроме fn>)` встаёт на место носителя
+    (`ast.copy_location`). Ссылка без аргументов за ней в журнал ничего не подаёт — судить
+    нечего, и вызовом журнала она не считается; аргумент ДО ссылки (исполнитель у
+    `run_in_executor`) в журнал не уходит.
+    """
+    if _is_identified_log_call(call, names):
+        return []
+    keywords = [keyword for keyword in call.keywords if keyword.arg not in REFERENCE_KEYWORDS]
+    reference: ast.expr | None = None
+    arguments: list[ast.expr] = []
+    for index, argument in enumerate(call.args):
+        if not isinstance(argument, ast.Starred) and _is_log_callable(argument, names):
+            reference = argument
+            arguments = list(call.args[index + 1 :])
+            break
+    if reference is None:
+        for keyword in call.keywords:
+            if keyword.arg in REFERENCE_KEYWORDS and _is_log_callable(keyword.value, names):
+                reference = keyword.value
+                arguments = list(call.args)
+                break
+    if reference is None or not (arguments or keywords):
+        return []
+    return [ast.copy_location(ast.Call(func=reference, args=arguments, keywords=keywords), call)]
+
+
 def python_log_calls(source: str) -> list[ast.Call]:
-    """Вызовы журнала в исходнике Python, в порядке строк."""
+    """Вызовы журнала в исходнике Python, в порядке строк.
+
+    Прежние вызовы журнала (`_is_identified_log_call`) и синтетические вызовы, которые
+    сделает носитель ссылки на вызываемое журнала (`_carried_log_calls`, ревью WR-17).
+    """
     tree = ast.parse(source)
     names = module_log_names(tree)
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and (
-            _is_print(node)
-            or _is_log_method_call(node, names)
-            or _is_context_binding(node, names)
-            or _is_log_function_call(node, names)
-            or _is_log_partial(node, names)
-            or _carries_initial_values(node, names)
-        )
-    ]
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if _is_identified_log_call(node, names):
+            calls.append(node)
+        else:
+            calls.extend(_carried_log_calls(node, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
