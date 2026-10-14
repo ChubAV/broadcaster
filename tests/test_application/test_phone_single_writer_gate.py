@@ -1989,6 +1989,49 @@ def test_a_planted_backfill_with_attribute_keys_reddens_the_gate(tmp_path):
     ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
 
 
+def test_a_planted_backfill_with_a_method_bound_writer_alias_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-14: класс-исполнитель с `self.bum = session.bulk_update_mappings` в `__init__`.
+
+    Класс-исполнитель, который в `__init__` запоминает пишущий API сессии атрибутом, а
+    в другом методе зовёт его через `self.`, — естественная форма скрипта дозаполнения
+    Фазы 20 (D-13). На SQLite в памяти такая запись пишет колонку (замер верификатора
+    раунда 5, `+75`, SQLAlchemy 2.0.46). До плана 16-27 гейт её пропускал: псевдоним
+    пишущего API связывался только присваиванием имени (ревью WR-14; решение владельца
+    О-12 (а): заявление шапки прежнее, предикат догоняет его). Подложенный файл
+    находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_bound_writer.py",
+        "class Backfill:\n"
+        "    def __init__(self, session):\n"
+        "        self.bum = session.bulk_update_mappings\n"
+        "\n"
+        "    def run(self, rows):\n"
+        '        self.bum(MessengerAccount, [{"id": a, "phone": n} for a, n in rows])\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_bound_writer.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_bound_writer.py:6 — {KIND_ROW_MAPPING} — ")
+    ]
+    assert found, (
+        "псевдоним пишущего API, связанный атрибутом в методе, не опознан: "
+        "`self.bum = session.bulk_update_mappings` в `__init__` и "
+        "`self.bum(MessengerAccount, [{'phone': n} for …])` в `run` в "
+        f"scripts/backfill_bound_writer.py гейт пропустил: {offences}"
+    )
+    assert all(
+        "bulk_update_mappings" in offence and "phone" in offence for offence in found
+    ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
+
+
 def test_an_aliased_writer_api_in_the_same_module_is_judged():
     """Пишущий API под псевдонимом ввоза в том же модуле судится как сам API.
 
@@ -4035,6 +4078,82 @@ LITERAL_FORM_CASES = [
         "phone",
         id="getattr-assignment-alias",
     ),
+    # Ревью WR-14, верификация раунда 5 (2026-10-13): пишущий API, связанный
+    # `getattr`-строкой, распаковкой кортежа, `:=`, атрибутом `self.<x>` в методе и
+    # `getattr`-строкой в теле класса. До плана 16-27 гейт давал `[]` на каждой форме,
+    # а на SQLite в памяти каждая записала колонку (замер верификатора, `+71`…`+75`).
+    pytest.param(
+        'bum = getattr(session, "bulk_update_mappings")\n'
+        'bum(MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="getattr-bound-writer-alias",
+    ),
+    pytest.param(
+        "w, touch = setattr, flag_modified\n"
+        'w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="tuple-bound-setattr-alias",
+    ),
+    pytest.param(
+        "w, touch = setattr, flag_modified\n"
+        'account.__dict__["phone"] = x\n'
+        'touch(account, "phone")\n',
+        KIND_SETATTR,
+        "flag_modified",
+        "phone",
+        id="tuple-bound-flag-modified-alias",
+    ),
+    pytest.param(
+        "scv, touch = set_committed_value, flag_modified\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="tuple-bound-set-committed-value-alias",
+    ),
+    pytest.param(
+        "if (w := setattr):\n"
+        '    w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="walrus-bound-setattr-alias",
+    ),
+    pytest.param(
+        "if (scv := set_committed_value):\n"
+        '    scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="walrus-bound-set-committed-value-alias",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self, s):\n"
+        "        self.bum = s.bulk_update_mappings\n"
+        "\n"
+        "    def go(self, p):\n"
+        '        self.bum(MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="method-bound-attribute-alias",
+    ),
+    pytest.param(
+        "class W:\n"
+        '    scv = getattr(attributes, "set_committed_value")\n'
+        "\n"
+        "    def go(self, account, x):\n"
+        '        self.scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="class-body-getattr-bound-alias",
+    ),
 ]
 
 
@@ -4350,6 +4469,26 @@ LEGITIMATE_CASES = [
     pytest.param(
         'stmt = update(groups).values({"ti" + "tle": t})\n',
         id="values-other-constant-concatenation-key",
+    ),
+    # Ревью WR-14 (план 16-27): псевдонимы пишущих API, связанные распаковкой,
+    # атрибутом в методе и `getattr`-строкой, которые номер не пишут.
+    pytest.param(
+        "scv, touch = set_committed_value, flag_modified\n"
+        'scv(account, "status", x)\n',
+        id="tuple-bound-writer-alias-other-attribute",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self, s):\n"
+        "        self.bum = s.bulk_update_mappings\n"
+        "\n"
+        "    def go(self, t):\n"
+        '        self.bum(Group, [{"id": 1, "title": t}])\n',
+        id="method-bound-writer-alias-other-model",
+    ),
+    pytest.param(
+        'strip = getattr(text, "strip")\nlabel = strip()\n',
+        id="getattr-bound-other-method",
     ),
 ]
 
