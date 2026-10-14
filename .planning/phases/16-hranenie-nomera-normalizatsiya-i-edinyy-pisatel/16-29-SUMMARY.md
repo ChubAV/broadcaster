@@ -361,3 +361,9 @@ status: complete
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-14*
+
+## Self-Check: PASSED
+
+- FOUND: `tests/test_phone_gates_parity.py`, `tests/test_phone_privacy_gate.py`, `16-29-SUMMARY.md`
+- FOUND on this branch (`git log 922b915f..HEAD`): e293d1de, 9df72956, 22e1b6bb, 29249009, 5951e6f9, 334b0b9a, 67aed58b, aff284c9, b20c2af7, 90803f88, b31e87d6, e2807607
+- TDD gate: 6 коммитов `test(16-29)` и 6 `feat(16-29)`, каждый `feat` после своего `test`; удалённых файлов в коммитах плана нет
