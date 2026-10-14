@@ -36,20 +36,38 @@ def binding_pairs(target: ast.expr, value: ast.expr) -> list[tuple[ast.expr, ast
 
     Кортеж или список на кортеж или список той же длины без `Starred` — попарно и
     рекурсивно: `w, touch = setattr, flag_modified` связывает `w` с `setattr` и
-    `touch` с `flag_modified`. Распаковка не-литерала (`a, b = pair`) — одна пара
-    «кортеж — значение»: что в ней лежит, решает поток данных.
+    `touch` с `flag_modified`. Цель с одной звёздной частью на литерал без звёзд —
+    попарно позиции до звезды и после неё, звёздная часть получает список середины:
+    `w, *rest = setattr, flag_modified, None` связывает `w` с `setattr`
+    (самопроверка исполнителя 16-27). Распаковка не-литерала (`a, b = pair`) и литерал
+    со звёздной распаковкой (`a, b = *pair, x`) — одна пара «кортеж — значение»: что в
+    них лежит, решает поток данных.
     """
     if (
         isinstance(target, (ast.Tuple, ast.List))
         and isinstance(value, (ast.Tuple, ast.List))
-        and len(target.elts) == len(value.elts)
-        and not any(isinstance(elt, ast.Starred) for elt in (*target.elts, *value.elts))
+        and not any(isinstance(elt, ast.Starred) for elt in value.elts)
     ):
-        return [
-            pair
-            for sub_target, sub_value in zip(target.elts, value.elts)
-            for pair in binding_pairs(sub_target, sub_value)
-        ]
+        stars = [index for index, elt in enumerate(target.elts) if isinstance(elt, ast.Starred)]
+        if not stars and len(target.elts) == len(value.elts):
+            return [
+                pair
+                for sub_target, sub_value in zip(target.elts, value.elts)
+                for pair in binding_pairs(sub_target, sub_value)
+            ]
+        if len(stars) == 1 and len(value.elts) >= len(target.elts) - 1:
+            star = stars[0]
+            tail = len(target.elts) - star - 1
+            middle = value.elts[star : len(value.elts) - tail]
+            starred = target.elts[star]
+            assert isinstance(starred, ast.Starred)
+            rest = ast.copy_location(ast.List(elts=list(middle), ctx=ast.Load()), value)
+            pairs = list(zip(target.elts[:star], value.elts[:star]))
+            pairs.append((starred.value, rest))
+            pairs += list(zip(target.elts[star + 1 :], value.elts[len(value.elts) - tail :]))
+            return [
+                pair for sub_target, sub_value in pairs for pair in binding_pairs(sub_target, sub_value)
+            ]
     return [(target, value)]
 
 
