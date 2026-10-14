@@ -4673,6 +4673,54 @@ LITERAL_FORM_CASES = [
         "phone",
         id="methodcaller-method-bound-model-init",
     ),
+    # Самопроверка 16-27, заход 3: псевдоним самого носителя опознания
+    # (`operator.methodcaller`, встроенного `getattr`), связанный целью-атрибутом или в
+    # теле класса, зовут через атрибут — `self.mc(…)`, `K.attr(…)`.
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, session, p):\n"
+        '        self.mc("bulk_update_mappings", MessengerAccount, [{"id": 1, "phone": p}])(session)\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="methodcaller-self-attribute-carrier-alias",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    mc = operator.methodcaller\n"
+        "\n"
+        'K.mc("set_committed_value", account, "phone", x)(attributes)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="methodcaller-class-body-carrier-alias",
+    ),
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.attr = getattr\n"
+        "\n"
+        "    def go(self, x):\n"
+        '        return self.attr(update(MessengerAccount), "values")({"phone": x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="getattr-self-attribute-carrier-alias",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    attr = getattr\n"
+        "\n"
+        "    def go(self, session, p):\n"
+        '        self.attr(session, "bulk_update_mappings")(MessengerAccount, [{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="getattr-class-body-carrier-alias",
+    ),
 ]
 
 
@@ -5024,6 +5072,20 @@ LEGITIMATE_CASES = [
     pytest.param(
         'asyncio.to_thread(operator.methodcaller("__init__", group, phone=x), Group)\n',
         id="methodcaller-to-thread-other-model-init",
+    ),
+    # Самопроверка 16-27, заход 3: псевдонимы носителей через атрибут без записи номера.
+    pytest.param(
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.attr = getattr\n"
+        "\n"
+        "    def go(self, group):\n"
+        '        return self.attr(group, "title")\n',
+        id="getattr-self-attribute-carrier-alias-other-attribute",
+    ),
+    pytest.param(
+        'class K:\n    mc = operator.methodcaller\n\nnames = map(K.mc("strip"), rows)\n',
+        id="methodcaller-class-body-carrier-alias-other-method",
     ),
 ]
 
