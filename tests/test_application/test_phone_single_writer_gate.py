@@ -290,6 +290,8 @@ from typing import NamedTuple
 
 import pytest
 
+from tests.phone_gate_grammar import binding_name, module_bindings
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Каталоги вселенной гейта. Множество файлов ВЫВОДИТСЯ их обходом.
@@ -1636,11 +1638,18 @@ def _module_model_aliases(tree: ast.AST) -> frozenset[str]:
 def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
     """Псевдонимы имени `name` в ТОМ ЖЕ модуле.
 
-    `from … import <name> as X`, присваивание `X = <name>` и `X = module.<name>`
-    (план 16-17: `Model = models.MessengerAccount`, `bind = functools.partial`), и
-    цепочкой `Y = X`. Область видимости плоская — весь модуль, без учёта функций и
-    классов; псевдоним, заведённый в другом модуле, — поток данных между модулями,
-    и это названная граница предиката.
+    `from … import <name> as X` и связывание по ОБЩЕЙ грамматике обоих гейтов номера
+    (`module_bindings` из `tests/phone_gate_grammar.py`, решение владельца О-12 (а)):
+    присваивание, аннотированное присваивание, распаковка кортежа на кортеж попарно,
+    `:=`, цель-атрибут `self.<x>` / `cls.<x>` в любом методе, тело класса; значение —
+    `<name>`, `module.<name>` или `getattr(<obj>, "<name>")` (читается как атрибут) —
+    план 16-17: `Model = models.MessengerAccount`, `bind = functools.partial`; и
+    цепочкой `Y = X`. Цель-атрибут даёт имя последнего звена (`binding_name`): `self.bum
+    = s.bulk_update_mappings` зовут `self.bum(…)`. До плана 16-27 связывание видело
+    только цель-имя у `=` и аннотированного: распаковка, `:=`, `self.<x> =` в методе
+    и `getattr`-строка проходили гейт (ревью WR-14). Область видимости плоская — весь
+    модуль, без учёта функций и классов; псевдоним, заведённый в другом модуле, —
+    поток данных между модулями, и это названная граница предиката.
     """
     known = {name}
     for node in ast.walk(tree):
@@ -1648,23 +1657,19 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
             for alias in node.names:
                 if alias.name == name and alias.asname:
                     known.add(alias.asname)
+    bindings = module_bindings(tree)
     changed = True
     while changed:
         changed = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                targets, value = node.targets, node.value
-            elif isinstance(node, ast.AnnAssign) and node.value is not None:
-                targets, value = [node.target], node.value
-            else:
-                continue
+        for binding in bindings:
+            value = binding.value
             if (isinstance(value, ast.Name) and value.id in known) or (
                 isinstance(value, ast.Attribute) and value.attr == name
             ):
-                for target in targets:
-                    if isinstance(target, ast.Name) and target.id not in known:
-                        known.add(target.id)
-                        changed = True
+                target = binding_name(binding.target)
+                if target is not None and target not in known:
+                    known.add(target)
+                    changed = True
     return frozenset(known - {name})
 
 
@@ -1694,17 +1699,19 @@ def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
     и `bum = Session.bulk_update_mappings` проходили гейт (ревью WR-12).
 
     `_module_aliases` зовётся только для имён, которые в модуле вообще ввозятся под
-    псевдонимом или стоят значением присваивания, — итог тот же, обход короче.
+    псевдонимом или стоят значением связывания общей грамматики (`module_bindings`
+    из `tests/phone_gate_grammar.py`: распаковка, `:=`, `self.<x> =`, `getattr`-строка
+    — ревью WR-14, план 16-27), — итог тот же, обход короче.
     """
     bound: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             bound.update(alias.name for alias in node.names if alias.asname)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
-            if isinstance(node.value, ast.Name):
-                bound.add(node.value.id)
-            elif isinstance(node.value, ast.Attribute):
-                bound.add(node.value.attr)
+    for binding in module_bindings(tree):
+        if isinstance(binding.value, ast.Name):
+            bound.add(binding.value.id)
+        elif isinstance(binding.value, ast.Attribute):
+            bound.add(binding.value.attr)
     aliases: dict[str, str] = {}
     for name in sorted(judged_names & bound):
         for alias in sorted(_module_aliases(tree, name)):
@@ -1720,19 +1727,16 @@ def _api_alias_targets(tree: ast.AST, api_aliases: dict[str, str]) -> dict[str, 
     (и цепочкой `Y = X`). Синтетический вызов псевдонима берёт этот узел вызываемым и
     сохраняет ПОЛУЧАТЕЛЯ, по которому судятся дескриптор колонки и повторный
     конструктор модели (самопроверка исполнителя 16-22). Ввоз `as` атрибута не даёт.
+
+    Связывания — по общей грамматике `module_bindings` (`tests/phone_gate_grammar.py`,
+    ревью WR-14, план 16-27): «`binding_name(цель)` → значение»; у значения
+    `getattr(<obj>, "<api>")` атрибут сохраняет получателя `<obj>`.
     """
     bindings: dict[str, ast.expr] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            targets, value = node.targets, node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets, value = [node.target], node.value
-        else:
-            continue
-        if isinstance(value, (ast.Name, ast.Attribute)):
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    bindings.setdefault(target.id, value)
+    for binding in module_bindings(tree):
+        target = binding_name(binding.target)
+        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+            bindings.setdefault(target, binding.value)
     found: dict[str, ast.expr] = {}
     for alias, original in api_aliases.items():
         value, seen = bindings.get(alias), {alias}

@@ -19,7 +19,116 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
 
 from __future__ import annotations
 
+import ast
 from typing import NamedTuple
+
+
+class Binding(NamedTuple):
+    """Одно связывание модуля: цель, значение и стоит ли оператор прямо в теле класса."""
+
+    target: ast.expr
+    value: ast.expr
+    in_class_body: bool
+
+
+def binding_pairs(target: ast.expr, value: ast.expr) -> list[tuple[ast.expr, ast.expr]]:
+    """Пары «цель — значение» одного связывания.
+
+    Кортеж или список на кортеж или список той же длины без `Starred` — попарно и
+    рекурсивно: `w, touch = setattr, flag_modified` связывает `w` с `setattr` и
+    `touch` с `flag_modified`. Распаковка не-литерала (`a, b = pair`) — одна пара
+    «кортеж — значение»: что в ней лежит, решает поток данных.
+    """
+    if (
+        isinstance(target, (ast.Tuple, ast.List))
+        and isinstance(value, (ast.Tuple, ast.List))
+        and len(target.elts) == len(value.elts)
+        and not any(isinstance(elt, ast.Starred) for elt in (*target.elts, *value.elts))
+    ):
+        return [
+            pair
+            for sub_target, sub_value in zip(target.elts, value.elts)
+            for pair in binding_pairs(sub_target, sub_value)
+        ]
+    return [(target, value)]
+
+
+def getattr_as_attribute(value: ast.expr) -> ast.expr:
+    """`getattr(<obj>, "<const>")` — как узел `Attribute(<obj>, "<const>")`, иначе как есть.
+
+    Строка в `getattr` называет атрибут литералом так же, как точка: `bum =
+    getattr(session, "bulk_update_mappings")` связывает `bum` с тем же
+    `session.bulk_update_mappings` (ревью WR-14). Два или три позиционных аргумента
+    (третий — значение по умолчанию) и ни одного именованного; узел встаёт на место
+    вызова (`ast.copy_location`), поэтому строка находки — настоящая.
+    """
+    if (
+        isinstance(value, ast.Call)
+        and isinstance(value.func, ast.Name)
+        and value.func.id == "getattr"
+        and len(value.args) in (2, 3)
+        and not value.keywords
+        and not any(isinstance(arg, ast.Starred) for arg in value.args)
+        and isinstance(value.args[1], ast.Constant)
+        and isinstance(value.args[1].value, str)
+    ):
+        return ast.copy_location(
+            ast.Attribute(value=value.args[0], attr=value.args[1].value, ctx=ast.Load()),
+            value,
+        )
+    return value
+
+
+def module_bindings(tree: ast.AST) -> list[Binding]:
+    """Каждое связывание модуля `tree` — по грамматике, общей для обоих гейтов номера.
+
+    Связывания: `ast.Assign` (каждая цель, кортеж на кортеж — попарно,
+    `binding_pairs`), `ast.AnnAssign` со значением и оператор `:=` (`ast.NamedExpr`).
+    Цель — любая: имя, атрибут любой глубины, в том числе `self.<x>` / `cls.<x>` в
+    любом методе; `binding_name` даёт имя, под которым связанное зовут на месте
+    вызова. Значение каждой пары — через `getattr_as_attribute`. `in_class_body` —
+    оператор стоит прямо в теле `ClassDef` (такое имя зовут через `self.` / `cls.`).
+
+    Область видимости плоская — весь модуль, без учёта функций и классов, как у
+    прежних помощников обоих гейтов: имя, однажды связанное, судится в любой
+    функции файла. Вне грамматики — цель `for` (элемент контейнера) и `with … as`
+    (результат `__enter__`): `OUT_OF_GRAMMAR_BINDING_FORMS`.
+    """
+    class_body = {
+        id(statement)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef)
+        for statement in node.body
+    }
+    found: list[Binding] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            in_class_body = id(node) in class_body
+            for target in node.targets:
+                found.extend(
+                    Binding(sub_target, getattr_as_attribute(sub_value), in_class_body)
+                    for sub_target, sub_value in binding_pairs(target, node.value)
+                )
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            found.append(
+                Binding(node.target, getattr_as_attribute(node.value), id(node) in class_body)
+            )
+        elif isinstance(node, ast.NamedExpr):
+            found.append(Binding(node.target, getattr_as_attribute(node.value), False))
+    return found
+
+
+def binding_name(target: ast.expr) -> str | None:
+    """Имя, под которым связанное зовут на месте вызова: `Name.id`, `Attribute.attr`, иначе `None`.
+
+    `self.bum = …` зовут `self.bum(…)`, и последнее звено вызова — `bum`; имя в теле
+    класса зовут через `self.` / `cls.` тем же последним звеном.
+    """
+    if isinstance(target, ast.Name):
+        return target.id
+    if isinstance(target, ast.Attribute):
+        return target.attr
+    return None
 
 
 class BindingForm(NamedTuple):
