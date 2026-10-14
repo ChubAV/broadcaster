@@ -518,10 +518,11 @@ RAW_SQL_PHONE_WRITE = re.compile(
     re.IGNORECASE,
 )
 
-# Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)).
-_SQL_UPDATE = re.compile(r"\bupdate\b", re.IGNORECASE)
-_SQL_SET = re.compile(r"\bset\b", re.IGNORECASE)
-_SQL_WHERE = re.compile(r"\bwhere\b", re.IGNORECASE)
+# Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)). Ключевое слово —
+# не идентификатор в кавычках из одного слова (`"where"`, `[set]`).
+_SQL_UPDATE = re.compile(r'(?<!["`\[])\bupdate\b(?!["`\]])', re.IGNORECASE)
+_SQL_SET = re.compile(r'(?<!["`\[])\bset\b(?!["`\]])', re.IGNORECASE)
+_SQL_WHERE = re.compile(r'(?<!["`\[])\bwhere\b(?!["`\]])', re.IGNORECASE)
 _SQL_PHONE_NAME = re.compile(r"\bphone(?:_is_manual)?\b", re.IGNORECASE)
 _SQL_PHONE_ASSIGNMENT = re.compile(
     r"\bphone(?:_is_manual)?\b" + _SQL_QUOTE + r"\s*=", re.IGNORECASE
@@ -1667,8 +1668,9 @@ def _raw_sql_set_writes(text: str) -> list[str]:
     предложение `SET` — текст после `SET` до первого `WHERE` на НУЛЕВОЙ глубине скобок
     относительно `SET`, до `;` на нулевой глубине, до закрывающей скобки, уводящей
     глубину ниже нуля (оператор внутри скобок), либо до конца строки. Строковые
-    литералы SQL `'…'` пропускаются целиком: слово `where` и скобки внутри них
-    предложение не обрывают. На нулевой глубине предложения запись — (а) колонка
+    литералы SQL `'…'`, комментарии и кавычки не из одного слова пропускаются целиком
+    (`_sql_visible`): слово `where`, скобки и `;` внутри них предложение не обрывают.
+    На нулевой глубине предложения запись — (а) колонка
     номера `phone` / `phone_is_manual` (в кавычке идентификатора `_SQL_QUOTE` или без),
     за которой следует `=`; (б) строчный конструктор — скобка нулевой глубины, на своём
     уровне называющая колонку номера, и за ней `=`, в ЛЮБОЙ позиции списка `SET`.
@@ -1679,7 +1681,7 @@ def _raw_sql_set_writes(text: str) -> list[str]:
     Возвращает найденные записи текстом (`phone =`, `(status, phone) =`); пустой
     список — записи в `SET` нет.
     """
-    plain = _sql_without_literals(text)
+    plain = _sql_visible(text)
     wheres = {match.start() for match in _SQL_WHERE.finditer(plain)}
     writes: list[str] = []
     for update in _SQL_UPDATE.finditer(plain):
@@ -1700,19 +1702,44 @@ def _raw_sql_set_writes(text: str) -> list[str]:
     return writes
 
 
-def _sql_without_literals(text: str) -> str:
-    """SQL с пробелами на месте строковых литералов `'…'`; длина и позиции прежние.
+def _sql_visible(text: str) -> str:
+    """SQL, в котором видна только структура; длина и позиции прежние.
 
-    Удвоенная кавычка `''` внутри литерала закрывает и тут же открывает его — итог тот же.
+    Пробелами заменяются строковые литералы `'…'` (удвоенная кавычка `''` закрывает и
+    тут же открывает литерал — итог тот же), комментарии `-- …` до конца строки и
+    `/* … */`, и идентификатор или строка в кавычках `"…"`, `` `…` ``, `[…]`, если
+    внутри не одно слово: слово `where`, скобки и `;` внутри них предложение `SET` не
+    обрывают и глубину не меняют. Идентификатор из одного слова (`"phone"`,
+    `` `phone_is_manual` ``, `[messenger_accounts]`) виден как есть — он может быть
+    колонкой номера (самопроверка исполнителя 16-28, ось SQL, заход 1: на SQLite
+    `SET [a where b] = 1, phone = :p` пишет колонку).
     """
+    closers = {'"': '"', "`": "`", "[": "]"}
     out: list[str] = []
-    inside = False
-    for char in text:
+    index = 0
+    while index < len(text):
+        char = text[index]
         if char == "'":
-            inside = not inside
-            out.append(" ")
+            end = text.find("'", index + 1)
+            end = len(text) if end < 0 else end + 1
+        elif text.startswith("--", index):
+            end = text.find("\n", index)
+            end = len(text) if end < 0 else end
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = len(text) if end < 0 else end + 2
+        elif char in closers and (close := text.find(closers[char], index + 1)) >= 0:
+            end = close + 1
+            if re.fullmatch(r"\w+", text[index + 1 : close]):
+                out.append(text[index:end])
+                index = end
+                continue
         else:
-            out.append(" " if inside else char)
+            out.append(char)
+            index += 1
+            continue
+        out.append(" " * (end - index))
+        index = end
     return "".join(out)
 
 
