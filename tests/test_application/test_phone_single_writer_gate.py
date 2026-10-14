@@ -290,7 +290,15 @@ from typing import NamedTuple
 
 import pytest
 
-from tests.phone_gate_grammar import binding_name, module_bindings
+from tests.phone_gate_grammar import (
+    BINDING_FORMS,
+    REFERENCE_CARRIERS,
+    BindingForm,
+    IdentificationValue,
+    binding_form_source,
+    binding_name,
+    module_bindings,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -2851,6 +2859,69 @@ def test_every_column_naming_in_every_judged_context_is_a_write(naming):
     )
 
 
+# Значения опознания пишущего API для оси B (`id` — общие с гейтом приватности, план
+# 16-29): как ячейка матрицы называет `set_committed_value` и с какими аргументами его
+# применяет. `methodcaller` применяется к получателю — модулю `attributes`.
+API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
+    IdentificationValue("name", "set_committed_value", '(account, "phone", x)'),
+    IdentificationValue("attribute", "attributes.set_committed_value", '(account, "phone", x)'),
+    IdentificationValue(
+        "getattr-string", 'getattr(attributes, "set_committed_value")', '(account, "phone", x)'
+    ),
+    IdentificationValue("partial", "functools.partial(set_committed_value, account)", '("phone", x)'),
+    IdentificationValue(
+        "methodcaller",
+        'operator.methodcaller("set_committed_value", account, "phone", x)',
+        "(attributes)",
+    ),
+)
+
+
+@pytest.mark.parametrize("form", [pytest.param(f, id=f.id) for f in BINDING_FORMS])
+def test_every_binding_form_of_a_writer_api_alias_is_judged(form: BindingForm):
+    """Каждая форма связывания × каждое значение опознания × каждый способ вызова — находка.
+
+    Ось B («как назван API») была закрытым перечнем самопроверки исполнителя 16-22, и
+    форм связывания, кроме `X = …`, в нём не было: пятый круг одной оси (WR-01 → WR-08
+    → WR-10 → WR-12 → WR-14) открылся именно на ней — `self.bum = s.bulk_update_mappings`
+    в `__init__`, распаковка кортежа, `:=` и `getattr`-строка проходили гейт. Матрица
+    держит ось в суите: каждая форма `BINDING_FORMS` общего модуля подаётся с каждым
+    значением `API_IDENTIFICATION_VALUES` прямым вызовом и через каждый носитель
+    `REFERENCE_CARRIERS` (у `map` аргументы — одноэлементными списками), и ячейка
+    обязана дать ровно одну находку вида `KIND_SETATTR`, предмет которой называет
+    `set_committed_value` и `phone`. Новая форма связывания, значение или носитель дают
+    одну красную строку на форму со всеми промахами сразу. Решение владельца О-12 (а).
+    """
+    cells = [
+        (value, carrier)
+        for value in API_IDENTIFICATION_VALUES
+        for carrier in (None, *REFERENCE_CARRIERS)
+    ]
+    assert len(cells) >= 25, (
+        f"ячеек формы {len(cells)} — меньше 25: матрица проверяет почти ничто"
+    )
+    misses: list[str] = []
+    for value, carrier in cells:
+        source = binding_form_source(form, value, carrier)
+        offences = phone_write_offences(source, "scripts/x.py")
+        if len(offences) == 1:
+            _location, found_kind, subject = offences[0].split(" — ", 2)
+            if (
+                found_kind == KIND_SETATTR
+                and "set_committed_value" in subject
+                and "phone" in subject
+            ):
+                continue
+        way = carrier.name if carrier is not None else "прямой вызов"
+        shown = " ⏎ ".join(line.strip() for line in source.strip().splitlines())
+        misses.append(f"  {value.id} / {way}: `{shown}` → {offences}")
+
+    assert not misses, (
+        f"форма связывания пишущего API не опознана: `{form.id}` — {len(misses)} из "
+        f"{len(cells)} ячеек дали не ровно одну находку «{KIND_SETATTR}»:\n" + "\n".join(misses)
+    )
+
+
 # Литеральные формы записи из ревью WR-01: (исходник, вид, имя вызова, колонка).
 # Каждая видна в исходнике, а до плана 16-09 проходила гейт молча.
 LITERAL_FORM_CASES = [
@@ -4161,6 +4232,41 @@ LITERAL_FORM_CASES = [
         "phone",
         id="class-body-getattr-bound-alias",
     ),
+    # Ревью WR-14, план 16-27 (ось B): псевдоним, связанный с `functools.partial(<API>, …)`
+    # (гейт приватности ту же форму у журнала ловил — асимметрия, которую запрещает
+    # О-12 (а)); `map` подаёт функции элементы итерируемых; `Context.run` — носитель
+    # перечня `REFERENCE_CARRIERS` (закрепка: ловится и до плана).
+    pytest.param(
+        "w = functools.partial(session.bulk_update_mappings, MessengerAccount)\n"
+        'w([{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="partial-bound-writer-alias",
+    ),
+    pytest.param(
+        'list(map(setattr, [account], ["phone"], [x]))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="map-elementwise-setattr",
+    ),
+    pytest.param(
+        "list(map(functools.partial(session.bulk_update_mappings, MessengerAccount), "
+        '[[{"id": 1, "phone": p}]]))\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="map-elementwise-partial-bulk-update",
+    ),
+    pytest.param(
+        "contextvars.copy_context().run(session.bulk_update_mappings, MessengerAccount, "
+        '[{"id": 1, "phone": p}])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="context-run-bulk-update",
+    ),
 ]
 
 
@@ -4496,6 +4602,13 @@ LEGITIMATE_CASES = [
     pytest.param(
         'strip = getattr(text, "strip")\nlabel = strip()\n',
         id="getattr-bound-other-method",
+    ),
+    # План 16-27 (ось B): `map` над чужой функцией и связанный `partial` чужой модели.
+    pytest.param("names = list(map(str.strip, rows))\n", id="map-other-function"),
+    pytest.param(
+        "w = functools.partial(session.bulk_update_mappings, Group)\n"
+        'w([{"id": 1, "title": t}])\n',
+        id="partial-bound-writer-alias-other-model",
     ),
 ]
 

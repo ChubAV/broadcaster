@@ -221,3 +221,82 @@ OUT_OF_GRAMMAR_BINDING_FORMS: tuple[OutOfGrammarForm, ...] = (
         "`with … as f` связывает результат `__enter__`, а не выражение после `with`",
     ),
 )
+
+
+# Носитель, который подаёт функции ЭЛЕМЕНТЫ итерируемых, а не сами итерируемые:
+# функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
+# [x])` зовёт `setattr(account, "phone", x)`).
+ELEMENTWISE_CARRIERS = frozenset({"map"})
+
+
+class ReferenceCarrier(NamedTuple):
+    """Носитель ссылки: вызов, которому подают ссылку на функцию вместе с её аргументами.
+
+    `name` — как носитель назван в шапках гейтов; `template` — выражение с местами
+    `{ref}` (ссылка) и `{args}` (аргументы применения).
+    """
+
+    id: str
+    name: str
+    template: str
+
+
+# Один перечень носителей ссылки обоих гейтов номера (решение владельца О-12 (а)).
+# Это не закрытый список опознания — гейт писателя судит ссылку на пишущий API в
+# любом вызове, — а общий словарь матриц, шапок и правила-паритета.
+REFERENCE_CARRIERS: tuple[ReferenceCarrier, ...] = (
+    ReferenceCarrier("run-sync", "run_sync", "session.run_sync({ref}, {args})"),
+    ReferenceCarrier("to-thread", "to_thread", "asyncio.to_thread({ref}, {args})"),
+    ReferenceCarrier(
+        "run-in-executor", "run_in_executor", "loop.run_in_executor(None, {ref}, {args})"
+    ),
+    ReferenceCarrier("map", "map", "list(map({ref}, {args}))"),
+    ReferenceCarrier(
+        "context-run", "Context.run", "contextvars.copy_context().run({ref}, {args})"
+    ),
+)
+
+
+class IdentificationValue(NamedTuple):
+    """Значение опознания: выражение, которое называет судимый объект, и аргументы применения.
+
+    `call` — аргументы в скобках, `(account, "phone", x)`; каждый гейт инстанцирует
+    свою таблицу значений с общими `id`.
+    """
+
+    id: str
+    value: str
+    call: str
+
+
+def binding_form_source(
+    form: BindingForm | OutOfGrammarForm,
+    value: IdentificationValue,
+    carrier: ReferenceCarrier | None = None,
+) -> str:
+    """Исходник одной ячейки матрицы «форма связывания × значение опознания × носитель».
+
+    Место `{use}` формы получает прямой вызов `ref + call` (при `carrier=None`) или
+    выражение носителя: ссылка формы и аргументы `call`, разобранные через `ast`; у
+    носителя из `ELEMENTWISE_CARRIERS` каждый аргумент подаётся одноэлементным
+    списком. Той же функцией собирают ячейки правило-матрица гейта писателя, матрица
+    гейта приватности, правило-паритет (план 16-29) и самопроверки исполнителей —
+    ячейка одна и та же для обоих гейтов по построению.
+    """
+    ref = form.ref.format(value=value.value)
+    if carrier is None:
+        use = ref + value.call
+    else:
+        applied = ast.parse(f"f{value.call}", mode="eval").body
+        assert isinstance(applied, ast.Call), value.call
+        arguments = [ast.unparse(argument) for argument in applied.args]
+        if carrier.name in ELEMENTWISE_CARRIERS:
+            arguments = [f"[{argument}]" for argument in arguments]
+        arguments += [
+            f"{keyword.arg}={ast.unparse(keyword.value)}"
+            if keyword.arg is not None
+            else f"**{ast.unparse(keyword.value)}"
+            for keyword in applied.keywords
+        ]
+        use = carrier.template.format(ref=ref, args=", ".join(arguments))
+    return form.template.format(value=value.value, use=use)
