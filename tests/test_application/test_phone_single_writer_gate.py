@@ -1977,16 +1977,32 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
 def _rename_aliases(tree: ast.AST, name: str) -> None:
     """Имя каждого псевдонима `name` в том же модуле (`_module_aliases`) — в `name`.
 
-    Только узлы `Name` в контексте чтения: присваивание псевдонима остаётся, а его
+    Только узлы в контексте чтения: присваивание псевдонима остаётся, а его
     использования читаются как исходное имя всеми ветками, опознающими носитель по
-    имени (`_call_name`, `_getattr_literal`, `_referenced_calls`).
+    имени (`_call_name`, `_getattr_literal`, `_referenced_calls`). Имя `Name` — на
+    месте; атрибут `<obj>.<псевдоним>` — узлом `Name(name)` вместо атрибута: псевдоним,
+    связанный целью-атрибутом `self.mc = operator.methodcaller` или в теле класса
+    (`attr = getattr`), зовут через атрибут — `self.mc(…)`, `K.attr(…)`, — и до
+    самопроверки исполнителя 16-27 такой вызов носителем не опознавался. Область
+    видимости плоская, по последнему звену, как у псевдонимов пишущих API.
     """
     aliases = _module_aliases(tree, name)
     if not aliases:
         return
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in aliases:
-            node.id = name
+
+    class _Rename(ast.NodeTransformer):
+        def visit_Name(self, node: ast.Name) -> ast.AST:
+            if isinstance(node.ctx, ast.Load) and node.id in aliases:
+                node.id = name
+            return node
+
+        def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+            self.generic_visit(node)
+            if isinstance(node.ctx, ast.Load) and node.attr in aliases:
+                return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
+            return node
+
+    _Rename().visit(tree)
 
 
 def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
