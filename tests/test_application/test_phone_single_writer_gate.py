@@ -293,6 +293,7 @@ import pytest
 from tests.phone_gate_grammar import (
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
+    OUT_OF_GRAMMAR_BINDING_FORMS,
     REFERENCE_CARRIERS,
     REFERENCE_KEYWORDS,
     BindingForm,
@@ -3080,6 +3081,73 @@ def test_every_binding_form_of_a_writer_api_alias_is_judged(form: BindingForm):
     assert not misses, (
         f"форма связывания пишущего API не опознана: `{form.id}` — {len(misses)} из "
         f"{len(cells)} ячеек дали не ровно одну находку «{KIND_SETATTR}»:\n" + "\n".join(misses)
+    )
+
+
+def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
+    """Шапка обещает ровно то, что видит предикат по оси «как назван API».
+
+    Пятый круг одной оси (WR-01 → WR-08 → WR-10 → WR-12 → WR-14) открылся там, где шапка
+    обещала псевдоним, «связанный присваиванием», а предикат видел только `X = …`.
+    Правило держит шапку и общий модуль вместе: шапка называет общую грамматику
+    связывания `tests/phone_gate_grammar.py` и каждую её форму, каждый носитель
+    `REFERENCE_CARRIERS`, формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`) — в
+    «ГРАНИЦЕ ПРЕДИКАТА» с причиной, а пойманный теперь связанный `partial` — не в пункте
+    (1). Заявление не сужено (решение владельца О-12 (а); запреты 16-09 №2, 16-12 №2,
+    16-17 №2, 16-22 №2).
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    missing: list[str] = []
+    for needle in (
+        "phone_gate_grammar",
+        "распаковк",
+        "`:=`",
+        "`self.<x>`",
+        "`cls.<x>`",
+        '`getattr(<obj>, "<api>")`',
+        *(carrier.name for carrier in REFERENCE_CARRIERS),
+    ):
+        if needle not in flat:
+            missing.append(f"нет «{needle}»")
+    if "тело класса" not in flat and "теле класса" not in flat:
+        missing.append("нет «тело класса»")
+    boundary_start = flat.find("ГРАНИЦА ПРЕДИКАТА")
+    boundary_end = flat.find("Летопись границы", boundary_start)
+    if boundary_start < 0 or boundary_end < 0:
+        missing.append("нет «ГРАНИЦА ПРЕДИКАТА» или «Летопись границы»")
+    else:
+        boundary = flat[boundary_start:boundary_end]
+        item_start = boundary.find("(1) ")
+        item_end = boundary.find("(2) ", item_start)
+        item = boundary[item_start:item_end] if 0 <= item_start < item_end else ""
+        if not item:
+            missing.append("в «ГРАНИЦЕ ПРЕДИКАТА» нет пунктов (1) и (2)")
+        elif "w = partial(" in item:
+            missing.append("пункт (1) всё ещё называет пойманный связанный `partial` (`w = partial(`)")
+        # Как граница называет каждую форму вне грамматики и её причину.
+        named = {
+            "for-target-over-container": ("цель `for`", "элемент контейнера"),
+            "with-as": ("`with … as", "`__enter__`"),
+        }
+        unnamed = {form.id for form in OUT_OF_GRAMMAR_BINDING_FORMS} - set(named)
+        if unnamed:
+            missing.append(f"форма вне грамматики без слов границы в этом правиле: {sorted(unnamed)}")
+        for form, needles in named.items():
+            for needle in needles:
+                if needle not in boundary:
+                    missing.append(f"граница не называет форму вне грамматики {form}: нет «{needle}»")
+    for claim in (
+        "Ловится всякая запись, в которой колонка номера",
+        "слепота предиката, а не граница средства",
+    ):
+        if claim not in flat:
+            missing.append(f"заявление сужено: нет «{claim}»")
+
+    assert not missing, (
+        "шапка гейта писателя не называет общую грамматику связывания, носителей или "
+        "правдивую границу:\n" + "\n".join(f"  {item}" for item in missing)
     )
 
 
