@@ -2679,6 +2679,36 @@ def test_a_raw_sql_phone_write_in_a_string_constant_is_a_write(source):
     ), f"сырой SQL с номером в строковой константе гейт не нашёл: {offences}"
 
 
+def test_a_raw_sql_write_after_a_subquery_in_set_is_a_write():
+    """Присваивание колонки номера в `SET` после подзапроса со своим `WHERE` — запись (WR-16).
+
+    Вид 5 (а) обещает присваивание колонки номера в `SET` до `WHERE` ОПЕРАТОРА, а
+    регулярное выражение до плана 16-28 брало первое слово `where` на любой глубине
+    скобок: подзапрос перед колонкой обрывал срез, и запись проходила гейт. На SQLite
+    оператор пишет колонку (замер верификатора раунда 5, `+7S`). Ревью WR-16; решение
+    владельца О-12 (а): заявление шапки прежнее, предикат догоняет его. Та же запись в
+    склейке `+` двух констант, разрезанной перед `phone`, — одна находка у склейки.
+    """
+    statement = "UPDATE messenger_accounts SET user_id = (SELECT id FROM users WHERE id = 1), "
+    sources = {
+        "константа": (
+            "async def f(s, p):\n"
+            f'    await s.execute(text("{statement}phone = :p"), {{"p": p}})\n'
+        ),
+        "склейка": (
+            "async def f(s, p):\n"
+            f'    await s.execute(text("{statement}" + "phone = :p"), {{"p": p}})\n'
+        ),
+    }
+    for shape, source in sources.items():
+        offences = phone_write_offences(source, "scripts/x.py")
+
+        assert len(offences) == 1 and offences[0].split(" — ")[1] == KIND_RAW_SQL, (
+            f"запись колонки в SET после подзапроса с WHERE не опознана ({shape}): "
+            f"`{source.strip()}` → {offences}"
+        )
+
+
 def test_an_upsert_set_of_a_phone_column_is_a_write():
     """`set_` у `on_conflict_do_update` пишет колонку при конфликте — это запись (WR-01)."""
     source = (
@@ -4970,6 +5000,46 @@ LITERAL_FORM_CASES = [
         "phone",
         id="setattr-nested-getattr-key",
     ),
+    # Ревью WR-16 (верификация раунда 5) и замер планирования 16-28: подзапрос со своим
+    # `WHERE` или строковый литерал со словом `where` перед колонкой в `SET` обрывали
+    # вид 5 (а), а строчный конструктор не первым в списке `SET` вид 5 (б) не видел. На
+    # SQLite каждый такой оператор пишет колонку (`+7S`, `+7ROW`).
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET user_id = '
+        '(SELECT id FROM users WHERE id = 1), phone = :p"), {"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-subquery-before-phone",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"UPDATE messenger_accounts SET note = 'a where b', "
+        'phone = :p"), {"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-literal-with-where-before-phone",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text('UPDATE messenger_accounts SET user_id = "
+        "(SELECT id FROM users WHERE id = 1), \"phone_is_manual\" = 1'), {\"p\": p})\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-subquery-before-quoted-phone-is-manual",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET user_id = '
+        "(SELECT id FROM users WHERE id = 1), (status, phone) = ('x', :p)\"), {\"p\": p})\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-row-constructor-after-assignment",
+    ),
 ]
 
 
@@ -5350,6 +5420,20 @@ LEGITIMATE_CASES = [
     pytest.param(
         'session.bulk_update_mappings(Group, [{"id": 1, getattr(Group.title, "key"): t}])\n',
         id="rows-other-getattr-derivative-key",
+    ),
+    # Ревью WR-16 (план 16-28): фильтр по номеру в `WHERE` оператора и в подзапросе
+    # `SET` записью колонки не является (контроль владельца О-12 (а)).
+    pytest.param(
+        "async def f(s, n, number):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET name = :n WHERE phone = :number"), '
+        '{"n": n, "number": number})\n',
+        id="raw-sql-filter-by-number-in-where",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET user_id = '
+        '(SELECT id FROM users WHERE phone = :p)"), {"p": p})\n',
+        id="raw-sql-subquery-filter-in-set",
     ),
 ]
 
