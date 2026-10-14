@@ -60,7 +60,10 @@
   же>, …)` (`info = logger.info`, `out = print`, `self.out = logger.info`,
   `p = functools.partial(logger.info, …)`, `emit = logger._log`), — функция журнала: её
   вызов есть вызов журнала. Вызовом журнала считаются и сам `functools.partial(<вызываемое журнала>, …)`
-  (его аргументы уйдут в журнал), и вызов, применённый к нему (`partial(…)(…)`).
+  (его аргументы уйдут в журнал), и вызов, применённый к нему (`partial(…)(…)`);
+  `partial` под псевдонимом ввоза или связывания (`from functools import partial as
+  bind_`, `bind_ = functools.partial`) — тот же `partial` (самопроверка исполнителя 16-29;
+  гейт писателя разрешает его псевдонимы с плана 16-22).
 * ПО НОСИТЕЛЮ ССЫЛКИ (ревью WR-17): вызов, которому подано вызываемое журнала —
   позиционным аргументом без `*` или именованным `fn=` (`REFERENCE_KEYWORDS`), — и за
   ссылкой есть аргументы, — вызов журнала: судятся аргументы после ссылки и именованные,
@@ -278,6 +281,7 @@ from tests.phone_gate_grammar import (
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
     REFERENCE_KEYWORDS,
+    Binding,
     BindingForm,
     IdentificationValue,
     binding_form_source,
@@ -523,6 +527,9 @@ class ModuleLogNames:
     `methodcaller(…)`», связанные любой формой общей грамматики (`emit =
     operator.methodcaller("info", …)`, `self.emit = …`, цепочка `g = emit`) — по имени их
     зовут `emit(logger)` / `self.emit(logger)` (ревью WR-17).
+    `partial_names` — имена, под которыми модуль зовёт `functools.partial`
+    (`from functools import partial as bind_`, `bind_ = functools.partial`; самопроверка
+    исполнителя 16-29 — гейт писателя разрешает псевдонимы `partial` с плана 16-22).
     Область видимости — весь модуль. Новые поля — с умолчаниями, чтобы позиционное
     создание по трём прежним полям не ломалось.
     """
@@ -535,6 +542,7 @@ class ModuleLogNames:
     log_function_attributes: frozenset[str] = frozenset()
     methodcaller_names: frozenset[str] = METHODCALLER_NAMES
     methodcallers: tuple[tuple[str, ast.Call], ...] = ()
+    partial_names: frozenset[str] = PARTIAL_NAMES
 
 
 NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
@@ -638,10 +646,11 @@ def _log_function_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LO
 
 
 def _is_log_partial(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
-    """`functools.partial(<вызываемое журнала>, …)`: его аргументы уйдут в журнал."""
+    """`functools.partial(<вызываемое журнала>, …)` (и под псевдонимом модуля,
+    `names.partial_names`): его аргументы уйдут в журнал."""
     return (
         isinstance(node, ast.Call)
-        and _last_name(node.func) in PARTIAL_NAMES
+        and _last_name(node.func) in (PARTIAL_NAMES | names.partial_names)
         and bool(node.args)
         and _is_log_callable(node.args[0], names)
     )
@@ -704,17 +713,17 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     log_functions: set[str] = set()
     log_function_attributes: set[str] = set()
     factories: set[str] = set()
-    methodcaller_names: set[str] = set(METHODCALLER_NAMES)
     bindings = module_bindings(tree)
+    # Обёртки ссылки под другим именем — до опознания журнала: `bind_(logger.info, …)`
+    # судится, как `functools.partial(logger.info, …)`.
+    partial_names = _wrapper_aliases(tree, bindings, PARTIAL_NAMES)
+    methodcaller_names = _wrapper_aliases(tree, bindings, METHODCALLER_NAMES)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             from_logging = node.level == 0 and node.module in LOGGING_MODULES
             for alias in node.names:
                 local = alias.asname or alias.name
-                if alias.name in METHODCALLER_NAMES and alias.asname:
-                    # `from operator import methodcaller as mc` — тот же `methodcaller` (WR-17).
-                    methodcaller_names.add(alias.asname)
-                elif from_logging and alias.name in LOG_METHODS:
+                if from_logging and alias.name in LOG_METHODS:
                     # `from logging import info` / `warning as warn_` — функция журнала (IN-09).
                     log_functions.add(local)
                 elif from_logging and alias.name in LOGGING_MODULE_LOGGERS:
@@ -743,6 +752,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             log_functions=frozenset(log_functions),
             factories=frozenset(factories),
             log_function_attributes=frozenset(log_function_attributes),
+            partial_names=partial_names,
         )
         for target, value, in_class_body in bindings:
             if _is_factory_reference(value, known):
@@ -756,10 +766,9 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
                 changed |= _bind(target, in_class_body, receiver_names, receiver_attributes)
             if _is_log_callable(value, known):
                 changed |= _bind(target, in_class_body, log_functions, log_function_attributes)
-    # `methodcaller` под другим именем и имена, связанные с вызовом `methodcaller(…)`, —
-    # той же общей грамматикой, до неподвижной точки (`mc = operator.methodcaller`,
-    # `emit = mc("info", …)`, `g = emit`). Имя — последнее звено цели (`binding_name`):
-    # `self.emit = …` зовут `self.emit(…)`.
+    # Имена, связанные с вызовом `methodcaller(…)` (и под псевдонимом), — той же общей
+    # грамматикой, до неподвижной точки (`emit = mc("info", …)`, `g = emit`). Имя —
+    # последнее звено цели (`binding_name`): `self.emit = …` зовут `self.emit(…)`.
     methodcallers: dict[str, list[ast.Call]] = {}
     changed = True
     while changed:
@@ -768,12 +777,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             name = binding_name(target)
             if name is None:
                 continue
-            if isinstance(value, (ast.Name, ast.Attribute)) and _last_name(value) in methodcaller_names:
-                if name not in methodcaller_names:
-                    methodcaller_names.add(name)
-                    changed = True
-                continue
-            found = _methodcaller_calls(value, frozenset(methodcaller_names), methodcallers)
+            found = _methodcaller_calls(value, methodcaller_names, methodcallers)
             if not found:
                 continue
             known_calls = methodcallers.setdefault(name, [])
@@ -788,11 +792,41 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
         log_functions=frozenset(log_functions),
         factories=frozenset(factories),
         log_function_attributes=frozenset(log_function_attributes),
-        methodcaller_names=frozenset(methodcaller_names),
+        methodcaller_names=methodcaller_names,
         methodcallers=tuple(
             (name, call) for name, calls in sorted(methodcallers.items()) for call in calls
         ),
+        partial_names=partial_names,
     )
+
+
+def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozenset[str]) -> frozenset[str]:
+    """Имена, под которыми модуль зовёт обёртку ссылки (`functools.partial`, `operator.methodcaller`).
+
+    Исходные имена `originals`; псевдоним ввоза (`from functools import partial as bind_`,
+    `from operator import methodcaller as mc`) и имя или атрибут, связанные с ссылкой на
+    обёртку любой формой общей грамматики (`bind_ = functools.partial`,
+    `self.mc = operator.methodcaller`, цепочка `g = mc`), — до неподвижной точки. Сверяется
+    по последнему имени, как и исходное имя (ревью WR-17, самопроверка исполнителя 16-29).
+    """
+    names = set(originals)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            names.update(alias.asname for alias in node.names if alias.name in originals and alias.asname)
+    changed = True
+    while changed:
+        changed = False
+        for target, value, _in_class_body in bindings:
+            name = binding_name(target)
+            if (
+                name is not None
+                and name not in names
+                and isinstance(value, (ast.Name, ast.Attribute))
+                and _last_name(value) in names
+            ):
+                names.add(name)
+                changed = True
+    return frozenset(names)
 
 
 def _methodcaller_calls(
