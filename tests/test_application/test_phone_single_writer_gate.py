@@ -3285,6 +3285,13 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
             for needle in needles:
                 if needle not in boundary:
                     missing.append(f"граница не называет форму вне грамматики {form}: нет «{needle}»")
+        # Связывание не оператором, а вызовом или через пространство имён (самопроверка
+        # исполнителя 16-27, зонд после захода 4): вне грамматики, названо с причиной.
+        for needle in ('`setattr(self, "f", api)`', '`globals()["f"] = api`'):
+            if needle not in boundary:
+                missing.append(f"граница не называет связывание вне оператора: нет «{needle}»")
+    if "звёздной целью" not in flat:
+        missing.append("нет распаковки со звёздной целью («звёздной целью»)")
     for claim in (
         "Ловится всякая запись, в которой колонка номера",
         "слепота предиката, а не граница средства",
