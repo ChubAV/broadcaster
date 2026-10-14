@@ -2430,6 +2430,19 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("взятый из контейнера", "`with … as lg`"):
         if needle not in boundary:
             missing.append(f"граница стёрла прежний пункт: нет «{needle}»")
+    # Зонд самопроверки исполнителя 16-29 (связывание не оператором): ссылка на вызываемое
+    # журнала, положенная вызовом или через пространство имён, взятая из контейнера,
+    # результатом не-`partial` вызова или обёрнутая `lambda`, — вне общей грамматики; граница
+    # называет её с причиной, как пункт (1) гейта писателя.
+    for needle in (
+        '`setattr(self, "f", logger.info)`',
+        '`globals()["f"] = logger.info`',
+        '`fns["i"](…)`',
+        "`staticmethod(logger.info)`",
+        "`lambda`",
+    ):
+        if needle not in boundary:
+            missing.append(f"граница не называет ссылку на журнал вне грамматики: нет «{needle}»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
