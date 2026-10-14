@@ -5169,6 +5169,45 @@ LITERAL_FORM_CASES = [
         "phone",
         id="raw-sql-row-constructor-after-assignment",
     ),
+    # Самопроверка исполнителя 16-28, ось SQL, заход 1: слово `where` внутри
+    # идентификатора в кавычках (`` `…` ``, `[…]`, `"…"` — у SQLite и строка) или внутри
+    # комментария SQL перед колонкой обрывало предложение `SET`. На SQLite 3.53 каждый
+    # такой оператор пишет колонку (замер исполнителя: `+7NEW`).
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET `a where b` = 1, phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-backtick-identifier-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET [a where b] = 1, phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-bracket-identifier-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = \"a where b\", phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-double-quoted-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = 1 /* where */, phone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-block-comment-with-where-before-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = 1, -- where\\nphone = :p'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-line-comment-with-where-before-phone",
+    ),
 ]
 
 
@@ -5563,6 +5602,17 @@ LEGITIMATE_CASES = [
         '    await s.execute(text("UPDATE messenger_accounts SET user_id = '
         '(SELECT id FROM users WHERE phone = :p)"), {"p": p})\n',
         id="raw-sql-subquery-filter-in-set",
+    ),
+    # Самопроверка 16-28, ось SQL, заход 1: текст `phone = …` внутри строки в двойных
+    # кавычках и внутри комментария SQL колонку не пишет (замер на SQLite 3.53: номер
+    # прежний).
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note = \"phone = 1\"'\n",
+        id="raw-sql-double-quoted-text-with-phone-assignment",
+    ),
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note = 'n' /* phone = :p */ WHERE id = 1\"\n",
+        id="raw-sql-comment-with-phone-assignment",
     ),
 ]
 
