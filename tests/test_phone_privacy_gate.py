@@ -222,7 +222,15 @@ from typing import Mapping
 
 import pytest
 
-from tests.phone_gate_grammar import REFERENCE_KEYWORDS, module_bindings
+from tests.phone_gate_grammar import (
+    BINDING_FORMS,
+    REFERENCE_CARRIERS,
+    REFERENCE_KEYWORDS,
+    BindingForm,
+    IdentificationValue,
+    binding_form_source,
+    module_bindings,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -1960,6 +1968,28 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="run-sync-log-reference",
     ),
+    # Летопись WR-17 (замер планирования 16-29): `operator.methodcaller("<метод>", …)`,
+    # применённый к опознанному журналу, до плана 16-29 вызовом журнала не считался — ни
+    # прямо, ни через связанное имя, ни поданный носителю вместе с журналом, — хотя гейт
+    # писателя опознаёт API по `methodcaller` с плана 16-17.
+    pytest.param(
+        "app/x.py",
+        'operator.methodcaller("info", "x %s", account.phone)(logger)\n',
+        "phone",
+        id="methodcaller-applied-to-a-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        'emit = operator.methodcaller("info", "x %s", account.phone)\nemit(logger)\n',
+        "phone",
+        id="methodcaller-bound-then-applied",
+    ),
+    pytest.param(
+        "app/x.py",
+        'list(map(operator.methodcaller("info", "x %s", account.phone), [logger]))\n',
+        "phone",
+        id="methodcaller-handed-to-map-with-a-logger",
+    ),
 ]
 
 
@@ -2045,6 +2075,57 @@ def test_any_method_of_an_identified_logger_is_a_log_call():
             "метод опознанного журнала вне списка уровней не судится: "
             f"{source!r} прошёл мимо гейта: {offences}"
         )
+
+
+# Значения опознания журнала для матрицы «форма связывания × значение × носитель» (`id` —
+# общие с `API_IDENTIFICATION_VALUES` гейта писателя: правило-паритет
+# `tests/test_phone_gates_parity.py` сверяет их порядок). Как ячейка называет вызываемое
+# журнала и с какими аргументами его применяет; `methodcaller` применяется к получателю —
+# опознанному журналу `logger`.
+LOG_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
+    IdentificationValue("name", "print", '("x %s", account.phone)'),
+    IdentificationValue("attribute", "logger.info", '("x %s", account.phone)'),
+    IdentificationValue("getattr-string", 'getattr(logger, "info")', '("x %s", account.phone)'),
+    IdentificationValue("partial", 'functools.partial(logger.info, "x %s")', "(account.phone)"),
+    IdentificationValue(
+        "methodcaller", 'operator.methodcaller("info", "x %s", account.phone)', "(logger)"
+    ),
+)
+
+
+@pytest.mark.parametrize("form", [pytest.param(f, id=f.id) for f in BINDING_FORMS])
+def test_every_binding_form_of_a_log_reference_is_judged(form: BindingForm):
+    """Каждая форма связывания × каждое значение опознания × каждый способ вызова — находка.
+
+    Ось «как опознан журнал» прошла четыре круга (IN-06 → IN-09 → WR-13 → WR-17): на
+    четвёртом ссылка на метод журнала, поданная носителю (`asyncio.to_thread`,
+    `loop.run_in_executor`, `map`, `Context.run`), уходила мимо гейта, хотя соседний гейт
+    писателя ту же форму ловил. Матрица держит ось в суите: каждая форма `BINDING_FORMS`
+    общего модуля подаётся с каждым значением `LOG_IDENTIFICATION_VALUES` прямым вызовом и
+    через каждый носитель `REFERENCE_CARRIERS` (у `map` аргументы — одноэлементными
+    списками), ячейку собирает `binding_form_source` — та же функция, что у гейта писателя;
+    находки ячейки непусты и называют `phone`. Решение владельца О-12 (а).
+    """
+    cells = [
+        (value, carrier)
+        for value in LOG_IDENTIFICATION_VALUES
+        for carrier in (None, *REFERENCE_CARRIERS)
+    ]
+    assert len(cells) >= 25, f"ячеек формы {len(cells)} — меньше 25: матрица проверяет почти ничто"
+    misses: list[str] = []
+    for value, carrier in cells:
+        source = binding_form_source(form, value, carrier)
+        offences = python_log_offences(source, "app/x.py")
+        if offences and all("phone" in offence for offence in offences):
+            continue
+        way = carrier.name if carrier is not None else "прямой вызов"
+        shown = " ⏎ ".join(line.strip() for line in source.strip().splitlines())
+        misses.append(f"  {value.id} / {way}: `{shown}` → {offences}")
+
+    assert not misses, (
+        f"форма связывания ссылки на журнал не опознана: `{form.id}` — {len(misses)} из "
+        f"{len(cells)} ячеек без находки, называющей `phone`:\n" + "\n".join(misses)
+    )
 
 
 # --- Положительные контроли: ничего не найдено ---------------------------------
@@ -2279,6 +2360,20 @@ POSITIVE_CONTROLS = [
         "    return format_datetime_for_user(log.sent_at, user)\n",
         True,
         id="send-log-attribute-handed-to-a-call-is-judged-without-a-finding",
+    ),
+    # WR-17 (D-17): `methodcaller` судится по получателю, а не по имени метода — применённый
+    # к не-журналу или не применённый к опознанному журналу, он вызовом журнала не считается.
+    pytest.param(
+        "app/x.py",
+        'label = operator.methodcaller("strip")(text)\n',
+        False,
+        id="methodcaller-applied-to-a-non-logger-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        'emit = operator.methodcaller("info", account.phone)\n',
+        False,
+        id="methodcaller-without-an-identified-receiver-is-not-a-log",
     ),
 ]
 
