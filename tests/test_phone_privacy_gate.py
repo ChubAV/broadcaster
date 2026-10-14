@@ -2200,6 +2200,23 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-handed-by-fn-keyword-with-a-logger",
     ),
+    # Самопроверка исполнителя 16-29, заход 1: `functools.partial` под псевдонимом ввоза или
+    # связывания — тот же `partial` (гейт писателя разрешает его псевдонимы с плана 16-22):
+    # `partial` распознавался только по последнему имени `partial`.
+    pytest.param(
+        "app/x.py",
+        'from functools import partial as bind_\n\nbind_(logger.info, "x %s")(account.phone)\n',
+        "phone",
+        id="partial-import-alias-of-a-log-method",
+    ),
+    pytest.param(
+        "app/x.py",
+        "bind_ = functools.partial\n\n\n"
+        "async def f(account):\n"
+        '    await asyncio.to_thread(bind_(logger.info, "x %s"), account.phone)\n',
+        "phone",
+        id="partial-assigned-alias-handed-to-to-thread",
+    ),
 ]
 
 
