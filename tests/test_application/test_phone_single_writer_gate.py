@@ -807,19 +807,12 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Call)
     }
-    # Получатель `methodcaller(…)` — объект его применения `methodcaller(…)(obj)`:
+    # Получатели `methodcaller(…)` — объекты его применения: `methodcaller(…)(obj)`
+    # (самопроверка исполнителя 16-22), вызов связанного имени `f(obj)` и носитель,
+    # который применяет его к следующему аргументу (самопроверка исполнителя 16-27):
     # вызов `obj.<имя>(…)` судится с получателем, по которому судятся дескриптор
-    # колонки и повторный конструктор модели (самопроверка исполнителя 16-22).
-    methodcaller_receivers = {
-        id(node.func): node.args[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Call)
-        and _call_name(node.func) == "methodcaller"
-        and len(node.args) == 1
-        and not isinstance(node.args[0], ast.Starred)
-        and not node.keywords
-    }
+    # колонки и повторный конструктор модели.
+    methodcaller_receivers = _methodcaller_receivers(tree, referable)
     # Ссылки у каждого вызова (`_referenced_calls`). `partial(ref, …)`, поданный
     # другому вызову и разобранный им как носитель ссылки, сам не судится: его
     # аргументы уже стоят в синтетическом вызове внешнего (иначе
@@ -880,19 +873,27 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
             if id(node) not in consumed:
                 for synthetic, referenced, _carrier in references.get(id(node), []):
-                    if (holder := methodcaller_receivers.get(id(node))) is not None:
-                        func = ast.copy_location(
-                            ast.Attribute(value=holder, attr=referenced, ctx=ast.Load()),
+                    holders = methodcaller_receivers.get(id(node), [])
+                    # Без известного применения `methodcaller` судится без получателя;
+                    # каждое применение — свой вызов `obj.<имя>(…)`.
+                    variants = [synthetic] if not holders else [
+                        _synthetic_call(
                             synthetic,
+                            ast.copy_location(
+                                ast.Attribute(value=holder, attr=referenced, ctx=ast.Load()),
+                                synthetic,
+                            ),
+                            list(synthetic.args),
+                            list(synthetic.keywords),
                         )
-                        synthetic = _synthetic_call(
-                            synthetic, func, list(synthetic.args), list(synthetic.keywords)
+                        for holder in holders
+                    ]
+                    for variant in variants:
+                        _judge_call(
+                            *_canonical_call(variant, referenced, api_aliases, alias_targets),
+                            write_names,
+                            record,
                         )
-                    _judge_call(
-                        *_canonical_call(synthetic, referenced, api_aliases, alias_targets),
-                        write_names,
-                        record,
-                    )
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -1344,6 +1345,95 @@ def _partial_aliases(
                 found[name] = found[reference]
                 changed = True
     return found
+
+
+def _methodcaller_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, ast.expr]:
+    """Имена, связанные с `operator.methodcaller(…)` любой формой общей грамматики: «имя → вызов».
+
+    `set_phone = methodcaller("__set__", account, x)`, `self.init = methodcaller(…)`, и
+    цепочкой `g = f`. Имя, которое само судимо, не переводится.
+    """
+    bindings = module_bindings(tree)
+    found: dict[str, ast.expr] = {}
+    changed = True
+    while changed:
+        changed = False
+        for binding in bindings:
+            name = binding_name(binding.target)
+            if name is None or name in found or name in judged_names:
+                continue
+            value = binding.value
+            if isinstance(value, ast.Call) and _call_name(value) == "methodcaller":
+                found[name] = value
+                changed = True
+            elif (
+                isinstance(value, (ast.Name, ast.Attribute))
+                and (reference := _reference_name(value)) in found
+            ):
+                found[name] = found[reference]
+                changed = True
+    return found
+
+
+def _methodcaller_receivers(
+    tree: ast.AST, judged_names: frozenset[str]
+) -> dict[int, list[ast.expr]]:
+    """Получатели каждого `operator.methodcaller(…)` модуля: «id вызова → объекты применения».
+
+    `methodcaller("<имя>", …)` зовёт `obj.<имя>(…)` у объекта, к которому его применили,
+    и дескриптор колонки (`__set__`) и повторный конструктор модели (`__init__`)
+    судятся по этому получателю. Применение — прямое `methodcaller(…)(obj)`, вызов
+    имени, связанного с ним любой формой общей грамматики (`f(obj)`, `self.f(obj)`), и
+    носитель, которому `methodcaller` подан ссылкой вместе с получателем: судится
+    СЛЕДУЮЩИЙ за ним позиционный аргумент (`to_thread(mc, obj)`,
+    `run_in_executor(None, mc, obj)`, `partial(mc, obj)`), у поэлементного носителя
+    — элементы первой итерируемой (`map(mc, [obj])`). До самопроверки исполнителя
+    16-27 получатель брался только у прямого применения: `set_phone =
+    methodcaller("__set__", account, x); set_phone(MessengerAccount.phone)` проходил.
+    """
+    aliases = _methodcaller_aliases(tree, judged_names)
+
+    def methodcaller_of(node: ast.expr) -> ast.expr | None:
+        if isinstance(node, ast.Call) and _call_name(node) == "methodcaller":
+            return node
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            return aliases.get(_reference_name(node) or "")
+        return None
+
+    found: dict[int, dict[int, ast.expr]] = {}
+
+    def add(methodcaller: ast.expr, receiver: ast.expr) -> None:
+        found.setdefault(id(methodcaller), {}).setdefault(id(receiver), receiver)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        applied = methodcaller_of(node.func)
+        if (
+            applied is not None
+            and len(node.args) == 1
+            and not isinstance(node.args[0], ast.Starred)
+            and not node.keywords
+        ):
+            add(applied, node.args[0])
+            continue
+        if _call_name(node) == "methodcaller":
+            continue
+        positional = _forwarded_arguments(list(node.args))
+        for index, argument in enumerate(positional):
+            methodcaller = methodcaller_of(argument)
+            if methodcaller is None:
+                continue
+            after = positional[index + 1 :]
+            if after and not isinstance(after[0], ast.Starred):
+                if _call_name(node) in ELEMENTWISE_CARRIERS:
+                    column = _iterable_elements(after[0])
+                    for element in column[0] if column is not None else []:
+                        add(methodcaller, element)
+                else:
+                    add(methodcaller, after[0])
+            break
+    return {key: list(receivers.values()) for key, receivers in found.items()}
 
 
 # Место элемента итерируемой, которую предикат не раскрывает (параметр, вызов):
