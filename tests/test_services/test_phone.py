@@ -891,7 +891,13 @@ def _manual_extra_digit_enumeration() -> ManualExtraDigitEnumeration:
 # которой правило по длинам не закрывает у них класс «номер плюс лишние цифры»:
 # `MOBILE` — длину допускает сам `MOBILE`; `VOIP_ONLY` — только `VOIP`;
 # `FIXED_LINE` — только `FIXED_LINE` / `FIXED_LINE_OR_MOBILE`. Регион, названный
-# прозой пункта 5, обязан стоять здесь (запрет №3 плана 16-21).
+# прозой пункта 5, обязан стоять здесь (запрет №3 плана 16-21). Эту обязанность
+# держит `_item_five_boundary_problems` (ревью IN-13, решение владельца О-13,
+# план 16-26): каждая из трёх скобок пункта 5 равна множеству регионов таблицы с
+# той же причиной, в обе стороны, и каждый код региона в предложении остатка —
+# ключ таблицы. Летопись: до плана 16-26 правило проверяло только называние
+# региона и его причину по таблице, а не скобку, и обратного вложения не
+# проверяло.
 MANUAL_BOUNDARY_EXAMPLES: dict[str, str] = {
     "NL": "MOBILE",
     "FI": "MOBILE",
@@ -906,8 +912,8 @@ MANUAL_BOUNDARY_EXAMPLES: dict[str, str] = {
 }
 
 
-def _manual_item_five() -> str:
-    """Пункт 5 докстринга `normalize_manual`: строки от «5. » до «6. », склеенные пробелом."""
+def _manual_docstring_item(number: int) -> str:
+    """Пункт `number` докстринга `normalize_manual`: строки от «N. » до «N+1. », склеенные пробелом."""
     tree = ast.parse(PHONE_MODULE.read_text(encoding="utf-8"))
     function = next(
         node
@@ -918,13 +924,18 @@ def _manual_item_five() -> str:
     inside = False
     for line in (ast.get_docstring(function) or "").splitlines():
         stripped = line.strip()
-        if stripped.startswith("5. "):
+        if stripped.startswith(f"{number}. "):
             inside = True
-        elif stripped.startswith("6. "):
+        elif stripped.startswith(f"{number + 1}. "):
             break
         if inside:
             lines.append(stripped)
     return " ".join(lines)
+
+
+def _manual_item_five() -> str:
+    """Пункт 5 докстринга `normalize_manual`: строки от «5. » до «6. », склеенные пробелом."""
+    return _manual_docstring_item(5)
 
 
 def _boundary_cause_holds(cause: str, admitting: list[frozenset[str]]) -> bool:
@@ -943,34 +954,71 @@ def _boundary_cause_holds(cause: str, admitting: list[frozenset[str]]) -> bool:
     return False
 
 
-def test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement():
-    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 1 ПЛАНА 16-21: пункт 5 называет настоящий остаток правила О-7 (а).
+# Три перечня регионов пункта 5 по классу причины `MANUAL_BOUNDARY_EXAMPLES`:
+# скобка после «сам `MOBILE` (», скобка после «только `VOIP` (» и перечень между
+# «у » и « — `FIXED_LINE`» (ревью IN-13, план 16-26).
+ITEM_FIVE_GROUP_PATTERNS: dict[str, str] = {
+    "MOBILE": r"сам `MOBILE` \(([^)]*)\)",
+    "VOIP_ONLY": r"только `VOIP` \(([^)]*)\)",
+    "FIXED_LINE": r"\bу ((?:[A-Z]{2}, )*[A-Z]{2}) — `FIXED_LINE`",
+}
 
-    Ревью WR-11, верификация раунда 4 (2026-10-12), решение владельца О-9 (а)
-    (2026-10-13). До плана пункт 5 докстринга `normalize_manual` называл
-    остатком класса «номер плюс лишние цифры» вне кода 7 только Германию и
-    Израиль, с причиной «переменная длина `FIXED_LINE`», а перебор ручного пути
-    принимал вводы в десятках регионов, и у части из них длину допускает сам
-    `MOBILE` или только `VOIP`. Правило утверждает, что пункт 5 называет замер
-    перебора `_manual_extra_digit_enumeration` — «{принято} из {всего}» вводов,
-    «{число регионов} регион…», «{действительных} из {принято}», — и что каждый
-    регион `MANUAL_BOUNDARY_EXAMPLES` назван пунктом и его причина подтверждена
-    замером по типам.
+# Отрезок пункта 5, где стоит предложение остатка вне кода 7: от первого якоря до
+# второго. Каждый код региона в нём — ключ `MANUAL_BOUNDARY_EXAMPLES`. Отрезок, а
+# не пункт целиком: выше в пункте стоят `RU` («регионом `RU`») и `CR` (из «CR-01»).
+ITEM_FIVE_REMAINDER_ANCHORS = ("У кодов, отличных от 7", "Замер:")
 
-    Зачем живой пересчёт: подъём пина `phonenumberslite` (IN-02, отложено
-    владельцем) изменит числа — и правило покраснеет, а не оставит прозу
-    устаревшей молча. Замер на 2026-10-13 (`phonenumberslite==9.0.41`):
-    «56 из 976» вводов, 36 регионов, «15 из 56» действительных.
+
+def _item_five_groups(item: str) -> dict[str, frozenset[str]]:
+    """Перечни регионов пункта 5 по классу причины; ненайденный перечень в словаре отсутствует."""
+    groups: dict[str, frozenset[str]] = {}
+    for cause, pattern in ITEM_FIVE_GROUP_PATTERNS.items():
+        match = re.search(pattern, item)
+        if match is not None:
+            groups[cause] = frozenset(code.strip() for code in match.group(1).split(","))
+    return groups
+
+
+def _item_five_boundary_problems(
+    item: str, enumeration: ManualExtraDigitEnumeration
+) -> list[str]:
+    """Расхождения текста пункта 5 с замером перебора и таблицей `MANUAL_BOUNDARY_EXAMPLES`.
+
+    Чистая функция над текстом: правило-сверка зовёт её на живом пункте 5, а
+    правила-контроли — на тексте, мутированном в памяти (зубы правила
+    доказываются контролями, а не правкой настоящего файла). Пустой список —
+    проза верна.
+
+    Проверки: три числа замера; каждый регион таблицы назван, принят перебором,
+    и его причина подтверждена замером по типам; каждая скобка пункта найдена и
+    равна множеству регионов таблицы с той же причиной, в обе стороны; каждый код
+    региона в отрезке остатка — ключ таблицы (ревью IN-13, решение владельца О-13).
     """
-    item = _manual_item_five()
-    assert item.startswith("5. "), "антивакуум: в докстринге normalize_manual нет пункта 5"
-    enumeration = _manual_extra_digit_enumeration()
-    assert enumeration.total >= 900, (
-        f"антивакуум: вводов перебора {enumeration.total}, ждали не меньше 900"
-    )
-    assert enumeration.accepted > 0, "антивакуум: ручной путь не принял ни одного ввода перебора"
-
     problems: list[str] = []
+    groups = _item_five_groups(item)
+    for cause in ITEM_FIVE_GROUP_PATTERNS:
+        expected = {region for region, kind in MANUAL_BOUNDARY_EXAMPLES.items() if kind == cause}
+        if cause not in groups:
+            problems.append(f"скобка причины {cause} не найдена в пункте 5")
+            continue
+        extra = sorted(groups[cause] - expected)
+        missing = sorted(expected - groups[cause])
+        if extra:
+            problems.append(f"в скобке причины {cause} лишние против таблицы: {extra}")
+        if missing:
+            problems.append(f"в скобке причины {cause} недостаёт регионов таблицы: {missing}")
+    start_anchor, end_anchor = ITEM_FIVE_REMAINDER_ANCHORS
+    start = item.find(start_anchor)
+    end = item.find(end_anchor, start) if start >= 0 else -1
+    if end < 0:
+        problems.append("отрезок остатка пункта 5 не найден")
+    else:
+        for code in sorted(set(re.findall(r"(?<!\w)[A-Z]{2}(?!\w)", item[start:end]))):
+            if code in phonenumbers.SUPPORTED_REGIONS and code not in MANUAL_BOUNDARY_EXAMPLES:
+                problems.append(
+                    f"регион {code} назван в отрезке остатка пункта 5, но строки "
+                    "MANUAL_BOUNDARY_EXAMPLES у него нет"
+                )
     for claim in (
         f"{enumeration.accepted} из {enumeration.total}",
         f"{len(enumeration.regions)} регион",
@@ -988,11 +1036,120 @@ def test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement():
                 f"причина {cause} у {region} не подтверждена замером: "
                 f"{[sorted(kinds) for kinds in enumeration.admitting[region]]}"
             )
+    return problems
+
+
+def test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement():
+    """⚠️ ЦЕЛЬ RED ЗАДАЧИ 1 ПЛАНА 16-21: пункт 5 называет настоящий остаток правила О-7 (а).
+
+    Ревью WR-11, верификация раунда 4 (2026-10-12), решение владельца О-9 (а)
+    (2026-10-13). До плана пункт 5 докстринга `normalize_manual` называл
+    остатком класса «номер плюс лишние цифры» вне кода 7 только Германию и
+    Израиль, с причиной «переменная длина `FIXED_LINE`», а перебор ручного пути
+    принимал вводы в десятках регионов, и у части из них длину допускает сам
+    `MOBILE` или только `VOIP`. Правило утверждает, что пункт 5 называет замер
+    перебора `_manual_extra_digit_enumeration` — «{принято} из {всего}» вводов,
+    «{число регионов} регион…», «{действительных} из {принято}», — и что каждый
+    регион `MANUAL_BOUNDARY_EXAMPLES` назван пунктом и его причина подтверждена
+    замером по типам. В какой скобке прозы стоит каждый регион и есть ли у
+    региона прозы строка таблицы, судит `_item_five_boundary_problems` — три
+    скобки равны таблице по причине в обе стороны (ревью IN-13, решение
+    владельца О-13, план 16-26).
+
+    Зачем живой пересчёт: подъём пина `phonenumberslite` (IN-02, отложено
+    владельцем) изменит числа — и правило покраснеет, а не оставит прозу
+    устаревшей молча. Замер на 2026-10-13 (`phonenumberslite==9.0.41`):
+    «56 из 976» вводов, 36 регионов, «15 из 56» действительных.
+    """
+    item = _manual_item_five()
+    assert item.startswith("5. "), "антивакуум: в докстринге normalize_manual нет пункта 5"
+    enumeration = _manual_extra_digit_enumeration()
+    assert enumeration.total >= 900, (
+        f"антивакуум: вводов перебора {enumeration.total}, ждали не меньше 900"
+    )
+    assert enumeration.accepted > 0, "антивакуум: ручной путь не принял ни одного ввода перебора"
+
+    problems = _item_five_boundary_problems(item, enumeration)
     assert problems == [], (
         f"пункт 5 не называет замер остатка: {problems}; замер — принято "
         f"{enumeration.accepted} из {enumeration.total}, регионов {len(enumeration.regions)}, "
         f"действительных {enumeration.valid}"
     )
+
+
+def test_the_item_five_rule_reddens_a_region_filed_under_another_cause():
+    """Контроль правила-сверки: регион остатка в чужой скобке пункта 5 краснит правило.
+
+    Ревью IN-13, верификация раунда 5 (2026-10-13), решение владельца О-13. Мутация
+    верификатора в памяти: `TW` перенесён из скобки «только `VOIP`» в скобку «сам
+    `MOBILE`». Проза стала бы ложной (у TW длину допускает только `VOIP`), а
+    правило, проверявшее лишь называние региона и его причину по таблице,
+    оставалось зелёным. Настоящий файл не правится — мутируется текст пункта.
+    """
+    item = _manual_item_five()
+    mutated = item.replace("(NL, FI, ID, MY, AT)", "(NL, FI, ID, MY, AT, TW)").replace(
+        "(TW, ZW)", "(ZW)"
+    )
+    assert mutated != item, "антивакуум: мутация не изменила текст пункта 5"
+    problems = _item_five_boundary_problems(mutated, _manual_extra_digit_enumeration())
+    assert any("TW" in problem for problem in problems), (
+        f"мутация не покраснила правило пункта 5: TW в скобке `MOBILE`, проблемы {problems}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param("(TW, ZW)", "(TW, ZW, RS)", id="in_the_voip_bracket"),
+        pytest.param(" Замер:", " Так же и RS. Замер:", id="in_the_remainder_sentence"),
+    ],
+)
+def test_the_item_five_rule_reddens_a_region_named_without_a_table_row(before, after):
+    """Контроль правила-сверки: регион прозы без строки `MANUAL_BOUNDARY_EXAMPLES` краснит правило.
+
+    Ревью IN-13, верификация раунда 5 (2026-10-13), решение владельца О-13.
+    Комментарий над таблицей обещает обратное вложение «регион, названный прозой
+    пункта 5, стоит в таблице»; `RS`, дописанный в скобку «только `VOIP`» или в
+    предложение остатка вне скобок, — регион без замера причины. Настоящий файл
+    не правится — мутируется текст пункта.
+    """
+    item = _manual_item_five()
+    assert item.count(before) == 1, f"антивакуум: якорь мутации {before!r} не единственный"
+    mutated = item.replace(before, after)
+    assert mutated != item, "антивакуум: мутация не изменила текст пункта 5"
+    problems = _item_five_boundary_problems(mutated, _manual_extra_digit_enumeration())
+    assert any("RS" in problem for problem in problems), (
+        f"мутация не покраснила правило пункта 5: RS без строки таблицы, проблемы {problems}"
+    )
+
+
+def test_item_seven_points_to_its_remainder_in_item_five():
+    """Пункт 7 докстринга `normalize_manual` ссылается на свой остаток в пункте 5.
+
+    Ревью IN-14, верификация раунда 5 (2026-10-13), решение владельца О-13.
+    Пункт 7 — правило по типам аккаунта, закрывающее класс «номер плюс лишние
+    цифры» у кодов, отличных от 7, — читался как полное закрытие класса, а
+    остаток с замером назван в пункте 5. Правило утверждает ссылку на пункт 5
+    и то, что пункт 7 не повторяет ни чисел остатка, ни регионов
+    `MANUAL_BOUNDARY_EXAMPLES`: их пересчитывает вживую только правило
+    пункта 5 (запрет №3 плана 16-21).
+    """
+    item = _manual_docstring_item(7)
+    assert item.startswith("7. "), "антивакуум: в докстринге normalize_manual нет пункта 7"
+    problems: list[str] = []
+    if not re.search(r"пункт(?:е|а)? 5\b", item):
+        problems.append("нет ссылки на пункт 5")
+    counts = re.findall(r"\d+ из \d+", item)
+    if counts:
+        problems.append(f"повторены числа остатка: {counts}")
+    named = [
+        region
+        for region in MANUAL_BOUNDARY_EXAMPLES
+        if re.search(rf"(?<!\w){region}(?!\w)", item)
+    ]
+    if named:
+        problems.append(f"повторены регионы таблицы: {named}")
+    assert problems == [], f"пункт 7 не ссылается на свой остаток в пункте 5: {problems}"
 
 
 def test_every_account_type_example_number_of_the_metadata_is_accepted_by_hand():
