@@ -2178,6 +2178,15 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-handed-to-map-with-a-logger",
     ),
+    # Самопроверка исполнителя 16-29, заход 1: `methodcaller`, поданный носителю ключом
+    # ссылки `fn=` (`REFERENCE_KEYWORDS`), получает позиционные аргументы носителя — как
+    # вызываемое журнала под `fn=`; получатель — первый из них.
+    pytest.param(
+        "app/x.py",
+        'runner.call(logger, fn=operator.methodcaller("info", "x %s", account.phone))\n',
+        "phone",
+        id="methodcaller-handed-by-fn-keyword-with-a-logger",
+    ),
 ]
 
 
