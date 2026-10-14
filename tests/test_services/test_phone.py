@@ -943,6 +943,37 @@ def _boundary_cause_holds(cause: str, admitting: list[frozenset[str]]) -> bool:
     return False
 
 
+def _item_five_boundary_problems(
+    item: str, enumeration: ManualExtraDigitEnumeration
+) -> list[str]:
+    """Расхождения текста пункта 5 с замером перебора и таблицей `MANUAL_BOUNDARY_EXAMPLES`.
+
+    Чистая функция над текстом: правило-сверка зовёт её на живом пункте 5, а
+    правила-контроли — на тексте, мутированном в памяти (зубы правила
+    доказываются контролями, а не правкой настоящего файла). Пустой список —
+    проза верна.
+    """
+    problems: list[str] = []
+    for claim in (
+        f"{enumeration.accepted} из {enumeration.total}",
+        f"{len(enumeration.regions)} регион",
+        f"{enumeration.valid} из {enumeration.accepted}",
+    ):
+        if claim not in item:
+            problems.append(f"нет «{claim}»")
+    for region, cause in MANUAL_BOUNDARY_EXAMPLES.items():
+        if not re.search(rf"(?<![A-Za-z]){region}(?![A-Za-z])", item):
+            problems.append(f"регион {region} не назван")
+        if region not in enumeration.regions:
+            problems.append(f"регион {region} не принят перебором")
+        elif not _boundary_cause_holds(cause, enumeration.admitting[region]):
+            problems.append(
+                f"причина {cause} у {region} не подтверждена замером: "
+                f"{[sorted(kinds) for kinds in enumeration.admitting[region]]}"
+            )
+    return problems
+
+
 def test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement():
     """⚠️ ЦЕЛЬ RED ЗАДАЧИ 1 ПЛАНА 16-21: пункт 5 называет настоящий остаток правила О-7 (а).
 
@@ -970,28 +1001,57 @@ def test_the_manual_path_names_its_extra_digit_boundary_with_its_measurement():
     )
     assert enumeration.accepted > 0, "антивакуум: ручной путь не принял ни одного ввода перебора"
 
-    problems: list[str] = []
-    for claim in (
-        f"{enumeration.accepted} из {enumeration.total}",
-        f"{len(enumeration.regions)} регион",
-        f"{enumeration.valid} из {enumeration.accepted}",
-    ):
-        if claim not in item:
-            problems.append(f"нет «{claim}»")
-    for region, cause in MANUAL_BOUNDARY_EXAMPLES.items():
-        if not re.search(rf"(?<![A-Za-z]){region}(?![A-Za-z])", item):
-            problems.append(f"регион {region} не назван")
-        if region not in enumeration.regions:
-            problems.append(f"регион {region} не принят перебором")
-        elif not _boundary_cause_holds(cause, enumeration.admitting[region]):
-            problems.append(
-                f"причина {cause} у {region} не подтверждена замером: "
-                f"{[sorted(kinds) for kinds in enumeration.admitting[region]]}"
-            )
+    problems = _item_five_boundary_problems(item, enumeration)
     assert problems == [], (
         f"пункт 5 не называет замер остатка: {problems}; замер — принято "
         f"{enumeration.accepted} из {enumeration.total}, регионов {len(enumeration.regions)}, "
         f"действительных {enumeration.valid}"
+    )
+
+
+def test_the_item_five_rule_reddens_a_region_filed_under_another_cause():
+    """Контроль правила-сверки: регион остатка в чужой скобке пункта 5 краснит правило.
+
+    Ревью IN-13, верификация раунда 5 (2026-10-13), решение владельца О-13. Мутация
+    верификатора в памяти: `TW` перенесён из скобки «только `VOIP`» в скобку «сам
+    `MOBILE`». Проза стала бы ложной (у TW длину допускает только `VOIP`), а
+    правило, проверявшее лишь называние региона и его причину по таблице,
+    оставалось зелёным. Настоящий файл не правится — мутируется текст пункта.
+    """
+    item = _manual_item_five()
+    mutated = item.replace("(NL, FI, ID, MY, AT)", "(NL, FI, ID, MY, AT, TW)").replace(
+        "(TW, ZW)", "(ZW)"
+    )
+    assert mutated != item, "антивакуум: мутация не изменила текст пункта 5"
+    problems = _item_five_boundary_problems(mutated, _manual_extra_digit_enumeration())
+    assert any("TW" in problem for problem in problems), (
+        f"мутация не покраснила правило пункта 5: TW в скобке `MOBILE`, проблемы {problems}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        pytest.param("(TW, ZW)", "(TW, ZW, RS)", id="in_the_voip_bracket"),
+        pytest.param(" Замер:", " Так же и RS. Замер:", id="in_the_remainder_sentence"),
+    ],
+)
+def test_the_item_five_rule_reddens_a_region_named_without_a_table_row(before, after):
+    """Контроль правила-сверки: регион прозы без строки `MANUAL_BOUNDARY_EXAMPLES` краснит правило.
+
+    Ревью IN-13, верификация раунда 5 (2026-10-13), решение владельца О-13.
+    Комментарий над таблицей обещает обратное вложение «регион, названный прозой
+    пункта 5, стоит в таблице»; `RS`, дописанный в скобку «только `VOIP`» или в
+    предложение остатка вне скобок, — регион без замера причины. Настоящий файл
+    не правится — мутируется текст пункта.
+    """
+    item = _manual_item_five()
+    assert item.count(before) == 1, f"антивакуум: якорь мутации {before!r} не единственный"
+    mutated = item.replace(before, after)
+    assert mutated != item, "антивакуум: мутация не изменила текст пункта 5"
+    problems = _item_five_boundary_problems(mutated, _manual_extra_digit_enumeration())
+    assert any("RS" in problem for problem in problems), (
+        f"мутация не покраснила правило пункта 5: RS без строки таблицы, проблемы {problems}"
     )
 
 
