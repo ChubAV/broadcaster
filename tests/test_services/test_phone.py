@@ -912,8 +912,8 @@ MANUAL_BOUNDARY_EXAMPLES: dict[str, str] = {
 }
 
 
-def _manual_item_five() -> str:
-    """Пункт 5 докстринга `normalize_manual`: строки от «5. » до «6. », склеенные пробелом."""
+def _manual_docstring_item(number: int) -> str:
+    """Пункт `number` докстринга `normalize_manual`: строки от «N. » до «N+1. », склеенные пробелом."""
     tree = ast.parse(PHONE_MODULE.read_text(encoding="utf-8"))
     function = next(
         node
@@ -924,13 +924,18 @@ def _manual_item_five() -> str:
     inside = False
     for line in (ast.get_docstring(function) or "").splitlines():
         stripped = line.strip()
-        if stripped.startswith("5. "):
+        if stripped.startswith(f"{number}. "):
             inside = True
-        elif stripped.startswith("6. "):
+        elif stripped.startswith(f"{number + 1}. "):
             break
         if inside:
             lines.append(stripped)
     return " ".join(lines)
+
+
+def _manual_item_five() -> str:
+    """Пункт 5 докстринга `normalize_manual`: строки от «5. » до «6. », склеенные пробелом."""
+    return _manual_docstring_item(5)
 
 
 def _boundary_cause_holds(cause: str, admitting: list[frozenset[str]]) -> bool:
@@ -1116,6 +1121,35 @@ def test_the_item_five_rule_reddens_a_region_named_without_a_table_row(before, a
     assert any("RS" in problem for problem in problems), (
         f"мутация не покраснила правило пункта 5: RS без строки таблицы, проблемы {problems}"
     )
+
+
+def test_item_seven_points_to_its_remainder_in_item_five():
+    """Пункт 7 докстринга `normalize_manual` ссылается на свой остаток в пункте 5.
+
+    Ревью IN-14, верификация раунда 5 (2026-10-13), решение владельца О-13.
+    Пункт 7 — правило по типам аккаунта, закрывающее класс «номер плюс лишние
+    цифры» у кодов, отличных от 7, — читался как полное закрытие класса, а
+    остаток с замером назван в пункте 5. Правило утверждает ссылку на пункт 5
+    и то, что пункт 7 не повторяет ни чисел остатка, ни регионов
+    `MANUAL_BOUNDARY_EXAMPLES`: их пересчитывает вживую только правило
+    пункта 5 (запрет №3 плана 16-21).
+    """
+    item = _manual_docstring_item(7)
+    assert item.startswith("7. "), "антивакуум: в докстринге normalize_manual нет пункта 7"
+    problems: list[str] = []
+    if not re.search(r"пункт(?:е|а)? 5\b", item):
+        problems.append("нет ссылки на пункт 5")
+    counts = re.findall(r"\d+ из \d+", item)
+    if counts:
+        problems.append(f"повторены числа остатка: {counts}")
+    named = [
+        region
+        for region in MANUAL_BOUNDARY_EXAMPLES
+        if re.search(rf"(?<!\w){region}(?!\w)", item)
+    ]
+    if named:
+        problems.append(f"повторены регионы таблицы: {named}")
+    assert problems == [], f"пункт 7 не ссылается на свой остаток в пункте 5: {problems}"
 
 
 def test_every_account_type_example_number_of_the_metadata_is_accepted_by_hand():
