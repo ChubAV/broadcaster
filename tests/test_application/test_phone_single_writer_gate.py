@@ -4737,6 +4737,24 @@ LITERAL_FORM_CASES = [
         "phone",
         id="getattr-class-body-carrier-alias",
     ),
+    # Самопроверка 16-27, зонд после захода 4: распаковка кортежа со звёздной целью —
+    # позиции до и после звезды связываются попарно, как у распаковки без неё.
+    pytest.param(
+        "w, *rest = setattr, flag_modified, None\n"
+        'w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="starred-tuple-bound-setattr-alias",
+    ),
+    pytest.param(
+        "*rest, scv = None, set_committed_value\n"
+        'scv(account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="starred-tuple-bound-suffix-alias",
+    ),
 ]
 
 
@@ -5102,6 +5120,11 @@ LEGITIMATE_CASES = [
     pytest.param(
         'class K:\n    mc = operator.methodcaller\n\nnames = map(K.mc("strip"), rows)\n',
         id="methodcaller-class-body-carrier-alias-other-method",
+    ),
+    pytest.param(
+        "scv, *rest = set_committed_value, None\n"
+        'scv(account, "status", x)\n',
+        id="starred-tuple-bound-writer-alias-other-attribute",
     ),
 ]
 
