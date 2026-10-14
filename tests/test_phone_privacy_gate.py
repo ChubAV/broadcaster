@@ -1377,6 +1377,46 @@ def test_a_planted_async_level_call_in_app_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_log_reference_handed_to_to_thread_reddens_the_gate(tmp_path):
+    """WR-17 (D-11, D-17): ссылка на метод опознанного журнала, поданная носителю, — вызов журнала.
+
+    `await asyncio.to_thread(logger.info, "connected %s", account.phone)` зовёт
+    `logger.info("connected %s", account.phone)` в потоке: аргументы за ссылкой уходят в
+    журнал так же, как у `functools.partial(logger.info, …)`. `asyncio.to_thread` уже есть
+    в `app/` (`app/services/image_upload.py:444`), а прогон верификатора раунда 5
+    (2026-10-13) напечатал этой формой номер в журнал (ревью WR-17). Подложенный файл
+    находится тем же обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "services" / "planted_offload.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import asyncio\n"
+        "import structlog\n"
+        "\n"
+        "logger = structlog.get_logger()\n"
+        "\n"
+        "\n"
+        "async def connect(account):\n"
+        '    await asyncio.to_thread(logger.info, "connected %s", account.phone)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+
+    assert app_scan.calls > 0 and any(
+        offence == "app/services/planted_offload.py:8 — имя — phone (владелец connect)"
+        for offence in offences
+    ), (
+        "ссылка на метод журнала, поданная носителю, не опознана: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о "
+        f"`await asyncio.to_thread(logger.info, …, account.phone)`: {offences}"
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -1849,6 +1889,48 @@ NEGATIVE_CONTROLS = [
     pytest.param(
         "app/x.py", 'logger._logger.info("x", phone=p)\n', "phone=", id="wrapped-structlog-logger-attribute"
     ),
+    # Летопись WR-17: до плана 16-29 ссылка на метод опознанного журнала, поданная носителю
+    # (`asyncio.to_thread`, `loop.run_in_executor`, `map`, `Context.run`, `run_sync`, и тот же
+    # журнал через связанное имя), вызовом журнала не считалась, и гейт давал `[]` (ревью
+    # WR-17, верификация раунда 5, 2026-10-13): носитель подаёт ссылке аргументы за ней —
+    # тот же довод, что у `functools.partial`.
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await asyncio.to_thread(logger.info, "connected %s", account.phone)\n',
+        "phone",
+        id="to-thread-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(loop, account):\n"
+        '    await loop.run_in_executor(None, logger.info, "connected %s", account.phone)\n',
+        "phone",
+        id="run-in-executor-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        "list(map(logger.info, [a.phone for a in accounts]))\n",
+        "phone",
+        id="map-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        "contextvars.copy_context().run(logger.info, account.phone)\n",
+        "phone",
+        id="context-run-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        "emit = logger.info\n\n\nasync def f(account):\n    await asyncio.to_thread(emit, account.phone)\n",
+        "phone",
+        id="bound-log-reference-to-thread",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(session, account):\n    await session.run_sync(logger.info, account.phone)\n",
+        "phone",
+        id="run-sync-log-reference",
+    ),
 ]
 
 
@@ -2143,6 +2225,31 @@ POSITIVE_CONTROLS = [
         'async def f(db, i):\n    log = await db.get(SendLog, i)\n    log.mark_failed("timeout")\n',
         True,
         id="send-log-record-method-is-judged-without-a-finding",
+    ),
+    # WR-17: носитель с не-журнальной ссылкой (живая форма `app/services/image_upload.py:444`)
+    # вызовом журнала не считается; ссылка на метод журнала без аргументов за ней в журнал
+    # ничего не подаёт; член записи `SendLog` под именем `log`, поданный вызову с
+    # аргументом за ним, судится как носитель — цена строгости, находок нет (живые места —
+    # `app/pages/history.py:288`, `:289`, `:293`).
+    pytest.param(
+        "app/x.py",
+        "async def f(content):\n    return await asyncio.to_thread(prepare_upload, content)\n",
+        False,
+        id="to-thread-non-log-reference-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f():\n    await asyncio.to_thread(logger.flush)\n",
+        False,
+        id="log-reference-without-arguments-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(db, i, user):\n"
+        "    log = await db.get(SendLog, i)\n"
+        "    return format_datetime_for_user(log.sent_at, user)\n",
+        True,
+        id="send-log-attribute-handed-to-a-call-is-judged-without-a-finding",
     ),
 ]
 
