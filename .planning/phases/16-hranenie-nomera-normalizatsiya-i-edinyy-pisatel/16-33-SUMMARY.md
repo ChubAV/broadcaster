@@ -370,3 +370,9 @@ None - no external service configuration required.
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-16*
+
+## Self-Check: PASSED
+
+- FOUND: tests/test_application/test_phone_single_writer_gate.py
+- FOUND (ancestors of HEAD): 4c286ab3, e478c8c2, 111d39c4, 8aba9962, f6aa7205, e72a8e53, 1e65ce71, c5e82453, ac55d689, 6fbc414c
+- `tests/test_planning` после коммита сводки (`01a4c242`): `218 passed, 2 skipped`
