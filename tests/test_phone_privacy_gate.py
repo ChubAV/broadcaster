@@ -2478,6 +2478,25 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-handed-with-a-literal-argument-list",
     ),
+    # Самопроверка исполнителя 16-32, зонд захода 1 (320 форм): обёртка носителя, связанная с
+    # именем, — `w = partial(asyncio.to_thread, logger.info); w(…)` — то же применение
+    # `partial(…)(…)`, разделённое связыванием, и судится так же (каждое связывание имени
+    # судится общей грамматикой); до цикла 2 давала `[]`.
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        "    w = functools.partial(asyncio.to_thread, logger.info)\n"
+        '    await w("x %s", account.phone)\n',
+        "phone",
+        id="carrier-wrapper-bound-to-a-name-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'w = functools.partial(asyncio.to_thread, operator.methodcaller("info", "x %s", account.phone))\n'
+        "w(logger)\n",
+        "phone",
+        id="carrier-wrapper-bound-to-a-name-methodcaller",
+    ),
 ]
 
 
@@ -2703,7 +2722,15 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     # носителей, которые план 16-34 впишет в `REFERENCE_CARRIERS`, и обёртку итерируемой у
     # `map`, место цены строгости и пункт границы об аргументах, пришедших нелитералом.
     if paragraph:
-        for needle in ("любым именованным аргументом", "литеральный кортеж", "литеральный словарь", "`*[…]`", "`X(…)(…)`"):
+        for needle in (
+            "любым именованным аргументом",
+            "литеральный кортеж",
+            "литеральный словарь",
+            "`*[…]`",
+            "`X(…)(…)`",
+            # Самопроверка 16-32, цикл 2: обёртка носителя, связанная с именем.
+            "`w = partial(asyncio.to_thread, logger.info); w(…)`",
+        ):
             if needle not in paragraph:
                 missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
         if "позиционным аргументом без `*`" in paragraph:
@@ -3020,6 +3047,14 @@ POSITIVE_CONTROLS = [
         "    return build_dispatch_task(ad=ad, group=group, account=account, schedule_id=send_log.schedule_id)\n",
         True,
         id="send-log-member-handed-by-keyword-is-judged-without-a-finding",
+    ),
+    # Самопроверка 16-32, цикл 2: обёртка носителя под именем с не-журнальной ссылкой —
+    # не вызов журнала.
+    pytest.param(
+        "app/x.py",
+        "w = functools.partial(asyncio.to_thread, prepare_upload)\nw(content)\n",
+        False,
+        id="carrier-wrapper-bound-to-a-name-non-log-reference-is-not-a-log",
     ),
 ]
 
