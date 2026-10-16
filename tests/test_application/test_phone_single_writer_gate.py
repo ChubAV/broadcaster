@@ -872,7 +872,9 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # который применяет его к следующему аргументу (самопроверка исполнителя 16-27):
     # вызов `obj.<имя>(…)` судится с получателем, по которому судятся дескриптор
     # колонки и повторный конструктор модели.
-    methodcaller_receivers = _methodcaller_receivers(tree, referable)
+    # Имя, которое ещё и псевдоним пишущего API, переводится и как `methodcaller` /
+    # `partial`: каждое связывание имени судится (ревью WR-18, план 16-31).
+    methodcaller_receivers = _methodcaller_receivers(tree, judged_names)
     # Ссылки у каждого вызова (`_referenced_calls`). `partial(ref, …)`, поданный
     # другому вызову и разобранный им как носитель ссылки, сам не судится: его
     # аргументы уже стоят в синтетическом вызове внешнего (иначе
@@ -882,7 +884,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     partial_names = PARTIAL_NAMES | _module_aliases(tree, "partial")
     # Имена, связанные с `partial(<API>, …)` любой формой общей грамматики (ревью
     # WR-14, план 16-27): вызов и ссылка такого имени судятся как `partial(…)(…)`.
-    partial_aliases = _partial_aliases(tree, referable, partial_names)
+    partial_aliases = _partial_aliases(tree, referable, partial_names, judged_names)
     references = {
         id(node): _referenced_calls(node, referable, partial_names, partial_aliases)
         for node in ast.walk(tree)
@@ -903,7 +905,12 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         for node in ast.walk(tree)
         if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load)
     }
-    consumed |= {id(value) for alias, value in partial_aliases.items() if alias in used}
+    consumed |= {
+        id(value)
+        for alias, values in partial_aliases.items()
+        if alias in used
+        for value in values
+    }
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -926,9 +933,10 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         elif isinstance(node, ast.Call):
             name = _call_name(node)
             if name is not None:
-                _judge_call(
-                    *_canonical_call(node, name, api_aliases, alias_targets), write_names, record
-                )
+                # Каждое связывание имени судится (ревью WR-18): вызов псевдонима — по
+                # каждому исходному API и каждой его цели.
+                for canonical, original in _canonical_call(node, name, api_aliases, alias_targets):
+                    _judge_call(canonical, original, write_names, record)
             # `methodcaller("…", …)` судится у себя: его применение подаёт объект,
             # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
             if id(node) not in consumed:
@@ -949,11 +957,10 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                         for holder in holders
                     ]
                     for variant in variants:
-                        _judge_call(
-                            *_canonical_call(variant, referenced, api_aliases, alias_targets),
-                            write_names,
-                            record,
-                        )
+                        for canonical, original in _canonical_call(
+                            variant, referenced, api_aliases, alias_targets
+                        ):
+                            _judge_call(canonical, original, write_names, record)
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
@@ -980,7 +987,13 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         ):
             record(node, KIND_RAW_SQL, _raw_sql_subject(folded))
 
-    return sorted(found)
+    # Одна находка на (строка, столбец, вид): вызов имени, связанного с несколькими
+    # целями, судится по каждой, но место записи одно (ревью WR-18, план 16-31);
+    # остаётся первая в порядке обхода.
+    unique: dict[tuple[int, int, str], tuple[int, int, str, str]] = {}
+    for write in found:
+        unique.setdefault(write[:3], write)
+    return sorted(unique.values())
 
 
 def _judge_call(
@@ -1330,39 +1343,48 @@ BoundReference = tuple[str, ast.expr, list[ast.expr], list[ast.keyword]]
 def _bound_reference(
     node: ast.expr | None,
     partial_names: frozenset[str] = PARTIAL_NAMES,
-    partial_aliases: dict[str, ast.expr] | None = None,
+    partial_aliases: dict[str, list[ast.expr]] | None = None,
     seen: frozenset[str] = frozenset(),
-) -> BoundReference | None:
-    """Ссылка на функцию — голая или внутри `functools.partial(…)` с аргументами.
+) -> list[BoundReference]:
+    """Ссылки на функцию — голая или внутри `functools.partial(…)` с аргументами.
 
-    `s.bulk_update_mappings` → (`bulk_update_mappings`, ссылка, [], []);
+    `s.bulk_update_mappings` → [(`bulk_update_mappings`, ссылка, [], [])];
     `partial(s.bulk_update_mappings, M, mapper=…)` → та же ссылка с привязанными
     `M` и `mapper=…`; `partial(partial(ref, a), b)` — рекурсивно (самопроверка
     исполнителя 16-17: `run_in_executor(None, partial(ref, M), rows)` — обычная
-    форма, у `run_in_executor` нет именованных аргументов).
+    форма, у `run_in_executor` нет именованных аргументов). Не ссылка — пустой список.
 
     Имя, связанное с `functools.partial(<ссылка>, …)` в том же модуле
     (`partial_aliases`, `_partial_aliases`), — та же ссылка с привязанными
     аргументами: `w = partial(s.bulk_update_mappings, M); to_thread(w, rows)` (ревью
-    WR-14, план 16-27; гейт приватности ту же форму у журнала ловил).
+    WR-14, план 16-27; гейт приватности ту же форму у журнала ловил). КАЖДОЕ
+    связывание имени с `partial` даёт свою ссылку (ревью WR-18, план 16-31: `w =
+    partial(s.bulk_update_mappings, M); w = partial(setattr, account)` — две ссылки,
+    а не первая), и само имя остаётся ссылкой — на случай, если оно ещё и
+    псевдоним пишущего API; вызывающий отбирает ссылки на судимые имена.
     """
     name = _reference_name(node)
     if name is not None:
         assert node is not None
+        found: list[BoundReference] = []
         if partial_aliases and name in partial_aliases and name not in seen:
-            return _bound_reference(
-                partial_aliases[name], partial_names, partial_aliases, seen | {name}
-            )
-        return name, node, [], []
+            for value in partial_aliases[name]:
+                found.extend(
+                    _bound_reference(value, partial_names, partial_aliases, seen | {name})
+                )
+        found.append((name, node, [], []))
+        return found
     if isinstance(node, ast.Call) and _call_name(node) in partial_names:
         positional = _positional_arguments(node)
         if positional and positional[0] is not None:
-            inner = _bound_reference(positional[0], partial_names, partial_aliases, seen)
-            if inner is not None:
-                referenced, func, args, keywords = inner
-                rest = _forwarded_arguments(list(node.args))[1:]
-                return referenced, func, args + rest, keywords + list(node.keywords)
-    return None
+            rest = _forwarded_arguments(list(node.args))[1:]
+            return [
+                (referenced, func, args + rest, keywords + list(node.keywords))
+                for referenced, func, args, keywords in _bound_reference(
+                    positional[0], partial_names, partial_aliases, seen
+                )
+            ]
+    return []
 
 
 def _synthetic_call(
@@ -1372,10 +1394,26 @@ def _synthetic_call(
     return ast.copy_location(ast.Call(func=func, args=args, keywords=keywords), origin)
 
 
+def _add_bound_values(found: dict[str, list[ast.expr]], name: str, values: list[ast.expr]) -> bool:
+    """Дописать в список имени значения, которых в нём ещё нет (по узлу); вырос ли список."""
+    present = found.setdefault(name, [])
+    grown = False
+    for value in values:
+        if not any(value is known for known in present):
+            present.append(value)
+            grown = True
+    if not present:
+        del found[name]
+    return grown
+
+
 def _partial_aliases(
-    tree: ast.AST, judged_names: frozenset[str], partial_names: frozenset[str]
-) -> dict[str, ast.expr]:
-    """Имена, связанные с `functools.partial(<судимый API>, …)` в том же модуле: «имя → `partial`».
+    tree: ast.AST,
+    judged_names: frozenset[str],
+    partial_names: frozenset[str],
+    untranslated: frozenset[str] | None = None,
+) -> dict[str, list[ast.expr]]:
+    """Имена, связанные с `functools.partial(<судимый API>, …)` в том же модуле: «имя → `partial`-ы».
 
     Связывание — любой формой общей грамматики (`module_bindings`): `=`,
     аннотированное, распаковка, `:=`, `self.<x>` / `cls.<x>` в любом методе, тело
@@ -1383,58 +1421,68 @@ def _partial_aliases(
     модуле) над ссылкой, которую `_bound_reference` опознаёт как судимый API. До плана
     16-27 пункт (1) границы называл `w = partial(…); w(rows)` «результатом другого
     вызова», а гейт приватности ту же форму у журнала ловил — асимметрия, которую
-    запрещает решение владельца О-12 (а) (ревью WR-14). Имя, которое само судимо, не
-    переводится.
+    запрещает решение владельца О-12 (а) (ревью WR-14). Имя из `untranslated` (по
+    умолчанию — `judged_names`; само судимое имя) не переводится.
+
+    Карта многозначна (ревью WR-18, план 16-31): КАЖДОЕ связывание имени судится — `w =
+    partial(s.bulk_update_mappings, M)` в одной функции и `w = partial(setattr,
+    account)` в другой дают имени два значения в порядке обхода; до плана держалось
+    первое, и `w("phone", x)` судился как `bulk_update_mappings(…)`. Неподвижная точка
+    — по росту списков.
     """
+    skip = judged_names if untranslated is None else untranslated
     bindings = module_bindings(tree)
-    found: dict[str, ast.expr] = {}
+    found: dict[str, list[ast.expr]] = {}
     changed = True
     while changed:
         changed = False
         for binding in bindings:
             name = binding_name(binding.target)
-            if name is None or name in found or name in judged_names:
+            if name is None or name in skip:
                 continue
             value = binding.value
             if isinstance(value, ast.Call) and _call_name(value) in partial_names:
-                bound = _bound_reference(value, partial_names, found)
-                if bound is not None and bound[0] in judged_names:
-                    found[name] = value
-                    changed = True
+                bounds = _bound_reference(value, partial_names, found)
+                if any(bound[0] in judged_names for bound in bounds):
+                    changed |= _add_bound_values(found, name, [value])
             elif (
                 isinstance(value, (ast.Name, ast.Attribute))
                 and (reference := _reference_name(value)) in found
+                and reference != name
             ):
-                found[name] = found[reference]
-                changed = True
+                changed |= _add_bound_values(found, name, list(found[reference]))
     return found
 
 
-def _methodcaller_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, ast.expr]:
-    """Имена, связанные с `operator.methodcaller(…)` любой формой общей грамматики: «имя → вызов».
+def _methodcaller_aliases(
+    tree: ast.AST, judged_names: frozenset[str]
+) -> dict[str, list[ast.expr]]:
+    """Имена, связанные с `operator.methodcaller(…)` любой формой общей грамматики: «имя → вызовы».
 
     `set_phone = methodcaller("__set__", account, x)`, `self.init = methodcaller(…)`, и
-    цепочкой `g = f`. Имя, которое само судимо, не переводится.
+    цепочкой `g = f`. Имя, которое само судимо, не переводится. Карта многозначна (ревью
+    WR-18, план 16-31): каждое связывание имени с `methodcaller(…)` — своё значение, в
+    порядке обхода; `f = methodcaller("noop"); f = methodcaller("__set__", a, x);
+    f(M.phone)` до плана судил получателя только у первого.
     """
     bindings = module_bindings(tree)
-    found: dict[str, ast.expr] = {}
+    found: dict[str, list[ast.expr]] = {}
     changed = True
     while changed:
         changed = False
         for binding in bindings:
             name = binding_name(binding.target)
-            if name is None or name in found or name in judged_names:
+            if name is None or name in judged_names:
                 continue
             value = binding.value
             if isinstance(value, ast.Call) and _call_name(value) == "methodcaller":
-                found[name] = value
-                changed = True
+                changed |= _add_bound_values(found, name, [value])
             elif (
                 isinstance(value, (ast.Name, ast.Attribute))
                 and (reference := _reference_name(value)) in found
+                and reference != name
             ):
-                found[name] = found[reference]
-                changed = True
+                changed |= _add_bound_values(found, name, list(found[reference]))
     return found
 
 
@@ -1456,12 +1504,14 @@ def _methodcaller_receivers(
     """
     aliases = _methodcaller_aliases(tree, judged_names)
 
-    def methodcaller_of(node: ast.expr) -> ast.expr | None:
+    def methodcallers_of(node: ast.expr) -> list[ast.expr]:
+        # Имя, связанное с `methodcaller(…)` несколько раз, применяет КАЖДОЕ своё
+        # значение (ревью WR-18, план 16-31).
         if isinstance(node, ast.Call) and _call_name(node) == "methodcaller":
-            return node
+            return [node]
         if isinstance(node, (ast.Name, ast.Attribute)):
-            return aliases.get(_reference_name(node) or "")
-        return None
+            return list(aliases.get(_reference_name(node) or "", []))
+        return []
 
     found: dict[int, dict[int, ast.expr]] = {}
 
@@ -1471,30 +1521,32 @@ def _methodcaller_receivers(
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        applied = methodcaller_of(node.func)
+        applied = methodcallers_of(node.func)
         if (
-            applied is not None
+            applied
             and len(node.args) == 1
             and not isinstance(node.args[0], ast.Starred)
             and not node.keywords
         ):
-            add(applied, node.args[0])
+            for methodcaller in applied:
+                add(methodcaller, node.args[0])
             continue
         if _call_name(node) == "methodcaller":
             continue
         positional = _forwarded_arguments(list(node.args))
         for index, argument in enumerate(positional):
-            methodcaller = methodcaller_of(argument)
-            if methodcaller is None:
+            methodcallers = methodcallers_of(argument)
+            if not methodcallers:
                 continue
             after = positional[index + 1 :]
             if after and not isinstance(after[0], ast.Starred):
-                if _call_name(node) in ELEMENTWISE_CARRIERS:
-                    column = _iterable_elements(after[0])
-                    for element in column[0] if column is not None else []:
-                        add(methodcaller, element)
-                else:
-                    add(methodcaller, after[0])
+                for methodcaller in methodcallers:
+                    if _call_name(node) in ELEMENTWISE_CARRIERS:
+                        column = _iterable_elements(after[0])
+                        for element in column[0] if column is not None else []:
+                            add(methodcaller, element)
+                    else:
+                        add(methodcaller, after[0])
             break
     return {key: list(receivers.values()) for key, receivers in found.items()}
 
@@ -1567,7 +1619,7 @@ def _referenced_calls(
     call: ast.Call,
     judged_names: frozenset[str],
     partial_names: frozenset[str] = PARTIAL_NAMES,
-    partial_aliases: dict[str, ast.expr] | None = None,
+    partial_aliases: dict[str, list[ast.expr]] | None = None,
 ) -> list[tuple[ast.Call, str, ast.expr | None]]:
     """Вызовы пишущего API, названного в `call` ссылкой или строкой.
 
@@ -1590,6 +1642,9 @@ def _referenced_calls(
       итерируемые, и функция получает их ЭЛЕМЕНТЫ (`_elementwise_arguments`): одна
       позиция — один синтетический вызов (план 16-27).
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
+    Ссылка, за которой стоит несколько связываний (`partial_aliases` многозначна — ревью
+    WR-18, план 16-31), даёт синтетический вызов на КАЖДОЕ; находки одного места
+    дедуплицирует `_phone_writes`.
     """
     name = _call_name(call)
     if name == "methodcaller":
@@ -1604,22 +1659,31 @@ def _referenced_calls(
             synthetic = _synthetic_call(call, func, rest, list(call.keywords))
             return [(synthetic, head.value, None)]
         return []
+    if partial_aliases and name in partial_aliases:
+        # `w = partial(s.bulk_update_mappings, M); w(rows)` — как `partial(…)(rows)`,
+        # по каждому связыванию `w` с `partial` (ревью WR-18). Имя, которое ЕЩЁ и
+        # псевдоним пишущего API, судится и как он — у `_canonical_call`.
+        applications = [
+            (
+                _synthetic_call(
+                    call,
+                    func,
+                    bound_args + _forwarded_arguments(list(call.args)),
+                    bound_keywords + list(call.keywords),
+                ),
+                referenced,
+                None,
+            )
+            for value in partial_aliases[name]
+            for referenced, func, bound_args, bound_keywords in _bound_reference(
+                value, partial_names, partial_aliases, frozenset({name})
+            )
+            if referenced in judged_names
+        ]
+        if applications:
+            return applications
     if name in judged_names or name == "getattr":
         return []
-    if partial_aliases and name in partial_aliases:
-        # `w = partial(s.bulk_update_mappings, M); w(rows)` — как `partial(…)(rows)`.
-        bound = _bound_reference(
-            partial_aliases[name], partial_names, partial_aliases, frozenset({name})
-        )
-        if bound is not None and bound[0] in judged_names:
-            referenced, func, bound_args, bound_keywords = bound
-            synthetic = _synthetic_call(
-                call,
-                func,
-                bound_args + _forwarded_arguments(list(call.args)),
-                bound_keywords + list(call.keywords),
-            )
-            return [(synthetic, referenced, None)]
     source, outer_args, outer_keywords = call, [], []
     if isinstance(call.func, ast.Call) and _call_name(call.func) not in (
         "getattr",
@@ -1633,46 +1697,63 @@ def _referenced_calls(
     forwarded = _forwarded_arguments(list(source.args))
     keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
     for index, argument in enumerate(positional):
-        bound = _bound_reference(argument, partial_names, partial_aliases)
-        if argument is not None and bound is not None and bound[0] in judged_names:
-            referenced, func, bound_args, bound_keywords = bound
-            after = forwarded[index + 1 :]
-            if name in ELEMENTWISE_CARRIERS:
-                # `map(setattr, [account], ["phone"], [x])` зовёт
-                # `setattr(account, "phone", x)`: функция получает элементы.
-                return [
-                    (
-                        _synthetic_call(
-                            call, func, bound_args + elements, bound_keywords + keywords
-                        ),
-                        referenced,
-                        argument,
-                    )
-                    for elements in _elementwise_arguments(after)
-                ]
-            synthetic = _synthetic_call(
-                call,
-                func,
-                bound_args + after + outer_args,
-                bound_keywords + keywords + outer_keywords,
+        if argument is None:
+            continue
+        bounds = [
+            bound
+            for bound in _bound_reference(argument, partial_names, partial_aliases)
+            if bound[0] in judged_names
+        ]
+        if not bounds:
+            continue
+        after = forwarded[index + 1 :]
+        if name in ELEMENTWISE_CARRIERS:
+            # `map(setattr, [account], ["phone"], [x])` зовёт
+            # `setattr(account, "phone", x)`: функция получает элементы.
+            return [
+                (
+                    _synthetic_call(call, func, bound_args + elements, bound_keywords + keywords),
+                    referenced,
+                    argument,
+                )
+                for referenced, func, bound_args, bound_keywords in bounds
+                for elements in _elementwise_arguments(after)
+            ]
+        return [
+            (
+                _synthetic_call(
+                    call,
+                    func,
+                    bound_args + after + outer_args,
+                    bound_keywords + keywords + outer_keywords,
+                ),
+                referenced,
+                argument,
             )
-            return [(synthetic, referenced, argument)]
+            for referenced, func, bound_args, bound_keywords in bounds
+        ]
     for keyword, value in _named_arguments(source):
-        bound = (
-            _bound_reference(value, partial_names, partial_aliases)
-            if keyword in REFERENCE_KEYWORDS
-            else None
-        )
-        if bound is not None and bound[0] in judged_names:
-            referenced, func, bound_args, bound_keywords = bound
-            rest = forwarded
-            synthetic = _synthetic_call(
-                call,
-                func,
-                bound_args + rest + outer_args,
-                bound_keywords + keywords + outer_keywords,
-            )
-            return [(synthetic, referenced, value)]
+        if keyword not in REFERENCE_KEYWORDS:
+            continue
+        bounds = [
+            bound
+            for bound in _bound_reference(value, partial_names, partial_aliases)
+            if bound[0] in judged_names
+        ]
+        if bounds:
+            return [
+                (
+                    _synthetic_call(
+                        call,
+                        func,
+                        bound_args + forwarded + outer_args,
+                        bound_keywords + keywords + outer_keywords,
+                    ),
+                    referenced,
+                    value,
+                )
+                for referenced, func, bound_args, bound_keywords in bounds
+            ]
     return []
 
 
@@ -2241,8 +2322,8 @@ def _rename_aliases(tree: ast.AST, name: str) -> None:
     _Rename().visit(tree)
 
 
-def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
-    """Псевдонимы пишущих API в ТОМ ЖЕ модуле: «псевдоним → исходное имя».
+def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, frozenset[str]]:
+    """Псевдонимы пишущих API в ТОМ ЖЕ модуле: «псевдоним → множество исходных имён».
 
     Для каждого имени из `judged_names` (`_judged_call_names`) — его псевдонимы
     `_module_aliases`: ввоз `from … import <имя> as X`, присваивание `X = <имя>` и
@@ -2255,6 +2336,12 @@ def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
     псевдонимом или стоят значением связывания общей грамматики (`module_bindings`
     из `tests/phone_gate_grammar.py`: распаковка, `:=`, `self.<x> =`, `getattr`-строка
     — ревью WR-14, план 16-27), — итог тот же, обход короче.
+
+    Карта многозначна (ревью WR-18, план 16-31): КАЖДОЕ связывание имени судится.
+    Псевдоним, связанный с несколькими пишущими API, — `w = session.bulk_update_mappings`
+    в одной функции и `w = setattr` в другой, — получает их все; до плана
+    `aliases.setdefault` оставлял одно, первое по алфавиту, и `w(account, "phone", x)`
+    судился как `bulk_update_mappings(…)`.
     """
     bound: set[str] = set()
     for node in ast.walk(tree):
@@ -2265,16 +2352,18 @@ def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, str]:
             bound.add(binding.value.id)
         elif isinstance(binding.value, ast.Attribute):
             bound.add(binding.value.attr)
-    aliases: dict[str, str] = {}
+    aliases: dict[str, set[str]] = {}
     for name in sorted(judged_names & bound):
         for alias in sorted(_module_aliases(tree, name)):
             if alias not in judged_names:
-                aliases.setdefault(alias, name)
-    return aliases
+                aliases.setdefault(alias, set()).add(name)
+    return {alias: frozenset(names) for alias, names in aliases.items()}
 
 
-def _api_alias_targets(tree: ast.AST, api_aliases: dict[str, str]) -> dict[str, ast.expr]:
-    """Атрибут, с которым псевдоним пишущего API связан присваиванием: «псевдоним → узел».
+def _api_alias_targets(
+    tree: ast.AST, api_aliases: dict[str, frozenset[str]]
+) -> dict[str, list[ast.expr]]:
+    """Атрибуты, с которыми псевдоним пишущего API связан присваиванием: «псевдоним → узлы».
 
     `set_phone = MessengerAccount.phone.__set__` → `MessengerAccount.phone.__set__`
     (и цепочкой `Y = X`). Синтетический вызов псевдонима берёт этот узел вызываемым и
@@ -2282,47 +2371,81 @@ def _api_alias_targets(tree: ast.AST, api_aliases: dict[str, str]) -> dict[str, 
     конструктор модели (самопроверка исполнителя 16-22). Ввоз `as` атрибута не даёт.
 
     Связывания — по общей грамматике `module_bindings` (`tests/phone_gate_grammar.py`,
-    ревью WR-14, план 16-27): «`binding_name(цель)` → значение»; у значения
+    ревью WR-14, план 16-27): «`binding_name(цель)` → значения»; у значения
     `getattr(<obj>, "<api>")` атрибут сохраняет получателя `<obj>`.
+
+    Каждое связывание имени судится (ревью WR-18, план 16-31): значения — по ВСЕМ
+    связываниям `module_bindings` в порядке обхода, цепочка `Y = X` прослеживается для
+    каждого отдельно (с защитой от цикла), и в список попадает каждый атрибут, чьё
+    последнее звено — один из исходных API псевдонима. До плана `bindings.setdefault`
+    держал первое связывание: `set_phone = helper.thing; set_phone =
+    MessengerAccount.phone.__set__` терял получателя.
     """
-    bindings: dict[str, ast.expr] = {}
+    bindings: dict[str, list[ast.expr]] = {}
     for binding in module_bindings(tree):
         target = binding_name(binding.target)
         if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
-            bindings.setdefault(target, binding.value)
-    found: dict[str, ast.expr] = {}
-    for alias, original in api_aliases.items():
-        value, seen = bindings.get(alias), {alias}
-        while isinstance(value, ast.Name) and value.id in bindings and value.id not in seen:
-            seen.add(value.id)
-            value = bindings[value.id]
-        if isinstance(value, ast.Attribute) and value.attr == original:
-            found[alias] = value
-    return found
+            bindings.setdefault(target, []).append(binding.value)
+
+    def attributes(name: str, originals: frozenset[str], seen: frozenset[str]) -> list[ast.expr]:
+        found: list[ast.expr] = []
+        for value in bindings.get(name, []):
+            if isinstance(value, ast.Name):
+                if value.id in bindings and value.id not in seen:
+                    found.extend(attributes(value.id, originals, seen | {value.id}))
+            elif value.attr in originals:
+                found.append(value)
+        return found
+
+    targets: dict[str, list[ast.expr]] = {}
+    for alias, originals in api_aliases.items():
+        unique: list[ast.expr] = []
+        for value in attributes(alias, originals, frozenset({alias})):
+            if not any(value is known for known in unique):
+                unique.append(value)
+        if unique:
+            targets[alias] = unique
+    return targets
 
 
 def _canonical_call(
     call: ast.Call,
     name: str,
-    api_aliases: dict[str, str],
-    alias_targets: dict[str, ast.expr] | None = None,
-) -> tuple[ast.Call, str]:
-    """Вызов псевдонима пишущего API как вызов самого API: (вызов, имя).
+    api_aliases: dict[str, frozenset[str]],
+    alias_targets: dict[str, list[ast.expr]] | None = None,
+) -> list[tuple[ast.Call, str]]:
+    """Вызов псевдонима пишущего API как вызовы самих API: [(вызов, имя), …].
 
     `scv(account, "phone", x)` при `set_committed_value as scv` — синтетический
     `set_committed_value(account, "phone", x)` на месте исходного: ветки
     `_judge_call`, которые берут имя у самого узла (`_values_dict_keys`,
     `_positional_phone_columns`), видят исходное имя. Псевдоним, связанный с
     атрибутом (`_api_alias_targets`), вызывается этим атрибутом — с получателем.
-    Имя без псевдонима — как есть.
+    Имя без псевдонима — `[(call, name)]`.
+
+    Каждое связывание имени судится (ревью WR-18, план 16-31): по одному
+    синтетическому вызову на каждый исходный API псевдонима и каждую его
+    цель-атрибут; у API без цели-атрибута — вызов по имени. Находки одного места
+    дедуплицирует `_phone_writes` — одна на (строка, столбец, вид).
     """
-    original = api_aliases.get(name)
-    if original is None:
-        return call, name
-    func = (alias_targets or {}).get(name)
-    if func is None:
-        func = ast.copy_location(ast.Name(id=original, ctx=ast.Load()), call.func)
-    return _synthetic_call(call, func, list(call.args), list(call.keywords)), original
+    originals = api_aliases.get(name)
+    if not originals:
+        return [(call, name)]
+    targets = (alias_targets or {}).get(name, [])
+    found: list[tuple[ast.Call, str]] = []
+    for original in sorted(originals):
+        funcs: list[ast.expr] = [
+            target
+            for target in targets
+            if isinstance(target, ast.Attribute) and target.attr == original
+        ]
+        if not funcs:
+            funcs = [ast.copy_location(ast.Name(id=original, ctx=ast.Load()), call.func)]
+        found.extend(
+            (_synthetic_call(call, func, list(call.args), list(call.keywords)), original)
+            for func in funcs
+        )
+    return found
 
 
 def _mapping_key_text(key: ast.AST, column: str) -> str:
