@@ -203,8 +203,10 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 (`obj.scv(…)`); имя, связанное с несколькими API (`w = session.bulk_update_mappings` в
 одной функции и `w = setattr` в другой), — как каждый из них, а имя, связанное с
 `functools.partial(…)` или `operator.methodcaller(…)` несколько раз, — по каждому
-связыванию; находка одна на (строка, столбец, вид) — первая в порядке обхода целей
-(план 16-31, ревью WR-18). Цена — в сторону лишней находки, а не пропуска: имя,
+связыванию; находка одна на (строка, столбец, вид), а толкования ОДНОГО вызова по
+разным целям — одна находка на место (строка, столбец): первая в порядке обхода целей,
+исходные API — по алфавиту (план 16-31, ревью WR-18; самопроверка исполнителя 16-31:
+`f = update; f = bulk_update_mappings; f({"phone": x})` давал две находки разных видов). Цена — в сторону лишней находки, а не пропуска: имя,
 перевязанное с пишущего API на безобидное (`w = setattr`, потом `w = print`), судится и
 как API. Цель-атрибут `self.bum = …` связывает имя последнего звена `bum`, и
 `other.bum(…)` любого объекта того же файла судится так же (план 16-27). Та же
@@ -949,12 +951,30 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
             # объявление колонки, а не запись в неё: узел `Name`, не `Attribute`.
             record(node, KIND_ASSIGNMENT, ast.unparse(node))
         elif isinstance(node, ast.Call):
+            # Толкования ОДНОГО вызова — прямое и через ссылку, по каждому исходному API и
+            # каждой цели псевдонима (каждое связывание имени судится, ревью WR-18), — это
+            # альтернативы, а не разные записи: находка одна на место (строка, столбец), и
+            # остаётся первая в порядке обхода целей (самопроверка исполнителя 16-31,
+            # заход 1: `f = update; f = bulk_update_mappings; f({"phone": x})` давал две
+            # находки разных видов на одном ключе).
+            readings: list[list[tuple[int, int, str, str]]] = []
+
+            def judged(call: ast.Call, api: str) -> None:
+                reading: list[tuple[int, int, str, str]] = []
+                _judge_call(
+                    call,
+                    api,
+                    write_names,
+                    lambda at, kind, subject: reading.append(
+                        (at.lineno, at.col_offset, kind, subject)
+                    ),
+                )
+                readings.append(reading)
+
             name = _call_name(node)
             if name is not None:
-                # Каждое связывание имени судится (ревью WR-18): вызов псевдонима — по
-                # каждому исходному API и каждой его цели.
                 for canonical, original in _canonical_call(node, name, api_aliases, alias_targets):
-                    _judge_call(canonical, original, write_names, record)
+                    judged(canonical, original)
             # `methodcaller("…", …)` судится у себя: его применение подаёт объект,
             # а не аргументы API. Применённый и поглощённый `partial` — у внешнего.
             if id(node) not in consumed:
@@ -978,7 +998,11 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                         for canonical, original in _canonical_call(
                             variant, referenced, api_aliases, alias_targets
                         ):
-                            _judge_call(canonical, original, write_names, record)
+                            judged(canonical, original)
+            taken: set[tuple[int, int]] = set()
+            for reading in readings:
+                found.extend(write for write in reading if write[:2] not in taken)
+                taken |= {write[:2] for write in reading}
         elif (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
