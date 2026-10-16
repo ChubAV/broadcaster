@@ -6077,6 +6077,55 @@ LITERAL_FORM_CASES = [
         "phone",
         id="process-list-bulk-update",
     ),
+    # Самопроверка 16-34, заход 1. Обёртка носителя, связанная с именем, — то же применение
+    # `partial(…)(…)`, разделённое связыванием (у гейта приватности поймана планом 16-32,
+    # цикл 2; у гейта писателя давала `[]` — передано планом 16-32); литеральный кортеж или
+    # список ПОЗИЦИОННЫХ аргументов за ссылкой (`pool.apply_async(func, args, kwds)`) — то же
+    # общее правило О-14 (а) «по всем литеральным аргументам того же вызова» (гейт
+    # приватности ловил ту же форму с журналом); именованная ссылка за позиционным
+    # аргументом, который сам судимое имя (модель `MessengerAccount` среди аргументов
+    # носителя), — судится каждая ссылка носителя.
+    pytest.param(
+        "w = functools.partial(asyncio.to_thread, setattr)\n"
+        'w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-bound-to-a-name-setattr",
+    ),
+    pytest.param(
+        "class Backfill:\n"
+        "    def __init__(self, loop):\n"
+        "        self.write = functools.partial(loop.run_in_executor, None, setattr)\n"
+        "\n"
+        "    def run(self, account, x):\n"
+        '        self.write(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-bound-to-an-attribute-setattr",
+    ),
+    pytest.param(
+        'pool.apply_async(setattr, (account, "phone", x), {})\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="apply-async-literal-argument-tuple-setattr",
+    ),
+    pytest.param(
+        'pool.apply(session.bulk_update_mappings, [MessengerAccount, [{"id": 1, "phone": p}]])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="apply-literal-argument-list-bulk-update",
+    ),
+    pytest.param(
+        'pool.call(MessengerAccount, [{"id": 1, "phone": p}], target=session.bulk_update_mappings)\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="keyword-reference-after-a-judged-positional-argument",
+    ),
 ]
 
 
@@ -6545,6 +6594,17 @@ LEGITIMATE_CASES = [
     pytest.param(
         'threading.Thread(target=setattr, args=(account, "status", x)).start()\n',
         id="thread-target-setattr-other-attribute",
+    ),
+    # Самопроверка 16-34, заход 1: обёртка носителя под именем с не-пишущей ссылкой и с
+    # чужим атрибутом — не запись номера.
+    pytest.param(
+        "w = functools.partial(asyncio.to_thread, helper.noop)\n"
+        'w(account, "phone", x)\n',
+        id="carrier-wrapper-bound-to-a-name-non-writer",
+    ),
+    pytest.param(
+        'pool.apply_async(setattr, (account, "status", x), {})\n',
+        id="apply-async-literal-argument-tuple-other-attribute",
     ),
 ]
 
