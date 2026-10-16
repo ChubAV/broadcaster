@@ -153,8 +153,10 @@ class BindingForm(NamedTuple):
     """Форма связывания Python, которую грамматика разрешает.
 
     `template` — исходник с местами `{value}` (значение опознания) и `{use}`
-    (выражение на месте вызова); `ref` — как связанное имя названо на месте вызова
-    (`f`, `self.f`, `cls.f`; у формы без связывания — `{value}`, само значение).
+    (выражение на месте вызова), у формы повторного связывания — ещё `{decoy}`
+    (подменное значение того же вида, `IdentificationValue.decoy`); `ref` — как
+    связанное имя названо на месте вызова (`f`, `self.f`, `cls.f`; у формы без
+    связывания — `{value}`, само значение).
     """
 
     id: str
@@ -206,6 +208,39 @@ BINDING_FORMS: tuple[BindingForm, ...] = (
         "class-body",
         "class W:\n"
         "    f = {value}\n"
+        "\n"
+        "    def run(self):\n"
+        "        {use}\n",
+        "self.f",
+    ),
+    # Ось «сколько раз связано имя» (ревью WR-18, верификация раунда 6, 2026-10-14):
+    # карты псевдонимов гейтов держали ОДНО связывание имени — первое в обходе или
+    # первое по алфавиту, — и имя, связанное в модуле дважды, судилось по подмене.
+    # Каждая форма ниже связывает одно имя с подменным значением того же вида
+    # (`IdentificationValue.decoy`) и со значением опознания: в одной области, в обратной
+    # очерёдности в двух функциях и в двух классах. Каждое связывание имени судится.
+    BindingForm("rebound", "f = {decoy}\nf = {value}\n{use}\n", "f"),
+    BindingForm(
+        "rebound-reversed",
+        "def a():\n"
+        "    f = {value}\n"
+        "    {use}\n"
+        "\n"
+        "\n"
+        "def b():\n"
+        "    f = {decoy}\n",
+        "f",
+    ),
+    BindingForm(
+        "rebound-across-classes",
+        "class A:\n"
+        "    def __init__(self):\n"
+        "        self.f = {decoy}\n"
+        "\n"
+        "\n"
+        "class B:\n"
+        "    def __init__(self):\n"
+        "        self.f = {value}\n"
         "\n"
         "    def run(self):\n"
         "        {use}\n",
@@ -289,11 +324,20 @@ class IdentificationValue(NamedTuple):
 
     `call` — аргументы в скобках, `(account, "phone", x)`; каждый гейт инстанцирует
     свою таблицу значений с общими `id`.
+
+    `decoy` — безобидное значение ТОГО ЖЕ вида опознания, которое формы повторного
+    связывания (`rebound*` в `BINDING_FORMS`) связывают с тем же именем (ревью WR-18,
+    план 16-31): ошибка «судится одно связывание» видна, только когда подмена того же
+    вида, что значение, — другой пишущий API, первый по алфавиту, у имени, атрибута и
+    `getattr`-строки; `partial` над другим API; `methodcaller("noop")`. Умолчание —
+    пустая строка: позиционное создание прежних строк не ломается, а форма с `{decoy}`
+    при пустой подмене — вакуум, и `binding_form_source` его отвергает.
     """
 
     id: str
     value: str
     call: str
+    decoy: str = ""
 
 
 def binding_form_source(
@@ -309,7 +353,15 @@ def binding_form_source(
     списком. Той же функцией собирают ячейки правило-матрица гейта писателя, матрица
     гейта приватности, правило-паритет (план 16-29) и самопроверки исполнителей —
     ячейка одна и та же для обоих гейтов по построению.
+
+    Место `{decoy}` формы повторного связывания получает `value.decoy` (план 16-31); у
+    значения без подмены такая ячейка — вакуум, и функция поднимает `AssertionError`.
     """
+    if "{decoy}" in form.template and not value.decoy:
+        raise AssertionError(
+            f"форма `{form.id}` связывает имя повторно, а у значения `{value.id}` нет "
+            "подменного значения `decoy`: ячейка проверяла бы ничто"
+        )
     ref = form.ref.format(value=value.value)
     if carrier is None:
         use = ref + value.call
@@ -326,4 +378,4 @@ def binding_form_source(
             for keyword in applied.keywords
         ]
         use = carrier.template.format(ref=ref, args=", ".join(arguments))
-    return form.template.format(value=value.value, use=use)
+    return form.template.format(value=value.value, use=use, decoy=value.decoy)

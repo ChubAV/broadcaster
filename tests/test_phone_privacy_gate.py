@@ -54,7 +54,10 @@
   `lg = logger.unbind("k")`) или уже опознанный журнал — второе
   связывание (`a = lg`, `a = logger`). Имя, связанное в теле класса, зовут через
   `self.lg` / `cls.lg` / имя класса — оно считается и атрибутом. Ссылка на фабрику без
-  вызова (`gl = logging.getLogger`) делает имя фабрикой.
+  вызова (`gl = logging.getLogger`) делает имя фабрикой. Каждое связывание имени
+  судится (план 16-31, ревью WR-18): имя, связанное в модуле несколько раз — подряд, в
+  разных функциях или классах, — журнал, вызываемое журнала или `methodcaller` по
+  каждому своему связыванию, а не по первому.
 * ПО ССЫЛКЕ НА МЕТОД ОПОЗНАННОГО ЖУРНАЛА: имя или атрибут, связанные с любым методом
   опознанного журнала (`logger.info`, `logger._log`), `getattr(logger, "info")`, `print`, привязкой к контексту или `functools.partial(<то
   же>, …)` (`info = logger.info`, `out = print`, `self.out = logger.info`,
@@ -94,8 +97,10 @@
   `logging.getLogger(name="x")`) вызовом журнала не считается.
 Журнал по любому имени с методом `.info` гейт НЕ угадывает: опора — ввоз, фабрика,
 связывание или ссылка в том же модуле.
-Псевдонимы и связывания разрешаются по всему модулю без учёта областей видимости — цена
-названа: имя, связанное с журналом где-либо в модуле, считается журналом во всём модуле
+Псевдонимы и связывания разрешаются по всему модулю без учёта областей видимости, и
+каждое связывание имени судится, в том числе у `methodcaller`: имя, связанное с
+`methodcaller(…)` дважды, применяется каждым связыванием (план 16-31, ревью WR-18), —
+цена названа: имя, связанное с журналом где-либо в модуле, считается журналом во всём модуле
 (на живом дереве совпадений ноль: множества распознанных вызовов всех 106 файлов прежние,
 сверка планом 16-18 по строке и столбцу каждого вызова). Настройка опознанного журнала
 (`lg.setLevel(...)`, `root.addHandler(...)`, `getattr(logger, "setLevel")(…)`,
@@ -175,6 +180,14 @@ IN-09 (`from logging import info`, журнал из тела класса че�
 грамматику `tests/phone_gate_grammar.py` и правило-паритет `tests/test_phone_gates_parity.py`;
 решение владельца О-12 (а), 2026-10-13: заявления прежние, вариант (б) — сузить заявления до
 перечня грамматики — ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ.
+
+Летопись WR-18: до плана 16-31 `_applied_log_methodcaller` возвращал первого кандидата, и
+`methodcaller`, связанный дважды, клал номер в журнал мимо гейта (ревью WR-18, верификация
+раунда 6, 2026-10-14: `emit = methodcaller("noop"); emit = methodcaller("info", …,
+account.phone); emit(logger)` судился как `logger.noop()`); пятый круг оси «как опознан
+журнал» (IN-06 → IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20); решение владельца О-14 (а),
+2026-10-16: заявления прежние, каждое связывание имени судится, варианты (а′) и (б)
+ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ.
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -267,8 +280,10 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
   (`getattr(logger, name)(…)`, `getattr(structlog.contextvars, attr)(…)`): строки в
   исходнике нет; имя, записанное строкой, — ловится;
 * область видимости одна — модуль: имя, связанное с журналом в одной функции, журналом
-  считается и в другой (цена в сторону лишней находки, а не пропуска; на живом дереве
-  совпадений ноль);
+  считается и в другой, и каждое связывание имени судится — у `methodcaller` тоже: имя,
+  связанное с `methodcaller(…)` в двух функциях, применяется каждым связыванием (цена в
+  сторону лишней находки, а не пропуска, — с плана 16-31 это правда и для пути
+  `methodcaller`, ревью WR-18; на живом дереве совпадений ноль);
 * получатель вне списка D-17 (`logger.*` / `log.*` / `logging.*` / `print(`): вывод мимо
   журнала и `print` — `sys.stdout.write`, `sys.stderr.write`, `warnings.warn`,
   `traceback.print_*`, `pprint`, `os.write` — и текст исключения
@@ -987,8 +1002,8 @@ def _iterable_elements(node: ast.expr) -> list[ast.expr]:
     return []
 
 
-def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> ast.Call | None:
-    """Вызов журнала, который сделает `operator.methodcaller`, применённый к журналу (WR-17).
+def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
+    """Вызовы журнала, которые сделает `operator.methodcaller`, применённый к журналу (WR-17).
 
     `methodcaller("<метод>", *a, **k)` зовёт `obj.<метод>(*a, **k)` у объекта, к которому
     его применили. Применение — прямое `methodcaller(…)(R)`; вызов имени или атрибута,
@@ -999,8 +1014,14 @@ def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> ast.Call
     ним (`map(mc, [R])`), а у ключа ссылки `fn=` — первый позиционный аргумент носителя
     (`call(R, fn=mc)`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
     — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
-    `methodcaller` после имени метода. Без опознанного получателя — `None`: имя метода
-    объект журналом не делает (D-17, угадывания по имени нет).
+    `methodcaller` после имени метода. Без опознанного получателя — пустой список: имя
+    метода объект журналом не делает (D-17, угадывания по имени нет).
+
+    Каждое связывание имени судится (ревью WR-18, план 16-31): синтетический вызов
+    строится на КАЖДУЮ пару «`methodcaller` × получатель», чей получатель — опознанный
+    журнал. До плана функция возвращала первого кандидата, и `emit =
+    methodcaller("noop"); emit = methodcaller("info", …, account.phone); emit(logger)`
+    судился как `logger.noop()` — номер уходил в журнал мимо гейта.
     """
     candidates: list[tuple[ast.Call, ast.expr]] = []
     grouped = _grouped(names.methodcallers)
@@ -1035,6 +1056,7 @@ def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> ast.Call
                     candidates = [(methodcaller, first) for methodcaller in methodcallers]
                     if candidates:
                         break
+    found: list[ast.Call] = []
     for methodcaller, receiver in candidates:
         if not _is_log_receiver(receiver, names):
             continue
@@ -1046,8 +1068,11 @@ def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> ast.Call
         )
         func = ast.copy_location(ast.Attribute(value=receiver, attr=attribute, ctx=ast.Load()), call)
         synthetic = ast.Call(func=func, args=list(methodcaller.args[1:]), keywords=list(methodcaller.keywords))
-        return ast.copy_location(synthetic, call)
-    return None
+        # Одно и то же применение, пришедшее двумя путями (имя, связанное дважды с равным
+        # `methodcaller(…)`), — один вызов: находки одного места не дублируются.
+        if all(ast.dump(synthetic) != ast.dump(known) for known in found):
+            found.append(ast.copy_location(synthetic, call))
+    return found
 
 
 def _grouped(pairs: tuple[tuple[str, ast.Call], ...]) -> dict[str, list[ast.Call]]:
@@ -1076,9 +1101,8 @@ def python_log_calls(source: str) -> list[ast.Call]:
             calls.append(node)
             continue
         calls.extend(_carried_log_calls(node, names))
-        applied = _applied_log_methodcaller(node, names)
-        if applied is not None:
-            calls.append(applied)
+        # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
+        calls.extend(_applied_log_methodcaller(node, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
@@ -2262,6 +2286,17 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="partial-assigned-alias-handed-to-to-thread",
     ),
+    # Ревью WR-18 (верификация раунда 6, 2026-10-14): `_applied_log_methodcaller`
+    # возвращал ПЕРВОГО кандидата, и `methodcaller`, связанный дважды, клал номер в
+    # журнал мимо гейта — судился `logger.noop()`, а не `logger.info(…, account.phone)`.
+    pytest.param(
+        "app/x.py",
+        'emit = operator.methodcaller("noop")\n'
+        'emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "emit(logger)\n",
+        "phone",
+        id="rebound-methodcaller-applied-to-a-logger",
+    ),
 ]
 
 
@@ -2353,14 +2388,29 @@ def test_any_method_of_an_identified_logger_is_a_log_call():
 # общие с `API_IDENTIFICATION_VALUES` гейта писателя: правило-паритет
 # `tests/test_phone_gates_parity.py` сверяет их порядок). Как ячейка называет вызываемое
 # журнала и с какими аргументами его применяет; `methodcaller` применяется к получателю —
-# опознанному журналу `logger`.
+# опознанному журналу `logger`. Подменное значение (`decoy`, план 16-31, ревью WR-18) —
+# безобидное того же вида: имя, атрибут, `getattr`-строка, `partial` и `methodcaller`
+# над `noop`, который журналом не опознан.
 LOG_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
-    IdentificationValue("name", "print", '("x %s", account.phone)'),
-    IdentificationValue("attribute", "logger.info", '("x %s", account.phone)'),
-    IdentificationValue("getattr-string", 'getattr(logger, "info")', '("x %s", account.phone)'),
-    IdentificationValue("partial", 'functools.partial(logger.info, "x %s")', "(account.phone)"),
+    IdentificationValue("name", "print", '("x %s", account.phone)', "noop"),
+    IdentificationValue("attribute", "logger.info", '("x %s", account.phone)', "helper.noop"),
     IdentificationValue(
-        "methodcaller", 'operator.methodcaller("info", "x %s", account.phone)', "(logger)"
+        "getattr-string",
+        'getattr(logger, "info")',
+        '("x %s", account.phone)',
+        'getattr(helper, "noop")',
+    ),
+    IdentificationValue(
+        "partial",
+        'functools.partial(logger.info, "x %s")',
+        "(account.phone)",
+        'functools.partial(helper.noop, "x %s")',
+    ),
+    IdentificationValue(
+        "methodcaller",
+        'operator.methodcaller("info", "x %s", account.phone)',
+        "(logger)",
+        'operator.methodcaller("noop")',
     ),
 )
 
@@ -2454,6 +2504,17 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     ):
         if needle not in boundary:
             missing.append(f"граница не называет ссылку на журнал вне грамматики: нет «{needle}»")
+    # Ось «сколько раз связано имя» (ревью WR-18, план 16-31): шапка называет правило
+    # «каждое связывание имени судится», а пункт границы о единой области видимости — что
+    # цена в сторону лишней находки верна и для пути `methodcaller`.
+    for needle in ("каждое связывание", "WR-18"):
+        if needle not in flat:
+            missing.append(f"нет правила кратности связывания: нет «{needle}»")
+    scope_start = boundary.find("область видимости одна")
+    scope_end = boundary.find("* ", scope_start + 1)
+    scope = boundary[scope_start:scope_end] if 0 <= scope_start < scope_end else ""
+    if "methodcaller" not in scope:
+        missing.append("пункт границы «область видимости одна» не называет `methodcaller`")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
@@ -2707,6 +2768,16 @@ POSITIVE_CONTROLS = [
         'emit = operator.methodcaller("info", account.phone)\n',
         False,
         id="methodcaller-without-an-identified-receiver-is-not-a-log",
+    ),
+    # Ревью WR-18 (план 16-31): `methodcaller`, связанный дважды, судится каждым
+    # связыванием, но без опознанного получателя ни одно — не вызов журнала (D-17).
+    pytest.param(
+        "app/x.py",
+        'emit = operator.methodcaller("noop")\n'
+        'emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "emit(other)\n",
+        False,
+        id="rebound-methodcaller-without-an-identified-receiver-is-not-a-log",
     ),
 ]
 
