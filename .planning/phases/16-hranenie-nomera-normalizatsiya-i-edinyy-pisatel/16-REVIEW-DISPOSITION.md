@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-18
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "A name bound twice in one module resolves only to its FIRST binding: a writer API, descriptor, `partial` or `methodcaller` bound second under a reused name passes both gates"
   - id: WR-19
     severity: warning
@@ -159,7 +159,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 7
+open: 6
 total: 39
 recorded: 2026-10-14T12:20:52.887Z
 ---
@@ -168,7 +168,7 @@ recorded: 2026-10-14T12:20:52.887Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-18 | warning | open | - |
+| WR-18 | warning | fixed | `16-31` задачи 1–3, GREEN `d3304aab`, `0b7a503b`, `2a506aea`, и цикл самопроверки исполнителя, GREEN `ebe466ac` — решение владельца О-14 (а): заявления обоих гейтов прежние, каждое связывание имени судится; карты псевдонимов гейта писателя многозначны (`_api_aliases` — «псевдоним → множество исходных API», `_api_alias_targets`, `_partial_aliases`, `_methodcaller_aliases` — «имя → список значений»), `_bound_reference` и `_canonical_call` возвращают списки, находки дедуплицируются по (строка, столбец, вид), а толкования одного вызова сводятся в одну находку на место; гейт приватности судит каждого кандидата `methodcaller` с опознанным получателем (`_applied_log_methodcaller` возвращает список); в общем словаре `BINDING_FORMS` три строки повторного связывания `rebound`, `rebound-reversed`, `rebound-across-classes` с подменой того же вида (поле `IdentificationValue.decoy`, место `{decoy}`), «12» форм, «360» ячеек на гейт в обеих матрицах и правиле-паритете; трасер `test_a_planted_backfill_with_a_rebound_writer_alias_reddens_the_gate`; самопроверка оси кратности — «134 460» форм («90 396» у гейта писателя, «44 064» у гейта приватности), ноль промахов после одного цикла (две находки разных видов на одном месте у имени, связанного с двумя API, — «1 968» форм); живые деревья — 0 находок, «224/68/93» вызовов; коммиты RED — «a9e1f6a1», «8e411e06», «97434b5b», «c7c297ed» |
 | WR-19 | warning | open | - |
 | WR-20 | warning | open | - |
 | WR-21 | warning | open | - |
