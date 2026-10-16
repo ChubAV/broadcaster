@@ -1724,6 +1724,47 @@ def test_a_planted_log_reference_handed_to_to_thread_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_log_reference_handed_to_a_thread_target_reddens_the_gate(tmp_path):
+    """WR-20 (D-11, D-17): ссылка на журнал, поданная ИМЕНОВАННЫМ аргументом, — вызов журнала.
+
+    `threading.Thread(target=logger.info, args=("connected %s", account.phone)).start()`
+    зовёт `logger.info("connected %s", account.phone)` в потоке: литеральный кортеж
+    именованного аргумента того же вызова — позиционные аргументы ссылки (общее правило
+    владельца О-14 (а), 2026-10-16: ключи отдельных API не перечисляются).
+    `threading.Thread(target=…)` — идиома проекта (`app/worker/celery_app.py:196`), а прогон
+    верификатора раунда 6 (2026-10-14) напечатал этой формой номер в журнал (ревью WR-20).
+    Подложенный файл находится тем же обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "services" / "planted_thread_log.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import threading\n"
+        "import structlog\n"
+        "\n"
+        "logger = structlog.get_logger()\n"
+        "\n"
+        "\n"
+        "def connect(account):\n"
+        '    threading.Thread(target=logger.info, args=("connected %s", account.phone)).start()\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+
+    assert app_scan.calls > 0 and any(
+        offence == "app/services/planted_thread_log.py:8 — имя — phone (владелец connect)"
+        for offence in offences
+    ), (
+        "ссылка на метод журнала, поданная именованным аргументом, не опознана: гейт обошёл "
+        f"синтетическое дерево ({_render(scans)}) и промолчал о "
+        f"`threading.Thread(target=logger.info, args=(…, account.phone))`: {offences}"
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -2297,6 +2338,55 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="rebound-methodcaller-applied-to-a-logger",
     ),
+    # Летопись WR-19 / WR-20 (ревью, верификация раунда 6, 2026-10-14): до плана 16-32 гейт
+    # давал `[]` на ссылке на журнал, поданной именованным аргументом, кроме `fn=`
+    # (`Thread(target=…, args=…)`, выдуманный ключ, словарь `kwargs={…}`), литеральной
+    # `*`-распаковкой и внутри применённой обёртки носителя `partial(…)(…)`; верификатор
+    # напечатал этими формами номер в журнал. `Timer(…, args=…)` ловился случайно — гейт
+    # судил каждый именованный аргумент синтетического вызова; строка закрепляет поимку
+    # общим правилом О-14 (а): литеральные аргументы того же вызова — аргументы ссылки.
+    pytest.param(
+        "app/x.py",
+        'threading.Thread(target=logger.info, args=("x %s", account.phone)).start()\n',
+        "phone",
+        id="thread-target-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'threading.Timer(1.0, logger.info, args=("x %s", account.phone)).start()\n',
+        "phone",
+        id="timer-args-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'scheduler.enqueue(job=logger.info, payload=("x %s", account.phone))\n',
+        "phone",
+        id="invented-keyword-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'pool.submit(task=logger.info, kwargs={"msg": "x", "phone": account.phone})\n',
+        "phone",
+        id="keyword-dict-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await asyncio.to_thread(*[logger.info, "x %s", account.phone])\n',
+        "phone",
+        id="starred-log-reference-to-thread",
+    ),
+    pytest.param(
+        "app/x.py",
+        'partial(*[logger.info, "x %s", account.phone])()\n',
+        "phone",
+        id="starred-log-reference-in-applied-partial",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await partial(asyncio.to_thread, logger.info)("x %s", account.phone)\n',
+        "phone",
+        id="partial-wrapped-carrier-log-reference",
+    ),
 ]
 
 
@@ -2778,6 +2868,36 @@ POSITIVE_CONTROLS = [
         "emit(other)\n",
         False,
         id="rebound-methodcaller-without-an-identified-receiver-is-not-a-log",
+    ),
+    # План 16-32 (ревью WR-20, О-14 (а)): идиома проекта `threading.Thread(target=_loop, …)`
+    # (`app/worker/celery_app.py:196`) — ссылка не на журнал, вызова журнала нет; ссылка на
+    # журнал, поданная именованным аргументом без аргументов, в журнал ничего не подаёт;
+    # член записи `SendLog` под именем `send_log` (шаблон имени журнала D-17), поданный
+    # именованным аргументом рядом с другими, судится как ссылка — цена строгости общего
+    # правила, находок нет (живое место — `app/worker/tasks.py:453`).
+    pytest.param(
+        "app/x.py",
+        "def start(service):\n"
+        "    def _loop():\n"
+        "        pass\n"
+        "\n"
+        '    thread = threading.Thread(target=_loop, name=f"infra-heartbeat-{service}", daemon=True)\n'
+        "    thread.start()\n",
+        False,
+        id="thread-target-non-log-loop-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        "threading.Thread(target=logger.flush).start()\n",
+        False,
+        id="keyword-log-reference-without-arguments-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(ad, group, account, send_log):\n"
+        "    return build_dispatch_task(ad=ad, group=group, account=account, schedule_id=send_log.schedule_id)\n",
+        True,
+        id="send-log-member-handed-by-keyword-is-judged-without-a-finding",
     ),
 ]
 
