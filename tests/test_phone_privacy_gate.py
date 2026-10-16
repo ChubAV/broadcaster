@@ -67,28 +67,54 @@
   `partial` под псевдонимом ввоза или связывания (`from functools import partial as
   bind_`, `bind_ = functools.partial`) — тот же `partial` (самопроверка исполнителя 16-29;
   гейт писателя разрешает его псевдонимы с плана 16-22).
-* ПО НОСИТЕЛЮ ССЫЛКИ (ревью WR-17): вызов, которому подано вызываемое журнала —
-  позиционным аргументом без `*` или именованным `fn=` (`REFERENCE_KEYWORDS`), — и за
-  ссылкой есть аргументы, — вызов журнала: судятся аргументы после ссылки и именованные,
-  кроме `fn` (у `fn=` — все позиционные), тот же довод, что у `functools.partial`: эти
-  аргументы уйдут в журнал. Носитель — любой вызов; перечень `REFERENCE_CARRIERS` общего
-  модуля — `run_sync`, `to_thread`, `run_in_executor`, `map`, `Context.run` — словарь,
-  общий с гейтом писателя, а не закрытый список: `await asyncio.to_thread(logger.info,
-  "x %s", account.phone)`, `await loop.run_in_executor(None, logger.info, …)`,
+* ПО НОСИТЕЛЮ ССЫЛКИ (ревью WR-17, WR-19, WR-20): вызов, которому подано вызываемое
+  журнала — позиционным аргументом (в том числе литеральной распаковкой `*[…]` / `*(…)`:
+  `await asyncio.to_thread(*[logger.info, "x %s", account.phone])`), любым именованным
+  аргументом (`fn=`, `target=`, `function=`, `initializer=`, выдуманный `job=` — ключи
+  отдельных API не перечисляются) или внутри применённой обёртки носителя `X(…)(…)`
+  (`await partial(asyncio.to_thread, logger.info)("x %s", account.phone)`,
+  `partial(*[logger.info, …])()`; и та же обёртка, связанная с именем общей грамматикой,
+  `w = partial(asyncio.to_thread, logger.info); w(…)` — самопроверка исполнителя 16-32), —
+  и у ссылки есть аргументы, — вызов журнала. Судятся
+  аргументы после ссылки (у именованной ссылки — все позиционные аргументы носителя) и, по
+  общему правилу владельца О-14 (а), литеральные аргументы того же вызова: литеральный
+  кортеж или список именованного аргумента идёт позиционными аргументами ссылки
+  (`threading.Thread(target=logger.info, args=("x %s", account.phone))`,
+  `threading.Timer(1.0, logger.info, args=(…))`, `scheduler.enqueue(job=logger.info,
+  payload=(…))`), литеральный словарь (и `dict(ключ=…)`, пары литерального `**{…}`) —
+  именованными (`kwargs={"phone": …}`), прочие именованные — как есть; затем аргументы
+  применения обёртки. Тот же довод, что у `functools.partial`: эти аргументы уйдут в
+  журнал. Носитель — любой вызов; перечень `REFERENCE_CARRIERS` общего модуля — `run_sync`,
+  `to_thread`, `run_in_executor`, `map`, `Context.run` и шесть строк, которые впишет план
+  16-34: `to_thread(*[…])`, `partial(to_thread, …)(…)`, `Thread(target=…, args=…)`,
+  `Timer(…, args=…)`, `enqueue(job=…, payload=…)` и `map` с обёрткой итерируемой
+  `list([…])` — словарь, общий с гейтом писателя, а не закрытый список:
+  `await asyncio.to_thread(logger.info, "x %s", account.phone)`,
+  `await loop.run_in_executor(None, logger.info, …)`,
   `list(map(logger.info, [a.phone for a in accounts]))`,
   `contextvars.copy_context().run(logger.info, …)`, `session.run_sync(logger.info, …)`,
-  `emit = logger.info; await asyncio.to_thread(emit, …)`. Аргумент ДО ссылки (исполнитель
-  у `run_in_executor`) в журнал не уходит; ссылка без аргументов за ней
-  (`to_thread(logger.flush)`) ничего в журнал не подаёт и вызовом журнала не считается.
+  `emit = logger.info; await asyncio.to_thread(emit, …)`. У `map` ссылке подаются элементы
+  литеральной итерируемой, в том числе в обёртке `list([…])`, `tuple(…)`, `set(…)`, `iter(…)`.
+  Семантика носителя — функции общего модуля `reference_arguments`,
+  `literal_keyword_arguments`, `iterable_elements`, `getattr_literal` (план 16-32, решение
+  владельца О-15: своих копий у гейта нет; паритет — `tests/test_phone_gates_parity.py`).
+  Прежняя оговорка, исключавшая звёздную распаковку и ключи, кроме `fn=`, снята планом 16-32:
+  эти формы ловятся. Аргумент ДО позиционной ссылки (исполнитель у `run_in_executor`) в
+  журнал не уходит; ссылка без аргументов (`to_thread(logger.flush)`,
+  `threading.Thread(target=logger.flush)`) ничего в журнал не подаёт и вызовом журнала не
+  считается; идиома проекта `threading.Thread(target=_loop, name=…, daemon=True)`
+  (`app/worker/celery_app.py:196`) — ссылка не на журнал.
   `operator.methodcaller("<метод>", …)`, применённый к опознанному получателю — прямо
   (`methodcaller(…)(logger)`), через имя или атрибут, связанные с ним общей грамматикой
-  (`emit = methodcaller(…); emit(logger)`, `self.emit(logger)`), или поданный носителю
-  вместе с получателем за ним (`to_thread(mc, logger)`, у `map` — элементом литеральной
-  итерируемой: `map(mc, [logger])`, у `fn=` — первым позиционным: `call(logger, fn=mc)`),
-  — вызов `<получатель>.<метод>(…)`: судятся аргументы
-  `methodcaller` после имени метода; `methodcaller` под псевдонимом ввоза или связывания —
-  тот же. Без опознанного получателя `methodcaller` вызовом журнала не считается: имя
-  метода объект журналом не делает (угадывания по имени нет, D-17).
+  (`emit = methodcaller(…); emit(logger)`, `self.emit(logger)`), или поданный ЛЮБОМУ
+  носителю, — применяется к первому аргументу, который носитель подаст ссылке
+  (`to_thread(mc, logger)`, `to_thread(*[mc, logger])`, `Thread(target=mc, args=(logger,))`,
+  `call(logger, fn=mc)`, `partial(asyncio.to_thread, mc)(logger)`, у `map` — элементом
+  литеральной итерируемой: `map(mc, [logger])`, `map(mc, list([logger]))`), — вызов
+  `<получатель>.<метод>(…)`: судятся аргументы `methodcaller` после имени метода;
+  `methodcaller` под псевдонимом ввоза или связывания — тот же. Без опознанного получателя
+  `methodcaller` вызовом журнала не считается: имя метода объект журналом не делает
+  (угадывания по имени нет, D-17).
 * НАЧАЛЬНЫЕ ЗНАЧЕНИЯ ФАБРИКИ судятся, как `bind` (D-11): фабрика с именованным аргументом
   вне `FACTORY_CONFIGURATION_KEYWORDS` или со вторым позиционным аргументом
   (`structlog.get_logger(__name__, phone=…)`, `structlog.wrap_logger(base, phone=…)`,
@@ -116,8 +142,16 @@
 `:289`, `:293` (`format_datetime_for_user(log.sent_at, user)`,
 `MESSENGER_LABELS.get(log.messenger_type, …)`, `STATUS_LABELS.get(log.status, …)`; `log` —
 запись `SendLog`), находок нет; сверка множеств вызовов всех 106 файлов против `33a31ee3`
-по строке и столбцу — новых мест ровно три, удалённых нет. Живые числа: `app` — 224
-вызова, `scripts` — 68, `max_worker` — 93, находок 0
+по строке и столбцу — новых мест ровно три, удалённых нет. Та же цена у общего правила
+именованного аргумента (план 16-32, О-14 (а)): член получателя, опознанного по имени,
+поданный ИМЕНОВАННЫМ аргументом рядом с другими аргументами, судится как ссылка — на живом
+дереве ровно `app/worker/tasks.py:453` (`build_dispatch_task(ad=ad, group=group,
+account=account, schedule_id=send_log.schedule_id)`; `send_log` — запись `SendLog`, имя по
+шаблону журнала D-17), находок нет; сверка множеств вызовов всех 106 файлов против
+`4cd68671` по строке и столбцу — новое место ровно одно, удалённых нет. Общее правило — в
+сторону лишней находки, а не пропуска: литеральный кортеж или словарь у ключа, который
+API ссылке не подаёт, судится тоже. Живые числа: `app` — 225 вызовов, `scripts` — 68,
+`max_worker` — 93, находок 0
 (`uv run pytest tests/test_phone_privacy_gate.py -q -p no:randomly -s -k live_trees`).
 `bind` включён НАМЕРЕННО: `logger.bind(phone=x)` кладёт номер в каждую следующую
 строку этого журнала. По той же причине вызовом журнала считается любой вызов с
@@ -188,6 +222,21 @@ account.phone); emit(logger)` судился как `logger.noop()`); пятый
 журнал» (IN-06 → IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20); решение владельца О-14 (а),
 2026-10-16: заявления прежние, каждое связывание имени судится, варианты (а′) и (б)
 ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ.
+
+Летопись WR-19 / WR-20: до плана 16-32 правило носителя было уже, чем у гейта писателя:
+литеральная `*`-распаковка (`to_thread(*[logger.info, …])`, `partial(*[logger.info, …])()`),
+обёртка носителя `partial(asyncio.to_thread, logger.info)(…)`, обёртка итерируемой
+`list([logger])` у `map` с `methodcaller` и ссылка в именованном аргументе, кроме `fn=`
+(`threading.Thread(target=logger.info, args=(…))`), проходили (ревью WR-19, WR-20,
+верификация раунда 6, 2026-10-14: номер напечатан в журнал шесть раз), а семантика носителя
+жила двумя копиями — `_iterable_elements` и `_getattr_literal` в модулях обоих гейтов (ревью
+IN-15); `Timer(…, args=…)` ловился случайно. Пятый круг оси «как опознан журнал». План 16-32
+перенёс семантику носителя в общий модуль (`reference_arguments`, `iterable_elements`,
+`getattr_literal`) и ввёл общее правило именованного аргумента: литеральные аргументы того
+же вызова — аргументы ссылки, ключи не перечисляются. Решение владельца О-14 (а), 2026-10-16:
+заявления прежние, варианты (а′) — назвать `target=` / `args=` в границе как семантику API —
+и (б) — сузить заявления до перечня грамматики — ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ; О-15 — копии сняты
+попутно.
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -276,6 +325,11 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
     контейнер объекта или модуля и читается оттуда — поток данных, который предикат не
     прослеживает; гейт писателя называет те же формы в пункте (1) своей границы (зонд
     самопроверки исполнителя 16-29);
+* аргументы ссылки на журнал, пришедшие нелитералом (`args=row`, `kwargs=opts`,
+  распаковка `*rows` и `**opts`), — поток данных, который предикат не прослеживает: что
+  лежит в кортеже или словаре, известно только во время исполнения; судится само выражение
+  (имя с `phone` краснит, `row` — нет); общее правило О-14 (а) раскрывает только литеральный
+  кортеж, список и словарь; пункт (1) границы гейта писателя называет то же;
 * имя метода журнала или привязки, вычисленное во время исполнения
   (`getattr(logger, name)(…)`, `getattr(structlog.contextvars, attr)(…)`): строки в
   исходнике нет; имя, записанное строкой, — ловится;
@@ -296,13 +350,18 @@ from __future__ import annotations
 import ast
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 import pytest
 
-from tests.phone_gate_grammar import (
+# Семантика носителя — функции общего модуля (план 16-32, О-14 (а), О-15): своих копий
+# (`_iterable_elements`, `_getattr_literal`, извлечения аргументов ссылки) гейт не держит.
+# `iterable_elements` здесь зовёт `reference_arguments`; ввоз держит имя для
+# правила-паритета, как и `ELEMENTWISE_CARRIERS` и `REFERENCE_KEYWORDS` (ключ ссылки
+# правилом носителя больше не читается — ссылку несёт любой именованный аргумент).
+from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
@@ -312,7 +371,10 @@ from tests.phone_gate_grammar import (
     IdentificationValue,
     binding_form_source,
     binding_name,
+    getattr_literal,
+    iterable_elements,
     module_bindings,
+    reference_arguments,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -556,6 +618,10 @@ class ModuleLogNames:
     `partial_names` — имена, под которыми модуль зовёт `functools.partial`
     (`from functools import partial as bind_`, `bind_ = functools.partial`; самопроверка
     исполнителя 16-29 — гейт писателя разрешает псевдонимы `partial` с плана 16-22).
+    `carrier_wrappers` — пары «имя → обёртка носителя»: имя, связанное общей грамматикой с
+    `partial(<носитель>, <ссылка на вызываемое журнала или methodcaller>, …)`
+    (`w = functools.partial(asyncio.to_thread, logger.info)`); вызов `w(…)` судится, как
+    применённая обёртка `partial(…)(…)` (самопроверка исполнителя 16-32, цикл 2).
     Область видимости — весь модуль. Новые поля — с умолчаниями, чтобы позиционное
     создание по трём прежним полям не ломалось.
     """
@@ -569,6 +635,7 @@ class ModuleLogNames:
     methodcaller_names: frozenset[str] = METHODCALLER_NAMES
     methodcallers: tuple[tuple[str, ast.Call], ...] = ()
     partial_names: frozenset[str] = PARTIAL_NAMES
+    carrier_wrappers: tuple[tuple[str, ast.Call], ...] = ()
 
 
 NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
@@ -579,30 +646,16 @@ def _is_logger_name(name: str) -> bool:
     return name in LOG_RECEIVERS or bool(_LOGGER_NAME.search(name))
 
 
-def _getattr_literal(node: ast.expr) -> tuple[ast.expr, str] | None:
-    """`getattr(<объект>, "<строка>")` (и с умолчанием третьим аргументом) → (объект, строка).
-
-    Имя члена, записанное строкой, опознаётся так же, как атрибут; имя, вычисленное во
-    время исполнения (`getattr(logger, name)`), — нет (граница, названная в шапке).
-    """
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "getattr"
-        and len(node.args) in (2, 3)
-        and not node.keywords
-        and isinstance(node.args[1], ast.Constant)
-        and isinstance(node.args[1].value, str)
-    ):
-        return node.args[0], node.args[1].value
-    return None
-
-
 def _member(node: ast.expr) -> tuple[ast.expr, str] | None:
-    """Доступ к члену объекта: `X.name` или `getattr(X, "name")` → (X, name)."""
+    """Доступ к члену объекта: `X.name` или `getattr(X, "name")` → (X, name).
+
+    Строку в `getattr` читает `getattr_literal` общего модуля — один читатель обоих гейтов
+    (план 16-32, ревью IN-15, О-15); имя, вычисленное во время исполнения
+    (`getattr(logger, name)`), — не литерал (граница, названная в шапке).
+    """
     if isinstance(node, ast.Attribute):
         return node.value, node.attr
-    return _getattr_literal(node)
+    return getattr_literal(node)
 
 
 def _last_name(node: ast.expr) -> str | None:
@@ -811,7 +864,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
                 if all(call is not known for known in known_calls):
                     known_calls.append(call)
                     changed = True
-    return ModuleLogNames(
+    names = ModuleLogNames(
         frozenset(binders),
         frozenset(receiver_names),
         frozenset(receiver_attributes),
@@ -824,6 +877,56 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
         ),
         partial_names=partial_names,
     )
+    return replace(names, carrier_wrappers=_carrier_wrappers(bindings, names))
+
+
+def _carrier_wrappers(bindings: list[Binding], names: ModuleLogNames) -> tuple[tuple[str, ast.Call], ...]:
+    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)` (самопроверка 16-32).
+
+    `w = functools.partial(asyncio.to_thread, logger.info); w("x %s", account.phone)` —
+    то же применение `partial(…)(…)`, что и на месте, разделённое связыванием: ссылка — в
+    аргументах `partial` (`reference_arguments` общего модуля находит её там), аргументы
+    применения приходят с вызова `w(…)`. Связывание — любой формой общей грамматики, цепочка
+    `g = w` — тоже, до неподвижной точки; каждое связывание имени судится. `partial` над
+    самим вызываемым журнала (`partial(logger.info, …)`) — уже функция журнала, здесь не
+    повторяется.
+    """
+    grouped = _grouped(names.methodcallers)
+    not_carriers = _not_carriers(names)
+
+    def is_reference(node: ast.expr) -> bool:
+        return _is_log_callable(node, names) or bool(
+            _methodcaller_calls(node, names.methodcaller_names, grouped)
+        )
+
+    found: dict[str, list[ast.Call]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for target, value, _in_class_body in bindings:
+            name = binding_name(target)
+            if name is None:
+                continue
+            if isinstance(value, ast.Call):
+                values = (
+                    [value]
+                    if _last_name(value.func) in names.partial_names
+                    and not _is_log_partial(value, names)
+                    and reference_arguments(value, is_reference, not_carriers)
+                    else []
+                )
+            elif isinstance(value, ast.Name):
+                values = list(found.get(value.id, ()))
+            elif isinstance(value, ast.Attribute):
+                values = list(found.get(value.attr, ()))
+            else:
+                values = []
+            for wrapper in values:
+                known = found.setdefault(name, [])
+                if all(wrapper is not other for other in known):
+                    known.append(wrapper)
+                    changed = True
+    return tuple((name, wrapper) for name, wrappers in sorted(found.items()) for wrapper in wrappers)
 
 
 def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozenset[str]) -> frozenset[str]:
@@ -953,69 +1056,77 @@ def _is_identified_log_call(call: ast.Call, names: ModuleLogNames) -> bool:
     )
 
 
+def _not_carriers(names: ModuleLogNames) -> frozenset[str]:
+    """Применения, которые носителем не судятся: `getattr(…)(…)` и `methodcaller(…)(…)`."""
+    return frozenset({"getattr"}) | names.methodcaller_names
+
+
+def _applied_carriers(tree: ast.AST, names: ModuleLogNames) -> set[int]:
+    """`id` вызовов `X(…)`, применённых как `X(…)(…)`: их ссылку и аргументы судит применение."""
+    not_carriers = _not_carriers(names)
+    return {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Call)
+        and _callee_name(node.func.func) not in not_carriers
+    }
+
+
 def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
-    """Вызов журнала, который носитель ссылки сделает за автора (ревью WR-17).
+    """Вызовы журнала, которые носитель ссылки сделает за автора (ревью WR-17, WR-19, WR-20).
 
     Носитель — ЛЮБОЙ вызов, который сам вызовом журнала не опознан: `asyncio.to_thread`,
-    `loop.run_in_executor`, `map`, `Context.run`, `run_sync` (`REFERENCE_CARRIERS` общего
-    модуля — словарь шапок и матриц, а не закрытый перечень). Ссылка — первый слева
-    позиционный аргумент без `*`, являющийся вызываемым журнала (`_is_log_callable`), или
-    именованный аргумент из `REFERENCE_KEYWORDS` (`fn=`). Носитель подаёт ссылке аргументы,
-    стоящие ЗА ней (у `fn=` — все позиционные), и именованные, кроме `fn`, — тот же довод,
-    что у `functools.partial`: эти аргументы уйдут в журнал. Синтетический вызов
-    `<ссылка>(<аргументы после неё>, <именованные, кроме fn>)` встаёт на место носителя
-    (`ast.copy_location`). Ссылка без аргументов за ней в журнал ничего не подаёт — судить
-    нечего, и вызовом журнала она не считается; аргумент ДО ссылки (исполнитель у
-    `run_in_executor`) в журнал не уходит.
+    `loop.run_in_executor`, `map`, `Context.run`, `run_sync`, `threading.Thread(target=…)`
+    (`REFERENCE_CARRIERS` общего модуля — словарь шапок и матриц, а не закрытый перечень).
+    Где стоит ссылка и какие аргументы носитель ей подаст, решает функция общего модуля
+    `reference_arguments` (план 16-32, О-14 (а), О-15) — та же семантика, что у гейта
+    писателя: ссылка — позиционным аргументом (литеральная распаковка `*[…]` раскрыта),
+    ЛЮБЫМ именованным аргументом или внутри применённой обёртки `X(…)(…)`; аргументы —
+    позиционные ЗА ссылкой (у именованной — все позиционные носителя) и литеральные
+    аргументы того же вызова по общему правилу `literal_keyword_arguments` (литеральный
+    кортеж или список — позиционные, литеральный словарь — именованные), затем аргументы
+    применения; у `map` — элементы литеральных итерируемых. Тот же довод, что у
+    `functools.partial`: эти аргументы уйдут в журнал. Синтетический вызов
+    `<ссылка>(<аргументы>)` встаёт на место носителя (`ast.copy_location`). Ссылка без
+    аргументов в журнал ничего не подаёт — судить нечего, и вызовом журнала она не
+    считается; аргумент ДО позиционной ссылки (исполнитель у `run_in_executor`) в журнал не
+    уходит.
     """
     if _is_identified_log_call(call, names):
         return []
-    keywords = [keyword for keyword in call.keywords if keyword.arg not in REFERENCE_KEYWORDS]
-    reference: ast.expr | None = None
-    arguments: list[ast.expr] = []
-    for index, argument in enumerate(call.args):
-        if not isinstance(argument, ast.Starred) and _is_log_callable(argument, names):
-            reference = argument
-            arguments = list(call.args[index + 1 :])
-            break
-    if reference is None:
-        for keyword in call.keywords:
-            if keyword.arg in REFERENCE_KEYWORDS and _is_log_callable(keyword.value, names):
-                reference = keyword.value
-                arguments = list(call.args)
-                break
-    if reference is None or not (arguments or keywords):
-        return []
-    return [ast.copy_location(ast.Call(func=reference, args=arguments, keywords=keywords), call)]
+    return [
+        ast.copy_location(
+            ast.Call(func=carried.reference, args=carried.args, keywords=carried.keywords), call
+        )
+        for carried in reference_arguments(
+            call, lambda node: _is_log_callable(node, names), _not_carriers(names)
+        )
+        if carried.args or carried.keywords
+    ]
 
 
-def _iterable_elements(node: ast.expr) -> list[ast.expr]:
-    """Элементы литеральной итерируемой, которые поэлементный носитель подаст функции.
-
-    Список, кортеж, набор — их элементы (кроме `*`-распаковки); comprehension и
-    генератор — его элемент. Иначе — ничего: элементы решает поток данных.
-    """
-    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return [element for element in node.elts if not isinstance(element, ast.Starred)]
-    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
-        return [node.elt]
-    return []
-
-
-def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
+def _applied_log_methodcaller(
+    call: ast.Call, names: ModuleLogNames, as_carrier: bool = True
+) -> list[ast.Call]:
     """Вызовы журнала, которые сделает `operator.methodcaller`, применённый к журналу (WR-17).
 
     `methodcaller("<метод>", *a, **k)` зовёт `obj.<метод>(*a, **k)` у объекта, к которому
     его применили. Применение — прямое `methodcaller(…)(R)`; вызов имени или атрибута,
     связанных с `methodcaller(…)` любой формой общей грамматики (`emit(R)`,
-    `self.emit(R)`); носитель, которому `methodcaller` подан ссылкой вместе с получателем
-    ЗА ней (`to_thread(mc, R)`, `run_in_executor(None, mc, R)`, `partial(mc, R)`), у
-    поэлементного носителя (`ELEMENTWISE_CARRIERS`) — элементы литеральной итерируемой за
-    ним (`map(mc, [R])`), а у ключа ссылки `fn=` — первый позиционный аргумент носителя
-    (`call(R, fn=mc)`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
+    `self.emit(R)`); и носитель, которому `methodcaller` подан ссылкой: получатель — ПЕРВЫЙ
+    аргумент, который носитель подаст ссылке, по той же семантике носителя, что у
+    вызываемого журнала (`reference_arguments` общего модуля, план 16-32, ревью WR-19):
+    позиционная ссылка и литеральная `*`-распаковка (`to_thread(mc, R)`,
+    `to_thread(*[mc, R])`, `run_in_executor(None, mc, R)`, `partial(mc, R)`), ЛЮБОЙ
+    именованный аргумент (`call(R, fn=mc)`, `Thread(target=mc, args=(R,))`), применённая
+    обёртка носителя (`partial(asyncio.to_thread, mc)(R)`), у поэлементного носителя —
+    элемент литеральной итерируемой, в том числе в обёртке (`map(mc, [R])`,
+    `map(mc, list([R]))`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
     — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
     `methodcaller` после имени метода. Без опознанного получателя — пустой список: имя
-    метода объект журналом не делает (D-17, угадывания по имени нет).
+    метода объект журналом не делает (D-17, угадывания по имени нет). `as_carrier=False` —
+    вызов `X(…)` судит его применение `X(…)(…)`, и путь носителя здесь не идёт.
 
     Каждое связывание имени судится (ревью WR-18, план 16-31): синтетический вызов
     строится на КАЖДУЮ пару «`methodcaller` × получатель», чей получатель — опознанный
@@ -1025,37 +1136,28 @@ def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> list[ast
     """
     candidates: list[tuple[ast.Call, ast.expr]] = []
     grouped = _grouped(names.methodcallers)
-    applied = _methodcaller_calls(call.func, names.methodcaller_names, grouped)
+
+    def named(node: ast.expr) -> list[ast.Call]:
+        return _methodcaller_calls(node, names.methodcaller_names, grouped)
+
+    applied = named(call.func)
     if applied:
         if len(call.args) == 1 and not isinstance(call.args[0], ast.Starred) and not call.keywords:
             candidates = [(methodcaller, call.args[0]) for methodcaller in applied]
-    elif _last_name(call.func) not in names.methodcaller_names:
-        for index, argument in enumerate(call.args):
-            if isinstance(argument, ast.Starred):
+    elif as_carrier and _last_name(call.func) not in names.methodcaller_names:
+        for carried in reference_arguments(call, lambda node: bool(named(node)), _not_carriers(names)):
+            if not carried.args or isinstance(carried.args[0], ast.Starred):
                 continue
-            methodcallers = _methodcaller_calls(argument, names.methodcaller_names, grouped)
-            if not methodcallers:
-                continue
-            after = call.args[index + 1 :]
-            if after and not isinstance(after[0], ast.Starred):
-                receivers = (
-                    _iterable_elements(after[0])
-                    if _last_name(call.func) in ELEMENTWISE_CARRIERS
-                    else [after[0]]
-                )
-                candidates = [(methodcaller, receiver) for methodcaller in methodcallers for receiver in receivers]
-            break
-        else:
-            # Ключ ссылки `fn=` (`REFERENCE_KEYWORDS`): носитель подаёт ссылке свои
-            # позиционные аргументы, как у вызываемого журнала под `fn=`; получатель —
-            # первый из них (самопроверка исполнителя 16-29, заход 1).
-            first = call.args[0] if call.args and not isinstance(call.args[0], ast.Starred) else None
-            for keyword in call.keywords:
-                if keyword.arg in REFERENCE_KEYWORDS and first is not None:
-                    methodcallers = _methodcaller_calls(keyword.value, names.methodcaller_names, grouped)
-                    candidates = [(methodcaller, first) for methodcaller in methodcallers]
-                    if candidates:
-                        break
+            receivers = [carried.args[0]]
+            # Литеральный кортеж или список, поданный ссылке первым, — и его первый элемент
+            # (`pool.apply_async(mc, [logger])` зовёт `mc(logger)`; самопроверка 16-32, заход 1):
+            # цена — в сторону лишней находки, получатель-список журналом не бывает.
+            elements = iterable_elements(carried.args[0])
+            if elements is not None and elements[0] and not elements[1]:
+                receivers.append(elements[0][0])
+            candidates += [
+                (methodcaller, receiver) for methodcaller in named(carried.reference) for receiver in receivers
+            ]
     found: list[ast.Call] = []
     for methodcaller, receiver in candidates:
         if not _is_log_receiver(receiver, names):
@@ -1093,6 +1195,8 @@ def python_log_calls(source: str) -> list[ast.Call]:
     """
     tree = ast.parse(source)
     names = module_log_names(tree)
+    applied = _applied_carriers(tree, names)
+    wrappers = _grouped(names.carrier_wrappers)
     calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -1100,9 +1204,27 @@ def python_log_calls(source: str) -> list[ast.Call]:
         if _is_identified_log_call(node, names):
             calls.append(node)
             continue
-        calls.extend(_carried_log_calls(node, names))
+        # `X(…)` в `X(…)(…)` носителем не судится: его ссылку и аргументы судит применение
+        # (`partial(*[logger.info, …])()` — один вызов на месте, а не два).
+        if id(node) not in applied:
+            calls.extend(_carried_log_calls(node, names))
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
-        calls.extend(_applied_log_methodcaller(node, names))
+        calls.extend(_applied_log_methodcaller(node, names, as_carrier=id(node) not in applied))
+        # Вызов имени, связанного с обёрткой носителя (`w = partial(asyncio.to_thread,
+        # logger.info); w(…)`), — как применённая обёртка `partial(…)(…)` на этом месте.
+        bound = (
+            wrappers.get(node.func.id, [])
+            if isinstance(node.func, ast.Name)
+            else wrappers.get(node.func.attr, [])
+            if isinstance(node.func, ast.Attribute)
+            else []
+        )
+        for wrapper in bound:
+            application = ast.copy_location(
+                ast.Call(func=wrapper, args=list(node.args), keywords=list(node.keywords)), node
+            )
+            calls.extend(_carried_log_calls(application, names))
+            calls.extend(_applied_log_methodcaller(application, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
@@ -1724,6 +1846,47 @@ def test_a_planted_log_reference_handed_to_to_thread_reddens_the_gate(tmp_path):
     )
 
 
+def test_a_planted_log_reference_handed_to_a_thread_target_reddens_the_gate(tmp_path):
+    """WR-20 (D-11, D-17): ссылка на журнал, поданная ИМЕНОВАННЫМ аргументом, — вызов журнала.
+
+    `threading.Thread(target=logger.info, args=("connected %s", account.phone)).start()`
+    зовёт `logger.info("connected %s", account.phone)` в потоке: литеральный кортеж
+    именованного аргумента того же вызова — позиционные аргументы ссылки (общее правило
+    владельца О-14 (а), 2026-10-16: ключи отдельных API не перечисляются).
+    `threading.Thread(target=…)` — идиома проекта (`app/worker/celery_app.py:196`), а прогон
+    верификатора раунда 6 (2026-10-14) напечатал этой формой номер в журнал (ревью WR-20).
+    Подложенный файл находится тем же обходом `python_sources(root)`, что и живое дерево.
+    """
+    planted = tmp_path / "app" / "services" / "planted_thread_log.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import threading\n"
+        "import structlog\n"
+        "\n"
+        "logger = structlog.get_logger()\n"
+        "\n"
+        "\n"
+        "def connect(account):\n"
+        '    threading.Thread(target=logger.info, args=("connected %s", account.phone)).start()\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+
+    assert app_scan.calls > 0 and any(
+        offence == "app/services/planted_thread_log.py:8 — имя — phone (владелец connect)"
+        for offence in offences
+    ), (
+        "ссылка на метод журнала, поданная именованным аргументом, не опознана: гейт обошёл "
+        f"синтетическое дерево ({_render(scans)}) и промолчал о "
+        f"`threading.Thread(target=logger.info, args=(…, account.phone))`: {offences}"
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -2260,9 +2423,10 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-handed-to-map-with-a-logger",
     ),
-    # Самопроверка исполнителя 16-29, заход 1: `methodcaller`, поданный носителю ключом
-    # ссылки `fn=` (`REFERENCE_KEYWORDS`), получает позиционные аргументы носителя — как
-    # вызываемое журнала под `fn=`; получатель — первый из них.
+    # Самопроверка исполнителя 16-29, заход 1: `methodcaller`, поданный носителю именованным
+    # аргументом (`fn=` здесь — любой ключ: общее правило О-14 (а), план 16-32, ключи не
+    # перечисляются), получает позиционные аргументы носителя — как вызываемое журнала,
+    # поданное именованным аргументом; получатель — первый из них.
     pytest.param(
         "app/x.py",
         'runner.call(logger, fn=operator.methodcaller("info", "x %s", account.phone))\n',
@@ -2296,6 +2460,115 @@ NEGATIVE_CONTROLS = [
         "emit(logger)\n",
         "phone",
         id="rebound-methodcaller-applied-to-a-logger",
+    ),
+    # Летопись WR-19 / WR-20 (ревью, верификация раунда 6, 2026-10-14): до плана 16-32 гейт
+    # давал `[]` на ссылке на журнал, поданной именованным аргументом, кроме `fn=`
+    # (`Thread(target=…, args=…)`, выдуманный ключ, словарь `kwargs={…}`), литеральной
+    # `*`-распаковкой и внутри применённой обёртки носителя `partial(…)(…)`; верификатор
+    # напечатал этими формами номер в журнал. `Timer(…, args=…)` ловился случайно — гейт
+    # судил каждый именованный аргумент синтетического вызова; строка закрепляет поимку
+    # общим правилом О-14 (а): литеральные аргументы того же вызова — аргументы ссылки.
+    pytest.param(
+        "app/x.py",
+        'threading.Thread(target=logger.info, args=("x %s", account.phone)).start()\n',
+        "phone",
+        id="thread-target-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'threading.Timer(1.0, logger.info, args=("x %s", account.phone)).start()\n',
+        "phone",
+        id="timer-args-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'scheduler.enqueue(job=logger.info, payload=("x %s", account.phone))\n',
+        "phone",
+        id="invented-keyword-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'pool.submit(task=logger.info, kwargs={"msg": "x", "phone": account.phone})\n',
+        "phone",
+        id="keyword-dict-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await asyncio.to_thread(*[logger.info, "x %s", account.phone])\n',
+        "phone",
+        id="starred-log-reference-to-thread",
+    ),
+    pytest.param(
+        "app/x.py",
+        'partial(*[logger.info, "x %s", account.phone])()\n',
+        "phone",
+        id="starred-log-reference-in-applied-partial",
+    ),
+    pytest.param(
+        "app/x.py",
+        'async def f(account):\n    await partial(asyncio.to_thread, logger.info)("x %s", account.phone)\n',
+        "phone",
+        id="partial-wrapped-carrier-log-reference",
+    ),
+    # Ревью WR-19 (верификация раунда 6, 2026-10-14): `methodcaller`, поданный носителю,
+    # применялся к получателю только у позиционной ссылки без `*` и у `fn=`; обёртка
+    # итерируемой `list([logger])` у `map`, именованный аргумент, литеральная `*`-распаковка
+    # и обёртка носителя `partial(…)(…)` давали `[]`. План 16-32: получатель — первый
+    # аргумент, который носитель подаст ссылке (`reference_arguments` общего модуля).
+    pytest.param(
+        "app/x.py",
+        'list(map(methodcaller("info", account.phone), list([logger])))\n',
+        "phone",
+        id="methodcaller-handed-to-map-in-a-wrapped-iterable",
+    ),
+    pytest.param(
+        "app/x.py",
+        'threading.Thread(target=operator.methodcaller("info", "x %s", account.phone), args=(logger,)).start()\n',
+        "phone",
+        id="methodcaller-handed-by-thread-target",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    await asyncio.to_thread(*[operator.methodcaller("info", "x %s", account.phone), logger])\n',
+        "phone",
+        id="methodcaller-starred-to-thread",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    await partial(asyncio.to_thread, operator.methodcaller("info", "x %s", account.phone))(logger)\n',
+        "phone",
+        id="methodcaller-in-a-partial-wrapped-carrier",
+    ),
+    # Самопроверка исполнителя 16-32, заход 1 (405 форм): `methodcaller`, поданный носителю
+    # вместе с литеральным списком аргументов (`pool.apply_async(mc, [logger])` зовёт
+    # `mc(logger)`), — получатель первым элементом литерального кортежа или списка, который
+    # носитель подаёт ссылке первым аргументом, не опознавался.
+    pytest.param(
+        "app/x.py",
+        'pool.apply_async(operator.methodcaller("info", "x %s", account.phone), [logger])\n',
+        "phone",
+        id="methodcaller-handed-with-a-literal-argument-list",
+    ),
+    # Самопроверка исполнителя 16-32, зонд захода 1 (320 форм): обёртка носителя, связанная с
+    # именем, — `w = partial(asyncio.to_thread, logger.info); w(…)` — то же применение
+    # `partial(…)(…)`, разделённое связыванием, и судится так же (каждое связывание имени
+    # судится общей грамматикой); до цикла 2 давала `[]`.
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        "    w = functools.partial(asyncio.to_thread, logger.info)\n"
+        '    await w("x %s", account.phone)\n',
+        "phone",
+        id="carrier-wrapper-bound-to-a-name-log-reference",
+    ),
+    pytest.param(
+        "app/x.py",
+        'w = functools.partial(asyncio.to_thread, operator.methodcaller("info", "x %s", account.phone))\n'
+        "w(logger)\n",
+        "phone",
+        id="carrier-wrapper-bound-to-a-name-methodcaller",
     ),
 ]
 
@@ -2515,6 +2788,45 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     scope = boundary[scope_start:scope_end] if 0 <= scope_start < scope_end else ""
     if "methodcaller" not in scope:
         missing.append("пункт границы «область видимости одна» не называет `methodcaller`")
+    # Ось «как подана ссылка» (ревью WR-19 / WR-20, план 16-32, решение владельца О-14 (а)):
+    # абзац носителя называет ссылку, поданную любым именованным аргументом, литеральной
+    # `*`-распаковкой и в применённой обёртке, общее правило литеральных аргументов того же
+    # вызова и не сужает правило прежней оговоркой о звёздочке; шапка называет шесть
+    # носителей, которые план 16-34 впишет в `REFERENCE_CARRIERS`, и обёртку итерируемой у
+    # `map`, место цены строгости и пункт границы об аргументах, пришедших нелитералом.
+    if paragraph:
+        for needle in (
+            "любым именованным аргументом",
+            "литеральный кортеж",
+            "литеральный словарь",
+            "`*[…]`",
+            "`X(…)(…)`",
+            # Самопроверка 16-32, цикл 2: обёртка носителя, связанная с именем.
+            "`w = partial(asyncio.to_thread, logger.info); w(…)`",
+        ):
+            if needle not in paragraph:
+                missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+        if "позиционным аргументом без `*`" in paragraph:
+            missing.append("абзац «ПО НОСИТЕЛЮ ССЫЛКИ» сужает правило оговоркой «позиционным аргументом без `*`»")
+    for needle in (
+        "`to_thread(*[…])`",
+        "`partial(to_thread, …)(…)`",
+        "`Thread(target=…, args=…)`",
+        "`Timer(…, args=…)`",
+        "`enqueue(job=…, payload=…)`",
+        "`list([…])`",
+        "app/worker/tasks.py",
+        "WR-19",
+        "WR-20",
+        "О-14 (а)",
+    ):
+        if needle not in flat:
+            missing.append(f"нет «{needle}»")
+    data_start = boundary.find("`args=row`")
+    data_end = boundary.find("* ", data_start + 1)
+    data_item = boundary[boundary.rfind("* ", 0, data_start) : data_end] if 0 <= data_start < data_end else ""
+    if "поток данных" not in data_item:
+        missing.append("граница не называет аргументы ссылки, пришедшие нелитералом (`args=row`), с причиной «поток данных»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
@@ -2778,6 +3090,44 @@ POSITIVE_CONTROLS = [
         "emit(other)\n",
         False,
         id="rebound-methodcaller-without-an-identified-receiver-is-not-a-log",
+    ),
+    # План 16-32 (ревью WR-20, О-14 (а)): идиома проекта `threading.Thread(target=_loop, …)`
+    # (`app/worker/celery_app.py:196`) — ссылка не на журнал, вызова журнала нет; ссылка на
+    # журнал, поданная именованным аргументом без аргументов, в журнал ничего не подаёт;
+    # член записи `SendLog` под именем `send_log` (шаблон имени журнала D-17), поданный
+    # именованным аргументом рядом с другими, судится как ссылка — цена строгости общего
+    # правила, находок нет (живое место — `app/worker/tasks.py:453`).
+    pytest.param(
+        "app/x.py",
+        "def start(service):\n"
+        "    def _loop():\n"
+        "        pass\n"
+        "\n"
+        '    thread = threading.Thread(target=_loop, name=f"infra-heartbeat-{service}", daemon=True)\n'
+        "    thread.start()\n",
+        False,
+        id="thread-target-non-log-loop-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        "threading.Thread(target=logger.flush).start()\n",
+        False,
+        id="keyword-log-reference-without-arguments-is-not-a-log",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(ad, group, account, send_log):\n"
+        "    return build_dispatch_task(ad=ad, group=group, account=account, schedule_id=send_log.schedule_id)\n",
+        True,
+        id="send-log-member-handed-by-keyword-is-judged-without-a-finding",
+    ),
+    # Самопроверка 16-32, цикл 2: обёртка носителя под именем с не-журнальной ссылкой —
+    # не вызов журнала.
+    pytest.param(
+        "app/x.py",
+        "w = functools.partial(asyncio.to_thread, prepare_upload)\nw(content)\n",
+        False,
+        id="carrier-wrapper-bound-to-a-name-non-log-reference-is-not-a-log",
     ),
 ]
 
