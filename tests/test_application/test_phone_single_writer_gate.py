@@ -4110,6 +4110,74 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     )
 
 
+def test_the_writer_gate_header_names_four_quote_kinds_and_every_column_constructor():
+    """Шапка обещает ровно то, что видит предикат по лексике SQL и классу конструктора колонки.
+
+    Шестой круг одной оси открылся и здесь: шапка утверждала, что SQLite принимает три вида
+    кавычек идентификатора, а SQLite принимает и четвёртый — однословный `'…'` там, где
+    строковый литерал недопустим (ревью WR-21); голова видов 5 (в) / (г) искалась по
+    сырому тексту, и комментарий в ней рвал `\\s+` (ревью WR-22); вид 3 обещал колонку,
+    «названную литералом в самом пишущем вызове», а `Column("phone")` и
+    `ColumnClause("phone")` не судились (ревью WR-23). Правило держит шапку и таблицы
+    вместе: «все четыре» и одинарная кавычка, видимый SQL `_sql_visible` у видов (в) / (г),
+    каждое имя `COLUMN_CONSTRUCTORS` и `name=` в виде 3, летопись WR-21 / WR-22 / WR-23 и
+    решение владельца О-14 (а). Заявление не сужено (запреты 16-09 №2, 16-12 №2, 16-17 №2,
+    16-22 №2, 16-28 №2).
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+
+    def item(number: int) -> str:
+        start = re.search(rf"^{number}\. ", doc, re.MULTILINE)
+        end = re.search(rf"^{number + 1}\. ", doc, re.MULTILINE)
+        if start is None or end is None or end.start() <= start.start():
+            return ""
+        return " ".join(doc[start.start() : end.start()].split())
+
+    missing: list[str] = []
+    quotes_start = flat.find("Кавычки идентификатора")
+    quotes_end = flat.find("все четыре", quotes_start)
+    if quotes_start < 0 or quotes_end < 0:
+        missing.append(
+            "нет фразы «Кавычки идентификатора … все четыре» (SQLite принимает четыре вида кавычек)"
+        )
+    elif "`'…'`" not in flat[quotes_start:quotes_end]:
+        missing.append(
+            "фраза о кавычках идентификатора не называет одинарную кавычку («`'…'`»)"
+        )
+    if "все три" in flat:
+        missing.append("осталась прежняя фраза «все три»")
+    kind_five = item(5)
+    if not kind_five:
+        missing.append("нет отрезка вида 5 (от «5. » до «6. »)")
+    else:
+        for needle in ("комментари", "_sql_visible"):
+            if needle not in kind_five:
+                missing.append(f"вид 5 не говорит, что (в) и (г) судятся по видимому SQL: нет «{needle}»")
+    kind_three = item(3)
+    if not kind_three:
+        missing.append("нет отрезка вида 3 (от «3. » до «4. »)")
+    else:
+        for needle in (*(f"`{name}(" for name in sorted(COLUMN_CONSTRUCTORS)), "name="):
+            if needle not in kind_three:
+                missing.append(f"вид 3 не называет конструктор колонки: нет «{needle}»")
+    for needle in ("WR-21", "WR-22", "WR-23", "О-14 (а)"):
+        if needle not in flat:
+            missing.append(f"нет летописи: нет «{needle}»")
+    for claim in (
+        "Ловится всякая запись, в которой колонка номера",
+        "слепота предиката, а не граница средства",
+    ):
+        if claim not in flat:
+            missing.append(f"заявление сужено: нет «{claim}»")
+
+    assert not missing, (
+        "шапка гейта писателя не называет четыре вида кавычек SQLite и каждый конструктор "
+        "колонки:\n" + "\n".join(f"  {entry}" for entry in missing)
+    )
+
+
 # Литеральные формы записи из ревью WR-01: (исходник, вид, имя вызова, колонка).
 # Каждая видна в исходнике, а до плана 16-09 проходила гейт молча.
 LITERAL_FORM_CASES = [
