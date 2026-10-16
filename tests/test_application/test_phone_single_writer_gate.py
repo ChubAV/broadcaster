@@ -2589,6 +2589,60 @@ def test_a_planted_backfill_with_a_method_bound_writer_alias_reddens_the_gate(tm
     ), f"предмет находки не называет `bulk_update_mappings` и колонку `phone`: {found}"
 
 
+def test_a_planted_backfill_with_a_rebound_writer_alias_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-18: имя `w`, связанное с `session.bulk_update_mappings` в одной функции и с `setattr` в другой.
+
+    Короткое имя (`w`, `fn`, `self.write`), переиспользованное в двух функциях одного
+    скрипта, — обычный код скрипта дозаполнения Фазы 20 (D-13). На SQLite в памяти
+    такая запись пишет колонку (замер верификатора раунда 6, `+71`, SQLAlchemy
+    2.0.46). До плана 16-31 гейт её пропускал: карты псевдонимов держали ОДНО
+    связывание имени (`setdefault`, первое по алфавиту), и `w(account, "phone", x)`
+    судился как `bulk_update_mappings(…)` (ревью WR-18; решение владельца О-14 (а):
+    заявление шапки прежнее, каждое связывание имени судится). Подложенный файл
+    находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_rebound_alias.py",
+        "def flags(session, rows):\n"
+        "    w = session.bulk_update_mappings\n"
+        '    w(MessengerAccount, [{"id": a, "flag": f} for a, f in rows])\n'
+        "\n"
+        "\n"
+        "def numbers(account, number):\n"
+        "    w = setattr\n"
+        '    w(account, "phone", number)\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_rebound_alias.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_rebound_alias.py:8 — {KIND_SETATTR} — ")
+    ]
+    assert found, (
+        "псевдоним пишущего API, связанный повторно, не опознан: "
+        "`w = session.bulk_update_mappings` в `flags` и `w = setattr; "
+        "w(account, 'phone', number)` в `numbers` в "
+        f"scripts/backfill_rebound_alias.py гейт пропустил: {offences}"
+    )
+    assert all("setattr" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет `setattr` и колонку `phone`: {found}"
+    )
+    at_call = [
+        offence
+        for offence in offences
+        if offence.startswith("scripts/backfill_rebound_alias.py:8 — ")
+    ]
+    assert len(at_call) == 1, (
+        f"у вызова `w(account, 'phone', number)` не ровно одна находка: {at_call}"
+    )
+
+
 def test_a_planted_backfill_with_a_nested_column_naming_reddens_the_gate(tmp_path):
     """ТРАСЕР WR-15: ключ `MessengerAccount.__table__.c[MessengerAccount.phone.key]` в `values`.
 
@@ -5297,6 +5351,68 @@ LITERAL_FORM_CASES = [
         "phone",
         id="raw-sql-concatenation-with-a-write-in-each-part",
     ),
+    # Ревью WR-18 (верификация раунда 6, 2026-10-14): имя, связанное в модуле дважды, —
+    # в двух функциях, в двух классах или подряд, — судилось по ОДНОМУ связыванию:
+    # карты псевдонимов держали первое (`setdefault`, первое по алфавиту). До плана
+    # 16-31 каждая форма ниже давала `[]`; на SQLite они пишут колонку (`+71`…`+74`).
+    pytest.param(
+        "def b(session, p):\n"
+        "    w = session.bulk_update_mappings\n"
+        '    w(MessengerAccount, [{"id": 1, "flag": p}])\n'
+        "\n"
+        "\n"
+        "def a(account, x):\n"
+        "    w = setattr\n"
+        '    w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="rebound-name-alias-two-functions",
+    ),
+    pytest.param(
+        "class A:\n"
+        "    def __init__(self, s):\n"
+        "        self.write = s.bulk_update_mappings\n"
+        "\n"
+        "\n"
+        "class B:\n"
+        "    def __init__(self):\n"
+        "        self.write = setattr\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        self.write(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="rebound-attribute-alias-two-classes",
+    ),
+    pytest.param(
+        "set_phone = helper.thing\n"
+        "set_phone = MessengerAccount.phone.__set__\n"
+        "set_phone(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="rebound-descriptor-alias",
+    ),
+    pytest.param(
+        'f = methodcaller("noop")\n'
+        'f = methodcaller("__set__", account, x)\n'
+        "f(MessengerAccount.phone)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="rebound-methodcaller-alias",
+    ),
+    pytest.param(
+        "w = partial(session.bulk_update_mappings, MessengerAccount)\n"
+        "w = partial(setattr, account)\n"
+        'w("phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="rebound-partial-alias",
+    ),
 ]
 
 
@@ -5702,6 +5818,23 @@ LEGITIMATE_CASES = [
     pytest.param(
         "SQL = \"UPDATE messenger_accounts SET note = 'n' /* phone = :p */ WHERE id = 1\"\n",
         id="raw-sql-comment-with-phone-assignment",
+    ),
+    # Ревью WR-18 (план 16-31): имя, связанное повторно, судится по каждому связыванию,
+    # но запись ЧУЖОГО атрибута и повторное связывание с безобидными объектами — не номер.
+    pytest.param(
+        "def b(session, p):\n"
+        "    w = session.bulk_update_mappings\n"
+        '    w(MessengerAccount, [{"id": 1, "flag": p}])\n'
+        "\n"
+        "\n"
+        "def a(account, x):\n"
+        "    w = setattr\n"
+        '    w(account, "status", x)\n',
+        id="rebound-writer-alias-other-attribute",
+    ),
+    pytest.param(
+        'w = helper.a\nw = helper.b\nw(account, "phone", x)\n',
+        id="rebound-alias-to-harmless-targets",
     ),
 ]
 
