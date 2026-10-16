@@ -5825,6 +5825,61 @@ LITERAL_FORM_CASES = [
         "phone",
         id="values-column-clause-key",
     ),
+    # Самопроверка исполнителя 16-33, заход 1 (ось лексики SQL): ключевое слово ВПЛОТНУЮ к
+    # кавычке идентификатора — `SET"phone"`, `INTO'messenger_accounts'`, `TABLE`…``.
+    # Окрестность `_SQL_UPDATE` / `_SQL_SET` / `_SQL_WHERE` считала такое слово
+    # однословным идентификатором в кавычках по ОДНОЙ стороне, а голова (в) / (г) требовала
+    # пробел `\s+` перед таблицей; 1 008 форм давали `[]`. На SQLite 3.53.1 каждый
+    # такой оператор пишет колонку (замер исполнителя: `+7NEW`).
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET'phone'=:p WHERE id = 1\"\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-set-tight-single-quoted-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET\"phone\"=:p WHERE id = 1'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-set-tight-double-quoted-phone",
+    ),
+    pytest.param(
+        "SQL = \"UPDATE'messenger_accounts' SET phone = :p WHERE id = 1\"\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-update-tight-single-quoted-table",
+    ),
+    pytest.param(
+        "SQL = \"INSERT INTO'messenger_accounts'(id, phone) VALUES (5, :p)\"\n",
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-into-tight-single-quoted-table",
+    ),
+    pytest.param(
+        "SQL = 'INSERT INTO\"messenger_accounts\"(id, phone) VALUES (5, :p)'\n",
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-into-tight-double-quoted-table",
+    ),
+    pytest.param(
+        "SQL = 'COPY\"messenger_accounts\"(id, phone) FROM STDIN'\n",
+        KIND_RAW_SQL,
+        "«COPY",
+        "phone",
+        id="raw-sql-copy-tight-double-quoted-table",
+    ),
+    pytest.param(
+        "SQL = \"LOAD DATA INFILE 'x' INTO TABLE`messenger_accounts`(id, phone)\"\n",
+        KIND_RAW_SQL,
+        "«LOAD",
+        "phone",
+        id="raw-sql-load-data-tight-backtick-table",
+    ),
 ]
 
 
@@ -6262,6 +6317,12 @@ LEGITIMATE_CASES = [
     pytest.param(
         'stmt = update(Group).values({sa.Column("title"): t})\n',
         id="values-sa-column-other-name",
+    ),
+    # Самопроверка 16-33, заход 1: `WHERE` вплотную к кавычке — по-прежнему `WHERE`, и
+    # фильтр по номеру за ним записью не является (на SQLite номер прежний).
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note = :n WHERE'phone' = :number\"\n",
+        id="raw-sql-tight-quoted-phone-filter-in-where",
     ),
 ]
 
