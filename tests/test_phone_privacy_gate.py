@@ -365,7 +365,6 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
-    REFERENCE_KEYWORDS,
     Binding,
     BindingForm,
     IdentificationValue,

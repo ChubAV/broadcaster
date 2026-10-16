@@ -290,14 +290,16 @@ OUT_OF_GRAMMAR_BINDING_FORMS: tuple[OutOfGrammarForm, ...] = (
 )
 
 
-# Именованный параметр ССЫЛКИ на функцию: `fn` у `AsyncSession.run_sync` /
-# `AsyncConnection.run_sync` — `(self, fn, *arg, **kw)`, замер `inspect.signature`,
-# SQLAlchemy 2.0.46. У `asyncio.to_thread` и `functools.partial` ссылка
-# позиционно-только (`partial(func=…)` и `to_thread(func=…)` падают `TypeError`,
-# замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
-# (план 16-17, ревью WR-10). Перенесён из гейта писателя планом 16-27: перечень
-# носителей и их ключ — общие для обоих гейтов (О-12 (а)).
-REFERENCE_KEYWORDS = frozenset({"fn"})
+# Летопись ключа ссылки. До плана 16-34 здесь была закрытая таблица `REFERENCE_KEYWORDS =
+# frozenset({"fn"})` — именованный параметр ССЫЛКИ `fn` у `AsyncSession.run_sync` /
+# `AsyncConnection.run_sync` (`(self, fn, *arg, **kw)`, замер `inspect.signature`,
+# SQLAlchemy 2.0.46; план 16-17, ревью WR-10; перенесена из гейта писателя планом 16-27).
+# Ключ ссылки был один — `fn`, и `threading.Thread(target=setattr, args=(…))` проходил оба
+# гейта (ревью WR-20). Общее правило О-14 (а) (владелец, 2026-10-16) судит ЛЮБОЙ
+# именованный аргумент (`reference_arguments`), а не перечень ключей отдельных API, и
+# таблица выведена целиком: из этого модуля, из ввоза обоих гейтов и из обязательных
+# имён правила-паритета; в его `GRAMMAR_TABLES` имя осталось — модуль гейта не вправе
+# завести таблицу снова.
 
 # Носитель, который подаёт функции ЭЛЕМЕНТЫ итерируемых, а не сами итерируемые:
 # функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
@@ -337,6 +339,35 @@ REFERENCE_CARRIERS: tuple[ReferenceCarrier, ...] = (
     ReferenceCarrier("map", "map", "list(map({ref}, {args}))"),
     ReferenceCarrier(
         "context-run", "Context.run", "contextvars.copy_context().run({ref}, {args})"
+    ),
+    # Ось «как подана ссылка» (ревью WR-19 / WR-20, верификация раунда 6, 2026-10-14; план
+    # 16-34): в словаре не было ни литеральной `*`-распаковки, ни применённой обёртки
+    # носителя, ни обёртки итерируемой, ни ссылки в именованном аргументе — и матрицы с
+    # правилом-паритетом этих форм не видели. Выдуманная пара ключей (`job=` / `payload=`)
+    # доказывает, что общее правило О-14 (а) от имён ключей не зависит.
+    ReferenceCarrier(
+        "starred", "to_thread(*[…])", "asyncio.to_thread(*[{ref}, {positional}], **{keywords})"
+    ),
+    ReferenceCarrier(
+        "partial-wrapped",
+        "partial(to_thread, …)(…)",
+        "functools.partial(asyncio.to_thread, {ref})({args})",
+    ),
+    ReferenceCarrier("map-wrapped-iterable", "map", "list(map({ref}, {args}))", "list([{}])"),
+    ReferenceCarrier(
+        "thread-target",
+        "Thread(target=…, args=…)",
+        "threading.Thread(target={ref}, args=({positional},), kwargs={keywords})",
+    ),
+    ReferenceCarrier(
+        "timer-args",
+        "Timer(…, args=…)",
+        "threading.Timer(1.0, {ref}, args=({positional},), kwargs={keywords})",
+    ),
+    ReferenceCarrier(
+        "invented-keyword",
+        "enqueue(job=…, payload=…)",
+        "scheduler.enqueue(job={ref}, payload=({positional},), options={keywords})",
     ),
 )
 
@@ -586,42 +617,154 @@ def _keyword_references(keywords: list[ast.keyword]) -> list[ast.expr]:
     return values
 
 
+def _verbatim_keywords(keywords: list[ast.keyword], skip: ast.expr) -> list[ast.keyword]:
+    """Именованные аргументы вызова как есть, без ссылки `skip`: пары литерального `**{…}` — ключами."""
+    found: list[ast.keyword] = []
+    for keyword in keywords:
+        if keyword.value is skip:
+            continue
+        if keyword.arg is None:
+            pairs = _literal_named_pairs(keyword.value)
+            if pairs is not None:
+                found.extend(
+                    ast.copy_location(ast.keyword(arg=key, value=value), location)
+                    for key, value, location in pairs
+                    if value is not skip
+                )
+                continue
+        found.append(keyword)
+    return found
+
+
+def _spread_arguments(items: list[ast.expr]) -> tuple[list[ast.expr], list[ast.keyword]]:
+    """Общее правило О-14 (а) над ПОЗИЦИОННЫМИ аргументами за ссылкой: литералы раскрыты.
+
+    Литеральный кортеж или список без звёздных элементов — его элементы идут позиционными
+    аргументами ссылки, литеральный словарь со строковыми ключами и `dict(ключ=…)` —
+    именованными (место — ключ), прочие — как есть: `pool.apply_async(func, args, kwds)`
+    подаёт функции `*args, **kwds` (самопроверка исполнителя 16-34, заход 1).
+    """
+    positional: list[ast.expr] = []
+    named: list[ast.keyword] = []
+    for item in items:
+        sequence = _literal_sequence(item) if not isinstance(item, ast.Starred) else None
+        if sequence is not None:
+            positional.extend(sequence)
+            continue
+        pairs = _literal_named_pairs(item) if not isinstance(item, ast.Starred) else None
+        if pairs is not None:
+            named.extend(
+                ast.copy_location(ast.keyword(arg=key, value=value), location)
+                for key, value, location in pairs
+            )
+            continue
+        positional.append(item)
+    return positional, named
+
+
 def _carried_by(
     source: ast.Call,
     is_reference,
     outer_args: list[ast.expr],
     outer_keywords: list[ast.keyword],
+    every_reading: bool = False,
 ) -> list[ReferenceArguments]:
     """Ссылки одного носителя `source` и их аргументы (с хвостом применения `outer_*`)."""
     forwarded = forwarded_arguments(list(source.args))
-    reference: ast.expr | None = None
-    after: list[ast.expr] = []
-    positional_reference = False
+    # (ссылка, позиционные аргументы за ней, позиционная ли) — первая позиционная, иначе
+    # первая именованная; при `every_reading` — каждая позиционная и каждая именованная.
+    candidates: list[tuple[ast.expr, list[ast.expr], bool]] = []
     for index, argument in enumerate(forwarded):
         if not isinstance(argument, ast.Starred) and is_reference(argument):
-            reference, after, positional_reference = argument, forwarded[index + 1 :], True
-            break
-    if reference is None:
+            candidates.append((argument, forwarded[index + 1 :], True))
+            if not every_reading:
+                break
+    if not candidates or every_reading:
         for value in _keyword_references(list(source.keywords)):
             if is_reference(value):
-                reference, after = value, forwarded
-                break
-    if reference is None:
-        return []
-    literal_args, literal_keywords = literal_keyword_arguments(list(source.keywords), reference)
-    applied_args, applied_keywords = literal_keyword_arguments(outer_keywords)
-    keywords = literal_keywords + applied_keywords
-    if positional_reference and _callee_name(source.func) in ELEMENTWISE_CARRIERS:
-        return [
-            ReferenceArguments(reference, elements + literal_args, keywords)
-            for elements in elementwise_arguments(after + outer_args)
+                candidates.append((value, forwarded, False))
+                if not every_reading:
+                    break
+    if every_reading:
+        # Именованная ссылка — и без позиционных носителя: у применённой обёртки
+        # `partial(threading.Thread, target=ref)(args=(…))` первый позиционный `partial` — сам
+        # носитель, а не аргумент ссылки (самопроверка исполнителя 16-34, зонд захода 2).
+        candidates += [
+            (reference, [], False)
+            for reference, after, positional in list(candidates)
+            if not positional and after
         ]
-    return [
-        ReferenceArguments(reference, after + literal_args + outer_args + applied_args, keywords)
-    ]
+    found: list[ReferenceArguments] = []
+
+    def add(results: list[ReferenceArguments]) -> None:
+        # Повтор отбрасывается только между прочтениями: равные позиции `map` одного
+        # прочтения — разные вызовы.
+        earlier = {_dump(known) for known in found}
+        found.extend(result for result in results if _dump(result) not in earlier)
+
+    for reference, after, positional_reference in candidates:
+        literal_args, literal_keywords = literal_keyword_arguments(list(source.keywords), reference)
+        applied_args, applied_keywords = literal_keyword_arguments(outer_keywords)
+        keywords = literal_keywords + applied_keywords
+        elementwise = positional_reference and _callee_name(source.func) in ELEMENTWISE_CARRIERS
+        # Прочтения при `every_reading`: «как есть» (носитель подаёт ссылке свои именованные
+        # аргументы без разбора — `run_sync(fn, *arg, **kw)`, `functools.partial`, — и ключ
+        # литерального аргумента есть имя параметра ссылки: `mappings={…}`) — ПЕРВЫМ; общее
+        # правило — следом; затем общее правило и над позиционными аргументами за ссылкой
+        # (`_spread_arguments`: `pool.apply_async(func, (…), {…})`). Одно место — одна
+        # находка у вызывающего гейта.
+        readings: list[tuple[list[ast.expr], list[ast.keyword]]] = []
+        if every_reading:
+            readings.append(
+                (
+                    after + outer_args,
+                    _verbatim_keywords(list(source.keywords), reference) + list(outer_keywords),
+                )
+            )
+        readings.append((after + literal_args + outer_args + applied_args, keywords))
+        if every_reading and not elementwise:
+            spread_args, spread_keywords = _spread_arguments(after + outer_args)
+            readings.append((spread_args + literal_args + applied_args, keywords + spread_keywords))
+        for index, (own_args, own_keywords) in enumerate(readings):
+            if elementwise:
+                # `map`: позиционные за ссылкой — итерируемые; литеральные именованные
+                # аргументы общего правила — хвостом (у прочтения «как есть» — нет).
+                tail = [] if every_reading and index == 0 else literal_args
+                results = [
+                    ReferenceArguments(reference, elements + tail, own_keywords)
+                    for elements in elementwise_arguments(after + outer_args)
+                ]
+            else:
+                results = [ReferenceArguments(reference, own_args, own_keywords)]
+            add(results)
+        tuples = (
+            iterable_elements(after[0])
+            if every_reading and positional_reference and not elementwise and after
+            and not isinstance(after[0], ast.Starred)
+            else None
+        )
+        if tuples is not None:
+            # `starmap(ref, [(…), (…)])`: функция получает элементы КАЖДОГО литерального
+            # кортежа или списка первой итерируемой за ссылкой (самопроверка исполнителя
+            # 16-34, зонд захода 2) — по результату на элемент.
+            add(
+                [
+                    ReferenceArguments(reference, items, keywords)
+                    for element in tuples[0]
+                    if (items := _literal_sequence(element)) is not None
+                ]
+            )
+    return found
 
 
-def reference_arguments(call: ast.Call, is_reference, not_carriers) -> list[ReferenceArguments]:
+def _dump(carried: ReferenceArguments) -> str:
+    """Отпечаток аргументов результата: равные прочтения не повторяются."""
+    return ast.dump(ast.Call(func=carried.reference, args=carried.args, keywords=carried.keywords))
+
+
+def reference_arguments(
+    call: ast.Call, is_reference, not_carriers, every_reading: bool = False
+) -> list[ReferenceArguments]:
     """Ссылки на функцию, которые вызов-носитель `call` подаёт дальше, и их аргументы.
 
     Носитель — ЛЮБОЙ вызов; что считать ссылкой, решает предикат гейта `is_reference`
@@ -646,14 +789,72 @@ def reference_arguments(call: ast.Call, is_reference, not_carriers) -> list[Refe
     5. У носителя из `ELEMENTWISE_CARRIERS` при позиционной ссылке — по одному результату на
        каждую позицию `elementwise_arguments`.
     6. Нет ссылки — пустой список.
+    7. `every_reading=True` (гейт писателя, план 16-34; у него вид находки зависит от имени
+       параметра и от того, какая из ссылок носителя — вызываемая) — каждое прочтение:
+       (а) КАЖДАЯ позиционная и каждая именованная ссылка носителя, а не первая
+       (`pool.call(MessengerAccount, rows, target=s.bulk_update_mappings)`: модель среди
+       аргументов — тоже судимое имя); (б) ВПЕРЕДИ общего правила — прочтение «как есть»:
+       именованные аргументы носителя и применения подаются ссылке без разбора (так их
+       подают `run_sync(fn, *arg, **kw)` и `partial`: `mappings={"id": 1, "phone": p}` —
+       строка executemany, а не `id=1, phone=p`); (в) общее правило и над ПОЗИЦИОННЫМИ
+       аргументами за ссылкой (`_spread_arguments`: `pool.apply_async(func, (…), {…})`
+       подаёт `*args, **kwds`). Равные прочтения не повторяются; цена — в сторону лишней
+       находки. Гейт приватности судит номер в любом аргументе и зовёт функцию без флага:
+       лишние прочтения ему ничего не добавляют.
     Пустые `args` и `keywords` значат, что ссылке ничего не подано: судить нечего, и
     вызывающий гейт решает, считать ли это вызовом.
     """
     if isinstance(call.func, ast.Call) and _callee_name(call.func.func) not in not_carriers:
-        found = _carried_by(call.func, is_reference, list(call.args), list(call.keywords))
+        found = _carried_by(
+            call.func, is_reference, list(call.args), list(call.keywords), every_reading
+        )
         if found:
             return found
-    return _carried_by(call, is_reference, [], [])
+    return _carried_by(call, is_reference, [], [], every_reading)
+
+
+def carrier_wrapper_bindings(bindings: list[Binding], is_wrapper) -> dict[str, list[ast.Call]]:
+    """Имена, связанные с обёрткой носителя: «имя → обёртки» (самопроверка исполнителя 16-34).
+
+    `w = functools.partial(asyncio.to_thread, setattr); w(account, "phone", x)` — то же
+    применение `partial(…)(…)`, что и на месте, разделённое связыванием: ссылка — в
+    аргументах обёртки, аргументы применения приходят с вызова `w(…)` (`applied_wrapper`).
+    Что считать обёрткой, решает предикат гейта `is_wrapper` (вызов `partial` над носителем,
+    в аргументах которого `reference_arguments` находит ссылку). Связывание — любой формой
+    общей грамматики (`module_bindings`), цепочка `h = w` — тоже, до неподвижной точки;
+    каждое связывание имени судится (ревью WR-18). У гейта приватности та же семантика —
+    его `_carrier_wrappers` (самопроверка исполнителя 16-32, цикл 2); план 16-34 правит
+    модуль гейта приватности только строкой ввоза, и перевод его на эту функцию — за
+    следующим планом.
+    """
+    found: dict[str, list[ast.Call]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for binding in bindings:
+            name = binding_name(binding.target)
+            if name is None:
+                continue
+            value = binding.value
+            if isinstance(value, ast.Call):
+                values = [value] if is_wrapper(value) else []
+            elif isinstance(value, (ast.Name, ast.Attribute)):
+                values = list(found.get(binding_name(value) or "", ()))
+            else:
+                values = []
+            for wrapper in values:
+                known = found.setdefault(name, [])
+                if all(wrapper is not other for other in known):
+                    known.append(wrapper)
+                    changed = True
+    return found
+
+
+def applied_wrapper(call: ast.Call, wrapper: ast.Call) -> ast.Call:
+    """Вызов `w(…)` имени, связанного с обёрткой, — как применение `wrapper(…)` на месте `call`."""
+    return ast.copy_location(
+        ast.Call(func=wrapper, args=list(call.args), keywords=list(call.keywords)), call
+    )
 
 
 class IdentificationValue(NamedTuple):
