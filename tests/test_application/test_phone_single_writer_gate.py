@@ -3032,6 +3032,54 @@ def test_a_raw_sql_write_with_quoted_identifiers_reddens_the_gate(tmp_path):
     ), f"сырой SQL с кавычками и схемой не найден: {offences}"
 
 
+def test_a_planted_backfill_with_a_single_quoted_identifier_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-21: `UPDATE messenger_accounts SET 'phone' = :p WHERE id = :i` в скрипте дозаполнения.
+
+    SQLite читает однословный `'…'` как идентификатор там, где строковый литерал
+    недопустим (унаследованное поведение SQLite), а суита гоняется именно на SQLite:
+    на SQLite 3.53.1 такая запись пишет колонку (замер верификатора раунда 6, `+78`,
+    SQLAlchemy 2.0.46). До плана 16-33 гейт её пропускал: `_sql_visible` гасил любой
+    отрезок в одинарных кавычках, и в `_SQL_QUOTE` их не было (ревью WR-21; решение
+    владельца О-14 (а): заявление шапки прежнее, предикат догоняет его). Подложенный
+    файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_single_quoted.py",
+        "async def backfill(session, rows):\n"
+        "    for account_id, number in rows:\n"
+        "        await session.execute(text(\"UPDATE messenger_accounts SET 'phone' = :p "
+        "WHERE id = :i\"), {\"p\": number, \"i\": account_id})\n",
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_single_quoted.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_single_quoted.py:3 — {KIND_RAW_SQL} — ")
+    ]
+    assert found, (
+        "идентификатор SQLite в одинарных кавычках не опознан: "
+        "`UPDATE messenger_accounts SET 'phone' = :p WHERE id = :i` в "
+        f"scripts/backfill_single_quoted.py гейт пропустил: {offences}"
+    )
+    assert all("phone" in offence for offence in found), (
+        f"предмет находки не называет колонку `phone`: {found}"
+    )
+    at_statement = [
+        offence
+        for offence in offences
+        if offence.startswith("scripts/backfill_single_quoted.py:3 — ")
+    ]
+    assert len(at_statement) == 1, (
+        f"у оператора `SET 'phone' = :p` не ровно одна находка: {at_statement}"
+    )
+
+
 DICT_KEY_CASES = [
     pytest.param(
         'stmt = update(MessengerAccount).values({"phone": x})\n',
@@ -5630,6 +5678,68 @@ LITERAL_FORM_CASES = [
         "phone",
         id="rebound-partial-and-alias-two-kinds-at-one-place",
     ),
+    # Ревью WR-21 (верификация раунда 6, 2026-10-14): SQLite читает однословный `'…'` как
+    # идентификатор там, где строковый литерал недопустим, а `_sql_visible` гасил любой
+    # отрезок в одинарных кавычках, и в `_SQL_QUOTE` их не было. До плана 16-33 каждый
+    # оператор ниже давал `[]`; на SQLite 3.53.1 они пишут колонку (`+78`, `+84`, `+86`).
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"UPDATE messenger_accounts SET 'phone' = :p WHERE id = 1\"), "
+        '{"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-single-quoted-phone-assignment",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"UPDATE messenger_accounts SET ('phone', flag) = (:p, 'f')\"), "
+        '{"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-single-quoted-row-constructor",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"INSERT INTO 'messenger_accounts' (id, phone) VALUES (5, :p)\"), "
+        '{"p": p})\n',
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-into-single-quoted-table",
+    ),
+    # Ревью WR-22 (верификация раунда 6, 2026-10-14): виды 5 (в) и (г) искались
+    # выражением по СЫРОМУ тексту, и комментарий SQL в голове оператора рвал `\s+`. До
+    # плана 16-33 каждый оператор ниже давал `[]`; на SQLite они пишут колонку (`+79`,
+    # `+80`, `+81`).
+    pytest.param(
+        "async def f(s, i, p):\n"
+        '    await s.execute(text("INSERT /* x */ INTO messenger_accounts (id, phone) '
+        'VALUES (:i, :p)"), {"i": i, "p": p})\n',
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-comment-before-into",
+    ),
+    pytest.param(
+        "async def f(s, i, p):\n"
+        '    await s.execute(text("INSERT INTO /* x */ messenger_accounts (id, phone) '
+        'VALUES (:i, :p)"), {"i": i, "p": p})\n',
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-comment-before-table",
+    ),
+    pytest.param(
+        "async def f(s):\n"
+        "    await s.execute(text(\"REPLACE -- c\\n INTO messenger_accounts (id, phone) "
+        "VALUES (4, '+81')\"))\n",
+        KIND_RAW_SQL,
+        "«REPLACE",
+        "phone",
+        id="raw-sql-replace-line-comment-before-into",
+    ),
 ]
 
 
@@ -6052,6 +6162,16 @@ LEGITIMATE_CASES = [
     pytest.param(
         'w = helper.a\nw = helper.b\nw(account, "phone", x)\n',
         id="rebound-alias-to-harmless-targets",
+    ),
+    # Ревью WR-21 / WR-22 (план 16-33): однословная строка-значение в одинарных кавычках
+    # без `=` за ней и комментарий в голове вставки в ЧУЖУЮ таблицу — не запись номера.
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note = 'phone' WHERE id = 1\"\n",
+        id="raw-sql-single-quoted-value-is-not-a-write",
+    ),
+    pytest.param(
+        'SQL = "INSERT /* x */ INTO groups (title) VALUES (:t)"\n',
+        id="raw-sql-comment-in-the-head-of-another-table",
     ),
 ]
 
