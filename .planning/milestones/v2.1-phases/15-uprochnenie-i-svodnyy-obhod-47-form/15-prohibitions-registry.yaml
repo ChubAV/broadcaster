@@ -81,8 +81,8 @@
 # не меняется; вариант "живой реестр v2.2" владелец отверг. `rows_declared`: 741 (засев
 # 2026-09-25 по планам вехи v2.1) → 754 (засев 2026-10-08).
 
-measured: '2026-10-13'
-rows_declared: 819
+measured: '2026-10-16'
+rows_declared: 837
 class_decisions:
 - {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'планы 15-24…15-32 Фазы 15 — гэп-закрытие критерия 6 (б), решение владельца Г-1, 2026-09-25; прежде: «будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он» — верно на день ответа 2026-09-24'}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: gate-integrity, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 61}
@@ -918,3 +918,21 @@ rows:
 - {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-30-PLAN.md, index: 0, phase: '16', statement_digest: 75b03180c842, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-30-PLAN.md, index: 1, phase: '16', statement_digest: b118613202d8, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-30-PLAN.md, index: 2, phase: '16', statement_digest: 8274566f4629, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-31-PLAN.md, index: 0, phase: '16', statement_digest: 8b6d65e6feee, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-31-PLAN.md, index: 1, phase: '16', statement_digest: 528ecc180afa, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-31-PLAN.md, index: 2, phase: '16', statement_digest: c180cd7f2646, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-31-PLAN.md, index: 3, phase: '16', statement_digest: 4ca50fab5a9a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-32-PLAN.md, index: 0, phase: '16', statement_digest: 9472bed8303b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-32-PLAN.md, index: 1, phase: '16', statement_digest: 6fd60d4da4c0, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-32-PLAN.md, index: 2, phase: '16', statement_digest: 929dfb5d19db, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-32-PLAN.md, index: 3, phase: '16', statement_digest: eb79c5157a1f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-33-PLAN.md, index: 0, phase: '16', statement_digest: 2b7796ea2876, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-33-PLAN.md, index: 1, phase: '16', statement_digest: 5f6dc98da209, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-33-PLAN.md, index: 2, phase: '16', statement_digest: e4fd856745f7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-34-PLAN.md, index: 0, phase: '16', statement_digest: a749d3a4d299, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-34-PLAN.md, index: 1, phase: '16', statement_digest: 4d5d0627d211, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-34-PLAN.md, index: 2, phase: '16', statement_digest: cfa9d812da01, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-34-PLAN.md, index: 3, phase: '16', statement_digest: b6432effe47b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-35-PLAN.md, index: 0, phase: '16', statement_digest: ed0bca108acc, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-35-PLAN.md, index: 1, phase: '16', statement_digest: 33467132724e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-35-PLAN.md, index: 2, phase: '16', statement_digest: 30d5b5534c50, class: unclassified, disposition: unresolved}
