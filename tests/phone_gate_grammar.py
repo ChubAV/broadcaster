@@ -338,6 +338,35 @@ REFERENCE_CARRIERS: tuple[ReferenceCarrier, ...] = (
     ReferenceCarrier(
         "context-run", "Context.run", "contextvars.copy_context().run({ref}, {args})"
     ),
+    # Ось «как подана ссылка» (ревью WR-19 / WR-20, верификация раунда 6, 2026-10-14; план
+    # 16-34): в словаре не было ни литеральной `*`-распаковки, ни применённой обёртки
+    # носителя, ни обёртки итерируемой, ни ссылки в именованном аргументе — и матрицы с
+    # правилом-паритетом этих форм не видели. Выдуманная пара ключей (`job=` / `payload=`)
+    # доказывает, что общее правило О-14 (а) от имён ключей не зависит.
+    ReferenceCarrier(
+        "starred", "to_thread(*[…])", "asyncio.to_thread(*[{ref}, {positional}], **{keywords})"
+    ),
+    ReferenceCarrier(
+        "partial-wrapped",
+        "partial(to_thread, …)(…)",
+        "functools.partial(asyncio.to_thread, {ref})({args})",
+    ),
+    ReferenceCarrier("map-wrapped-iterable", "map", "list(map({ref}, {args}))", "list([{}])"),
+    ReferenceCarrier(
+        "thread-target",
+        "Thread(target=…, args=…)",
+        "threading.Thread(target={ref}, args=({positional},), kwargs={keywords})",
+    ),
+    ReferenceCarrier(
+        "timer-args",
+        "Timer(…, args=…)",
+        "threading.Timer(1.0, {ref}, args=({positional},), kwargs={keywords})",
+    ),
+    ReferenceCarrier(
+        "invented-keyword",
+        "enqueue(job=…, payload=…)",
+        "scheduler.enqueue(job={ref}, payload=({positional},), options={keywords})",
+    ),
 )
 
 

@@ -50,14 +50,39 @@ GRAMMAR_MODULE = "tests.phone_gate_grammar"
 # Модули гейтов, которые обязаны делить общую грамматику.
 GATE_MODULES: tuple[ModuleType, ...] = (writer, privacy)
 
-# Функции грамматики связывания, которые модуль гейта не определяет сам.
-GRAMMAR_FUNCTIONS = frozenset({"binding_pairs", "_binding_pairs", "module_bindings", "getattr_as_attribute"})
+# Семантика носителя ссылки общего модуля (план 16-32; ревью IN-15, О-15): имена,
+# которые модуль гейта не переопределяет — ни так, ни с подчёркиванием.
+CARRIER_SEMANTICS = (
+    "getattr_literal",
+    "iterable_elements",
+    "expanded_arguments",
+    "forwarded_arguments",
+    "elementwise_arguments",
+    "literal_keyword_arguments",
+    "reference_arguments",
+)
 
-# Таблицы общего модуля, которые модуль гейта не присваивает сам.
-GRAMMAR_TABLES = frozenset({"REFERENCE_KEYWORDS", "ELEMENTWISE_CARRIERS", "REFERENCE_CARRIERS", "BINDING_FORMS"})
+# Функции грамматики связывания И семантики носителя, которые модуль гейта не определяет
+# сам (с подчёркиванием и без).
+GRAMMAR_FUNCTIONS = frozenset(
+    {"binding_pairs", "_binding_pairs", "module_bindings", "_module_bindings"}
+    | {"getattr_as_attribute", "_getattr_as_attribute"}
+    | {variant for name in CARRIER_SEMANTICS for variant in (name, f"_{name}")}
+)
 
-# Имена общего модуля, которые обязан держать (ввозом) каждый гейт.
-REQUIRED_SHARED_NAMES = frozenset({"module_bindings", "REFERENCE_KEYWORDS", "REFERENCE_CARRIERS", "BINDING_FORMS"})
+# Таблицы общего модуля, которые модуль гейта не присваивает сам. `REFERENCE_KEYWORDS` —
+# закрытая таблица ключа ссылки, выведенная планом 16-34 (общее правило О-14 (а) судит
+# любой именованный аргумент): модуль гейта не вправе завести её снова.
+GRAMMAR_TABLES = frozenset(
+    {"REFERENCE_KEYWORDS", "ELEMENTWISE_CARRIERS", "REFERENCE_CARRIERS", "BINDING_FORMS"}
+    | {"LITERAL_CONTAINER_WRAPPERS", "UNJUDGED_ELEMENT", "_UNJUDGED_ELEMENT"}
+)
+
+# Имена общего модуля, которые обязан держать (ввозом) каждый гейт — тем же объектом.
+REQUIRED_SHARED_NAMES = frozenset(
+    {"module_bindings", "REFERENCE_CARRIERS", "BINDING_FORMS"}
+    | {"reference_arguments", "iterable_elements", "getattr_literal"}
+)
 
 # Имя на месте вызова, которое ничем не связано: база сверки форм вне грамматики.
 NEVER_BOUND_REF = "never_bound_fn"
@@ -127,8 +152,10 @@ def test_both_gates_take_the_binding_grammar_and_carriers_from_one_module():
         problems += [f"{module.__name__}: {problem}" for problem in own_grammar_problems(tree)]
         for name in sorted(REQUIRED_SHARED_NAMES - set(vars(module))):
             problems.append(f"{module.__name__}: не держит общее имя `{name}`")
+        # Имя, которого в общем модуле нет (`_UNJUDGED_ELEMENT`, выведенный `REFERENCE_KEYWORDS`),
+        # у гейта — тоже своя таблица, а не объект общего модуля.
         for name in sorted((GRAMMAR_TABLES | REQUIRED_SHARED_NAMES) & set(vars(module))):
-            if getattr(module, name) is not getattr(grammar, name):
+            if getattr(module, name) is not getattr(grammar, name, None):
                 problems.append(f"{module.__name__}: `{name}` — не объект общего модуля")
     writer_ids = [value.id for value in writer.API_IDENTIFICATION_VALUES]
     privacy_ids = [value.id for value in privacy.LOG_IDENTIFICATION_VALUES]
@@ -138,6 +165,37 @@ def test_both_gates_take_the_binding_grammar_and_carriers_from_one_module():
     assert not problems, "гейты номера не делят одну грамматику связывания:\n" + "\n".join(
         f"  {problem}" for problem in problems
     )
+
+
+def test_the_structural_half_reddens_a_redefined_grammar_point():
+    """Контроль структурной половины: переопределение КАЖДОЙ названной точки краснит её.
+
+    Для каждого имени `GRAMMAR_FUNCTIONS` — синтетический модуль гейта, который ввозит
+    `tests.phone_gate_grammar` и определяет на верхнем уровне функцию этого имени; для
+    каждого имени `GRAMMAR_TABLES` — модуль с присваиванием этого имени. `own_grammar_problems`
+    обязан назвать каждое: иначе структурная половина паритета молчит на копии, которую
+    обещает видеть. Копию под ДРУГИМ именем эта половина не видит по построению — её видит
+    только поведенческая половина, и только на ячейках общего словаря (ревью IN-15, О-15).
+    """
+    names = sorted(GRAMMAR_FUNCTIONS) + sorted(GRAMMAR_TABLES)
+    assert len(names) >= 20, f"названных точек {len(names)} — меньше 20: контроль проверяет почти ничто"
+    head = f"from {GRAMMAR_MODULE} import module_bindings\n\n\n"
+    silent: list[str] = []
+    for name in sorted(GRAMMAR_FUNCTIONS):
+        problems = own_grammar_problems(ast.parse(f"{head}def {name}(node):\n    return node\n"))
+        if not any(f"`{name}`" in problem for problem in problems):
+            silent.append(f"  функция `{name}`: {problems}")
+    for name in sorted(GRAMMAR_TABLES):
+        problems = own_grammar_problems(ast.parse(f"{head}{name} = frozenset()\n"))
+        if not any(f"`{name}`" in problem for problem in problems):
+            silent.append(f"  таблица `{name}`: {problems}")
+    clean = own_grammar_problems(ast.parse(f"{head}def unrelated(node):\n    return node\n"))
+
+    assert not silent, (
+        "структурная половина паритета не видит переопределённую точку грамматики:\n"
+        + "\n".join(silent)
+    )
+    assert clean == [], f"структурная половина краснит модуль без переопределений: {clean}"
 
 
 @pytest.mark.parametrize("form", [pytest.param(f, id=f.id) for f in grammar.BINDING_FORMS])
