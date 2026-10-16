@@ -5897,6 +5897,31 @@ LITERAL_FORM_CASES = [
         "messenger_accounts",
         id="raw-sql-load-data-tight-backtick-table",
     ),
+    # Самопроверка 16-33, заход 2: ключевое слово МЕЖДУ двумя отрезками в кавычках —
+    # `"messenger_accounts"SET"phone"`. По соседним символам оно неотличимо от однословного
+    # идентификатора в кавычках; различает их только разбор отрезков `_sql_visible`. На
+    # SQLite 3.53.1 каждый такой оператор пишет колонку (замер исполнителя: `+7NEW`).
+    pytest.param(
+        "SQL = 'UPDATE\"messenger_accounts\"SET\"phone\"=:p WHERE id = 1'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-keyword-between-two-double-quoted-identifiers",
+    ),
+    pytest.param(
+        "SQL = \"UPDATE'messenger_accounts'SET'phone'=:p WHERE id = 1\"\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-keyword-between-two-single-quoted-identifiers",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE`messenger_accounts`SET`phone`=:p WHERE id = 1'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-keyword-between-two-backtick-identifiers",
+    ),
 ]
 
 
@@ -6340,6 +6365,16 @@ LEGITIMATE_CASES = [
     pytest.param(
         "SQL = \"UPDATE messenger_accounts SET note = :n WHERE'phone' = :number\"\n",
         id="raw-sql-tight-quoted-phone-filter-in-where",
+    ),
+    # Самопроверка 16-33, заход 2: `WHERE` между значением и колонкой в кавычках — это
+    # `WHERE`, и фильтр по номеру за ним записью не является (на SQLite номер прежний).
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note='n'WHERE'phone'=:number\"\n",
+        id="raw-sql-where-between-two-single-quoted-spans-is-a-filter",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note=\"n\"WHERE\"phone\"=:number'\n",
+        id="raw-sql-where-between-two-double-quoted-spans-is-a-filter",
     ),
 ]
 
