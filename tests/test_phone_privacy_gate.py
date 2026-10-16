@@ -1089,8 +1089,18 @@ def _applied_log_methodcaller(
             candidates = [(methodcaller, call.args[0]) for methodcaller in applied]
     elif as_carrier and _last_name(call.func) not in names.methodcaller_names:
         for carried in reference_arguments(call, lambda node: bool(named(node)), _not_carriers(names)):
-            if carried.args and not isinstance(carried.args[0], ast.Starred):
-                candidates += [(methodcaller, carried.args[0]) for methodcaller in named(carried.reference)]
+            if not carried.args or isinstance(carried.args[0], ast.Starred):
+                continue
+            receivers = [carried.args[0]]
+            # Литеральный кортеж или список, поданный ссылке первым, — и его первый элемент
+            # (`pool.apply_async(mc, [logger])` зовёт `mc(logger)`; самопроверка 16-32, заход 1):
+            # цена — в сторону лишней находки, получатель-список журналом не бывает.
+            elements = iterable_elements(carried.args[0])
+            if elements is not None and elements[0] and not elements[1]:
+                receivers.append(elements[0][0])
+            candidates += [
+                (methodcaller, receiver) for methodcaller in named(carried.reference) for receiver in receivers
+            ]
     found: list[ast.Call] = []
     for methodcaller, receiver in candidates:
         if not _is_log_receiver(receiver, names):
