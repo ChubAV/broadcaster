@@ -603,19 +603,14 @@ RAW_SQL_PHONE_WRITE = re.compile(
 # Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)). Ключевое слово —
 # не идентификатор и не строка в кавычках из одного слова (`"where"`, `[set]`, `'where'`
 # — план 16-33, ревью WR-21: видимый `'where'` иначе оборвал бы предложение `SET`).
-# В кавычках слово — только если кавычка стоит с ОБЕИХ сторон: слово вплотную к кавычке
-# идентификатора — `SET"phone"`, `UPDATE'messenger_accounts'`, `WHERE'phone'` — по-прежнему
-# ключевое (самопроверка исполнителя 16-33, заход 1: такие операторы на SQLite пишут
-# колонку, а окрестность по одной стороне их не видела).
-def _sql_keyword(word: str) -> re.Pattern[str]:
-    return re.compile(
-        rf"(?<![\"`\['])\b{word}\b|\b{word}\b(?![\"`\]'])", re.IGNORECASE
-    )
-
-
-_SQL_UPDATE = _sql_keyword("update")
-_SQL_SET = _sql_keyword("set")
-_SQL_WHERE = _sql_keyword("where")
+# Что слово в кавычках, решает разбор отрезков `_sql_scan`, а не соседние символы: слово
+# вплотную к кавычке (`SET"phone"`, `WHERE'phone'`) и слово МЕЖДУ двумя отрезками в
+# кавычках (`"messenger_accounts"SET"phone"`, `'n'WHERE'phone'`) — ключевые
+# (самопроверка исполнителя 16-33, заходы 1 и 2: такие операторы на SQLite пишут колонку,
+# а окрестность по соседним символам их не видела или принимала фильтр за запись).
+_SQL_UPDATE = re.compile(r"\bupdate\b", re.IGNORECASE)
+_SQL_SET = re.compile(r"\bset\b", re.IGNORECASE)
+_SQL_WHERE = re.compile(r"\bwhere\b", re.IGNORECASE)
 _SQL_PHONE_NAME = re.compile(r"\bphone(?:_is_manual)?\b", re.IGNORECASE)
 _SQL_PHONE_ASSIGNMENT = re.compile(
     r"\bphone(?:_is_manual)?\b" + _SQL_QUOTE + r"\s*=", re.IGNORECASE
@@ -1912,13 +1907,23 @@ def _raw_sql_set_writes(text: str) -> list[str]:
     Возвращает найденные записи текстом (`phone =`, `(status, phone) =`); пустой
     список — записи в `SET` нет.
     """
-    plain = _sql_visible(text)
-    wheres = {match.start() for match in _SQL_WHERE.finditer(plain)}
+    plain, quoted = _sql_scan(text)
+
+    def keywords(pattern: re.Pattern[str], start: int = 0) -> list[re.Match[str]]:
+        # Ключевое слово — не однословный отрезок в кавычках (`"where"`, `'set'`).
+        return [
+            match
+            for match in pattern.finditer(plain, start)
+            if (match.start(), match.end()) not in quoted
+        ]
+
+    wheres = {match.start() for match in keywords(_SQL_WHERE)}
     writes: list[str] = []
-    for update in _SQL_UPDATE.finditer(plain):
-        head = _SQL_SET.search(plain, update.end())
-        if head is None:
+    for update in keywords(_SQL_UPDATE):
+        heads = keywords(_SQL_SET, update.end())
+        if not heads:
             continue
+        head = heads[0]
         start = head.end()
         clause = plain[start : _sql_set_clause_end(plain, start, wheres)]
         for match in _SQL_PHONE_ASSIGNMENT.finditer(_sql_depth_zero(clause)):
@@ -1949,8 +1954,20 @@ def _sql_visible(text: str) -> str:
     недопустим, и `SET 'phone' = :p` пишет колонку (план 16-33, ревью WR-21; до него
     любой отрезок `'…'` гас).
     """
+    return _sql_scan(text)[0]
+
+
+def _sql_scan(text: str) -> tuple[str, frozenset[tuple[int, int]]]:
+    """Видимый SQL `_sql_visible` и границы (начало, конец) слов однословных отрезков в кавычках.
+
+    Границы нужны ключевым словам вида 5 (а) / (б): `"where"`, `'set'` — не ключевые слова,
+    а `SET` вплотную к кавычке или между двумя отрезками (`"messenger_accounts"SET"phone"`)
+    — ключевое; соседние символы этого не различают, разбор отрезков различает
+    (самопроверка исполнителя 16-33, заход 2).
+    """
     closers = {'"': '"', "`": "`", "[": "]"}
     out: list[str] = []
+    quoted: set[tuple[int, int]] = set()
     index = 0
     while index < len(text):
         char = text[index]
@@ -1962,6 +1979,7 @@ def _sql_visible(text: str) -> str:
                 seek = close + 2
             if close >= 0 and re.fullmatch(r"\w+", text[index + 1 : close]):
                 out.append(text[index : close + 1])
+                quoted.add((index + 1, close))
                 index = close + 1
                 continue
             end = len(text) if close < 0 else close + 1
@@ -1975,6 +1993,7 @@ def _sql_visible(text: str) -> str:
             end = close + 1
             if re.fullmatch(r"\w+", text[index + 1 : close]):
                 out.append(text[index:end])
+                quoted.add((index + 1, close))
                 index = end
                 continue
         else:
@@ -1983,7 +2002,7 @@ def _sql_visible(text: str) -> str:
             continue
         out.append(" " * (end - index))
         index = end
-    return "".join(out)
+    return "".join(out), frozenset(quoted)
 
 
 def _sql_set_clause_end(plain: str, start: int, wheres: set[int]) -> int:
