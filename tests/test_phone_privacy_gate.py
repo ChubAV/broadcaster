@@ -2624,6 +2624,37 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     scope = boundary[scope_start:scope_end] if 0 <= scope_start < scope_end else ""
     if "methodcaller" not in scope:
         missing.append("пункт границы «область видимости одна» не называет `methodcaller`")
+    # Ось «как подана ссылка» (ревью WR-19 / WR-20, план 16-32, решение владельца О-14 (а)):
+    # абзац носителя называет ссылку, поданную любым именованным аргументом, литеральной
+    # `*`-распаковкой и в применённой обёртке, общее правило литеральных аргументов того же
+    # вызова и не сужает правило прежней оговоркой о звёздочке; шапка называет шесть
+    # носителей, которые план 16-34 впишет в `REFERENCE_CARRIERS`, и обёртку итерируемой у
+    # `map`, место цены строгости и пункт границы об аргументах, пришедших нелитералом.
+    if paragraph:
+        for needle in ("любым именованным аргументом", "литеральный кортеж", "литеральный словарь", "`*[…]`", "`X(…)(…)`"):
+            if needle not in paragraph:
+                missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+        if "позиционным аргументом без `*`" in paragraph:
+            missing.append("абзац «ПО НОСИТЕЛЮ ССЫЛКИ» сужает правило оговоркой «позиционным аргументом без `*`»")
+    for needle in (
+        "`to_thread(*[…])`",
+        "`partial(to_thread, …)(…)`",
+        "`Thread(target=…, args=…)`",
+        "`Timer(…, args=…)`",
+        "`enqueue(job=…, payload=…)`",
+        "`list([…])`",
+        "app/worker/tasks.py",
+        "WR-19",
+        "WR-20",
+        "О-14 (а)",
+    ):
+        if needle not in flat:
+            missing.append(f"нет «{needle}»")
+    data_start = boundary.find("`args=row`")
+    data_end = boundary.find("* ", data_start + 1)
+    data_item = boundary[boundary.rfind("* ", 0, data_start) : data_end] if 0 <= data_start < data_end else ""
+    if "поток данных" not in data_item:
+        missing.append("граница не называет аргументы ссылки, пришедшие нелитералом (`args=row`), с причиной «поток данных»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
