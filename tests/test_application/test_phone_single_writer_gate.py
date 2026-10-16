@@ -3499,6 +3499,14 @@ COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
     ),
     ColumnNaming("column-by-key", "column(MessengerAccount.phone.key)"),
     ColumnNaming("getattr-derivative", 'getattr(MessengerAccount.phone, "key")'),
+    # Ревью WR-23 (верификация раунда 6, 2026-10-14): класс конструктора колонки —
+    # `Column` (колонка Core, имя позицией или `name=`) и `ColumnClause` (класс за
+    # `column()`) называют колонку той же строкой в самом пишущем вызове, а
+    # `COLUMN_CONSTRUCTORS` знал только `column` и `literal_column`; до плана 16-33 каждое
+    # давало `[]` (замер верификатора на SQLite: `+77`, `+83`).
+    ColumnNaming("column-class", 'sa.Column("phone")'),
+    ColumnNaming("column-clause-class", 'ColumnClause("phone")'),
+    ColumnNaming("column-class-name-keyword", 'Column(name="phone")'),
 )
 
 
@@ -3821,6 +3829,10 @@ NAME_POSITIONS: tuple[NamePosition, ...] = (
     NamePosition("column-text-keyword", "column(text={name})"),
     NamePosition("getattr-name", "getattr(MessengerAccount, {name})"),
     NamePosition("getattr-derivative", 'getattr({name}, "key")'),
+    # Ревью WR-23 (план 16-33): класс конструктора колонки — ось, а не перечень: имя в
+    # `Column(…)` / `ColumnClause(…)` — любое наименование колонки номера.
+    NamePosition("column-class", "sa.Column({name})"),
+    NamePosition("column-clause-class", "ColumnClause({name})"),
 )
 
 # Контексты правила композиции: (id, исходник с местом `@COLUMN@`, вид, вызов).
@@ -5782,6 +5794,24 @@ LITERAL_FORM_CASES = [
         "phone",
         id="raw-sql-replace-line-comment-before-into",
     ),
+    # Ревью WR-23 (верификация раунда 6, 2026-10-14): `Column("phone")` и
+    # `ColumnClause("phone")` (класс за `column()`) в ключе `values` называют колонку
+    # литералом в самом пишущем вызове. До плана 16-33 каждая форма давала `[]`; на SQLite
+    # они пишут колонку (`+77`, `+83`).
+    pytest.param(
+        'stmt = update(MessengerAccount).where(MessengerAccount.id == 1).values({sa.Column("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-sa-column-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).where(MessengerAccount.id == 1).values({ColumnClause("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-clause-key",
+    ),
 ]
 
 
@@ -6214,6 +6244,11 @@ LEGITIMATE_CASES = [
     pytest.param(
         'SQL = "INSERT /* x */ INTO groups (title) VALUES (:t)"\n',
         id="raw-sql-comment-in-the-head-of-another-table",
+    ),
+    # Ревью WR-23 (план 16-33): конструктор колонки Core с ЧУЖИМ именем — не номер.
+    pytest.param(
+        'stmt = update(Group).values({sa.Column("title"): t})\n',
+        id="values-sa-column-other-name",
     ),
 ]
 
