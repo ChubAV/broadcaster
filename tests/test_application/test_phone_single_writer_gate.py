@@ -6222,6 +6222,33 @@ LITERAL_FORM_CASES = [
         "phone",
         id="keyword-reference-after-a-judged-positional-argument",
     ),
+    # Самопроверка 16-34, зонд после захода 2 (гейт приватности обе формы с журналом
+    # ловит): применённая обёртка с ИМЕНОВАННОЙ ссылкой и литеральным кортежем применения —
+    # `partial(threading.Thread, target=setattr)(args=(…))` — то же, что
+    # `Thread(target=setattr, args=(…))`, а первый позиционный `partial` — сам носитель, а
+    # не аргумент ссылки; `starmap` подаёт функции элементы КАЖДОГО кортежа литеральной
+    # итерируемой.
+    pytest.param(
+        'functools.partial(threading.Thread, target=setattr)(args=(account, "phone", x)).start()\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="applied-wrapper-keyword-reference-with-application-args",
+    ),
+    pytest.param(
+        'list(itertools.starmap(setattr, [(account, "phone", x)]))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="starmap-literal-argument-tuples-setattr",
+    ),
+    pytest.param(
+        'pool.starmap(session.bulk_update_mappings, [(MessengerAccount, [{"id": 1, "phone": p}])])\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="starmap-literal-argument-tuples-bulk-update",
+    ),
 ]
 
 
