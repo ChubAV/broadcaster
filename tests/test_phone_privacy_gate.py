@@ -302,7 +302,12 @@ from typing import Mapping
 
 import pytest
 
-from tests.phone_gate_grammar import (
+# Семантика носителя — функции общего модуля (план 16-32, О-14 (а), О-15): своих копий
+# (`_iterable_elements`, `_getattr_literal`, извлечения аргументов ссылки) гейт не держит.
+# `iterable_elements` здесь зовёт `reference_arguments`; ввоз держит имя для
+# правила-паритета, как и `ELEMENTWISE_CARRIERS` и `REFERENCE_KEYWORDS` (ключ ссылки
+# правилом носителя больше не читается — ссылку несёт любой именованный аргумент).
+from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
@@ -312,6 +317,8 @@ from tests.phone_gate_grammar import (
     IdentificationValue,
     binding_form_source,
     binding_name,
+    getattr_literal,
+    iterable_elements,
     module_bindings,
     reference_arguments,
 )
@@ -580,30 +587,16 @@ def _is_logger_name(name: str) -> bool:
     return name in LOG_RECEIVERS or bool(_LOGGER_NAME.search(name))
 
 
-def _getattr_literal(node: ast.expr) -> tuple[ast.expr, str] | None:
-    """`getattr(<объект>, "<строка>")` (и с умолчанием третьим аргументом) → (объект, строка).
-
-    Имя члена, записанное строкой, опознаётся так же, как атрибут; имя, вычисленное во
-    время исполнения (`getattr(logger, name)`), — нет (граница, названная в шапке).
-    """
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "getattr"
-        and len(node.args) in (2, 3)
-        and not node.keywords
-        and isinstance(node.args[1], ast.Constant)
-        and isinstance(node.args[1].value, str)
-    ):
-        return node.args[0], node.args[1].value
-    return None
-
-
 def _member(node: ast.expr) -> tuple[ast.expr, str] | None:
-    """Доступ к члену объекта: `X.name` или `getattr(X, "name")` → (X, name)."""
+    """Доступ к члену объекта: `X.name` или `getattr(X, "name")` → (X, name).
+
+    Строку в `getattr` читает `getattr_literal` общего модуля — один читатель обоих гейтов
+    (план 16-32, ревью IN-15, О-15); имя, вычисленное во время исполнения
+    (`getattr(logger, name)`), — не литерал (граница, названная в шапке).
+    """
     if isinstance(node, ast.Attribute):
         return node.value, node.attr
-    return _getattr_literal(node)
+    return getattr_literal(node)
 
 
 def _last_name(node: ast.expr) -> str | None:
@@ -1004,33 +997,27 @@ def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
     ]
 
 
-def _iterable_elements(node: ast.expr) -> list[ast.expr]:
-    """Элементы литеральной итерируемой, которые поэлементный носитель подаст функции.
-
-    Список, кортеж, набор — их элементы (кроме `*`-распаковки); comprehension и
-    генератор — его элемент. Иначе — ничего: элементы решает поток данных.
-    """
-    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        return [element for element in node.elts if not isinstance(element, ast.Starred)]
-    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
-        return [node.elt]
-    return []
-
-
-def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
+def _applied_log_methodcaller(
+    call: ast.Call, names: ModuleLogNames, as_carrier: bool = True
+) -> list[ast.Call]:
     """Вызовы журнала, которые сделает `operator.methodcaller`, применённый к журналу (WR-17).
 
     `methodcaller("<метод>", *a, **k)` зовёт `obj.<метод>(*a, **k)` у объекта, к которому
     его применили. Применение — прямое `methodcaller(…)(R)`; вызов имени или атрибута,
     связанных с `methodcaller(…)` любой формой общей грамматики (`emit(R)`,
-    `self.emit(R)`); носитель, которому `methodcaller` подан ссылкой вместе с получателем
-    ЗА ней (`to_thread(mc, R)`, `run_in_executor(None, mc, R)`, `partial(mc, R)`), у
-    поэлементного носителя (`ELEMENTWISE_CARRIERS`) — элементы литеральной итерируемой за
-    ним (`map(mc, [R])`), а у ключа ссылки `fn=` — первый позиционный аргумент носителя
-    (`call(R, fn=mc)`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
+    `self.emit(R)`); и носитель, которому `methodcaller` подан ссылкой: получатель — ПЕРВЫЙ
+    аргумент, который носитель подаст ссылке, по той же семантике носителя, что у
+    вызываемого журнала (`reference_arguments` общего модуля, план 16-32, ревью WR-19):
+    позиционная ссылка и литеральная `*`-распаковка (`to_thread(mc, R)`,
+    `to_thread(*[mc, R])`, `run_in_executor(None, mc, R)`, `partial(mc, R)`), ЛЮБОЙ
+    именованный аргумент (`call(R, fn=mc)`, `Thread(target=mc, args=(R,))`), применённая
+    обёртка носителя (`partial(asyncio.to_thread, mc)(R)`), у поэлементного носителя —
+    элемент литеральной итерируемой, в том числе в обёртке (`map(mc, [R])`,
+    `map(mc, list([R]))`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
     — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
     `methodcaller` после имени метода. Без опознанного получателя — пустой список: имя
-    метода объект журналом не делает (D-17, угадывания по имени нет).
+    метода объект журналом не делает (D-17, угадывания по имени нет). `as_carrier=False` —
+    вызов `X(…)` судит его применение `X(…)(…)`, и путь носителя здесь не идёт.
 
     Каждое связывание имени судится (ревью WR-18, план 16-31): синтетический вызов
     строится на КАЖДУЮ пару «`methodcaller` × получатель», чей получатель — опознанный
@@ -1040,37 +1027,18 @@ def _applied_log_methodcaller(call: ast.Call, names: ModuleLogNames) -> list[ast
     """
     candidates: list[tuple[ast.Call, ast.expr]] = []
     grouped = _grouped(names.methodcallers)
-    applied = _methodcaller_calls(call.func, names.methodcaller_names, grouped)
+
+    def named(node: ast.expr) -> list[ast.Call]:
+        return _methodcaller_calls(node, names.methodcaller_names, grouped)
+
+    applied = named(call.func)
     if applied:
         if len(call.args) == 1 and not isinstance(call.args[0], ast.Starred) and not call.keywords:
             candidates = [(methodcaller, call.args[0]) for methodcaller in applied]
-    elif _last_name(call.func) not in names.methodcaller_names:
-        for index, argument in enumerate(call.args):
-            if isinstance(argument, ast.Starred):
-                continue
-            methodcallers = _methodcaller_calls(argument, names.methodcaller_names, grouped)
-            if not methodcallers:
-                continue
-            after = call.args[index + 1 :]
-            if after and not isinstance(after[0], ast.Starred):
-                receivers = (
-                    _iterable_elements(after[0])
-                    if _last_name(call.func) in ELEMENTWISE_CARRIERS
-                    else [after[0]]
-                )
-                candidates = [(methodcaller, receiver) for methodcaller in methodcallers for receiver in receivers]
-            break
-        else:
-            # Ключ ссылки `fn=` (`REFERENCE_KEYWORDS`): носитель подаёт ссылке свои
-            # позиционные аргументы, как у вызываемого журнала под `fn=`; получатель —
-            # первый из них (самопроверка исполнителя 16-29, заход 1).
-            first = call.args[0] if call.args and not isinstance(call.args[0], ast.Starred) else None
-            for keyword in call.keywords:
-                if keyword.arg in REFERENCE_KEYWORDS and first is not None:
-                    methodcallers = _methodcaller_calls(keyword.value, names.methodcaller_names, grouped)
-                    candidates = [(methodcaller, first) for methodcaller in methodcallers]
-                    if candidates:
-                        break
+    elif as_carrier and _last_name(call.func) not in names.methodcaller_names:
+        for carried in reference_arguments(call, lambda node: bool(named(node)), _not_carriers(names)):
+            if carried.args and not isinstance(carried.args[0], ast.Starred):
+                candidates += [(methodcaller, carried.args[0]) for methodcaller in named(carried.reference)]
     found: list[ast.Call] = []
     for methodcaller, receiver in candidates:
         if not _is_log_receiver(receiver, names):
@@ -1121,7 +1089,7 @@ def python_log_calls(source: str) -> list[ast.Call]:
         if id(node) not in applied:
             calls.extend(_carried_log_calls(node, names))
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
-        calls.extend(_applied_log_methodcaller(node, names))
+        calls.extend(_applied_log_methodcaller(node, names, as_carrier=id(node) not in applied))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 

@@ -71,30 +71,44 @@ def binding_pairs(target: ast.expr, value: ast.expr) -> list[tuple[ast.expr, ast
     return [(target, value)]
 
 
+def getattr_literal(node: ast.AST) -> tuple[ast.expr, str] | None:
+    """`getattr(<obj>, "<строка>")` (и с умолчанием третьим аргументом) → (`<obj>`, строка), иначе `None`.
+
+    Один читатель getattr-литерала обоих гейтов номера (план 16-32, ревью IN-15, О-15): до
+    плана у гейта писателя и у гейта приватности было по своей копии, и копии расходились
+    (у писателя — два и более аргументов и любые именованные, у приватности — два-три без
+    именованных). Форма строгая, как у `getattr_as_attribute`: два или три позиционных
+    аргумента (третий — значение по умолчанию), ни одного именованного, без звёздной
+    распаковки, второй — строковая константа. Имя, вычисленное во время исполнения
+    (`getattr(logger, name)`), — не литерал.
+    """
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) in (2, 3)
+        and not node.keywords
+        and not any(isinstance(arg, ast.Starred) for arg in node.args)
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    ):
+        return node.args[0], node.args[1].value
+    return None
+
+
 def getattr_as_attribute(value: ast.expr) -> ast.expr:
     """`getattr(<obj>, "<const>")` — как узел `Attribute(<obj>, "<const>")`, иначе как есть.
 
     Строка в `getattr` называет атрибут литералом так же, как точка: `bum =
     getattr(session, "bulk_update_mappings")` связывает `bum` с тем же
-    `session.bulk_update_mappings` (ревью WR-14). Два или три позиционных аргумента
-    (третий — значение по умолчанию) и ни одного именованного; узел встаёт на место
-    вызова (`ast.copy_location`), поэтому строка находки — настоящая.
+    `session.bulk_update_mappings` (ревью WR-14). Форма — `getattr_literal`; узел встаёт
+    на место вызова (`ast.copy_location`), поэтому строка находки — настоящая.
     """
-    if (
-        isinstance(value, ast.Call)
-        and isinstance(value.func, ast.Name)
-        and value.func.id == "getattr"
-        and len(value.args) in (2, 3)
-        and not value.keywords
-        and not any(isinstance(arg, ast.Starred) for arg in value.args)
-        and isinstance(value.args[1], ast.Constant)
-        and isinstance(value.args[1].value, str)
-    ):
-        return ast.copy_location(
-            ast.Attribute(value=value.args[0], attr=value.args[1].value, ctx=ast.Load()),
-            value,
-        )
-    return value
+    literal = getattr_literal(value)
+    if literal is None:
+        return value
+    owner, attribute = literal
+    return ast.copy_location(ast.Attribute(value=owner, attr=attribute, ctx=ast.Load()), value)
 
 
 def module_bindings(tree: ast.AST) -> list[Binding]:
@@ -295,12 +309,20 @@ class ReferenceCarrier(NamedTuple):
     """Носитель ссылки: вызов, которому подают ссылку на функцию вместе с её аргументами.
 
     `name` — как носитель назван в шапках гейтов; `template` — выражение с местами
-    `{ref}` (ссылка) и `{args}` (аргументы применения).
+    `{ref}` (ссылка), `{args}` (аргументы применения через запятую), `{positional}`
+    (только позиционные аргументы применения) и `{keywords}` (литерал словаря именованных
+    аргументов применения, `{}` — когда их нет): носитель, который подаёт аргументы
+    кортежем и словарём (`threading.Thread(target={ref}, args=({positional},),
+    kwargs={keywords})`), собирается из тех же аргументов, что и прочие (план 16-32).
+    `element` — как поэлементный носитель (`ELEMENTWISE_CARRIERS`) оборачивает каждый
+    аргумент применения: одноэлементным списком (`"[{}]"`, умолчание) или обёрткой
+    итерируемой (`"list([{}])"`, ревью WR-19).
     """
 
     id: str
     name: str
     template: str
+    element: str = "[{}]"
 
 
 # Один перечень носителей ссылки обоих гейтов номера (решение владельца О-12 (а)).
@@ -456,12 +478,13 @@ class ReferenceArguments(NamedTuple):
 
 
 def _callee_name(node: ast.expr) -> str | None:
-    """Последнее имя вызываемого: `Name.id` или `Attribute.attr`, иначе `None`."""
+    """Последнее имя вызываемого: `Name.id`, `Attribute.attr` или строка `getattr(…, "…")`."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
-    return None
+    literal = getattr_literal(node)
+    return literal[1] if literal is not None else None
 
 
 def _literal_named_pairs(mapping: ast.expr) -> list[tuple[str, ast.expr, ast.AST]] | None:
@@ -663,8 +686,11 @@ def binding_form_source(
 
     Место `{use}` формы получает прямой вызов `ref + call` (при `carrier=None`) или
     выражение носителя: ссылка формы и аргументы `call`, разобранные через `ast`; у
-    носителя из `ELEMENTWISE_CARRIERS` каждый аргумент подаётся одноэлементным
-    списком. Той же функцией собирают ячейки правило-матрица гейта писателя, матрица
+    носителя из `ELEMENTWISE_CARRIERS` каждый позиционный аргумент оборачивается по
+    `carrier.element` (одноэлементный список или `list([…])`). Шаблон носителя получает
+    места `{args}` (все аргументы через запятую), `{positional}` (только позиционные) и
+    `{keywords}` (литерал словаря именованных, `{}` — когда их нет; план 16-32). Той же
+    функцией собирают ячейки правило-матрица гейта писателя, матрица
     гейта приватности, правило-паритет (план 16-29) и самопроверки исполнителей —
     ячейка одна и та же для обоих гейтов по построению.
 
@@ -682,14 +708,25 @@ def binding_form_source(
     else:
         applied = ast.parse(f"f{value.call}", mode="eval").body
         assert isinstance(applied, ast.Call), value.call
-        arguments = [ast.unparse(argument) for argument in applied.args]
+        positional = [ast.unparse(argument) for argument in applied.args]
         if carrier.name in ELEMENTWISE_CARRIERS:
-            arguments = [f"[{argument}]" for argument in arguments]
-        arguments += [
+            positional = [carrier.element.format(argument) for argument in positional]
+        named = [
             f"{keyword.arg}={ast.unparse(keyword.value)}"
             if keyword.arg is not None
             else f"**{ast.unparse(keyword.value)}"
             for keyword in applied.keywords
         ]
-        use = carrier.template.format(ref=ref, args=", ".join(arguments))
+        keywords = ", ".join(
+            f"{keyword.arg!r}: {ast.unparse(keyword.value)}"
+            if keyword.arg is not None
+            else f"**{ast.unparse(keyword.value)}"
+            for keyword in applied.keywords
+        )
+        use = carrier.template.format(
+            ref=ref,
+            args=", ".join(positional + named),
+            positional=", ".join(positional),
+            keywords="{" + keywords + "}",
+        )
     return form.template.format(value=value.value, use=use, decoy=value.decoy)
