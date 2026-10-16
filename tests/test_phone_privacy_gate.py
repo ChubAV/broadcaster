@@ -2458,6 +2458,16 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-in-a-partial-wrapped-carrier",
     ),
+    # Самопроверка исполнителя 16-32, заход 1 (405 форм): `methodcaller`, поданный носителю
+    # вместе с литеральным списком аргументов (`pool.apply_async(mc, [logger])` зовёт
+    # `mc(logger)`), — получатель первым элементом литерального кортежа или списка, который
+    # носитель подаёт ссылке первым аргументом, не опознавался.
+    pytest.param(
+        "app/x.py",
+        'pool.apply_async(operator.methodcaller("info", "x %s", account.phone), [logger])\n',
+        "phone",
+        id="methodcaller-handed-with-a-literal-argument-list",
+    ),
 ]
 
 
