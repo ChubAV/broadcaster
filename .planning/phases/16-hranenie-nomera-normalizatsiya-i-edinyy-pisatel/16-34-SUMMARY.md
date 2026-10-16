@@ -388,3 +388,9 @@ WR-19 на стороне писателя закрыт строками сло�
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-16*
+
+## Self-Check: PASSED
+
+- FOUND: tests/phone_gate_grammar.py, tests/test_application/test_phone_single_writer_gate.py, tests/test_phone_gates_parity.py, tests/test_phone_privacy_gate.py, 16-34-SUMMARY.md
+- FOUND (ancestors of HEAD): 83fac8e6, 94b6c25d, 9dc72673, a28d6efc, 59b56ab1, e5987a35, 5e32c335, 147f5e46, 8e960227, 21d463f0, b616b0b1
+- `tests/test_planning` после коммита сводки (`b616b0b1`): `218 passed, 2 skipped`
