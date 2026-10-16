@@ -685,7 +685,23 @@ def _carried_by(
                 candidates.append((value, forwarded, False))
                 if not every_reading:
                     break
+    if every_reading:
+        # Именованная ссылка — и без позиционных носителя: у применённой обёртки
+        # `partial(threading.Thread, target=ref)(args=(…))` первый позиционный `partial` — сам
+        # носитель, а не аргумент ссылки (самопроверка исполнителя 16-34, зонд захода 2).
+        candidates += [
+            (reference, [], False)
+            for reference, after, positional in list(candidates)
+            if not positional and after
+        ]
     found: list[ReferenceArguments] = []
+
+    def add(results: list[ReferenceArguments]) -> None:
+        # Повтор отбрасывается только между прочтениями: равные позиции `map` одного
+        # прочтения — разные вызовы.
+        earlier = {_dump(known) for known in found}
+        found.extend(result for result in results if _dump(result) not in earlier)
+
     for reference, after, positional_reference in candidates:
         literal_args, literal_keywords = literal_keyword_arguments(list(source.keywords), reference)
         applied_args, applied_keywords = literal_keyword_arguments(outer_keywords)
@@ -720,10 +736,24 @@ def _carried_by(
                 ]
             else:
                 results = [ReferenceArguments(reference, own_args, own_keywords)]
-            # Повтор отбрасывается только между прочтениями: равные позиции `map` одного
-            # прочтения — разные вызовы.
-            earlier = {_dump(known) for known in found}
-            found.extend(result for result in results if _dump(result) not in earlier)
+            add(results)
+        tuples = (
+            iterable_elements(after[0])
+            if every_reading and positional_reference and not elementwise and after
+            and not isinstance(after[0], ast.Starred)
+            else None
+        )
+        if tuples is not None:
+            # `starmap(ref, [(…), (…)])`: функция получает элементы КАЖДОГО литерального
+            # кортежа или списка первой итерируемой за ссылкой (самопроверка исполнителя
+            # 16-34, зонд захода 2) — по результату на элемент.
+            add(
+                [
+                    ReferenceArguments(reference, items, keywords)
+                    for element in tuples[0]
+                    if (items := _literal_sequence(element)) is not None
+                ]
+            )
     return found
 
 

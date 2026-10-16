@@ -75,7 +75,11 @@ args=(…))` (`Timer(…, args=…)`) и очереди с выдуманной 
 target=s.bulk_update_mappings)`); обёртка носителя, связанная с именем любой формой общей
 грамматики (`w = functools.partial(asyncio.to_thread, setattr); w(account, "phone", x)`,
 `self.write = …`, цепочка `h = w`), судится как применённая на месте вызова `w(…)`
-(самопроверка исполнителя 16-34, заход 1). Семантика — функция общего
+(самопроверка исполнителя 16-34, заход 1); именованная ссылка в применённой обёртке
+судится и без позиционных `partial` — первый из них сам носитель:
+`functools.partial(threading.Thread, target=setattr)(args=(…))`; `starmap` (`itertools.
+starmap`, `pool.starmap`) подаёт функции элементы каждого литерального кортежа первой
+итерируемой (зонд самопроверки 16-34 после захода 2). Семантика — функция общего
 модуля `reference_arguments` (та же у гейта приватности; паритет —
 `tests/test_phone_gates_parity.py`; план 16-34, ревью WR-20). Так же судится и
 `functools.partial(s.bulk_update_mappings, M)(rows)`: судится вызов этого API с
