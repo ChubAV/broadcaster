@@ -21,7 +21,8 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   связывания (`binding_pairs`, `module_bindings`, `getattr_as_attribute`) И семантика
   носителя ссылки (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
   `forwarded_arguments`, `elementwise_arguments`, `literal_keyword_arguments`,
-  `reference_arguments`), каждое имя с подчёркиванием и без, — и присваивания таблицы
+  `reference_arguments`, `carrier_wrapper_bindings`, `applied_wrapper`), каждое имя с
+  подчёркиванием и без, — и присваивания таблицы
   с именем из `GRAMMAR_TABLES` (`ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`,
   `BINDING_FORMS`, `LITERAL_CONTAINER_WRAPPERS`, `UNJUDGED_ELEMENT`, выведенная планом
   16-34 `REFERENCE_KEYWORDS`): названные точки не переопределены. Копию под другим
@@ -75,6 +76,12 @@ CARRIER_SEMANTICS = (
     "elementwise_arguments",
     "literal_keyword_arguments",
     "reference_arguments",
+    # Обёртка носителя под именем (самопроверка исполнителя 16-34, заход 1). Гейт
+    # приватности держит ту же семантику своей функцией `_carrier_wrappers` (план 16-32):
+    # план 16-34 правит его модуль только строкой ввоза — копия под другим именем, которую
+    # структурная половина не видит по построению; перевод — за следующим планом.
+    "carrier_wrapper_bindings",
+    "applied_wrapper",
 )
 
 # Функции грамматики связывания И семантики носителя, которые модуль гейта не определяет
