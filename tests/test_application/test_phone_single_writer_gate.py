@@ -581,14 +581,21 @@ _ACCOUNTS_TABLE_SQL = (
 # `/* … */` и `-- …` там — пробелы, и `\s+` его перекрывает; однословный идентификатор в
 # любой из четырёх кавычек виден. До плана 16-33 (в) и (г) искались по сырому тексту, и
 # комментарий в голове оператора рвал `\s+` — `INSERT /* x */ INTO messenger_accounts`,
-# `REPLACE -- c⏎ INTO messenger_accounts` проходили (ревью WR-22).
+# `REPLACE -- c⏎ INTO messenger_accounts` проходили (ревью WR-22). Между последним словом
+# головы и таблицей — пробел ИЛИ кавычка вплотную (`_SQL_HEAD_GAP`): `INTO'messenger_accounts'`,
+# `COPY"messenger_accounts"`, `INTO TABLE`messenger_accounts`` пишут так же (самопроверка
+# исполнителя 16-33, заход 1: до неё голова требовала `\s+`, и такие операторы проходили).
+_SQL_HEAD_GAP = r"(?:\s+|(?=[\"`\[']))"
 RAW_SQL_PHONE_WRITE = re.compile(
-    r"\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
+    r"\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into"
+    + _SQL_HEAD_GAP
     + _ACCOUNTS_TABLE_SQL
-    + r"|\bcopy\s+"
+    + r"|\bcopy"
+    + _SQL_HEAD_GAP
     + _ACCOUNTS_TABLE_SQL
     + r"\s*(?:\([^)]*\)\s*)?from\b"
-    + r"|\bload\s+data\b[\s\S]*?\binto\s+table\s+"
+    + r"|\bload\s+data\b[\s\S]*?\binto\s+table"
+    + _SQL_HEAD_GAP
     + _ACCOUNTS_TABLE_SQL,
     re.IGNORECASE,
 )
@@ -596,9 +603,19 @@ RAW_SQL_PHONE_WRITE = re.compile(
 # Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)). Ключевое слово —
 # не идентификатор и не строка в кавычках из одного слова (`"where"`, `[set]`, `'where'`
 # — план 16-33, ревью WR-21: видимый `'where'` иначе оборвал бы предложение `SET`).
-_SQL_UPDATE = re.compile(r"(?<![\"`\['])\bupdate\b(?![\"`\]'])", re.IGNORECASE)
-_SQL_SET = re.compile(r"(?<![\"`\['])\bset\b(?![\"`\]'])", re.IGNORECASE)
-_SQL_WHERE = re.compile(r"(?<![\"`\['])\bwhere\b(?![\"`\]'])", re.IGNORECASE)
+# В кавычках слово — только если кавычка стоит с ОБЕИХ сторон: слово вплотную к кавычке
+# идентификатора — `SET"phone"`, `UPDATE'messenger_accounts'`, `WHERE'phone'` — по-прежнему
+# ключевое (самопроверка исполнителя 16-33, заход 1: такие операторы на SQLite пишут
+# колонку, а окрестность по одной стороне их не видела).
+def _sql_keyword(word: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"(?<![\"`\['])\b{word}\b|\b{word}\b(?![\"`\]'])", re.IGNORECASE
+    )
+
+
+_SQL_UPDATE = _sql_keyword("update")
+_SQL_SET = _sql_keyword("set")
+_SQL_WHERE = _sql_keyword("where")
 _SQL_PHONE_NAME = re.compile(r"\bphone(?:_is_manual)?\b", re.IGNORECASE)
 _SQL_PHONE_ASSIGNMENT = re.compile(
     r"\bphone(?:_is_manual)?\b" + _SQL_QUOTE + r"\s*=", re.IGNORECASE
@@ -5870,14 +5887,14 @@ LITERAL_FORM_CASES = [
         "SQL = 'COPY\"messenger_accounts\"(id, phone) FROM STDIN'\n",
         KIND_RAW_SQL,
         "«COPY",
-        "phone",
+        "messenger_accounts",
         id="raw-sql-copy-tight-double-quoted-table",
     ),
     pytest.param(
         "SQL = \"LOAD DATA INFILE 'x' INTO TABLE`messenger_accounts`(id, phone)\"\n",
         KIND_RAW_SQL,
         "«LOAD",
-        "phone",
+        "messenger_accounts",
         id="raw-sql-load-data-tight-backtick-table",
     ),
 ]
