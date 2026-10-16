@@ -313,6 +313,7 @@ from tests.phone_gate_grammar import (
     binding_form_source,
     binding_name,
     module_bindings,
+    reference_arguments,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -953,40 +954,54 @@ def _is_identified_log_call(call: ast.Call, names: ModuleLogNames) -> bool:
     )
 
 
+def _not_carriers(names: ModuleLogNames) -> frozenset[str]:
+    """Применения, которые носителем не судятся: `getattr(…)(…)` и `methodcaller(…)(…)`."""
+    return frozenset({"getattr"}) | names.methodcaller_names
+
+
+def _applied_carriers(tree: ast.AST, names: ModuleLogNames) -> set[int]:
+    """`id` вызовов `X(…)`, применённых как `X(…)(…)`: их ссылку и аргументы судит применение."""
+    not_carriers = _not_carriers(names)
+    return {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Call)
+        and _callee_name(node.func.func) not in not_carriers
+    }
+
+
 def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
-    """Вызов журнала, который носитель ссылки сделает за автора (ревью WR-17).
+    """Вызовы журнала, которые носитель ссылки сделает за автора (ревью WR-17, WR-19, WR-20).
 
     Носитель — ЛЮБОЙ вызов, который сам вызовом журнала не опознан: `asyncio.to_thread`,
-    `loop.run_in_executor`, `map`, `Context.run`, `run_sync` (`REFERENCE_CARRIERS` общего
-    модуля — словарь шапок и матриц, а не закрытый перечень). Ссылка — первый слева
-    позиционный аргумент без `*`, являющийся вызываемым журнала (`_is_log_callable`), или
-    именованный аргумент из `REFERENCE_KEYWORDS` (`fn=`). Носитель подаёт ссылке аргументы,
-    стоящие ЗА ней (у `fn=` — все позиционные), и именованные, кроме `fn`, — тот же довод,
-    что у `functools.partial`: эти аргументы уйдут в журнал. Синтетический вызов
-    `<ссылка>(<аргументы после неё>, <именованные, кроме fn>)` встаёт на место носителя
-    (`ast.copy_location`). Ссылка без аргументов за ней в журнал ничего не подаёт — судить
-    нечего, и вызовом журнала она не считается; аргумент ДО ссылки (исполнитель у
-    `run_in_executor`) в журнал не уходит.
+    `loop.run_in_executor`, `map`, `Context.run`, `run_sync`, `threading.Thread(target=…)`
+    (`REFERENCE_CARRIERS` общего модуля — словарь шапок и матриц, а не закрытый перечень).
+    Где стоит ссылка и какие аргументы носитель ей подаст, решает функция общего модуля
+    `reference_arguments` (план 16-32, О-14 (а), О-15) — та же семантика, что у гейта
+    писателя: ссылка — позиционным аргументом (литеральная распаковка `*[…]` раскрыта),
+    ЛЮБЫМ именованным аргументом или внутри применённой обёртки `X(…)(…)`; аргументы —
+    позиционные ЗА ссылкой (у именованной — все позиционные носителя) и литеральные
+    аргументы того же вызова по общему правилу `literal_keyword_arguments` (литеральный
+    кортеж или список — позиционные, литеральный словарь — именованные), затем аргументы
+    применения; у `map` — элементы литеральных итерируемых. Тот же довод, что у
+    `functools.partial`: эти аргументы уйдут в журнал. Синтетический вызов
+    `<ссылка>(<аргументы>)` встаёт на место носителя (`ast.copy_location`). Ссылка без
+    аргументов в журнал ничего не подаёт — судить нечего, и вызовом журнала она не
+    считается; аргумент ДО позиционной ссылки (исполнитель у `run_in_executor`) в журнал не
+    уходит.
     """
     if _is_identified_log_call(call, names):
         return []
-    keywords = [keyword for keyword in call.keywords if keyword.arg not in REFERENCE_KEYWORDS]
-    reference: ast.expr | None = None
-    arguments: list[ast.expr] = []
-    for index, argument in enumerate(call.args):
-        if not isinstance(argument, ast.Starred) and _is_log_callable(argument, names):
-            reference = argument
-            arguments = list(call.args[index + 1 :])
-            break
-    if reference is None:
-        for keyword in call.keywords:
-            if keyword.arg in REFERENCE_KEYWORDS and _is_log_callable(keyword.value, names):
-                reference = keyword.value
-                arguments = list(call.args)
-                break
-    if reference is None or not (arguments or keywords):
-        return []
-    return [ast.copy_location(ast.Call(func=reference, args=arguments, keywords=keywords), call)]
+    return [
+        ast.copy_location(
+            ast.Call(func=carried.reference, args=carried.args, keywords=carried.keywords), call
+        )
+        for carried in reference_arguments(
+            call, lambda node: _is_log_callable(node, names), _not_carriers(names)
+        )
+        if carried.args or carried.keywords
+    ]
 
 
 def _iterable_elements(node: ast.expr) -> list[ast.expr]:
@@ -1093,6 +1108,7 @@ def python_log_calls(source: str) -> list[ast.Call]:
     """
     tree = ast.parse(source)
     names = module_log_names(tree)
+    applied = _applied_carriers(tree, names)
     calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -1100,7 +1116,10 @@ def python_log_calls(source: str) -> list[ast.Call]:
         if _is_identified_log_call(node, names):
             calls.append(node)
             continue
-        calls.extend(_carried_log_calls(node, names))
+        # `X(…)` в `X(…)(…)` носителем не судится: его ссылку и аргументы судит применение
+        # (`partial(*[logger.info, …])()` — один вызов на месте, а не два).
+        if id(node) not in applied:
+            calls.extend(_carried_log_calls(node, names))
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
         calls.extend(_applied_log_methodcaller(node, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
@@ -2301,9 +2320,10 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-handed-to-map-with-a-logger",
     ),
-    # Самопроверка исполнителя 16-29, заход 1: `methodcaller`, поданный носителю ключом
-    # ссылки `fn=` (`REFERENCE_KEYWORDS`), получает позиционные аргументы носителя — как
-    # вызываемое журнала под `fn=`; получатель — первый из них.
+    # Самопроверка исполнителя 16-29, заход 1: `methodcaller`, поданный носителю именованным
+    # аргументом (`fn=` здесь — любой ключ: общее правило О-14 (а), план 16-32, ключи не
+    # перечисляются), получает позиционные аргументы носителя — как вызываемое журнала,
+    # поданное именованным аргументом; получатель — первый из них.
     pytest.param(
         "app/x.py",
         'runner.call(logger, fn=operator.methodcaller("info", "x %s", account.phone))\n',
