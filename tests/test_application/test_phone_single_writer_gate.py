@@ -52,7 +52,14 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 `asyncio.to_thread(…)`, `loop.run_in_executor(None, …)`, `map(…)` — поэлементно,
 функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
 [x])` — вызов `setattr(account, "phone", x)`), `contextvars.copy_context().run(…)`
-(`Context.run`), — и по-прежнему любому другому вызову (цена строгости ниже), и
+(`Context.run`), литеральной распаковкой `asyncio.to_thread(*[ref, …])`
+(`to_thread(*[…])`), в применённой обёртке носителя
+`functools.partial(asyncio.to_thread, ref)(…)` (`partial(to_thread, …)(…)`), `map` с
+обёрткой итерируемой `list([…])`, потоку `threading.Thread(target=ref, args=(…),
+kwargs={…})` (`Thread(target=…, args=…)`), таймеру `threading.Timer(1.0, ref,
+args=(…))` (`Timer(…, args=…)`) и очереди с выдуманной парой ключей
+`scheduler.enqueue(job=ref, payload=(…))` (`enqueue(job=…, payload=…)`; план 16-34), —
+и по-прежнему любому другому вызову (цена строгости ниже), и
 `functools.partial(s.bulk_update_mappings, M)(rows)`: судится вызов этого API с
 аргументами после ссылки (и аргументами применения у `partial(…)(…)`); ссылка может стоять и внутри
 `functools.partial(ref, …)` (или его псевдонима в том же модуле — `from functools
@@ -432,16 +439,24 @@ from typing import NamedTuple
 
 import pytest
 
-from tests.phone_gate_grammar import (
+# Грамматика связывания, перечень носителей и семантика носителя ссылки — ввозом из общего
+# модуля (планы 16-27, 16-32, 16-34; О-12 (а), О-14 (а), О-15): своих копий гейт не держит.
+from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
+    LITERAL_CONTAINER_WRAPPERS,
     OUT_OF_GRAMMAR_BINDING_FORMS,
     REFERENCE_CARRIERS,
-    REFERENCE_KEYWORDS,
+    UNJUDGED_ELEMENT,
     BindingForm,
     IdentificationValue,
     binding_form_source,
     binding_name,
+    elementwise_arguments,
+    expanded_arguments,
+    forwarded_arguments,
+    getattr_literal,
+    iterable_elements,
     module_bindings,
     reference_arguments,
 )
@@ -530,10 +545,11 @@ ROW_MAPPING_CALL_NAMES = frozenset(
 # плана 16-17 `op.bulk_insert(table, rows=[…])` проходил (ревью WR-10).
 ROW_MAPPING_KEYWORDS = frozenset({"params", "mappings", "parameters", "rows"})
 
-# Именованный параметр ССЫЛКИ на функцию (`fn` у `run_sync`) — `REFERENCE_KEYWORDS`,
-# и носитель, подающий функции элементы итерируемых (`map`), — `ELEMENTWISE_CARRIERS`:
+# Носитель, подающий функции элементы итерируемых (`map`), — `ELEMENTWISE_CARRIERS`:
 # ввозом из общего модуля `tests/phone_gate_grammar.py` вместе с перечнем носителей
-# `REFERENCE_CARRIERS` (план 16-27, решение владельца О-12 (а)).
+# `REFERENCE_CARRIERS` (план 16-27, решение владельца О-12 (а)). Закрытой таблицы ключа
+# ссылки нет: до плана 16-34 ключ был один — `fn` (`REFERENCE_KEYWORDS`), а общее правило
+# О-14 (а) судит ссылку в ЛЮБОМ именованном аргументе (`reference_arguments`, ревью WR-20).
 
 # Обёртка ссылки с привязанными аргументами: `functools.partial(ref, …)`; её псевдонимы
 # в модуле добавляются при разборе исходника (`_module_aliases(tree, "partial")`).
@@ -577,8 +593,8 @@ DESCRIPTOR_SET = "__set__"
 MODEL_INIT = "__init__"
 
 # Обёртки литерального контейнера: `list(<генератор словарей>)` и подобные с ОДНИМ
-# позиционным аргументом и без именованных — разбираются по этому аргументу.
-LITERAL_CONTAINER_WRAPPERS = frozenset({"list", "tuple", "set", "iter"})
+# позиционным аргументом и без именованных — разбираются по этому аргументу. Таблица —
+# `LITERAL_CONTAINER_WRAPPERS` общего модуля (ввоз выше; до плана 16-34 — своя копия).
 
 # Upsert: именованный аргумент `set_` у `on_conflict_do_update` пишет колонки при
 # конфликте (ревью WR-01). MySQL `on_duplicate_key_update` (план 16-12) несёт
@@ -1291,50 +1307,19 @@ def _judged_bindings(name: str) -> tuple[frozenset[int], frozenset[str]]:
     )
 
 
-def _expanded_arguments(items: list[ast.expr]) -> list[ast.expr | None]:
-    """Элементы с раскрытой литеральной распаковкой: `*[a, b]` / `*(a, b)` → `a, b`.
-
-    Распаковка не-литерала (`*rows`, `*build()`) — один `None` на её месте.
-    """
-    found: list[ast.expr | None] = []
-    for item in items:
-        if isinstance(item, ast.Starred):
-            if isinstance(item.value, (ast.List, ast.Tuple)):
-                found.extend(_expanded_arguments(list(item.value.elts)))
-            else:
-                found.append(None)
-        else:
-            found.append(item)
-    return found
-
-
-def _forwarded_arguments(items: list[ast.expr]) -> list[ast.expr]:
-    """Аргументы, которые ссылка подаёт API: литеральная распаковка раскрыта, прочая — на месте.
-
-    Тот же порядок и та же длина, что у `_expanded_arguments`, но распаковка
-    не-литерала (`*[(…) for …]`, `*rows`) остаётся узлом `Starred`, а не `None`:
-    синтетический вызов API получает её так же, как прямой, — `ordered_values` судит
-    перечень пар в `*[(…) for …]`, а позиции за ней не связываются (самопроверка
-    исполнителя 16-22: до плана распаковка за ссылкой терялась).
-    """
-    found: list[ast.expr] = []
-    for item in items:
-        if isinstance(item, ast.Starred) and isinstance(item.value, (ast.List, ast.Tuple)):
-            found.extend(_forwarded_arguments(list(item.value.elts)))
-        else:
-            found.append(item)
-    return found
-
-
 def _positional_arguments(call: ast.Call) -> list[ast.expr | None]:
     """Позиционные аргументы вызова с раскрытой литеральной распаковкой `*[…]` / `*(…)`.
 
-    Распаковка не-литерала даёт `None` и обрывает позиции: сколько аргументов она
-    подаст, решает поток данных, поэтому `_bound_arguments` позиций за первым
-    `None` не связывает. Литеральные аргументы после неё остаются в перечне — их
-    судят ветки, которым позиция не нужна (строки executemany, отображения).
+    Тонкая обёртка над `expanded_arguments` общего модуля (план 16-34, О-15: до плана —
+    своя копия `_expanded_arguments`). Распаковка не-литерала даёт `None` и обрывает
+    позиции: сколько аргументов она подаст, решает поток данных, поэтому
+    `_bound_arguments` позиций за первым `None` не связывает. Литеральные аргументы после
+    неё остаются в перечне — их судят ветки, которым позиция не нужна (строки executemany,
+    отображения). Аргументы, которые ссылка подаёт API (распаковка не-литерала остаётся
+    узлом `Starred`: `ordered_values` судит перечень пар в `*[(…) for …]`, самопроверка
+    исполнителя 16-22), — `forwarded_arguments` общего модуля.
     """
-    return _expanded_arguments(list(call.args))
+    return expanded_arguments(list(call.args))
 
 
 def _named_arguments(call: ast.Call) -> list[tuple[str, ast.expr]]:
@@ -1421,24 +1406,21 @@ def _callee_receiver(func: ast.expr) -> ast.expr | None:
     """
     if isinstance(func, ast.Attribute):
         return func.value
-    if _getattr_literal(func) is not None:
-        assert isinstance(func, ast.Call)
-        return func.args[0]
-    return None
+    literal = getattr_literal(func)
+    return literal[0] if literal is not None else None
 
 
-def _getattr_literal(node: ast.AST) -> str | None:
-    """Строка в `getattr(<что угодно>, "<строка>")`, иначе `None`."""
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "getattr"
-        and len(node.args) >= 2
-        and isinstance(node.args[1], ast.Constant)
-        and isinstance(node.args[1].value, str)
-    ):
-        return node.args[1].value
-    return None
+def _getattr_string(node: ast.AST | None) -> str | None:
+    """Строка `getattr(<obj>, "<строка>")` по читателю общего модуля `getattr_literal`, иначе `None`.
+
+    Читатель getattr-литерала один на оба гейта (план 16-32 вынес его в общий модуль, план
+    16-34 перевёл на него гейт писателя; ревью IN-15, О-15): строгая форма — два или три
+    позиционных аргумента, без именованных и звёздочки. До плана 16-34 у гейта писателя
+    была своя копия `_getattr_literal` (два и более аргументов, любые именованные); замер
+    планирования: строгая форма не меняет ни одного ответа строк, матриц и живого дерева.
+    """
+    literal = getattr_literal(node) if node is not None else None
+    return literal[1] if literal is not None else None
 
 
 def _reference_name(node: ast.AST | None) -> str | None:
@@ -1451,7 +1433,7 @@ def _reference_name(node: ast.AST | None) -> str | None:
         return node.id
     if isinstance(node, ast.Attribute):
         return node.attr
-    return _getattr_literal(node) if node is not None else None
+    return _getattr_string(node)
 
 
 # Ссылка с привязанными аргументами: (имя API, узел ссылки, позиционные, именованные).
@@ -1495,7 +1477,7 @@ def _bound_reference(
     if isinstance(node, ast.Call) and _call_name(node) in partial_names:
         positional = _positional_arguments(node)
         if positional and positional[0] is not None:
-            rest = _forwarded_arguments(list(node.args))[1:]
+            rest = forwarded_arguments(list(node.args))[1:]
             return [
                 (referenced, func, args + rest, keywords + list(node.keywords))
                 for referenced, func, args, keywords in _bound_reference(
@@ -1670,70 +1652,6 @@ def _methodcaller_receivers(
     return {key: list(receivers.values()) for key, receivers in found.items()}
 
 
-# Место элемента итерируемой, которую предикат не раскрывает (параметр, вызов):
-# аргумент API на этой позиции не судится, как параметр функции, но позиция цела.
-_UNJUDGED_ELEMENT = "<элемент не-литерала>"
-
-
-def _iterable_elements(node: ast.expr) -> tuple[list[ast.expr], bool] | None:
-    """Элементы литеральной итерируемой: (элементы, повторяется ли один элемент).
-
-    Список, кортеж, набор (литеральная `*`-распаковка раскрыта) — их элементы по
-    позициям; comprehension и генератор — его элемент, одинаковый на каждой позиции;
-    обёртки `list(…)` и подобные — их аргумент. Иначе — `None`: длину и элементы решает
-    поток данных.
-    """
-    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
-        elements = _expanded_arguments(list(node.elts))
-        if any(element is None for element in elements):
-            return None
-        return [element for element in elements if element is not None], False
-    if isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
-        return [node.elt], True
-    if (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in LITERAL_CONTAINER_WRAPPERS
-        and len(node.args) == 1
-        and not node.keywords
-    ):
-        return _iterable_elements(node.args[0])
-    return None
-
-
-def _elementwise_arguments(iterables: list[ast.expr]) -> list[list[ast.expr]]:
-    """Аргументы каждого вызова функции поэлементного носителя (`map(fn, *iterables)`).
-
-    `map` зовёт функцию с элементом КАЖДОЙ итерируемой на одной позиции и
-    останавливается на самой короткой: литеральные список, кортеж и набор зипуются
-    (одна позиция — один вызов), у comprehension и генератора — его элемент на каждой
-    позиции, итерируемая не-литерал даёт на своей позиции аргумент вне суда. Распаковка
-    не-литерала `*rows` среди итерируемых обрывает перечень: сколько итерируемых она
-    подаст, решает поток данных. Число вызовов — длина самой короткой литеральной
-    итерируемой фиксированной длины, иначе один.
-    """
-    columns: list[tuple[list[ast.expr], bool] | None] = []
-    for iterable in iterables:
-        if isinstance(iterable, ast.Starred):
-            break
-        columns.append(_iterable_elements(iterable))
-    fixed = [len(column[0]) for column in columns if column is not None and not column[1]]
-    count = min(fixed) if fixed else 1
-    calls: list[list[ast.expr]] = []
-    for position in range(count):
-        arguments: list[ast.expr] = []
-        for iterable, column in zip(iterables, columns):
-            if column is None:
-                arguments.append(
-                    ast.copy_location(ast.Name(id=_UNJUDGED_ELEMENT, ctx=ast.Load()), iterable)
-                )
-            else:
-                elements, repeated = column
-                arguments.append(elements[0] if repeated else elements[position])
-        calls.append(arguments)
-    return calls
-
-
 def _referenced_calls(
     call: ast.Call,
     judged_names: frozenset[str],
@@ -1792,7 +1710,7 @@ def _referenced_calls(
                 _synthetic_call(
                     call,
                     func,
-                    bound_args + _forwarded_arguments(list(call.args)),
+                    bound_args + forwarded_arguments(list(call.args)),
                     bound_keywords + list(call.keywords),
                 ),
                 referenced,
@@ -2268,11 +2186,10 @@ def _phone_column(node: ast.AST) -> str | None:
         # порядка, замер планирования). `MessengerAccount.phone.key`,
         # `.property.key`, `.expression`, `.property.columns[0]` — та же колонка.
         return _phone_column(node.value)
-    if _getattr_literal(node) is not None:
+    if (literal := getattr_literal(node)) is not None:
         # `getattr`-производная (план 16-28, ревью WR-15): `getattr(X, "<строка>")` —
         # это `X.<строка>`, тоже ПОСЛЕ прямых наименований.
-        assert isinstance(node, ast.Call)
-        return _phone_column(node.args[0])
+        return _phone_column(literal[0])
     return None
 
 
@@ -2432,7 +2349,7 @@ def _rename_aliases(tree: ast.AST, name: str) -> None:
 
     Только узлы в контексте чтения: присваивание псевдонима остаётся, а его
     использования читаются как исходное имя всеми ветками, опознающими носитель по
-    имени (`_call_name`, `_getattr_literal`, `_referenced_calls`). Имя `Name` — на
+    имени (`_call_name`, `_getattr_string`, `_referenced_calls`). Имя `Name` — на
     месте; атрибут `<obj>.<псевдоним>` — узлом `Name(name)` вместо атрибута: псевдоним,
     связанный целью-атрибутом `self.mc = operator.methodcaller` или в теле класса
     (`attr = getattr`), зовут через атрибут — `self.mc(…)`, `K.attr(…)`, — и до
@@ -2604,7 +2521,7 @@ def _call_name(call: ast.Call) -> str | None:
         return call.func.id
     if isinstance(call.func, ast.Attribute):
         return call.func.attr
-    return _getattr_literal(call.func)
+    return _getattr_string(call.func)
 
 
 def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
@@ -3500,10 +3417,12 @@ def _binding_source(row: JudgedParameter, form: str) -> str:
     return f"{receiver}{row.call}({', '.join(arguments)})\n"
 
 
+# Строки ссылки `run_sync` (`fn`) отбираются по виду `KIND_BY_REFERENCE`, а не по ключу
+# ссылки: закрытой таблицы ключа больше нет (план 16-34, О-14 (а)); параметры прежние.
 BINDING_CASES = [
     pytest.param(row, form, id=f"{row.api}-{form}")
     for row in JUDGED_PARAMETERS
-    if row.parameter not in REFERENCE_KEYWORDS
+    if row.kind != KIND_BY_REFERENCE
     for form in PARAMETER_BINDING_FORMS
 ]
 

@@ -290,14 +290,16 @@ OUT_OF_GRAMMAR_BINDING_FORMS: tuple[OutOfGrammarForm, ...] = (
 )
 
 
-# Именованный параметр ССЫЛКИ на функцию: `fn` у `AsyncSession.run_sync` /
-# `AsyncConnection.run_sync` — `(self, fn, *arg, **kw)`, замер `inspect.signature`,
-# SQLAlchemy 2.0.46. У `asyncio.to_thread` и `functools.partial` ссылка
-# позиционно-только (`partial(func=…)` и `to_thread(func=…)` падают `TypeError`,
-# замер 2026-10-12), у `loop.run_in_executor` именованных аргументов нет вовсе
-# (план 16-17, ревью WR-10). Перенесён из гейта писателя планом 16-27: перечень
-# носителей и их ключ — общие для обоих гейтов (О-12 (а)).
-REFERENCE_KEYWORDS = frozenset({"fn"})
+# Летопись ключа ссылки. До плана 16-34 здесь была закрытая таблица `REFERENCE_KEYWORDS =
+# frozenset({"fn"})` — именованный параметр ССЫЛКИ `fn` у `AsyncSession.run_sync` /
+# `AsyncConnection.run_sync` (`(self, fn, *arg, **kw)`, замер `inspect.signature`,
+# SQLAlchemy 2.0.46; план 16-17, ревью WR-10; перенесена из гейта писателя планом 16-27).
+# Ключ ссылки был один — `fn`, и `threading.Thread(target=setattr, args=(…))` проходил оба
+# гейта (ревью WR-20). Общее правило О-14 (а) (владелец, 2026-10-16) судит ЛЮБОЙ
+# именованный аргумент (`reference_arguments`), а не перечень ключей отдельных API, и
+# таблица выведена целиком: из этого модуля, из ввоза обоих гейтов и из обязательных
+# имён правила-паритета; в его `GRAMMAR_TABLES` имя осталось — модуль гейта не вправе
+# завести таблицу снова.
 
 # Носитель, который подаёт функции ЭЛЕМЕНТЫ итерируемых, а не сами итерируемые:
 # функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],

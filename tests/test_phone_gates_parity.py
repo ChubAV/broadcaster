@@ -14,12 +14,27 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
 модуль `tests/phone_gate_grammar.py`, — и расхождение гейтов краснит это правило.
 
 ЧТО ПРОВЕРЯЕТСЯ.
-* Построение: оба модуля гейтов ввозят `tests.phone_gate_grammar` и не определяют на
-  верхнем уровне своей грамматики (`binding_pairs`, `_binding_pairs`, `module_bindings`,
-  `getattr_as_attribute`) и своих таблиц (`REFERENCE_KEYWORDS`, `ELEMENTWISE_CARRIERS`,
-  `REFERENCE_CARRIERS`, `BINDING_FORMS`); ввезённые объекты — те же объекты общего
-  модуля; `id` значений опознания (`API_IDENTIFICATION_VALUES`,
-  `LOG_IDENTIFICATION_VALUES`) совпадают по порядку.
+* Построение: оба модуля гейтов ввозят `tests.phone_gate_grammar` и держат его имена
+  `REQUIRED_SHARED_NAMES` (`module_bindings`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
+  `reference_arguments`, `iterable_elements`, `getattr_literal`) теми же объектами; на
+  верхнем уровне модуля гейта нет функции с именем из `GRAMMAR_FUNCTIONS` — грамматика
+  связывания (`binding_pairs`, `module_bindings`, `getattr_as_attribute`) И семантика
+  носителя ссылки (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
+  `forwarded_arguments`, `elementwise_arguments`, `literal_keyword_arguments`,
+  `reference_arguments`), каждое имя с подчёркиванием и без, — и присваивания таблицы
+  с именем из `GRAMMAR_TABLES` (`ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`,
+  `BINDING_FORMS`, `LITERAL_CONTAINER_WRAPPERS`, `UNJUDGED_ELEMENT`, выведенная планом
+  16-34 `REFERENCE_KEYWORDS`): названные точки не переопределены. Копию под другим
+  именем (`def _my_pairs(…)`, `MY_CARRIERS = …`) эта половина не видит по построению:
+  её видит только поведенческая половина — и только на ячейках общего словаря.
+  Правило-контроль `test_the_structural_half_reddens_a_redefined_grammar_point`
+  доказывает, что структурная половина краснеет на каждом названном имени; `id`
+  значений опознания (`API_IDENTIFICATION_VALUES`, `LOG_IDENTIFICATION_VALUES`)
+  совпадают по порядку. Летопись — ревью IN-15 (верификация раунда 6, 2026-10-14): до
+  плана 16-34 докстринг обещал, что копий нет вовсе, а правило сверяло четыре имени
+  функций и четыре таблицы, и копии `_iterable_elements` / `_getattr_literal` жили в
+  обоих гейтах; план 16-32 снял их у гейта приватности, план 16-34 — у гейта писателя,
+  и имена семантики носителя вошли в `GRAMMAR_FUNCTIONS` (решение владельца О-15).
 * Поведение: на каждой ячейке «форма `BINDING_FORMS` × значение опознания × прямой вызов
   и каждый носитель `REFERENCE_CARRIERS`» оба гейта находят — писатель запись номера,
   приватность номер в журнале. Ячейку обоих гейтов собирает одна функция
@@ -139,12 +154,17 @@ def _resolves_binding(offences_of, form, value, carrier) -> bool:
 
 
 def test_both_gates_take_the_binding_grammar_and_carriers_from_one_module():
-    """Построение паритета: общий модуль ввезён, своих копий грамматики и носителей нет.
+    """Построение паритета: общий модуль ввезён, названные точки грамматики не переопределены.
 
-    Паритет держится по построению, пока грамматика и перечень носителей определены
-    один раз — в `tests/phone_gate_grammar.py`. Вторая копия в модуле гейта (свой
-    `_binding_pairs`, свой перечень носителей) — та асимметрия, на которой открывались
-    круги WR-14 и WR-17 (решение владельца О-12 (а)).
+    Паритет держится по построению, пока грамматика, перечень носителей и семантика
+    носителя определены один раз — в `tests/phone_gate_grammar.py`. Правило проверяет
+    ровно названное: ввоз общего модуля; имена `REQUIRED_SHARED_NAMES` — те же объекты;
+    на верхнем уровне модуля гейта нет функции с именем из `GRAMMAR_FUNCTIONS` и
+    присваивания таблицы с именем из `GRAMMAR_TABLES`. Копию под другим именем оно не
+    видит — её ловит только поведенческая половина на ячейках общего словаря (ревью IN-15,
+    О-15). Вторая копия в модуле гейта (свой `_binding_pairs`, свой перечень носителей,
+    свой `_iterable_elements`) — та асимметрия, на которой открывались круги WR-14, WR-17 и
+    WR-19 (решение владельца О-12 (а)).
     """
     problems: list[str] = []
     for module in GATE_MODULES:
