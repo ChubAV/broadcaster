@@ -73,7 +73,9 @@
   аргументом (`fn=`, `target=`, `function=`, `initializer=`, выдуманный `job=` — ключи
   отдельных API не перечисляются) или внутри применённой обёртки носителя `X(…)(…)`
   (`await partial(asyncio.to_thread, logger.info)("x %s", account.phone)`,
-  `partial(*[logger.info, …])()`), — и у ссылки есть аргументы, — вызов журнала. Судятся
+  `partial(*[logger.info, …])()`; и та же обёртка, связанная с именем общей грамматикой,
+  `w = partial(asyncio.to_thread, logger.info); w(…)` — самопроверка исполнителя 16-32), —
+  и у ссылки есть аргументы, — вызов журнала. Судятся
   аргументы после ссылки (у именованной ссылки — все позиционные аргументы носителя) и, по
   общему правилу владельца О-14 (а), литеральные аргументы того же вызова: литеральный
   кортеж или список именованного аргумента идёт позиционными аргументами ссылки
@@ -348,7 +350,7 @@ from __future__ import annotations
 import ast
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Mapping
 
@@ -616,6 +618,10 @@ class ModuleLogNames:
     `partial_names` — имена, под которыми модуль зовёт `functools.partial`
     (`from functools import partial as bind_`, `bind_ = functools.partial`; самопроверка
     исполнителя 16-29 — гейт писателя разрешает псевдонимы `partial` с плана 16-22).
+    `carrier_wrappers` — пары «имя → обёртка носителя»: имя, связанное общей грамматикой с
+    `partial(<носитель>, <ссылка на вызываемое журнала или methodcaller>, …)`
+    (`w = functools.partial(asyncio.to_thread, logger.info)`); вызов `w(…)` судится, как
+    применённая обёртка `partial(…)(…)` (самопроверка исполнителя 16-32, цикл 2).
     Область видимости — весь модуль. Новые поля — с умолчаниями, чтобы позиционное
     создание по трём прежним полям не ломалось.
     """
@@ -629,6 +635,7 @@ class ModuleLogNames:
     methodcaller_names: frozenset[str] = METHODCALLER_NAMES
     methodcallers: tuple[tuple[str, ast.Call], ...] = ()
     partial_names: frozenset[str] = PARTIAL_NAMES
+    carrier_wrappers: tuple[tuple[str, ast.Call], ...] = ()
 
 
 NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
@@ -857,7 +864,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
                 if all(call is not known for known in known_calls):
                     known_calls.append(call)
                     changed = True
-    return ModuleLogNames(
+    names = ModuleLogNames(
         frozenset(binders),
         frozenset(receiver_names),
         frozenset(receiver_attributes),
@@ -870,6 +877,56 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
         ),
         partial_names=partial_names,
     )
+    return replace(names, carrier_wrappers=_carrier_wrappers(bindings, names))
+
+
+def _carrier_wrappers(bindings: list[Binding], names: ModuleLogNames) -> tuple[tuple[str, ast.Call], ...]:
+    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)` (самопроверка 16-32).
+
+    `w = functools.partial(asyncio.to_thread, logger.info); w("x %s", account.phone)` —
+    то же применение `partial(…)(…)`, что и на месте, разделённое связыванием: ссылка — в
+    аргументах `partial` (`reference_arguments` общего модуля находит её там), аргументы
+    применения приходят с вызова `w(…)`. Связывание — любой формой общей грамматики, цепочка
+    `g = w` — тоже, до неподвижной точки; каждое связывание имени судится. `partial` над
+    самим вызываемым журнала (`partial(logger.info, …)`) — уже функция журнала, здесь не
+    повторяется.
+    """
+    grouped = _grouped(names.methodcallers)
+    not_carriers = _not_carriers(names)
+
+    def is_reference(node: ast.expr) -> bool:
+        return _is_log_callable(node, names) or bool(
+            _methodcaller_calls(node, names.methodcaller_names, grouped)
+        )
+
+    found: dict[str, list[ast.Call]] = {}
+    changed = True
+    while changed:
+        changed = False
+        for target, value, _in_class_body in bindings:
+            name = binding_name(target)
+            if name is None:
+                continue
+            if isinstance(value, ast.Call):
+                values = (
+                    [value]
+                    if _last_name(value.func) in names.partial_names
+                    and not _is_log_partial(value, names)
+                    and reference_arguments(value, is_reference, not_carriers)
+                    else []
+                )
+            elif isinstance(value, ast.Name):
+                values = list(found.get(value.id, ()))
+            elif isinstance(value, ast.Attribute):
+                values = list(found.get(value.attr, ()))
+            else:
+                values = []
+            for wrapper in values:
+                known = found.setdefault(name, [])
+                if all(wrapper is not other for other in known):
+                    known.append(wrapper)
+                    changed = True
+    return tuple((name, wrapper) for name, wrappers in sorted(found.items()) for wrapper in wrappers)
 
 
 def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozenset[str]) -> frozenset[str]:
@@ -1139,6 +1196,7 @@ def python_log_calls(source: str) -> list[ast.Call]:
     tree = ast.parse(source)
     names = module_log_names(tree)
     applied = _applied_carriers(tree, names)
+    wrappers = _grouped(names.carrier_wrappers)
     calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -1152,6 +1210,21 @@ def python_log_calls(source: str) -> list[ast.Call]:
             calls.extend(_carried_log_calls(node, names))
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
         calls.extend(_applied_log_methodcaller(node, names, as_carrier=id(node) not in applied))
+        # Вызов имени, связанного с обёрткой носителя (`w = partial(asyncio.to_thread,
+        # logger.info); w(…)`), — как применённая обёртка `partial(…)(…)` на этом месте.
+        bound = (
+            wrappers.get(node.func.id, [])
+            if isinstance(node.func, ast.Name)
+            else wrappers.get(node.func.attr, [])
+            if isinstance(node.func, ast.Attribute)
+            else []
+        )
+        for wrapper in bound:
+            application = ast.copy_location(
+                ast.Call(func=wrapper, args=list(node.args), keywords=list(node.keywords)), node
+            )
+            calls.extend(_carried_log_calls(application, names))
+            calls.extend(_applied_log_methodcaller(application, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
