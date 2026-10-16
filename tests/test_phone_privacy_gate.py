@@ -2407,6 +2407,37 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="partial-wrapped-carrier-log-reference",
     ),
+    # Ревью WR-19 (верификация раунда 6, 2026-10-14): `methodcaller`, поданный носителю,
+    # применялся к получателю только у позиционной ссылки без `*` и у `fn=`; обёртка
+    # итерируемой `list([logger])` у `map`, именованный аргумент, литеральная `*`-распаковка
+    # и обёртка носителя `partial(…)(…)` давали `[]`. План 16-32: получатель — первый
+    # аргумент, который носитель подаст ссылке (`reference_arguments` общего модуля).
+    pytest.param(
+        "app/x.py",
+        'list(map(methodcaller("info", account.phone), list([logger])))\n',
+        "phone",
+        id="methodcaller-handed-to-map-in-a-wrapped-iterable",
+    ),
+    pytest.param(
+        "app/x.py",
+        'threading.Thread(target=operator.methodcaller("info", "x %s", account.phone), args=(logger,)).start()\n',
+        "phone",
+        id="methodcaller-handed-by-thread-target",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    await asyncio.to_thread(*[operator.methodcaller("info", "x %s", account.phone), logger])\n',
+        "phone",
+        id="methodcaller-starred-to-thread",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    await partial(asyncio.to_thread, operator.methodcaller("info", "x %s", account.phone))(logger)\n',
+        "phone",
+        id="methodcaller-in-a-partial-wrapped-carrier",
+    ),
 ]
 
 
