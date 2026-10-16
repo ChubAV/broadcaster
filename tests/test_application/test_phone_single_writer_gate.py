@@ -3750,18 +3750,37 @@ def test_every_column_naming_nested_in_every_name_position_is_a_write(position: 
 
 # Значения опознания пишущего API для оси B (`id` — общие с гейтом приватности, план
 # 16-29): как ячейка матрицы называет `set_committed_value` и с какими аргументами его
-# применяет. `methodcaller` применяется к получателю — модулю `attributes`.
+# применяет. `methodcaller` применяется к получателю — модулю `attributes`. Подменное
+# значение (`decoy`, план 16-31, ревью WR-18) — того же вида: пишущий API, первый по
+# алфавиту (`bulk_update_mappings` < `set_committed_value`), у имени, атрибута и
+# `getattr`-строки; `partial` над другим API; `methodcaller("noop")`.
 API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
-    IdentificationValue("name", "set_committed_value", '(account, "phone", x)'),
-    IdentificationValue("attribute", "attributes.set_committed_value", '(account, "phone", x)'),
     IdentificationValue(
-        "getattr-string", 'getattr(attributes, "set_committed_value")', '(account, "phone", x)'
+        "name", "set_committed_value", '(account, "phone", x)', "bulk_update_mappings"
     ),
-    IdentificationValue("partial", "functools.partial(set_committed_value, account)", '("phone", x)'),
+    IdentificationValue(
+        "attribute",
+        "attributes.set_committed_value",
+        '(account, "phone", x)',
+        "session.bulk_update_mappings",
+    ),
+    IdentificationValue(
+        "getattr-string",
+        'getattr(attributes, "set_committed_value")',
+        '(account, "phone", x)',
+        'getattr(session, "bulk_update_mappings")',
+    ),
+    IdentificationValue(
+        "partial",
+        "functools.partial(set_committed_value, account)",
+        '("phone", x)',
+        "functools.partial(session.bulk_update_mappings, MessengerAccount)",
+    ),
     IdentificationValue(
         "methodcaller",
         'operator.methodcaller("set_committed_value", account, "phone", x)',
         "(attributes)",
+        'operator.methodcaller("noop")',
     ),
 )
 

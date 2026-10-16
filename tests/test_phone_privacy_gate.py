@@ -2262,6 +2262,17 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="partial-assigned-alias-handed-to-to-thread",
     ),
+    # Ревью WR-18 (верификация раунда 6, 2026-10-14): `_applied_log_methodcaller`
+    # возвращал ПЕРВОГО кандидата, и `methodcaller`, связанный дважды, клал номер в
+    # журнал мимо гейта — судился `logger.noop()`, а не `logger.info(…, account.phone)`.
+    pytest.param(
+        "app/x.py",
+        'emit = operator.methodcaller("noop")\n'
+        'emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "emit(logger)\n",
+        "phone",
+        id="rebound-methodcaller-applied-to-a-logger",
+    ),
 ]
 
 
@@ -2353,14 +2364,29 @@ def test_any_method_of_an_identified_logger_is_a_log_call():
 # общие с `API_IDENTIFICATION_VALUES` гейта писателя: правило-паритет
 # `tests/test_phone_gates_parity.py` сверяет их порядок). Как ячейка называет вызываемое
 # журнала и с какими аргументами его применяет; `methodcaller` применяется к получателю —
-# опознанному журналу `logger`.
+# опознанному журналу `logger`. Подменное значение (`decoy`, план 16-31, ревью WR-18) —
+# безобидное того же вида: имя, атрибут, `getattr`-строка, `partial` и `methodcaller`
+# над `noop`, который журналом не опознан.
 LOG_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
-    IdentificationValue("name", "print", '("x %s", account.phone)'),
-    IdentificationValue("attribute", "logger.info", '("x %s", account.phone)'),
-    IdentificationValue("getattr-string", 'getattr(logger, "info")', '("x %s", account.phone)'),
-    IdentificationValue("partial", 'functools.partial(logger.info, "x %s")', "(account.phone)"),
+    IdentificationValue("name", "print", '("x %s", account.phone)', "noop"),
+    IdentificationValue("attribute", "logger.info", '("x %s", account.phone)', "helper.noop"),
     IdentificationValue(
-        "methodcaller", 'operator.methodcaller("info", "x %s", account.phone)', "(logger)"
+        "getattr-string",
+        'getattr(logger, "info")',
+        '("x %s", account.phone)',
+        'getattr(helper, "noop")',
+    ),
+    IdentificationValue(
+        "partial",
+        'functools.partial(logger.info, "x %s")',
+        "(account.phone)",
+        'functools.partial(helper.noop, "x %s")',
+    ),
+    IdentificationValue(
+        "methodcaller",
+        'operator.methodcaller("info", "x %s", account.phone)',
+        "(logger)",
+        'operator.methodcaller("noop")',
     ),
 )
 
@@ -2707,6 +2733,16 @@ POSITIVE_CONTROLS = [
         'emit = operator.methodcaller("info", account.phone)\n',
         False,
         id="methodcaller-without-an-identified-receiver-is-not-a-log",
+    ),
+    # Ревью WR-18 (план 16-31): `methodcaller`, связанный дважды, судится каждым
+    # связыванием, но без опознанного получателя ни одно — не вызов журнала (D-17).
+    pytest.param(
+        "app/x.py",
+        'emit = operator.methodcaller("noop")\n'
+        'emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "emit(other)\n",
+        False,
+        id="rebound-methodcaller-without-an-identified-receiver-is-not-a-log",
     ),
 ]
 
