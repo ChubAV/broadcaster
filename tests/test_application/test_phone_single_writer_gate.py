@@ -3891,6 +3891,19 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
                 missing.append(f"граница не называет связывание вне оператора: нет «{needle}»")
     if "звёздной целью" not in flat:
         missing.append("нет распаковки со звёздной целью («звёздной целью»)")
+    # Ось «сколько раз связано имя» (ревью WR-18, план 16-31): шапка называет правило
+    # «каждое связывание имени судится», а абзац цены — одну находку на место.
+    for needle in ("каждое связывание", "WR-18"):
+        if needle not in flat:
+            missing.append(f"нет правила кратности связывания: нет «{needle}»")
+    price_start = flat.find("ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ")
+    price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_start)
+    price = flat[price_start:price_end] if 0 <= price_start < price_end else ""
+    if "(строка, столбец, вид)" not in price:
+        missing.append(
+            "абзац «ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ» не называет одну находку на "
+            "«(строка, столбец, вид)»"
+        )
     for claim in (
         "Ловится всякая запись, в которой колонка номера",
         "слепота предиката, а не граница средства",

@@ -2489,6 +2489,17 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     ):
         if needle not in boundary:
             missing.append(f"граница не называет ссылку на журнал вне грамматики: нет «{needle}»")
+    # Ось «сколько раз связано имя» (ревью WR-18, план 16-31): шапка называет правило
+    # «каждое связывание имени судится», а пункт границы о единой области видимости — что
+    # цена в сторону лишней находки верна и для пути `methodcaller`.
+    for needle in ("каждое связывание", "WR-18"):
+        if needle not in flat:
+            missing.append(f"нет правила кратности связывания: нет «{needle}»")
+    scope_start = boundary.find("область видимости одна")
+    scope_end = boundary.find("* ", scope_start + 1)
+    scope = boundary[scope_start:scope_end] if 0 <= scope_start < scope_end else ""
+    if "methodcaller" not in scope:
+        missing.append("пункт границы «область видимости одна» не называет `methodcaller`")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
