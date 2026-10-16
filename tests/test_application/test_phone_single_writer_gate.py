@@ -4037,6 +4037,10 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
             missing.append("в «ГРАНИЦЕ ПРЕДИКАТА» нет пунктов (1) и (2)")
         elif "w = partial(" in item:
             missing.append("пункт (1) всё ещё называет пойманный связанный `partial` (`w = partial(`)")
+        # Ось «как подана ссылка» (ревью WR-20, план 16-34): граница — аргументы ссылки,
+        # пришедшие НЕлитералом; ссылка в именованном аргументе в ней не названа — ловится.
+        if item and "args=row" not in item:
+            missing.append("пункт (1) не называет аргументы ссылки, пришедшие нелитералом (`args=row`)")
         # Как граница называет каждую форму вне грамматики и её причину.
         named = {
             "for-target-over-container": ("цель `for`", "элемент контейнера"),
@@ -4061,6 +4065,19 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("каждое связывание", "WR-18"):
         if needle not in flat:
             missing.append(f"нет правила кратности связывания: нет «{needle}»")
+    # Общее правило именованного аргумента (решение владельца О-14 (а), план 16-34): ссылка
+    # в ЛЮБОМ именованном аргументе, литеральные аргументы того же вызова, одна функция
+    # общего модуля у обоих гейтов; летопись WR-20 и IN-15.
+    for needle in (
+        "любым именованным аргументом",
+        "литеральный кортеж",
+        "литеральный словарь",
+        "`reference_arguments`",
+        "WR-20",
+        "IN-15",
+    ):
+        if needle not in flat:
+            missing.append(f"нет общего правила именованного аргумента: нет «{needle}»")
     price_start = flat.find("ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ")
     price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_start)
     price = flat[price_start:price_end] if 0 <= price_start < price_end else ""
