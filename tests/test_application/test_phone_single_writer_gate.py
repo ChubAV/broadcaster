@@ -99,7 +99,11 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    `t.c.phone`, `inspect(M).c.phone`); индекс (`t.c["phone"]`,
    `inspect(M).columns["phone"]`) и поиск по имени (`t.c.get("phone")`,
    `inspect(M).get_property("phone")`); `getattr(M, "phone")`; конструктор колонки
-   `column("phone")` / `literal_column(…)`, имя позицией или `text=`; и любая
+   `column("phone")` / `literal_column(…)`, имя позицией или `text=`, и класс
+   конструктора — `Column(…)` (колонка Core, имя позицией или `name=`) и
+   `ColumnClause(…)` (класс за `column()`), с префиксом модуля (`sa.Column("phone")`)
+   и без; источник — `COLUMN_CONSTRUCTORS` и `COLUMN_NAME_KEYWORDS` (план 16-33,
+   ревью WR-23), их держат в суите матрица 714 контекстов и правило композиции; и любая
    производная такой колонки доступом
    к атрибуту или индексу (`.key`, `.name`, `.expression`, `.property.key`,
    `.property.columns[0]`; план 16-22, ревью WR-12) и `getattr`-строкой
@@ -139,20 +143,38 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    записи: (а) присваивание колонки номера в предложении `SET` до `WHERE`
    ОПЕРАТОРА, имя в кавычках или без, и (б) строчный конструктор с колонкой номера
    `(…, phone, …) =` в ЛЮБОЙ позиции списка `SET` — судит КОД `_raw_sql_set_writes` на
-   НУЛЕВОЙ глубине скобок: подзапрос со своим `WHERE`, строковый литерал `'…'`,
-   комментарий SQL и идентификатор в кавычках перед колонкой предложение не обрывают
-   (план 16-28, ревью WR-16); фильтр по номеру — в `WHERE` оператора и в подзапросе
-   (`SET user_id = (SELECT id FROM users WHERE phone = :p)`) — записью не является;
+   НУЛЕВОЙ глубине скобок: подзапрос со своим `WHERE`, строковый литерал из
+   нескольких слов, комментарий SQL и отрезок в кавычках перед колонкой предложение не
+   обрывают (план 16-28, ревью WR-16); фильтр по номеру — в `WHERE` оператора и в
+   подзапросе (`SET user_id = (SELECT id FROM users WHERE phone = :p)`) — записью не
+   является; ключевое слово `UPDATE` / `SET` / `WHERE` — слово вне однословного отрезка
+   в кавычках, и вплотную к кавычке (`SET"phone"=`), и между двумя отрезками
+   (`"messenger_accounts"SET"phone"`) — тоже: это решает разбор отрезков `_sql_scan`,
+   а не соседние символы (самопроверка исполнителя 16-33);
    (в) голова пишущего оператора
    перед таблицей аккаунтов — `INSERT [OR …] INTO`, `REPLACE INTO`, `UPSERT INTO`,
-   `MERGE INTO`, таблица в кавычках или без и с префиксом схемы; (г) загрузка —
+   `MERGE INTO`, таблица в кавычках или без (и вплотную к кавычке —
+   `INTO'messenger_accounts'`) и с префиксом схемы; (г) загрузка —
    `COPY <таблица аккаунтов> … FROM` и `LOAD DATA … INTO TABLE <таблица
    аккаунтов>` (`COPY … TO` — выгрузка, чтение); (в) и (г) — выражением
-   `RAW_SQL_PHONE_WRITE`. Кавычки идентификатора — `"…"`,
-   `` `…` `` и `[…]`: SQLite принимает все три. Цена строгости (а): сравнение с
+   `RAW_SQL_PHONE_WRITE` по ВИДИМОМУ SQL `_sql_visible`: комментарий `/* … */` или
+   `-- …` в голове оператора — `INSERT /* x */ INTO messenger_accounts`, `REPLACE --
+   c⏎ INTO messenger_accounts` — её не прячет (план 16-33, ревью WR-22). Кавычки
+   идентификатора — `"…"`, `` `…` ``, `[…]` и `'…'`: SQLite принимает все четыре
+   (одинарные — там, где строковый литерал недопустим; унаследованное поведение SQLite,
+   а суита гоняется на SQLite: `SET 'phone' = :p` и `INSERT INTO 'messenger_accounts'`
+   пишут колонку — замер верификатора раунда 6). Однословный отрезок в любой из них —
+   идентификатор и судится, многословный (`'phone = 1'`) и `''` внутри (`'it''s'`) —
+   литерал и гаснет (план 16-33, ревью WR-21). Цена строгости (а): сравнение с
    колонкой номера на нулевой глубине `SET` вне подзапроса — `SET status = CASE WHEN
    phone = :p THEN … END` — тоже судится: выражений SQL предикат не разбирает, и на
-   нулевой глубине оно неотличимо от присваивания. Сюда же
+   нулевой глубине оно неотличимо от присваивания. Та же цена у однословной
+   строки-значения в одинарных кавычках: она видна, и находкой становится ровно тогда,
+   когда за ней на нулевой глубине `SET` стоит `=` — `SET kind = CASE WHEN 'phone' =
+   kind THEN 1 END`, `SET note = 'phone' = kind` (на SQLite номер прежний); `SET note
+   = 'phone'`, `SET note = 'phone', flag = 1`, `WHERE status = 'phone'`, CTE с таким
+   фильтром перед `UPDATE` и `SET flag = ('phone' = kind)` — ноль (самопроверка
+   исполнителя 16-33, замер цены). Сюда же
    COPY asyncpg в обход SQLAlchemy — `copy_records_to_table("messenger_accounts",
    …)` / `copy_to_table` (таблица позицией или `table_name=`). Голое слово
    `phone_is_manual` в строке не судится — на нём
@@ -162,7 +184,13 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
    префикс схемы, `INSERT OR REPLACE`, `MERGE` и склейка проходили (ревью WR-08).
    До плана 16-28 (а) и (б) были альтернативами регулярного выражения: (а) обрывалась
    на первом `where` на любой глубине скобок, (б) требовала `SET (` сразу после `SET`
-   (ревью WR-16, замер планирования 16-28).
+   (ревью WR-16, замер планирования 16-28). До плана 16-33 фраза о кавычках называла
+   три вида как все, которые принимает SQLite, `_sql_visible` гасил любой отрезок
+   `'…'`, и `SET 'phone' = …`, `INSERT INTO 'messenger_accounts'` проходили (ревью
+   WR-21); голова (в) / (г) искалась по сырому тексту, и комментарий в ней рвал `\\s+`
+   (ревью WR-22); ключевое слово вплотную к кавычке или между двумя отрезками в
+   кавычках не опознавалось, а голова требовала пробел перед таблицей (самопроверка
+   исполнителя 16-33, заходы 1 и 2: 1 008 и 24 формы, каждая на SQLite пишет колонку).
 6. ключ номера в строках исполняющих вызовов `execute` / `scalar` / `scalars` /
    `stream` / `stream_scalars` / `exec_driver_sql` и bulk-API
    `bulk_update_mappings` / `bulk_insert_mappings` / Alembic `op.bulk_insert` —
@@ -366,6 +394,20 @@ WR-14 / WR-15 / WR-16 → WR-18 / WR-20 / WR-21 / WR-22 / WR-23); самопро
 было. План 16-31 сделал карты многозначными и вписал повторное связывание в общий
 словарь `BINDING_FORMS`; решение владельца О-14 (а), 2026-10-16: заявление прежнее,
 варианты (а′) и (б) ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ ((б) — в третий раз, после О-10 и О-12).
+Тот же шестой круг на осях «лексика SQL» и «класс конструктора колонки»: до плана
+16-33 фраза шапки называла три вида кавычек как все, которые принимает SQLite,
+`_sql_visible` гасил любой отрезок в одинарных кавычках, и `SET 'phone' = …`, `INSERT
+INTO 'messenger_accounts'` проходили (ревью WR-21); голова видов (в) / (г) искалась по
+сырому тексту, и комментарий в ней рвал `\\s+` (ревью WR-22); `COLUMN_CONSTRUCTORS`
+знал только `column` и `literal_column`, и `Column("phone")` / `ColumnClause("phone")`
+проходили (ревью WR-23); замер верификатора раунда 6 на SQLite — каждая форма пишет
+колонку. План 16-33 сделал одинарную кавычку четвёртым видом, голову (в) / (г) —
+судимой по видимому SQL, класс конструктора — строками `COLUMN_CONSTRUCTORS`,
+`COLUMN_NAMINGS` и `NAME_POSITIONS`; его самопроверка нашла ещё ключевое слово вплотную
+к кавычке и между двумя отрезками в кавычках (заходы 1 и 2). Решение владельца О-14 (а),
+2026-10-16: заявление прежнее, вариант (а′) — назвать одинарные кавычки SQLite в
+границе «семантикой диалекта» — ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ, вариант (б) — тоже, в третий раз.
+Ни одна форма WR-21 / WR-22 / WR-23 в «ГРАНИЦЕ ПРЕДИКАТА» не названа: они ловятся.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -502,8 +544,15 @@ PARTIAL_NAMES = frozenset({"partial"})
 IDENTIFICATION_CARRIERS = ("methodcaller", "getattr")
 
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
-# отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
-COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
+# отображения называют колонку номера литералом так же, как `"phone"` (план 16-17), и
+# классы конструктора — `ColumnClause("phone")` (класс за `column()`) и
+# `Column("phone")` (колонка Core): оба называют колонку той же строкой в самом пишущем
+# вызове — критерий заявления шапки. Имя берётся по последнему звену, поэтому
+# `sa.Column(…)` / `sqlalchemy.sql.ColumnClause(…)` судятся так же. Летопись: до плана
+# 16-33 здесь были только `column` и `literal_column`, и `values({sa.Column("phone"):
+# x})`, `values({ColumnClause("phone"): x})` проходили гейт (ревью WR-23; замер
+# верификатора раунда 6 на SQLite: `+77`, `+83`).
+COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column", "Column", "ColumnClause"})
 
 # Поиск колонки по имени-литералу: `t.c.get("phone")`, `t.columns.get("phone")`,
 # `inspect(M).get_property("phone")`, `t.c.__getitem__("phone")` — та же колонка, что
@@ -511,10 +560,13 @@ COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
 # индекса: `{form.get("phone"): x}` в пишущем вызове тоже судится.
 COLUMN_LOOKUP_METHODS = frozenset({"get", "get_property", "__getitem__"})
 
-# Имя первого параметра у конструкторов и поиска: `column(text, …)` /
-# `literal_column(text, …)`, `ColumnCollection.get(key, default=None)`,
-# `Mapper.get_property(key, …)` (SQLAlchemy 2.0.46).
-COLUMN_NAME_KEYWORDS = frozenset({"text", "key"})
+# Имя первого параметра у конструкторов и поиска (SQLAlchemy 2.0.46): `column(text, …)`,
+# `literal_column(text, …)`, `ColumnClause(text, …)`, `Column(name, type_, …)`,
+# `ColumnCollection.get(key, default=None)`, `Mapper.get_property(key, …)`. `name` —
+# план 16-33, ревью WR-23: у `Column` имя колонки — `name=`. Набор один на всех, поэтому
+# цена строгости та же, что у `key=`: `name=` у поиска (`t.c.get(name="phone")`, которого
+# нет в сигнатуре) и `text=` у `Column` тоже судятся.
+COLUMN_NAME_KEYWORDS = frozenset({"text", "key", "name"})
 
 # Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
 # `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
@@ -534,9 +586,14 @@ LITERAL_CONTAINER_WRAPPERS = frozenset({"list", "tuple", "set", "iter"})
 # достижимую форму недостижимой.
 UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update", "on_duplicate_key_update"})
 
-# Кавычки идентификатора SQL: двойные (стандарт, PostgreSQL), обратные (MySQL) и
-# квадратные скобки (SQL Server); SQLite, на которой гоняется суита, принимает все три.
-_SQL_QUOTE = r'["`\[\]]?'
+# Кавычки идентификатора SQL: двойные (стандарт, PostgreSQL), обратные (MySQL),
+# квадратные скобки (SQL Server) и одинарные — SQLite, на которой гоняется суита,
+# принимает все четыре: однословный `'…'` она читает как идентификатор там, где
+# строковый литерал недопустим (унаследованное поведение SQLite; `SET 'phone' = :p`
+# пишет колонку — замер верификатора раунда 6 на SQLite 3.53.1, `+78`).
+# Летопись: до плана 16-33 здесь было три вида кавычек, без одинарной, и `SET 'phone'
+# = …`, `INSERT INTO 'messenger_accounts'` проходили гейт (ревью WR-21).
+_SQL_QUOTE = r"[\"`\[\]']?"
 
 # Таблица аккаунтов в SQL: в кавычках или без, с необязательным префиксом схемы
 # (`public.messenger_accounts`, `"public"."messenger_accounts"`).
@@ -562,22 +619,40 @@ _ACCOUNTS_TABLE_SQL = (
 # со словом `where` перед колонкой прятал запись (ревью WR-16, 2026-10-13), а (б)
 # требовала `SET (` сразу после `SET`, и строчный конструктор не первым в списке
 # проходил (замер планирования 16-28: такой оператор на SQLite пишет колонку).
+# Выражение ищется в ВИДИМОМ SQL `_sql_visible(text)`, а не в сыром тексте: комментарий
+# `/* … */` и `-- …` там — пробелы, и `\s+` его перекрывает; однословный идентификатор в
+# любой из четырёх кавычек виден. До плана 16-33 (в) и (г) искались по сырому тексту, и
+# комментарий в голове оператора рвал `\s+` — `INSERT /* x */ INTO messenger_accounts`,
+# `REPLACE -- c⏎ INTO messenger_accounts` проходили (ревью WR-22). Между последним словом
+# головы и таблицей — пробел ИЛИ кавычка вплотную (`_SQL_HEAD_GAP`): `INTO'messenger_accounts'`,
+# `COPY"messenger_accounts"`, `INTO TABLE`messenger_accounts`` пишут так же (самопроверка
+# исполнителя 16-33, заход 1: до неё голова требовала `\s+`, и такие операторы проходили).
+_SQL_HEAD_GAP = r"(?:\s+|(?=[\"`\[']))"
 RAW_SQL_PHONE_WRITE = re.compile(
-    r"\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
+    r"\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into"
+    + _SQL_HEAD_GAP
     + _ACCOUNTS_TABLE_SQL
-    + r"|\bcopy\s+"
+    + r"|\bcopy"
+    + _SQL_HEAD_GAP
     + _ACCOUNTS_TABLE_SQL
     + r"\s*(?:\([^)]*\)\s*)?from\b"
-    + r"|\bload\s+data\b[\s\S]*?\binto\s+table\s+"
+    + r"|\bload\s+data\b[\s\S]*?\binto\s+table"
+    + _SQL_HEAD_GAP
     + _ACCOUNTS_TABLE_SQL,
     re.IGNORECASE,
 )
 
 # Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)). Ключевое слово —
-# не идентификатор в кавычках из одного слова (`"where"`, `[set]`).
-_SQL_UPDATE = re.compile(r'(?<!["`\[])\bupdate\b(?!["`\]])', re.IGNORECASE)
-_SQL_SET = re.compile(r'(?<!["`\[])\bset\b(?!["`\]])', re.IGNORECASE)
-_SQL_WHERE = re.compile(r'(?<!["`\[])\bwhere\b(?!["`\]])', re.IGNORECASE)
+# не идентификатор и не строка в кавычках из одного слова (`"where"`, `[set]`, `'where'`
+# — план 16-33, ревью WR-21: видимый `'where'` иначе оборвал бы предложение `SET`).
+# Что слово в кавычках, решает разбор отрезков `_sql_scan`, а не соседние символы: слово
+# вплотную к кавычке (`SET"phone"`, `WHERE'phone'`) и слово МЕЖДУ двумя отрезками в
+# кавычках (`"messenger_accounts"SET"phone"`, `'n'WHERE'phone'`) — ключевые
+# (самопроверка исполнителя 16-33, заходы 1 и 2: такие операторы на SQLite пишут колонку,
+# а окрестность по соседним символам их не видела или принимала фильтр за запись).
+_SQL_UPDATE = re.compile(r"\bupdate\b", re.IGNORECASE)
+_SQL_SET = re.compile(r"\bset\b", re.IGNORECASE)
+_SQL_WHERE = re.compile(r"\bwhere\b", re.IGNORECASE)
 _SQL_PHONE_NAME = re.compile(r"\bphone(?:_is_manual)?\b", re.IGNORECASE)
 _SQL_PHONE_ASSIGNMENT = re.compile(
     r"\bphone(?:_is_manual)?\b" + _SQL_QUOTE + r"\s*=", re.IGNORECASE
@@ -1820,16 +1895,33 @@ def _folded_string(node: ast.AST) -> str | None:
 
 
 def _raw_sql_write(text: str) -> bool:
-    """Пишущий SQL вида 5: (а) и (б) — кодом `_raw_sql_set_writes`, (в) и (г) — выражением."""
-    return bool(_raw_sql_set_writes(text)) or RAW_SQL_PHONE_WRITE.search(text) is not None
+    """Пишущий SQL вида 5: (а) и (б) — кодом `_raw_sql_set_writes`, (в) и (г) — выражением.
+
+    Выражение `RAW_SQL_PHONE_WRITE` ищется в видимом SQL `_sql_visible(text)`:
+    комментарий в голове оператора — пробелы (план 16-33, ревью WR-22).
+    """
+    return (
+        bool(_raw_sql_set_writes(text))
+        or RAW_SQL_PHONE_WRITE.search(_sql_visible(text)) is not None
+    )
 
 
 def _raw_sql_subject(text: str) -> str:
-    """Предмет находки сырого SQL: начало оператора и, если запись дальше, — она сама."""
+    """Предмет находки сырого SQL: начало оператора и, если запись дальше, — она сама.
+
+    Голова (в) / (г) ищется в видимом SQL, а отрезок берётся из исходного текста по
+    позициям совпадения: длина и позиции `_sql_visible` прежние.
+    """
     snippet = " ".join(text.split())[:60]
     writes = _raw_sql_set_writes(text)
-    head = RAW_SQL_PHONE_WRITE.search(text)
-    fragment = writes[0] if writes else " ".join(head.group(0).split()) if head else ""
+    head = RAW_SQL_PHONE_WRITE.search(_sql_visible(text))
+    fragment = (
+        writes[0]
+        if writes
+        else " ".join(text[head.start() : head.end()].split())
+        if head
+        else ""
+    )
     if fragment and fragment not in snippet:
         snippet = f"{snippet} … {fragment}"
     return f"«{snippet}»"
@@ -1841,9 +1933,11 @@ def _raw_sql_set_writes(text: str) -> list[str]:
     Для каждого `UPDATE … SET` (без учёта регистра; и `ON CONFLICT DO UPDATE SET`)
     предложение `SET` — текст после `SET` до первого `WHERE` на НУЛЕВОЙ глубине скобок
     относительно `SET`, до `;` на нулевой глубине, до закрывающей скобки, уводящей
-    глубину ниже нуля (оператор внутри скобок), либо до конца строки. Строковые
-    литералы SQL `'…'`, комментарии и кавычки не из одного слова пропускаются целиком
-    (`_sql_visible`): слово `where`, скобки и `;` внутри них предложение не обрывают.
+    глубину ниже нуля (оператор внутри скобок), либо до конца строки. Комментарии и
+    отрезки в кавычках — любой из четырёх, `'…'` включительно, — не из одного слова
+    пропускаются целиком (`_sql_visible`): слово `where`, скобки и `;` внутри них
+    предложение не обрывают; однословный отрезок виден — он может быть колонкой номера
+    (`SET 'phone' = :p` на SQLite пишет колонку; план 16-33, ревью WR-21).
     На нулевой глубине предложения запись — (а) колонка
     номера `phone` / `phone_is_manual` (в кавычке идентификатора `_SQL_QUOTE` или без),
     за которой следует `=`; (б) строчный конструктор — скобка нулевой глубины, на своём
@@ -1855,13 +1949,23 @@ def _raw_sql_set_writes(text: str) -> list[str]:
     Возвращает найденные записи текстом (`phone =`, `(status, phone) =`); пустой
     список — записи в `SET` нет.
     """
-    plain = _sql_visible(text)
-    wheres = {match.start() for match in _SQL_WHERE.finditer(plain)}
+    plain, quoted = _sql_scan(text)
+
+    def keywords(pattern: re.Pattern[str], start: int = 0) -> list[re.Match[str]]:
+        # Ключевое слово — не однословный отрезок в кавычках (`"where"`, `'set'`).
+        return [
+            match
+            for match in pattern.finditer(plain, start)
+            if (match.start(), match.end()) not in quoted
+        ]
+
+    wheres = {match.start() for match in keywords(_SQL_WHERE)}
     writes: list[str] = []
-    for update in _SQL_UPDATE.finditer(plain):
-        head = _SQL_SET.search(plain, update.end())
-        if head is None:
+    for update in keywords(_SQL_UPDATE):
+        heads = keywords(_SQL_SET, update.end())
+        if not heads:
             continue
+        head = heads[0]
         start = head.end()
         clause = plain[start : _sql_set_clause_end(plain, start, wheres)]
         for match in _SQL_PHONE_ASSIGNMENT.finditer(_sql_depth_zero(clause)):
@@ -1879,23 +1983,48 @@ def _raw_sql_set_writes(text: str) -> list[str]:
 def _sql_visible(text: str) -> str:
     """SQL, в котором видна только структура; длина и позиции прежние.
 
-    Пробелами заменяются строковые литералы `'…'` (удвоенная кавычка `''` закрывает и
-    тут же открывает литерал — итог тот же), комментарии `-- …` до конца строки и
-    `/* … */`, и идентификатор или строка в кавычках `"…"`, `` `…` ``, `[…]`, если
-    внутри не одно слово: слово `where`, скобки и `;` внутри них предложение `SET` не
-    обрывают и глубину не меняют. Идентификатор из одного слова (`"phone"`,
-    `` `phone_is_manual` ``, `[messenger_accounts]`) виден как есть — он может быть
-    колонкой номера (самопроверка исполнителя 16-28, ось SQL, заход 1: на SQLite
-    `SET [a where b] = 1, phone = :p` пишет колонку).
+    Пробелами заменяются комментарии `-- …` до конца строки и `/* … */` и отрезок в
+    кавычках любого из ЧЕТЫРЁХ видов — `"…"`, `` `…` ``, `[…]` и `'…'`, — если внутри
+    не одно слово: слово `where`, скобки и `;` внутри них предложение `SET` не обрывают
+    и глубину не меняют. У `'…'` удвоенная кавычка `''` — кавычка внутри литерала, а не
+    его конец: `'it''s'` — один литерал, и он гаснет целиком; незакрытая `'` гасит
+    хвост. Отрезок из одного слова (`"phone"`, `` `phone_is_manual` ``,
+    `[messenger_accounts]`, `'phone'`) виден как есть — он может быть колонкой номера
+    или таблицей аккаунтов (самопроверка исполнителя 16-28, ось SQL, заход 1: на SQLite
+    `SET [a where b] = 1, phone = :p` пишет колонку). Одинарная кавычка — четвёртый вид:
+    SQLite читает однословный `'…'` как идентификатор там, где строковый литерал
+    недопустим, и `SET 'phone' = :p` пишет колонку (план 16-33, ревью WR-21; до него
+    любой отрезок `'…'` гас).
+    """
+    return _sql_scan(text)[0]
+
+
+def _sql_scan(text: str) -> tuple[str, frozenset[tuple[int, int]]]:
+    """Видимый SQL `_sql_visible` и границы (начало, конец) слов однословных отрезков в кавычках.
+
+    Границы нужны ключевым словам вида 5 (а) / (б): `"where"`, `'set'` — не ключевые слова,
+    а `SET` вплотную к кавычке или между двумя отрезками (`"messenger_accounts"SET"phone"`)
+    — ключевое; соседние символы этого не различают, разбор отрезков различает
+    (самопроверка исполнителя 16-33, заход 2).
     """
     closers = {'"': '"', "`": "`", "[": "]"}
     out: list[str] = []
+    quoted: set[tuple[int, int]] = set()
     index = 0
     while index < len(text):
         char = text[index]
         if char == "'":
-            end = text.find("'", index + 1)
-            end = len(text) if end < 0 else end + 1
+            # Конец литерала — одинарная кавычка, за которой не стоит вторая (`''` —
+            # кавычка внутри литерала).
+            seek = index + 1
+            while (close := text.find("'", seek)) >= 0 and text.startswith("''", close):
+                seek = close + 2
+            if close >= 0 and re.fullmatch(r"\w+", text[index + 1 : close]):
+                out.append(text[index : close + 1])
+                quoted.add((index + 1, close))
+                index = close + 1
+                continue
+            end = len(text) if close < 0 else close + 1
         elif text.startswith("--", index):
             end = text.find("\n", index)
             end = len(text) if end < 0 else end
@@ -1906,6 +2035,7 @@ def _sql_visible(text: str) -> str:
             end = close + 1
             if re.fullmatch(r"\w+", text[index + 1 : close]):
                 out.append(text[index:end])
+                quoted.add((index + 1, close))
                 index = end
                 continue
         else:
@@ -1914,7 +2044,7 @@ def _sql_visible(text: str) -> str:
             continue
         out.append(" " * (end - index))
         index = end
-    return "".join(out)
+    return "".join(out), frozenset(quoted)
 
 
 def _sql_set_clause_end(plain: str, start: int, wheres: set[int]) -> int:
@@ -2110,7 +2240,10 @@ def _phone_column(node: ast.AST) -> str | None:
     (`COLUMN_LOOKUP_METHODS`) и конструктор колонки `column("phone")` /
     `sa.literal_column("phone_is_manual")` / `column(text="phone")`
     (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
-    строках executemany пишет колонку — замер на SQLite в памяти).
+    строках executemany пишет колонку — замер на SQLite в памяти), и классы
+    конструктора `sa.Column("phone")` / `Column(name="phone")` (колонка Core) и
+    `ColumnClause("phone")` (класс за `column()`): до плана 16-33 они проходили гейт,
+    хотя ключ `values` с ними пишет колонку (ревью WR-23, замер верификатора раунда 6).
 
     И производная такой колонки — любая цепочка доступа к атрибуту или индексу над
     ней: `MessengerAccount.phone.key`, `MessengerAccount.phone.name`,
@@ -3032,6 +3165,54 @@ def test_a_raw_sql_write_with_quoted_identifiers_reddens_the_gate(tmp_path):
     ), f"сырой SQL с кавычками и схемой не найден: {offences}"
 
 
+def test_a_planted_backfill_with_a_single_quoted_identifier_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-21: `UPDATE messenger_accounts SET 'phone' = :p WHERE id = :i` в скрипте дозаполнения.
+
+    SQLite читает однословный `'…'` как идентификатор там, где строковый литерал
+    недопустим (унаследованное поведение SQLite), а суита гоняется именно на SQLite:
+    на SQLite 3.53.1 такая запись пишет колонку (замер верификатора раунда 6, `+78`,
+    SQLAlchemy 2.0.46). До плана 16-33 гейт её пропускал: `_sql_visible` гасил любой
+    отрезок в одинарных кавычках, и в `_SQL_QUOTE` их не было (ревью WR-21; решение
+    владельца О-14 (а): заявление шапки прежнее, предикат догоняет его). Подложенный
+    файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_single_quoted.py",
+        "async def backfill(session, rows):\n"
+        "    for account_id, number in rows:\n"
+        "        await session.execute(text(\"UPDATE messenger_accounts SET 'phone' = :p "
+        "WHERE id = :i\"), {\"p\": number, \"i\": account_id})\n",
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_single_quoted.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_single_quoted.py:3 — {KIND_RAW_SQL} — ")
+    ]
+    assert found, (
+        "идентификатор SQLite в одинарных кавычках не опознан: "
+        "`UPDATE messenger_accounts SET 'phone' = :p WHERE id = :i` в "
+        f"scripts/backfill_single_quoted.py гейт пропустил: {offences}"
+    )
+    assert all("phone" in offence for offence in found), (
+        f"предмет находки не называет колонку `phone`: {found}"
+    )
+    at_statement = [
+        offence
+        for offence in offences
+        if offence.startswith("scripts/backfill_single_quoted.py:3 — ")
+    ]
+    assert len(at_statement) == 1, (
+        f"у оператора `SET 'phone' = :p` не ровно одна находка: {at_statement}"
+    )
+
+
 DICT_KEY_CASES = [
     pytest.param(
         'stmt = update(MessengerAccount).values({"phone": x})\n',
@@ -3409,6 +3590,14 @@ COLUMN_NAMINGS: tuple[ColumnNaming, ...] = (
     ),
     ColumnNaming("column-by-key", "column(MessengerAccount.phone.key)"),
     ColumnNaming("getattr-derivative", 'getattr(MessengerAccount.phone, "key")'),
+    # Ревью WR-23 (верификация раунда 6, 2026-10-14): класс конструктора колонки —
+    # `Column` (колонка Core, имя позицией или `name=`) и `ColumnClause` (класс за
+    # `column()`) называют колонку той же строкой в самом пишущем вызове, а
+    # `COLUMN_CONSTRUCTORS` знал только `column` и `literal_column`; до плана 16-33 каждое
+    # давало `[]` (замер верификатора на SQLite: `+77`, `+83`).
+    ColumnNaming("column-class", 'sa.Column("phone")'),
+    ColumnNaming("column-clause-class", 'ColumnClause("phone")'),
+    ColumnNaming("column-class-name-keyword", 'Column(name="phone")'),
 )
 
 
@@ -3731,6 +3920,10 @@ NAME_POSITIONS: tuple[NamePosition, ...] = (
     NamePosition("column-text-keyword", "column(text={name})"),
     NamePosition("getattr-name", "getattr(MessengerAccount, {name})"),
     NamePosition("getattr-derivative", 'getattr({name}, "key")'),
+    # Ревью WR-23 (план 16-33): класс конструктора колонки — ось, а не перечень: имя в
+    # `Column(…)` / `ColumnClause(…)` — любое наименование колонки номера.
+    NamePosition("column-class", "sa.Column({name})"),
+    NamePosition("column-clause-class", "ColumnClause({name})"),
 )
 
 # Контексты правила композиции: (id, исходник с местом `@COLUMN@`, вид, вызов).
@@ -3956,6 +4149,74 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "
         "правдивую границу:\n" + "\n".join(f"  {item}" for item in missing)
+    )
+
+
+def test_the_writer_gate_header_names_four_quote_kinds_and_every_column_constructor():
+    """Шапка обещает ровно то, что видит предикат по лексике SQL и классу конструктора колонки.
+
+    Шестой круг одной оси открылся и здесь: шапка утверждала, что SQLite принимает три вида
+    кавычек идентификатора, а SQLite принимает и четвёртый — однословный `'…'` там, где
+    строковый литерал недопустим (ревью WR-21); голова видов 5 (в) / (г) искалась по
+    сырому тексту, и комментарий в ней рвал `\\s+` (ревью WR-22); вид 3 обещал колонку,
+    «названную литералом в самом пишущем вызове», а `Column("phone")` и
+    `ColumnClause("phone")` не судились (ревью WR-23). Правило держит шапку и таблицы
+    вместе: «все четыре» и одинарная кавычка, видимый SQL `_sql_visible` у видов (в) / (г),
+    каждое имя `COLUMN_CONSTRUCTORS` и `name=` в виде 3, летопись WR-21 / WR-22 / WR-23 и
+    решение владельца О-14 (а). Заявление не сужено (запреты 16-09 №2, 16-12 №2, 16-17 №2,
+    16-22 №2, 16-28 №2).
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+
+    def item(number: int) -> str:
+        start = re.search(rf"^{number}\. ", doc, re.MULTILINE)
+        end = re.search(rf"^{number + 1}\. ", doc, re.MULTILINE)
+        if start is None or end is None or end.start() <= start.start():
+            return ""
+        return " ".join(doc[start.start() : end.start()].split())
+
+    missing: list[str] = []
+    quotes_start = flat.find("Кавычки идентификатора")
+    quotes_end = flat.find("все четыре", quotes_start)
+    if quotes_start < 0 or quotes_end < 0:
+        missing.append(
+            "нет фразы «Кавычки идентификатора … все четыре» (SQLite принимает четыре вида кавычек)"
+        )
+    elif "`'…'`" not in flat[quotes_start:quotes_end]:
+        missing.append(
+            "фраза о кавычках идентификатора не называет одинарную кавычку («`'…'`»)"
+        )
+    if "все три" in flat:
+        missing.append("осталась прежняя фраза «все три»")
+    kind_five = item(5)
+    if not kind_five:
+        missing.append("нет отрезка вида 5 (от «5. » до «6. »)")
+    else:
+        for needle in ("комментари", "_sql_visible"):
+            if needle not in kind_five:
+                missing.append(f"вид 5 не говорит, что (в) и (г) судятся по видимому SQL: нет «{needle}»")
+    kind_three = item(3)
+    if not kind_three:
+        missing.append("нет отрезка вида 3 (от «3. » до «4. »)")
+    else:
+        for needle in (*(f"`{name}(" for name in sorted(COLUMN_CONSTRUCTORS)), "name="):
+            if needle not in kind_three:
+                missing.append(f"вид 3 не называет конструктор колонки: нет «{needle}»")
+    for needle in ("WR-21", "WR-22", "WR-23", "О-14 (а)"):
+        if needle not in flat:
+            missing.append(f"нет летописи: нет «{needle}»")
+    for claim in (
+        "Ловится всякая запись, в которой колонка номера",
+        "слепота предиката, а не граница средства",
+    ):
+        if claim not in flat:
+            missing.append(f"заявление сужено: нет «{claim}»")
+
+    assert not missing, (
+        "шапка гейта писателя не называет четыре вида кавычек SQLite и каждый конструктор "
+        "колонки:\n" + "\n".join(f"  {entry}" for entry in missing)
     )
 
 
@@ -5630,6 +5891,166 @@ LITERAL_FORM_CASES = [
         "phone",
         id="rebound-partial-and-alias-two-kinds-at-one-place",
     ),
+    # Ревью WR-21 (верификация раунда 6, 2026-10-14): SQLite читает однословный `'…'` как
+    # идентификатор там, где строковый литерал недопустим, а `_sql_visible` гасил любой
+    # отрезок в одинарных кавычках, и в `_SQL_QUOTE` их не было. До плана 16-33 каждый
+    # оператор ниже давал `[]`; на SQLite 3.53.1 они пишут колонку (`+78`, `+84`, `+86`).
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"UPDATE messenger_accounts SET 'phone' = :p WHERE id = 1\"), "
+        '{"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-single-quoted-phone-assignment",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"UPDATE messenger_accounts SET ('phone', flag) = (:p, 'f')\"), "
+        '{"p": p})\n',
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-single-quoted-row-constructor",
+    ),
+    pytest.param(
+        "async def f(s, p):\n"
+        "    await s.execute(text(\"INSERT INTO 'messenger_accounts' (id, phone) VALUES (5, :p)\"), "
+        '{"p": p})\n',
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-into-single-quoted-table",
+    ),
+    # Ревью WR-22 (верификация раунда 6, 2026-10-14): виды 5 (в) и (г) искались
+    # выражением по СЫРОМУ тексту, и комментарий SQL в голове оператора рвал `\s+`. До
+    # плана 16-33 каждый оператор ниже давал `[]`; на SQLite они пишут колонку (`+79`,
+    # `+80`, `+81`).
+    pytest.param(
+        "async def f(s, i, p):\n"
+        '    await s.execute(text("INSERT /* x */ INTO messenger_accounts (id, phone) '
+        'VALUES (:i, :p)"), {"i": i, "p": p})\n',
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-comment-before-into",
+    ),
+    pytest.param(
+        "async def f(s, i, p):\n"
+        '    await s.execute(text("INSERT INTO /* x */ messenger_accounts (id, phone) '
+        'VALUES (:i, :p)"), {"i": i, "p": p})\n',
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-comment-before-table",
+    ),
+    pytest.param(
+        "async def f(s):\n"
+        "    await s.execute(text(\"REPLACE -- c\\n INTO messenger_accounts (id, phone) "
+        "VALUES (4, '+81')\"))\n",
+        KIND_RAW_SQL,
+        "«REPLACE",
+        "phone",
+        id="raw-sql-replace-line-comment-before-into",
+    ),
+    # Ревью WR-23 (верификация раунда 6, 2026-10-14): `Column("phone")` и
+    # `ColumnClause("phone")` (класс за `column()`) в ключе `values` называют колонку
+    # литералом в самом пишущем вызове. До плана 16-33 каждая форма давала `[]`; на SQLite
+    # они пишут колонку (`+77`, `+83`).
+    pytest.param(
+        'stmt = update(MessengerAccount).where(MessengerAccount.id == 1).values({sa.Column("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-sa-column-key",
+    ),
+    pytest.param(
+        'stmt = update(MessengerAccount).where(MessengerAccount.id == 1).values({ColumnClause("phone"): x})\n',
+        KIND_DICT_KEY,
+        "values",
+        "phone",
+        id="values-column-clause-key",
+    ),
+    # Самопроверка исполнителя 16-33, заход 1 (ось лексики SQL): ключевое слово ВПЛОТНУЮ к
+    # кавычке идентификатора — `SET"phone"`, `INTO'messenger_accounts'`, `TABLE`…``.
+    # Окрестность `_SQL_UPDATE` / `_SQL_SET` / `_SQL_WHERE` считала такое слово
+    # однословным идентификатором в кавычках по ОДНОЙ стороне, а голова (в) / (г) требовала
+    # пробел `\s+` перед таблицей; 1 008 форм давали `[]`. На SQLite 3.53.1 каждый
+    # такой оператор пишет колонку (замер исполнителя: `+7NEW`).
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET'phone'=:p WHERE id = 1\"\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-set-tight-single-quoted-phone",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET\"phone\"=:p WHERE id = 1'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-set-tight-double-quoted-phone",
+    ),
+    pytest.param(
+        "SQL = \"UPDATE'messenger_accounts' SET phone = :p WHERE id = 1\"\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-update-tight-single-quoted-table",
+    ),
+    pytest.param(
+        "SQL = \"INSERT INTO'messenger_accounts'(id, phone) VALUES (5, :p)\"\n",
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-into-tight-single-quoted-table",
+    ),
+    pytest.param(
+        "SQL = 'INSERT INTO\"messenger_accounts\"(id, phone) VALUES (5, :p)'\n",
+        KIND_RAW_SQL,
+        "«INSERT",
+        "phone",
+        id="raw-sql-insert-into-tight-double-quoted-table",
+    ),
+    pytest.param(
+        "SQL = 'COPY\"messenger_accounts\"(id, phone) FROM STDIN'\n",
+        KIND_RAW_SQL,
+        "«COPY",
+        "messenger_accounts",
+        id="raw-sql-copy-tight-double-quoted-table",
+    ),
+    pytest.param(
+        "SQL = \"LOAD DATA INFILE 'x' INTO TABLE`messenger_accounts`(id, phone)\"\n",
+        KIND_RAW_SQL,
+        "«LOAD",
+        "messenger_accounts",
+        id="raw-sql-load-data-tight-backtick-table",
+    ),
+    # Самопроверка 16-33, заход 2: ключевое слово МЕЖДУ двумя отрезками в кавычках —
+    # `"messenger_accounts"SET"phone"`. По соседним символам оно неотличимо от однословного
+    # идентификатора в кавычках; различает их только разбор отрезков `_sql_visible`. На
+    # SQLite 3.53.1 каждый такой оператор пишет колонку (замер исполнителя: `+7NEW`).
+    pytest.param(
+        "SQL = 'UPDATE\"messenger_accounts\"SET\"phone\"=:p WHERE id = 1'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-keyword-between-two-double-quoted-identifiers",
+    ),
+    pytest.param(
+        "SQL = \"UPDATE'messenger_accounts'SET'phone'=:p WHERE id = 1\"\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-keyword-between-two-single-quoted-identifiers",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE`messenger_accounts`SET`phone`=:p WHERE id = 1'\n",
+        KIND_RAW_SQL,
+        "«UPDATE",
+        "phone",
+        id="raw-sql-keyword-between-two-backtick-identifiers",
+    ),
 ]
 
 
@@ -6052,6 +6473,37 @@ LEGITIMATE_CASES = [
     pytest.param(
         'w = helper.a\nw = helper.b\nw(account, "phone", x)\n',
         id="rebound-alias-to-harmless-targets",
+    ),
+    # Ревью WR-21 / WR-22 (план 16-33): однословная строка-значение в одинарных кавычках
+    # без `=` за ней и комментарий в голове вставки в ЧУЖУЮ таблицу — не запись номера.
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note = 'phone' WHERE id = 1\"\n",
+        id="raw-sql-single-quoted-value-is-not-a-write",
+    ),
+    pytest.param(
+        'SQL = "INSERT /* x */ INTO groups (title) VALUES (:t)"\n',
+        id="raw-sql-comment-in-the-head-of-another-table",
+    ),
+    # Ревью WR-23 (план 16-33): конструктор колонки Core с ЧУЖИМ именем — не номер.
+    pytest.param(
+        'stmt = update(Group).values({sa.Column("title"): t})\n',
+        id="values-sa-column-other-name",
+    ),
+    # Самопроверка 16-33, заход 1: `WHERE` вплотную к кавычке — по-прежнему `WHERE`, и
+    # фильтр по номеру за ним записью не является (на SQLite номер прежний).
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note = :n WHERE'phone' = :number\"\n",
+        id="raw-sql-tight-quoted-phone-filter-in-where",
+    ),
+    # Самопроверка 16-33, заход 2: `WHERE` между значением и колонкой в кавычках — это
+    # `WHERE`, и фильтр по номеру за ним записью не является (на SQLite номер прежний).
+    pytest.param(
+        "SQL = \"UPDATE messenger_accounts SET note='n'WHERE'phone'=:number\"\n",
+        id="raw-sql-where-between-two-single-quoted-spans-is-a-filter",
+    ),
+    pytest.param(
+        "SQL = 'UPDATE messenger_accounts SET note=\"n\"WHERE\"phone\"=:number'\n",
+        id="raw-sql-where-between-two-double-quoted-spans-is-a-filter",
     ),
 ]
 
