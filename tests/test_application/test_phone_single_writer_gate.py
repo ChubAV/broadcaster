@@ -502,8 +502,15 @@ PARTIAL_NAMES = frozenset({"partial"})
 IDENTIFICATION_CARRIERS = ("methodcaller", "getattr")
 
 # Конструкторы колонки по имени: `column("phone")` / `literal_column("phone")` в ключе
-# отображения называют колонку номера литералом так же, как `"phone"` (план 16-17).
-COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
+# отображения называют колонку номера литералом так же, как `"phone"` (план 16-17), и
+# классы конструктора — `ColumnClause("phone")` (класс за `column()`) и
+# `Column("phone")` (колонка Core): оба называют колонку той же строкой в самом пишущем
+# вызове — критерий заявления шапки. Имя берётся по последнему звену, поэтому
+# `sa.Column(…)` / `sqlalchemy.sql.ColumnClause(…)` судятся так же. Летопись: до плана
+# 16-33 здесь были только `column` и `literal_column`, и `values({sa.Column("phone"):
+# x})`, `values({ColumnClause("phone"): x})` проходили гейт (ревью WR-23; замер
+# верификатора раунда 6 на SQLite: `+77`, `+83`).
+COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column", "Column", "ColumnClause"})
 
 # Поиск колонки по имени-литералу: `t.c.get("phone")`, `t.columns.get("phone")`,
 # `inspect(M).get_property("phone")`, `t.c.__getitem__("phone")` — та же колонка, что
@@ -511,10 +518,13 @@ COLUMN_CONSTRUCTORS = frozenset({"column", "literal_column"})
 # индекса: `{form.get("phone"): x}` в пишущем вызове тоже судится.
 COLUMN_LOOKUP_METHODS = frozenset({"get", "get_property", "__getitem__"})
 
-# Имя первого параметра у конструкторов и поиска: `column(text, …)` /
-# `literal_column(text, …)`, `ColumnCollection.get(key, default=None)`,
-# `Mapper.get_property(key, …)` (SQLAlchemy 2.0.46).
-COLUMN_NAME_KEYWORDS = frozenset({"text", "key"})
+# Имя первого параметра у конструкторов и поиска (SQLAlchemy 2.0.46): `column(text, …)`,
+# `literal_column(text, …)`, `ColumnClause(text, …)`, `Column(name, type_, …)`,
+# `ColumnCollection.get(key, default=None)`, `Mapper.get_property(key, …)`. `name` —
+# план 16-33, ревью WR-23: у `Column` имя колонки — `name=`. Набор один на всех, поэтому
+# цена строгости та же, что у `key=`: `name=` у поиска (`t.c.get(name="phone")`, которого
+# нет в сигнатуре) и `text=` у `Column` тоже судятся.
+COLUMN_NAME_KEYWORDS = frozenset({"text", "key", "name"})
 
 # Пишущие dunder-вызовы с получателем, известным по исходнику (план 16-17):
 # `MessengerAccount.phone.__set__(account, x)` — дескриптор колонки пишет атрибут
@@ -2152,7 +2162,10 @@ def _phone_column(node: ast.AST) -> str | None:
     (`COLUMN_LOOKUP_METHODS`) и конструктор колонки `column("phone")` /
     `sa.literal_column("phone_is_manual")` / `column(text="phone")`
     (`COLUMN_CONSTRUCTORS`, план 16-17: такой ключ в отображении `values` и в
-    строках executemany пишет колонку — замер на SQLite в памяти).
+    строках executemany пишет колонку — замер на SQLite в памяти), и классы
+    конструктора `sa.Column("phone")` / `Column(name="phone")` (колонка Core) и
+    `ColumnClause("phone")` (класс за `column()`): до плана 16-33 они проходили гейт,
+    хотя ключ `values` с ними пишет колонку (ревью WR-23, замер верификатора раунда 6).
 
     И производная такой колонки — любая цепочка доступа к атрибуту или индексу над
     ней: `MessengerAccount.phone.key`, `MessengerAccount.phone.name`,
