@@ -534,9 +534,14 @@ LITERAL_CONTAINER_WRAPPERS = frozenset({"list", "tuple", "set", "iter"})
 # достижимую форму недостижимой.
 UPSERT_CALL_NAMES = frozenset({"on_conflict_do_update", "on_duplicate_key_update"})
 
-# Кавычки идентификатора SQL: двойные (стандарт, PostgreSQL), обратные (MySQL) и
-# квадратные скобки (SQL Server); SQLite, на которой гоняется суита, принимает все три.
-_SQL_QUOTE = r'["`\[\]]?'
+# Кавычки идентификатора SQL: двойные (стандарт, PostgreSQL), обратные (MySQL),
+# квадратные скобки (SQL Server) и одинарные — SQLite, на которой гоняется суита,
+# принимает все четыре: однословный `'…'` она читает как идентификатор там, где
+# строковый литерал недопустим (унаследованное поведение SQLite; `SET 'phone' = :p`
+# пишет колонку — замер верификатора раунда 6 на SQLite 3.53.1, `+78`).
+# Летопись: до плана 16-33 здесь было три вида кавычек, без одинарной, и `SET 'phone'
+# = …`, `INSERT INTO 'messenger_accounts'` проходили гейт (ревью WR-21).
+_SQL_QUOTE = r"[\"`\[\]']?"
 
 # Таблица аккаунтов в SQL: в кавычках или без, с необязательным префиксом схемы
 # (`public.messenger_accounts`, `"public"."messenger_accounts"`).
@@ -562,6 +567,11 @@ _ACCOUNTS_TABLE_SQL = (
 # со словом `where` перед колонкой прятал запись (ревью WR-16, 2026-10-13), а (б)
 # требовала `SET (` сразу после `SET`, и строчный конструктор не первым в списке
 # проходил (замер планирования 16-28: такой оператор на SQLite пишет колонку).
+# Выражение ищется в ВИДИМОМ SQL `_sql_visible(text)`, а не в сыром тексте: комментарий
+# `/* … */` и `-- …` там — пробелы, и `\s+` его перекрывает; однословный идентификатор в
+# любой из четырёх кавычек виден. До плана 16-33 (в) и (г) искались по сырому тексту, и
+# комментарий в голове оператора рвал `\s+` — `INSERT /* x */ INTO messenger_accounts`,
+# `REPLACE -- c⏎ INTO messenger_accounts` проходили (ревью WR-22).
 RAW_SQL_PHONE_WRITE = re.compile(
     r"\b(?:insert\s+(?:or\s+\w+\s+|ignore\s+)?|replace\s+|upsert\s+|merge\s+)into\s+"
     + _ACCOUNTS_TABLE_SQL
@@ -574,10 +584,11 @@ RAW_SQL_PHONE_WRITE = re.compile(
 )
 
 # Слова и колонка номера для `_raw_sql_set_writes` (вид 5 (а) и (б)). Ключевое слово —
-# не идентификатор в кавычках из одного слова (`"where"`, `[set]`).
-_SQL_UPDATE = re.compile(r'(?<!["`\[])\bupdate\b(?!["`\]])', re.IGNORECASE)
-_SQL_SET = re.compile(r'(?<!["`\[])\bset\b(?!["`\]])', re.IGNORECASE)
-_SQL_WHERE = re.compile(r'(?<!["`\[])\bwhere\b(?!["`\]])', re.IGNORECASE)
+# не идентификатор и не строка в кавычках из одного слова (`"where"`, `[set]`, `'where'`
+# — план 16-33, ревью WR-21: видимый `'where'` иначе оборвал бы предложение `SET`).
+_SQL_UPDATE = re.compile(r"(?<![\"`\['])\bupdate\b(?![\"`\]'])", re.IGNORECASE)
+_SQL_SET = re.compile(r"(?<![\"`\['])\bset\b(?![\"`\]'])", re.IGNORECASE)
+_SQL_WHERE = re.compile(r"(?<![\"`\['])\bwhere\b(?![\"`\]'])", re.IGNORECASE)
 _SQL_PHONE_NAME = re.compile(r"\bphone(?:_is_manual)?\b", re.IGNORECASE)
 _SQL_PHONE_ASSIGNMENT = re.compile(
     r"\bphone(?:_is_manual)?\b" + _SQL_QUOTE + r"\s*=", re.IGNORECASE
@@ -1820,16 +1831,33 @@ def _folded_string(node: ast.AST) -> str | None:
 
 
 def _raw_sql_write(text: str) -> bool:
-    """Пишущий SQL вида 5: (а) и (б) — кодом `_raw_sql_set_writes`, (в) и (г) — выражением."""
-    return bool(_raw_sql_set_writes(text)) or RAW_SQL_PHONE_WRITE.search(text) is not None
+    """Пишущий SQL вида 5: (а) и (б) — кодом `_raw_sql_set_writes`, (в) и (г) — выражением.
+
+    Выражение `RAW_SQL_PHONE_WRITE` ищется в видимом SQL `_sql_visible(text)`:
+    комментарий в голове оператора — пробелы (план 16-33, ревью WR-22).
+    """
+    return (
+        bool(_raw_sql_set_writes(text))
+        or RAW_SQL_PHONE_WRITE.search(_sql_visible(text)) is not None
+    )
 
 
 def _raw_sql_subject(text: str) -> str:
-    """Предмет находки сырого SQL: начало оператора и, если запись дальше, — она сама."""
+    """Предмет находки сырого SQL: начало оператора и, если запись дальше, — она сама.
+
+    Голова (в) / (г) ищется в видимом SQL, а отрезок берётся из исходного текста по
+    позициям совпадения: длина и позиции `_sql_visible` прежние.
+    """
     snippet = " ".join(text.split())[:60]
     writes = _raw_sql_set_writes(text)
-    head = RAW_SQL_PHONE_WRITE.search(text)
-    fragment = writes[0] if writes else " ".join(head.group(0).split()) if head else ""
+    head = RAW_SQL_PHONE_WRITE.search(_sql_visible(text))
+    fragment = (
+        writes[0]
+        if writes
+        else " ".join(text[head.start() : head.end()].split())
+        if head
+        else ""
+    )
     if fragment and fragment not in snippet:
         snippet = f"{snippet} … {fragment}"
     return f"«{snippet}»"
@@ -1841,9 +1869,11 @@ def _raw_sql_set_writes(text: str) -> list[str]:
     Для каждого `UPDATE … SET` (без учёта регистра; и `ON CONFLICT DO UPDATE SET`)
     предложение `SET` — текст после `SET` до первого `WHERE` на НУЛЕВОЙ глубине скобок
     относительно `SET`, до `;` на нулевой глубине, до закрывающей скобки, уводящей
-    глубину ниже нуля (оператор внутри скобок), либо до конца строки. Строковые
-    литералы SQL `'…'`, комментарии и кавычки не из одного слова пропускаются целиком
-    (`_sql_visible`): слово `where`, скобки и `;` внутри них предложение не обрывают.
+    глубину ниже нуля (оператор внутри скобок), либо до конца строки. Комментарии и
+    отрезки в кавычках — любой из четырёх, `'…'` включительно, — не из одного слова
+    пропускаются целиком (`_sql_visible`): слово `where`, скобки и `;` внутри них
+    предложение не обрывают; однословный отрезок виден — он может быть колонкой номера
+    (`SET 'phone' = :p` на SQLite пишет колонку; план 16-33, ревью WR-21).
     На нулевой глубине предложения запись — (а) колонка
     номера `phone` / `phone_is_manual` (в кавычке идентификатора `_SQL_QUOTE` или без),
     за которой следует `=`; (б) строчный конструктор — скобка нулевой глубины, на своём
@@ -1879,14 +1909,18 @@ def _raw_sql_set_writes(text: str) -> list[str]:
 def _sql_visible(text: str) -> str:
     """SQL, в котором видна только структура; длина и позиции прежние.
 
-    Пробелами заменяются строковые литералы `'…'` (удвоенная кавычка `''` закрывает и
-    тут же открывает литерал — итог тот же), комментарии `-- …` до конца строки и
-    `/* … */`, и идентификатор или строка в кавычках `"…"`, `` `…` ``, `[…]`, если
-    внутри не одно слово: слово `where`, скобки и `;` внутри них предложение `SET` не
-    обрывают и глубину не меняют. Идентификатор из одного слова (`"phone"`,
-    `` `phone_is_manual` ``, `[messenger_accounts]`) виден как есть — он может быть
-    колонкой номера (самопроверка исполнителя 16-28, ось SQL, заход 1: на SQLite
-    `SET [a where b] = 1, phone = :p` пишет колонку).
+    Пробелами заменяются комментарии `-- …` до конца строки и `/* … */` и отрезок в
+    кавычках любого из ЧЕТЫРЁХ видов — `"…"`, `` `…` ``, `[…]` и `'…'`, — если внутри
+    не одно слово: слово `where`, скобки и `;` внутри них предложение `SET` не обрывают
+    и глубину не меняют. У `'…'` удвоенная кавычка `''` — кавычка внутри литерала, а не
+    его конец: `'it''s'` — один литерал, и он гаснет целиком; незакрытая `'` гасит
+    хвост. Отрезок из одного слова (`"phone"`, `` `phone_is_manual` ``,
+    `[messenger_accounts]`, `'phone'`) виден как есть — он может быть колонкой номера
+    или таблицей аккаунтов (самопроверка исполнителя 16-28, ось SQL, заход 1: на SQLite
+    `SET [a where b] = 1, phone = :p` пишет колонку). Одинарная кавычка — четвёртый вид:
+    SQLite читает однословный `'…'` как идентификатор там, где строковый литерал
+    недопустим, и `SET 'phone' = :p` пишет колонку (план 16-33, ревью WR-21; до него
+    любой отрезок `'…'` гас).
     """
     closers = {'"': '"', "`": "`", "[": "]"}
     out: list[str] = []
@@ -1894,8 +1928,16 @@ def _sql_visible(text: str) -> str:
     while index < len(text):
         char = text[index]
         if char == "'":
-            end = text.find("'", index + 1)
-            end = len(text) if end < 0 else end + 1
+            # Конец литерала — одинарная кавычка, за которой не стоит вторая (`''` —
+            # кавычка внутри литерала).
+            seek = index + 1
+            while (close := text.find("'", seek)) >= 0 and text.startswith("''", close):
+                seek = close + 2
+            if close >= 0 and re.fullmatch(r"\w+", text[index + 1 : close]):
+                out.append(text[index : close + 1])
+                index = close + 1
+                continue
+            end = len(text) if close < 0 else close + 1
         elif text.startswith("--", index):
             end = text.find("\n", index)
             end = len(text) if end < 0 else end
