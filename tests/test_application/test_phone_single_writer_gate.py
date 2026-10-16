@@ -5586,6 +5586,26 @@ LITERAL_FORM_CASES = [
         "phone",
         id="rebound-partial-alias",
     ),
+    # Самопроверка исполнителя 16-31, заход 1 (ось кратности): имя, связанное с двумя
+    # пишущими API, чьи толкования одного вызова дают находки РАЗНЫХ видов на одном месте
+    # (`Query.update` — ключ словаря `values`, `bulk_update_mappings` — ключ строк), давало
+    # две находки на один вызов: дедупликация по (строка, столбец, вид) их не сводила.
+    pytest.param(
+        'f = update\nf = bulk_update_mappings\nf({"phone": x})\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="rebound-alias-two-kinds-at-one-place",
+    ),
+    pytest.param(
+        "f = functools.partial(query.update)\n"
+        "f = bulk_update_mappings\n"
+        'f({"phone": x})\n',
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="rebound-partial-and-alias-two-kinds-at-one-place",
+    ),
 ]
 
 
