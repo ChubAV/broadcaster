@@ -443,6 +443,7 @@ from tests.phone_gate_grammar import (
     binding_form_source,
     binding_name,
     module_bindings,
+    reference_arguments,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1612,12 +1613,18 @@ def _methodcaller_receivers(
     и дескриптор колонки (`__set__`) и повторный конструктор модели (`__init__`)
     судятся по этому получателю. Применение — прямое `methodcaller(…)(obj)`, вызов
     имени, связанного с ним любой формой общей грамматики (`f(obj)`, `self.f(obj)`), и
-    носитель, которому `methodcaller` подан ссылкой вместе с получателем: судится
-    СЛЕДУЮЩИЙ за ним позиционный аргумент (`to_thread(mc, obj)`,
-    `run_in_executor(None, mc, obj)`, `partial(mc, obj)`), у поэлементного носителя
-    — элементы первой итерируемой (`map(mc, [obj])`). До самопроверки исполнителя
-    16-27 получатель брался только у прямого применения: `set_phone =
-    methodcaller("__set__", account, x); set_phone(MessengerAccount.phone)` проходил.
+    носитель, которому `methodcaller` подан ссылкой: получатель — ПЕРВЫЙ аргумент,
+    который носитель подаст ссылке, по семантике носителя общего модуля
+    `reference_arguments` (план 16-34, ревью WR-20; та же функция у гейта приватности):
+    позиционная ссылка и литеральная `*`-распаковка (`to_thread(mc, obj)`,
+    `run_in_executor(None, mc, obj)`, `partial(mc, obj)`, `to_thread(*[mc, obj])`),
+    ЛЮБОЙ именованный аргумент с общим правилом литеральных аргументов того же вызова
+    (`Thread(target=mc, args=(obj,))`), применённая обёртка носителя
+    (`partial(asyncio.to_thread, mc)(obj)`), у поэлементного носителя — первый элемент
+    каждой позиции (`map(mc, [obj])`, `map(mc, list([obj]))`). До самопроверки
+    исполнителя 16-27 получатель брался только у прямого применения: `set_phone =
+    methodcaller("__set__", account, x); set_phone(MessengerAccount.phone)` проходил; до
+    плана 16-34 — только у позиционной подачи.
     """
     aliases = _methodcaller_aliases(tree, judged_names)
 
@@ -1650,21 +1657,16 @@ def _methodcaller_receivers(
             continue
         if _call_name(node) == "methodcaller":
             continue
-        positional = _forwarded_arguments(list(node.args))
-        for index, argument in enumerate(positional):
-            methodcallers = methodcallers_of(argument)
-            if not methodcallers:
+        for carried in reference_arguments(
+            node,
+            lambda argument: bool(methodcallers_of(argument)),
+            IDENTIFICATION_CARRIERS,
+            verbatim=True,
+        ):
+            if not carried.args or isinstance(carried.args[0], ast.Starred):
                 continue
-            after = positional[index + 1 :]
-            if after and not isinstance(after[0], ast.Starred):
-                for methodcaller in methodcallers:
-                    if _call_name(node) in ELEMENTWISE_CARRIERS:
-                        column = _iterable_elements(after[0])
-                        for element in column[0] if column is not None else []:
-                            add(methodcaller, element)
-                    else:
-                        add(methodcaller, after[0])
-            break
+            for methodcaller in methodcallers_of(carried.reference):
+                add(methodcaller, carried.args[0])
     return {key: list(receivers.values()) for key, receivers in found.items()}
 
 
@@ -1743,21 +1745,26 @@ def _referenced_calls(
     Тройки (синтетический вызов, имя API, носитель ссылки — аргумент `call`, в
     котором она стоит; у `methodcaller` — `None`):
     - `operator.methodcaller("<имя>", …)` — вызов `<имя>` с аргументами после строки;
-    - ссылка на судимый API среди позиционных аргументов (с раскрытой распаковкой
-      `*[…]`) или в `fn=` (и `**{"fn": …}`), параметре ссылки `run_sync`, — вызов
-      этого API с позиционными аргументами ПОСЛЕ ссылки и именованными аргументами
-      `call`, кроме `fn`: `run_sync`, `to_thread`, `run_in_executor`, `partial`
-      подают их функции именно так; ссылка может стоять и внутри
-      `functools.partial(ref, …)` — тогда первыми идут его привязанные аргументы
-      (`_bound_reference`);
-    - `partial(ref, …)(…)` — к ним добавляются аргументы применения; судится у
-      применения (`call` с `func`-вызовом), а у самого `partial` — нет;
     - вызов имени, связанного с `partial(<API>, …)` (`partial_aliases`), — вызов API с
       привязанными аргументами впереди, как у `partial(…)(…)`; поданное носителю, такое
       имя — ссылка с привязанными аргументами (ревью WR-14, план 16-27);
-    - у поэлементного носителя (`ELEMENTWISE_CARRIERS`: `map`) аргументы после ссылки —
-      итерируемые, и функция получает их ЭЛЕМЕНТЫ (`_elementwise_arguments`): одна
-      позиция — один синтетический вызов (план 16-27).
+    - иначе где в `call` стоит ссылка на судимый API и какие аргументы носитель ей
+      подаст, решает функция ОБЩЕГО модуля `reference_arguments` (план 16-34, ревью
+      WR-20; та же функция у гейта приватности, паритет — `tests/test_phone_gates_parity.py`):
+      ссылка — позиционным аргументом (литеральная распаковка `*[…]` / `*(…)` раскрыта),
+      ЛЮБЫМ именованным аргументом (`fn=`, `target=`, `function=`, `initializer=`,
+      выдуманный `job=`; и парой литерального `**{…}`) или внутри применённой обёртки
+      `X(…)(…)` (`partial(ref, …)(…)`, `partial(asyncio.to_thread, ref)(…)` — судится у
+      применения, а у самого `X(…)` — нет); её аргументы — позиционные ЗА ней (у
+      именованной — все позиционные носителя) и, по общему правилу владельца О-14 (а),
+      литеральные аргументы того же вызова (`literal_keyword_arguments`: литеральный
+      кортеж или список — позиционные аргументы ссылки, литеральный словарь —
+      именованные), затем аргументы применения; у поэлементного носителя
+      (`ELEMENTWISE_CARRIERS`: `map`) — элементы литеральных итерируемых, одна позиция —
+      один синтетический вызов (план 16-27). Ссылка может стоять внутри
+      `functools.partial(ref, …)` — тогда первыми идут его привязанные аргументы
+      (`_bound_reference`). До плана 16-34 ключ ссылки был один — `fn`, и
+      `threading.Thread(target=setattr, args=(…))` проходил гейт.
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
     Ссылка, за которой стоит несколько связываний (`partial_aliases` многозначна — ревью
     WR-18, план 16-31), даёт синтетический вызов на КАЖДОЕ; находки одного места
@@ -1801,77 +1808,31 @@ def _referenced_calls(
             return applications
     if name in judged_names or name == "getattr":
         return []
-    source, outer_args, outer_keywords = call, [], []
-    if isinstance(call.func, ast.Call) and _call_name(call.func) not in (
-        "getattr",
-        "methodcaller",
-    ):
-        # `partial(ref, …)(…)`: ссылка — в применяемом вызове, хвост — у применения.
-        if _call_name(call.func) in judged_names:
-            return []
-        source, outer_args, outer_keywords = call.func, list(call.args), list(call.keywords)
-    positional = _positional_arguments(source)
-    forwarded = _forwarded_arguments(list(source.args))
-    keywords = [k for k in source.keywords if k.arg not in REFERENCE_KEYWORDS]
-    for index, argument in enumerate(positional):
-        if argument is None:
-            continue
-        bounds = [
-            bound
-            for bound in _bound_reference(argument, partial_names, partial_aliases)
-            if bound[0] in judged_names
-        ]
-        if not bounds:
-            continue
-        after = forwarded[index + 1 :]
-        if name in ELEMENTWISE_CARRIERS:
-            # `map(setattr, [account], ["phone"], [x])` зовёт
-            # `setattr(account, "phone", x)`: функция получает элементы.
-            return [
-                (
-                    _synthetic_call(call, func, bound_args + elements, bound_keywords + keywords),
-                    referenced,
-                    argument,
-                )
-                for referenced, func, bound_args, bound_keywords in bounds
-                for elements in _elementwise_arguments(after)
-            ]
+    # Применение судимого вызова (`values(…)(…)`) — не подача ссылки.
+    if isinstance(call.func, ast.Call) and _call_name(call.func) in judged_names:
+        return []
+
+    def bounds_of(node: ast.expr) -> list[BoundReference]:
+        # Предикат ссылки — гейта: узел через `_bound_reference` называет судимый API.
         return [
-            (
-                _synthetic_call(
-                    call,
-                    func,
-                    bound_args + after + outer_args,
-                    bound_keywords + keywords + outer_keywords,
-                ),
-                referenced,
-                argument,
-            )
-            for referenced, func, bound_args, bound_keywords in bounds
-        ]
-    for keyword, value in _named_arguments(source):
-        if keyword not in REFERENCE_KEYWORDS:
-            continue
-        bounds = [
             bound
-            for bound in _bound_reference(value, partial_names, partial_aliases)
+            for bound in _bound_reference(node, partial_names, partial_aliases)
             if bound[0] in judged_names
         ]
-        if bounds:
-            return [
-                (
-                    _synthetic_call(
-                        call,
-                        func,
-                        bound_args + forwarded + outer_args,
-                        bound_keywords + keywords + outer_keywords,
-                    ),
-                    referenced,
-                    value,
-                )
-                for referenced, func, bound_args, bound_keywords in bounds
-            ]
-    return []
+
+    return [
+        (
+            _synthetic_call(call, func, bound_args + carried.args, bound_keywords + carried.keywords),
+            referenced,
+            carried.reference,
+        )
+        # `verbatim`: судится и прочтение «как есть» — ключ литерального аргумента как имя
+        # параметра API (`run_sync(fn=…, mappings={…})`), — первым, общее правило — следом.
+        for carried in reference_arguments(
+            call, lambda node: bool(bounds_of(node)), IDENTIFICATION_CARRIERS, verbatim=True
+        )
+        for referenced, func, bound_args, bound_keywords in bounds_of(carried.reference)
+    ]
 
 
 def _is_concatenation(node: ast.AST) -> bool:

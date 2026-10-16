@@ -586,11 +586,31 @@ def _keyword_references(keywords: list[ast.keyword]) -> list[ast.expr]:
     return values
 
 
+def _verbatim_keywords(keywords: list[ast.keyword], skip: ast.expr) -> list[ast.keyword]:
+    """Именованные аргументы вызова как есть, без ссылки `skip`: пары литерального `**{…}` — ключами."""
+    found: list[ast.keyword] = []
+    for keyword in keywords:
+        if keyword.value is skip:
+            continue
+        if keyword.arg is None:
+            pairs = _literal_named_pairs(keyword.value)
+            if pairs is not None:
+                found.extend(
+                    ast.copy_location(ast.keyword(arg=key, value=value), location)
+                    for key, value, location in pairs
+                    if value is not skip
+                )
+                continue
+        found.append(keyword)
+    return found
+
+
 def _carried_by(
     source: ast.Call,
     is_reference,
     outer_args: list[ast.expr],
     outer_keywords: list[ast.keyword],
+    verbatim: bool = False,
 ) -> list[ReferenceArguments]:
     """Ссылки одного носителя `source` и их аргументы (с хвостом применения `outer_*`)."""
     forwarded = forwarded_arguments(list(source.args))
@@ -611,17 +631,44 @@ def _carried_by(
     literal_args, literal_keywords = literal_keyword_arguments(list(source.keywords), reference)
     applied_args, applied_keywords = literal_keyword_arguments(outer_keywords)
     keywords = literal_keywords + applied_keywords
-    if positional_reference and _callee_name(source.func) in ELEMENTWISE_CARRIERS:
-        return [
-            ReferenceArguments(reference, elements + literal_args, keywords)
-            for elements in elementwise_arguments(after + outer_args)
-        ]
-    return [
-        ReferenceArguments(reference, after + literal_args + outer_args + applied_args, keywords)
-    ]
+    # Прочтение «как есть» (`verbatim`): носитель, который подаёт ссылке свои именованные
+    # аргументы без разбора (`run_sync(fn, *arg, **kw)`, `functools.partial`), — ключ
+    # литерального аргумента и есть имя параметра ссылки (`mappings={…}`). Оно судится
+    # ПЕРВЫМ, общее правило — следом: одно место — одна находка у вызывающего гейта.
+    readings: list[tuple[list[ast.expr], list[ast.expr], list[ast.keyword]]] = []
+    if verbatim:
+        readings.append(
+            ([], [], _verbatim_keywords(list(source.keywords), reference) + list(outer_keywords))
+        )
+    readings.append((literal_args, applied_args, keywords))
+    found: list[ReferenceArguments] = []
+    for own_args, own_applied, own_keywords in readings:
+        if positional_reference and _callee_name(source.func) in ELEMENTWISE_CARRIERS:
+            candidates = [
+                ReferenceArguments(reference, elements + own_args, own_keywords)
+                for elements in elementwise_arguments(after + outer_args)
+            ]
+        else:
+            candidates = [
+                ReferenceArguments(
+                    reference, after + own_args + outer_args + own_applied, own_keywords
+                )
+            ]
+        # Повтор отбрасывается только между прочтениями: равные позиции `map` одного
+        # прочтения — разные вызовы.
+        earlier = {_dump(known) for known in found}
+        found.extend(candidate for candidate in candidates if _dump(candidate) not in earlier)
+    return found
 
 
-def reference_arguments(call: ast.Call, is_reference, not_carriers) -> list[ReferenceArguments]:
+def _dump(carried: ReferenceArguments) -> str:
+    """Отпечаток аргументов результата: равные прочтения не повторяются."""
+    return ast.dump(ast.Call(func=carried.reference, args=carried.args, keywords=carried.keywords))
+
+
+def reference_arguments(
+    call: ast.Call, is_reference, not_carriers, verbatim: bool = False
+) -> list[ReferenceArguments]:
     """Ссылки на функцию, которые вызов-носитель `call` подаёт дальше, и их аргументы.
 
     Носитель — ЛЮБОЙ вызов; что считать ссылкой, решает предикат гейта `is_reference`
@@ -646,14 +693,23 @@ def reference_arguments(call: ast.Call, is_reference, not_carriers) -> list[Refe
     5. У носителя из `ELEMENTWISE_CARRIERS` при позиционной ссылке — по одному результату на
        каждую позицию `elementwise_arguments`.
     6. Нет ссылки — пустой список.
+    7. `verbatim=True` (гейт писателя, план 16-34) — ВПЕРЕДИ результата общего правила
+       ещё прочтение «как есть»: именованные аргументы носителя и применения подаются
+       ссылке без разбора (так их подают `run_sync(fn, *arg, **kw)` и `partial`, и у
+       гейта писателя вид находки зависит от имени параметра: `mappings={"id": 1,
+       "phone": p}` — строка executemany, а не `id=1, phone=p`). Равные прочтения не
+       повторяются. Гейт приватности судит номер в любом аргументе, и второе прочтение
+       ему ничего не добавляет: он зовёт функцию без флага.
     Пустые `args` и `keywords` значат, что ссылке ничего не подано: судить нечего, и
     вызывающий гейт решает, считать ли это вызовом.
     """
     if isinstance(call.func, ast.Call) and _callee_name(call.func.func) not in not_carriers:
-        found = _carried_by(call.func, is_reference, list(call.args), list(call.keywords))
+        found = _carried_by(
+            call.func, is_reference, list(call.args), list(call.keywords), verbatim
+        )
         if found:
             return found
-    return _carried_by(call, is_reference, [], [])
+    return _carried_by(call, is_reference, [], [], verbatim)
 
 
 class IdentificationValue(NamedTuple):
