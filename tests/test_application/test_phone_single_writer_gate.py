@@ -2941,6 +2941,56 @@ def test_a_planted_backfill_with_a_rebound_writer_alias_reddens_the_gate(tmp_pat
     )
 
 
+def test_a_planted_backfill_with_a_threaded_writer_reference_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-20: поток `threading.Thread(target=setattr, args=(account, "phone", number))`.
+
+    `threading.Thread(target=…)` — идиома проекта (`app/worker/celery_app.py:196`), и поток
+    — естественная форма фоновой записи скрипта дозаполнения Фазы 20 (D-13). На SQLite в
+    памяти такая запись пишет колонку (замер верификатора раунда 6, `+75`, SQLAlchemy
+    2.0.46). До плана 16-34 гейт её пропускал: ключ ссылки был один — `fn`, и ссылка в
+    `target=` с литеральным кортежем `args=(…)` не судилась (ревью WR-20). Решение владельца
+    О-14 (а): ссылка, поданная ЛЮБЫМ именованным аргументом, судится общим правилом по
+    литеральным аргументам того же вызова (функция общего модуля `reference_arguments`), а
+    не таблицей ключей отдельных API. Подложенный файл находится тем же обходом, что и
+    живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_threaded.py",
+        "import threading\n"
+        "\n"
+        "\n"
+        "def backfill(rows):\n"
+        "    for account, number in rows:\n"
+        '        threading.Thread(target=setattr, args=(account, "phone", number)).start()\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_threaded.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        if offence.startswith(f"scripts/backfill_threaded.py:6 — {KIND_SETATTR} — ")
+    ]
+    assert found, (
+        "ссылка на пишущий API, поданная именованным аргументом, не опознана: "
+        "`threading.Thread(target=setattr, args=(account, 'phone', number)).start()` в "
+        f"scripts/backfill_threaded.py гейт пропустил: {offences}"
+    )
+    assert all("setattr" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет `setattr` и колонку `phone`: {found}"
+    )
+    at_call = [
+        offence for offence in offences if offence.startswith("scripts/backfill_threaded.py:6 — ")
+    ]
+    assert len(at_call) == 1, (
+        f"у вызова `threading.Thread(target=setattr, …)` не ровно одна находка: {at_call}"
+    )
+
+
 def test_a_planted_backfill_with_a_nested_column_naming_reddens_the_gate(tmp_path):
     """ТРАСЕР WR-15: ключ `MessengerAccount.__table__.c[MessengerAccount.phone.key]` в `values`.
 
@@ -6051,6 +6101,53 @@ LITERAL_FORM_CASES = [
         "phone",
         id="raw-sql-keyword-between-two-backtick-identifiers",
     ),
+    # Ревью WR-20 (верификация раунда 6, 2026-10-14; план 16-34): до плана 16-34 ключ
+    # ссылки был один — `fn`, и ссылка на пишущий API в любом другом именованном аргументе
+    # с литеральными аргументами того же вызова проходила гейт (`Thread(target=setattr,
+    # args=…)` на SQLite пишет колонку, `+75`). Решение владельца О-14 (а): общее правило
+    # `reference_arguments` — ЛЮБОЙ ключ; литеральный кортеж / список — позиционные
+    # аргументы ссылки, литеральный словарь — именованные. Выдуманные ключи `job=` /
+    # `payload=` и `task=` доказывают, что правило от имён ключей не зависит.
+    pytest.param(
+        'threading.Thread(target=setattr, args=(account, "phone", x)).start()\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="thread-target-setattr",
+    ),
+    pytest.param(
+        'threading.Timer(1.0, setattr, args=(account, "phone", x)).start()\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="timer-args-setattr",
+    ),
+    pytest.param(
+        'scheduler.enqueue(job=setattr, payload=(account, "phone", x))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="invented-keyword-setattr",
+    ),
+    pytest.param(
+        "pool.submit(\n"
+        '    task=set_attribute, kwargs={"instance": account, "key": "phone", "value": x}\n'
+        ")\n",
+        KIND_SETATTR,
+        "set_attribute",
+        "phone",
+        id="keyword-dict-set-attribute",
+    ),
+    pytest.param(
+        "Process(\n"
+        "    target=session.bulk_update_mappings,\n"
+        '    args=[MessengerAccount, [{"id": 1, "phone": p}]],\n'
+        ")\n",
+        KIND_ROW_MAPPING,
+        "bulk_update_mappings",
+        "phone",
+        id="process-list-bulk-update",
+    ),
 ]
 
 
@@ -6504,6 +6601,21 @@ LEGITIMATE_CASES = [
     pytest.param(
         "SQL = 'UPDATE messenger_accounts SET note=\"n\"WHERE\"phone\"=:number'\n",
         id="raw-sql-where-between-two-double-quoted-spans-is-a-filter",
+    ),
+    # Ревью WR-20 (план 16-34): поток с не-пишущей функцией — идиома проекта
+    # `app/worker/celery_app.py:196` — и поток, пишущий ЧУЖОЙ атрибут, — не запись номера.
+    pytest.param(
+        "def start_heartbeat(service):\n"
+        "    def _loop():\n"
+        "        pass\n"
+        "\n"
+        '    thread = threading.Thread(target=_loop, name=f"infra-heartbeat-{service}", daemon=True)\n'
+        "    thread.start()\n",
+        id="thread-target-non-writer-loop",
+    ),
+    pytest.param(
+        'threading.Thread(target=setattr, args=(account, "status", x)).start()\n',
+        id="thread-target-setattr-other-attribute",
     ),
 ]
 
