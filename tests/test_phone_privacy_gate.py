@@ -1138,7 +1138,9 @@ def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
     позиционные ЗА ссылкой (у именованной — все позиционные носителя) и литеральные
     аргументы того же вызова по общему правилу `literal_keyword_arguments` (литеральный
     кортеж или список — позиционные, литеральный словарь — именованные), затем аргументы
-    применения; у `map` — элементы литеральных итерируемых. Тот же довод, что у
+    применения; у поэлементного носителя (`ELEMENTWISE_CARRIERS`) — сами итерируемые, целиком
+    (`keep_iterables=True`, ревью CR-02: имя итерируемой с `phone` краснит, comprehension
+    судится с источником итерации). Тот же довод, что у
     `functools.partial`: эти аргументы уйдут в журнал. Синтетический вызов
     `<ссылка>(<аргументы>)` встаёт на место носителя (`ast.copy_location`). Ссылка без
     аргументов в журнал ничего не подаёт — судить нечего, и вызовом журнала она не
@@ -1152,7 +1154,10 @@ def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
             ast.Call(func=carried.reference, args=carried.args, keywords=carried.keywords), call
         )
         for carried in reference_arguments(
-            call, lambda node: _is_log_callable(node, names), _not_carriers(names)
+            call,
+            lambda node: _is_log_callable(node, names),
+            _not_carriers(names),
+            keep_iterables=True,
         )
         if carried.args or carried.keywords
     ]

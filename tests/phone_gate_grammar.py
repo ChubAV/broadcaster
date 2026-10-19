@@ -668,6 +668,7 @@ def _carried_by(
     outer_args: list[ast.expr],
     outer_keywords: list[ast.keyword],
     every_reading: bool = False,
+    keep_iterables: bool = False,
 ) -> list[ReferenceArguments]:
     """Ссылки одного носителя `source` и их аргументы (с хвостом применения `outer_*`)."""
     forwarded = forwarded_arguments(list(source.args))
@@ -726,7 +727,10 @@ def _carried_by(
             spread_args, spread_keywords = _spread_arguments(after + outer_args)
             readings.append((spread_args + literal_args + applied_args, keywords + spread_keywords))
         for index, (own_args, own_keywords) in enumerate(readings):
-            if elementwise:
+            # `keep_iterables` (гейт приватности, ревью CR-02): итерируемые поэлементного
+            # носителя подаются ссылке КАК ЕСТЬ — не-литерал самим выражением, comprehension
+            # целиком с источником итерации, `*name` узлом `Starred`, — а не элементами.
+            if elementwise and not keep_iterables:
                 # `map`: позиционные за ссылкой — итерируемые; литеральные именованные
                 # аргументы общего правила — хвостом (у прочтения «как есть» — нет).
                 tail = [] if every_reading and index == 0 else literal_args
@@ -763,7 +767,11 @@ def _dump(carried: ReferenceArguments) -> str:
 
 
 def reference_arguments(
-    call: ast.Call, is_reference, not_carriers, every_reading: bool = False
+    call: ast.Call,
+    is_reference,
+    not_carriers,
+    every_reading: bool = False,
+    keep_iterables: bool = False,
 ) -> list[ReferenceArguments]:
     """Ссылки на функцию, которые вызов-носитель `call` подаёт дальше, и их аргументы.
 
@@ -801,16 +809,31 @@ def reference_arguments(
        подаёт `*args, **kwds`). Равные прочтения не повторяются; цена — в сторону лишней
        находки. Гейт приватности судит номер в любом аргументе и зовёт функцию без флага:
        лишние прочтения ему ничего не добавляют.
+    8. `keep_iterables=True` (правило носителя гейта приватности, `_carried_log_calls`; ревью
+       CR-02, решение владельца О-16 (а), свойство 4) — у носителя из `ELEMENTWISE_CARRIERS`
+       ссылка получает итерируемые КАК ЕСТЬ, а не элементы правила 5: не-литерал — самим
+       выражением (не `UNJUDGED_ELEMENT`), comprehension — целиком, с источником итерации,
+       распаковка не-литерала `*name` — узлом `Starred`, и перечень ею не обрывается. Гейту
+       писателя имя итерируемой безразлично — колонку оно не называет (граница (1) его шапки), —
+       и он зовёт функцию без параметра: его ответ прежний. Гейт приватности судит именно
+       имена (правило (б) D-17): до плана 16-38 общая функция гасила у `map` не-литеральную
+       итерируемую, и `list(map(logger.info, account.phones))`, ловившийся на `c6953017^`,
+       уходил мимо после коммита `c6953017` (16-32), который перевёл гейт на эту функцию.
     Пустые `args` и `keywords` значат, что ссылке ничего не подано: судить нечего, и
     вызывающий гейт решает, считать ли это вызовом.
     """
     if isinstance(call.func, ast.Call) and _callee_name(call.func.func) not in not_carriers:
         found = _carried_by(
-            call.func, is_reference, list(call.args), list(call.keywords), every_reading
+            call.func,
+            is_reference,
+            list(call.args),
+            list(call.keywords),
+            every_reading,
+            keep_iterables,
         )
         if found:
             return found
-    return _carried_by(call, is_reference, [], [], every_reading)
+    return _carried_by(call, is_reference, [], [], every_reading, keep_iterables)
 
 
 def carrier_wrapper_bindings(
