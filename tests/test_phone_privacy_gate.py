@@ -1998,6 +1998,49 @@ def test_a_planted_log_wrapper_called_through_a_getattr_string_reddens_the_gate(
     )
 
 
+def test_a_planted_log_reference_mapped_over_an_account_attribute_reddens_the_gate(tmp_path):
+    """CR-02 (D-11, D-17): журнал, поданный `map` над атрибутом аккаунта, — вызов журнала с номером.
+
+    `list(map(logger.info, account.phones))` — естественная форма отчёта, какой Фазы 17–20
+    журналируют список номеров аккаунта: `map` зовёт `logger.info` с каждым номером, и номер
+    уходит в Loki. На `c6953017^` форма ловилась: гейт судил итерируемые `map` целиком. Коммит
+    `c6953017` (16-32, задача 1) перевёл гейт на общую `reference_arguments`, написанную по
+    семантике гейта писателя, и у `map` не-литеральная итерируемая гасла в `UNJUDGED_ELEMENT` —
+    форма уходила мимо (ревью CR-02, регрессия партии раунда 6; номер напечатан `logging`).
+    Граница гейта обещает: аргумент, пришедший нелитералом, — «судится само выражение (имя с
+    `phone` краснит)». Решение владельца О-16 (а), 2026-10-18, свойство 4: гейт приватности снова
+    судит итерируемую поэлементного носителя целиком, не меняя семантики гейта писателя.
+    Подложенный файл находится тем же обходом `python_sources(root)`, что и живое дерево;
+    находка в файле ровно одна.
+    """
+    planted = tmp_path / "app" / "services" / "phone_report.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import logging\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "def report(account):\n"
+        "    list(map(logger.info, account.phones))\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_report.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_report.py:7 — имя — phones (владелец report)"
+    ], (
+        "итерируемая поэлементного носителя не судится: гейт обошёл синтетическое дерево "
+        f"({_render(scans)}) и промолчал о `list(map(logger.info, account.phones))`: {offences}"
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -2759,6 +2802,55 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-in-a-handed-log-wrapper",
     ),
+    # Ревью CR-02 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 4):
+    # до плана 16-38 у `map` итерируемая не-литерал гасла в `UNJUDGED_ELEMENT` — общая
+    # `reference_arguments`, на которую коммит `c6953017` (16-32) перевёл гейт, подавала ссылке
+    # только элементы литеральной итерируемой. Каждая форма ловилась на `c6953017^` и уходила
+    # мимо после него; исполнение с `logging` напечатало номер.
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    list(map(logger.info, account.phones))\n",
+        "phone",
+        id="map-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n"
+        "    with ThreadPoolExecutor() as ex:\n"
+        "        list(ex.map(logger.info, account.phones))\n",
+        "phone",
+        id="executor-map-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    pool.map(logger.info, account.phones)\n",
+        "phone",
+        id="pool-map-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        'def f(account):\n    list(map(logger.info, [f"n {p}" for p in account.phones]))\n',
+        "phone",
+        id="map-over-a-comprehension-of-phones",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    list(map(logger.info, iter(account.phones)))\n",
+        "phone",
+        id="map-over-iter-of-phones",
+    ),
+    pytest.param(
+        "app/x.py",
+        'def f(phone_lists):\n    list(map(logger.info, "x %s", *phone_lists))\n',
+        "phone",
+        id="map-over-a-starred-name",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    phones = account.phones; list(map(logger.info, phones))\n",
+        "phone",
+        id="map-over-a-name-bound-to-phones",
+    ),
 ]
 
 
@@ -3364,6 +3456,14 @@ POSITIVE_CONTROLS = [
         "    await loop.run_in_executor(None, functools.partial(ctx.run, prepare_upload), content)\n",
         False,
         id="handed-carrier-wrapper-non-log-reference-is-not-a-log",
+    ),
+    # Ревью CR-02 (план 16-38): журнал, поданный `map` над итерируемой без номера, — вызов
+    # журнала без находки: суд итерируемой целиком краснит имя с `phone`, а не любое имя.
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    list(map(logger.info, account.names))\n",
+        True,
+        id="map-over-a-non-phone-attribute-is-a-log-without-a-finding",
     ),
 ]
 
