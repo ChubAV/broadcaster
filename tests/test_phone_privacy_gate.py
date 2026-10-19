@@ -2930,6 +2930,26 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="pool-starmap-over-phone-rows",
     ),
+    # Самопроверка исполнителя 16-38, заход 1 (ось «итерируемая поэлементного и построчного
+    # носителя», 432 промаха из 9 180 форм): обёртка носителя с журналом, поданная
+    # поэлементному носителю, получала от общей `wrapper_applications` только элементы —
+    # итерируемая не-литерал и comprehension гасли так же, как у `map(logger.info, …)` до
+    # задачи 1 (класс CR-02 на оси обёртки).
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n"
+        "    list(map(functools.partial(contextvars.copy_context().run, logger.info), account.phones))\n",
+        "phone",
+        id="carrier-wrapper-mapped-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n"
+        "    w = functools.partial(contextvars.copy_context().run, logger.info)\n"
+        '    pool.imap(w, [f"n {p}" for p in account.phones])\n',
+        "phone",
+        id="named-carrier-wrapper-imapped-over-a-comprehension-of-phones",
+    ),
 ]
 
 
