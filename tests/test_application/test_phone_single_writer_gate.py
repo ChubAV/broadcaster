@@ -63,7 +63,11 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 обёрткой итерируемой `list([…])`, потоку `threading.Thread(target=ref, args=(…),
 kwargs={…})` (`Thread(target=…, args=…)`), таймеру `threading.Timer(1.0, ref,
 args=(…))` (`Timer(…, args=…)`) и очереди с выдуманной парой ключей
-`scheduler.enqueue(job=ref, payload=(…))` (`enqueue(job=…, payload=…)`; план 16-34), —
+`scheduler.enqueue(job=ref, payload=(…))` (`enqueue(job=…, payload=…)`; план 16-34),
+обёртке носителя под именем, связанной с аргументами записи и переданной исполнителю, —
+дословному телу `asyncio.to_thread`:
+`w = partial(Context.run, …, args); run_in_executor(None, w)` (строка общего словаря
+плана 16-39, ревью CR-03: её держат обе матрицы и правило-паритет), —
 и по-прежнему любому другому вызову (цена строгости ниже). Ссылка подана носителю
 позицией (в том числе литеральной распаковкой `*[…]` / `*(…)`), любым именованным
 аргументом (`fn=`, `target=`, `function=`, `initializer=`, выдуманный `job=` — ключи не

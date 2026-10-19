@@ -88,7 +88,10 @@
   `to_thread`, `run_in_executor`, `map`, `Context.run` и шесть строк, вписанные планом
   16-34: `to_thread(*[…])`, `partial(to_thread, …)(…)`, `Thread(target=…, args=…)`,
   `Timer(…, args=…)`, `enqueue(job=…, payload=…)` и `map` с обёрткой итерируемой
-  `list([…])` — словарь, общий с гейтом писателя, а не закрытый список:
+  `list([…])`; строка плана 16-39 — обёртка носителя под именем, связанная с аргументами
+  журнала и переданная исполнителю (дословное тело `asyncio.to_thread`, ревью CR-03):
+  `w = partial(Context.run, …, args); run_in_executor(None, w)` — её держат обе матрицы и
+  правило-паритет; словарь, общий с гейтом писателя, а не закрытый список:
   `await asyncio.to_thread(logger.info, "x %s", account.phone)`,
   `await loop.run_in_executor(None, logger.info, …)`,
   `list(map(logger.info, [a.phone for a in accounts]))`,
