@@ -3176,6 +3176,19 @@ def test_every_binding_form_of_a_log_reference_is_judged(form: BindingForm):
     )
 
 
+def _chronicle_segment(flat: str, heading: str) -> str:
+    """Абзац летописи шапки: от заголовка до следующей летописи или раздела шапки."""
+    start = flat.find(heading)
+    if start < 0:
+        return ""
+    ends = [
+        index
+        for marker in ("Летопись", "РЕЕСТР ИСКЛЮЧЕНИЙ", "ЧТО КРАСНИТ")
+        if (index := flat.find(marker, start + len(heading))) >= 0
+    ]
+    return flat[start : min(ends, default=len(flat))]
+
+
 def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     """Шапка обещает ровно то, что видит предикат по оси «как опознан журнал».
 
@@ -3187,6 +3200,9 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     каждый носитель `REFERENCE_CARRIERS`, `methodcaller`, правило «судятся аргументы после
     ссылки» и цену строгости носителя местами живого дерева; прежние пункты «ГРАНИЦЫ
     СРЕДСТВА» не стёрты (решение владельца О-12 (а); запреты 16-09 №2, 16-18 №2, 16-23 №2).
+    С плана 16-39 (итог партии раунда 7, О-16 (а), свойства 6, 7) — и летопись словаря
+    седьмого круга: девять носителей, регрессии `c6953017` и `147f5e46`, мера «база ↔ HEAD»
+    против базы партии и `2f8c1656`.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -3303,6 +3319,27 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("CR-02", "c6953017", "WR-25"):
         if needle not in flat:
             missing.append(f"нет летописи CR-02 / WR-25: нет «{needle}»")
+    # Итог партии раунда 7 (решение владельца О-16 (а), свойства 6, 7; план 16-39): летопись
+    # словаря седьмого круга называет девять носителей, регрессии, которые они краснят, и меру
+    # «база ↔ HEAD» — каждый GREEN против родителя, итог против базы партии и `2f8c1656`.
+    for needle in ("16-39", "база ↔ HEAD", "О-16 (а)"):
+        if needle not in flat:
+            missing.append(f"нет итога партии раунда 7: нет «{needle}»")
+    chronicle = _chronicle_segment(flat, "Летопись словаря седьмого круга")
+    if not chronicle:
+        missing.append("нет «Летопись словаря седьмого круга»")
+    for needle in (
+        "16-39",
+        "девять носителей седьмого круга",
+        "c6953017",
+        "147f5e46",
+        "базой партии",
+        "2f8c1656",
+        "база ↔ HEAD",
+        "О-16 (а)",
+    ):
+        if chronicle and needle not in chronicle:
+            missing.append(f"летопись словаря седьмого круга не называет «{needle}»")
     if "судится само выражение" not in data_item:
         missing.append("пункт границы об аргументах нелитералом больше не обещает «судится само выражение»")
     # Строки `REFERENCE_CARRIERS` плана 16-34 вписаны — шапка не говорит о них в будущем
