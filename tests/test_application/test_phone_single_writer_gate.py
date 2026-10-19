@@ -6927,6 +6927,86 @@ LITERAL_FORM_CASES = [
         "phone",
         id="setattr-alias-chained-through-a-getattr-string",
     ),
+    # Зонд исполнителя 16-42, второй заход (та же ось «где прочитано имя»): `partial` с колонкой
+    # в связывании, прочитанный getattr-строкой, давал ДВЕ находки — множество имён, которые
+    # модуль зовёт или подаёт (поглощение `partial` у использования), читало только `Name` /
+    # `Attribute`, и связывание судилось ещё раз; псевдоним модели, прочитанный атрибутом или
+    # getattr-строкой, как получатель `__init__`, и псевдоним дескриптора колонки звеном цепочки
+    # через атрибут или getattr-строку давали `[]`. Давние пропуски — так же на базе `d1743b4a`.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.w = functools.partial(setattr, account, "phone")\n'
+        "\n"
+        "    def go(self, x):\n"
+        '        getattr(self, "w")(x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="partial-with-column-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.w = functools.partial(setattr, account, "phone")\n'
+        "\n"
+        "    async def go(self, x):\n"
+        '        await asyncio.to_thread(getattr(self, "w"), x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="partial-with-column-read-by-a-getattr-string-handed-to-to-thread",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.M = MessengerAccount\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        self.M.__init__(account, phone=x)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="model-alias-attribute-as-init-receiver",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.M = MessengerAccount\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "M").__init__(account, phone=x)\n',
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="model-alias-getattr-string-as-init-receiver",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.sp = MessengerAccount.phone.__set__\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.sp\n"
+        "        s2(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="descriptor-alias-chained-through-an-attribute",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.sp = MessengerAccount.phone.__set__\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        s2 = getattr(self, "sp")\n'
+        "        s2(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="descriptor-alias-chained-through-a-getattr-string",
+    ),
 ]
 
 
@@ -7464,6 +7544,35 @@ LEGITIMATE_CASES = [
         "        s2 = self.s\n"
         '        s2(account, "status", x)\n',
         id="setattr-alias-chained-through-an-attribute-other-column",
+    ),
+    # Зонд исполнителя 16-42, второй заход: те же чтения с чужой колонкой и чужой моделью.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.w = functools.partial(setattr, account, "status")\n'
+        "\n"
+        "    def go(self, x):\n"
+        '        getattr(self, "w")(x)\n',
+        id="partial-with-other-column-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.M = Group\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "M").__init__(account, phone=x)\n',
+        id="other-model-alias-getattr-string-as-init-receiver",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.sp = MessengerAccount.status.__set__\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.sp\n"
+        "        s2(account, x)\n",
+        id="other-column-descriptor-alias-chained-through-an-attribute",
     ),
 ]
 
