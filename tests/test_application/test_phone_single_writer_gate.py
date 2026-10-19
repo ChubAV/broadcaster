@@ -1182,11 +1182,14 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # `partial(…)`, связанный с именем, которое модуль зовёт или подаёт, судится у
     # использования — с аргументами применения, — а не на месте связывания: иначе
     # `w = partial(setattr, account, "phone"); w(x)` дал бы две находки.
+    # Имя на месте чтения — общим читателем `reading_name`: getattr-строка тоже чтение (ревью
+    # WR-28, план 16-42; до плана `getattr(self, "w")(x)` не поглощал `partial`, и связывание
+    # судилось второй находкой). Цель связывания (`Store`) — не чтение.
     used = {
-        node.id if isinstance(node, ast.Name) else node.attr
+        reading_name(node)
         for node in ast.walk(tree)
-        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load)
-    }
+        if not (isinstance(node, (ast.Name, ast.Attribute)) and not isinstance(node.ctx, ast.Load))
+    } - {None}
     consumed |= {
         id(value)
         for alias, values in partial_aliases.items()
@@ -1445,14 +1448,16 @@ def _judge_call(
                 break
     if (
         name == MODEL_INIT
-        and isinstance(receiver, ast.Name)
-        and receiver.id in (write_names - WRITE_CALL_NAMES) | {MODEL_NAME}
+        # Получатель — имя модели или её псевдонима, прочитанное общим читателем
+        # `reading_name`: `M.__init__`, `self.M.__init__`, `getattr(self, "M").__init__` (план
+        # 16-42; до плана — только `Name`).
+        and reading_name(receiver) in (write_names - WRITE_CALL_NAMES) | {MODEL_NAME}
     ):
         # `MessengerAccount.__init__(account, phone=x)` — повторный конструктор
         # модели (или её псевдонима в модуле). `obj.__init__(phone=…)` у объекта,
         # тип которого по исходнику не назван, сюда не попадает: без типов он
         # неотличим от `super().__init__(phone=…)` любого класса.
-        shown = f"{receiver.id}.__init__"
+        shown = f"{reading_name(receiver)}.__init__"
         for keyword in node.keywords:
             if keyword.arg in PHONE_COLUMNS:
                 record(keyword, KIND_KEYWORD, f"{shown}({keyword.arg}=…)")
@@ -1851,7 +1856,7 @@ def _absorbed_carrier_wrappers(
     link_targets: dict[tuple[int, int, int | None, int | None], set[str]] = {}
     for binding in module_bindings(tree):
         target = binding_name(binding.target)
-        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+        if target is not None and reading_name(binding.value) is not None:
             link_targets.setdefault(place(binding.value), set()).add(target)
     reads: dict[str, list[ast.AST]] = {}
     for node in ast.walk(tree):
@@ -2738,17 +2743,19 @@ def _api_alias_targets(
     bindings: dict[str, list[ast.expr]] = {}
     for binding in module_bindings(tree):
         target = binding_name(binding.target)
-        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+        if target is not None and reading_name(binding.value) is not None:
             bindings.setdefault(target, []).append(binding.value)
 
     def attributes(name: str, originals: frozenset[str], seen: frozenset[str]) -> list[ast.expr]:
+        # Звено цепочки читает общий читатель `reading_name` (план 16-42): `Y = X`, `Y = self.X`
+        # и `Y = getattr(self, "X")`; до плана цепочка шла только через имя, и псевдоним
+        # дескриптора, прочитанный атрибутом, терял получателя.
         found: list[ast.expr] = []
         for value in bindings.get(name, []):
-            if isinstance(value, ast.Name):
-                if value.id in bindings and value.id not in seen:
-                    found.extend(attributes(value.id, originals, seen | {value.id}))
-            elif value.attr in originals:
+            if isinstance(value, ast.Attribute) and value.attr in originals:
                 found.append(value)
+            elif (read := reading_name(value)) in bindings and read not in seen:
+                found.extend(attributes(read, originals, seen | {read}))
         return found
 
     targets: dict[str, list[ast.expr]] = {}
