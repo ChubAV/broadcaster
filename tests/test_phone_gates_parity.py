@@ -49,6 +49,13 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   (вызов, передача, передача с аргументами, getattr-вариант), `starmap`, `apply_async` и место
   не-литеральной итерируемой у `map` (`ReferenceCarrier.last`), — так что регрессии
   `c6953017` и `147f5e46` краснят обе матрицы и это правило по построению.
+* Место значения `partial` (`test_the_partial_value_place_is_pinned_by_a_privacy_row`, ревью
+  IN-20, решение владельца О-19, план 16-43): у `partial` с одним позиционным аргументом (номером)
+  места `last` нет по выбору словаря — его ячейка `map-named-iterable` равна ячейке `map`, — и
+  форму `list(map(functools.partial(logger.info, "x %s"), account.phones))` держит строка
+  `NEGATIVE_CONTROLS` `partial-log-reference-mapped-over-a-phone-attribute` гейта приватности с
+  одной находкой; докстринг `ReferenceCarrier` называет эту строку, D-17 относит только к
+  получателю `methodcaller`, а у `partial` называет выбор словаря.
 * Формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`): ни один гейт не разрешает их
   связывание, и у каждой формы есть причина. Сравнивается связывание, а не сырое число
   находок: гейт писателя находит запись и там, где значение несёт её само
