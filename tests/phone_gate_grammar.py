@@ -303,8 +303,18 @@ OUT_OF_GRAMMAR_BINDING_FORMS: tuple[OutOfGrammarForm, ...] = (
 
 # Носитель, который подаёт функции ЭЛЕМЕНТЫ итерируемых, а не сами итерируемые:
 # функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
-# [x])` зовёт `setattr(account, "phone", x)`).
-ELEMENTWISE_CARRIERS = frozenset({"map"})
+# [x])` зовёт `setattr(account, "phone", x)`). Построчный носитель подаёт функции элементы
+# каждой СТРОКИ первой итерируемой позиционными аргументами (`starmap(setattr,
+# [(account, "phone", x)])`). Какие носители поэлементны и построчны, решает одно правило
+# для обоих гейтов (ревью CR-02 / WR-25, решение владельца О-16 (а), свойство 4, план
+# 16-38): до плана таблица знала один `map`, и `pool.imap(logger.info, …)` гейт приватности
+# судил целиком, а `map(logger.info, …)` — поэлементно; прочтение строк `starmap` было
+# только у гейта писателя. Состав — замер stdlib 3.12: методы с `map` у
+# `multiprocessing.pool.Pool`, `concurrent.futures.Executor` и модуля `itertools`; сторож
+# правила-паритета `test_the_elementwise_and_row_carriers_name_the_installed_apis` краснит,
+# когда установленный stdlib назовёт метод с `map`, которого нет ни в одной таблице.
+ELEMENTWISE_CARRIERS = frozenset({"map", "imap", "imap_unordered", "map_async"})
+ROW_CARRIERS = frozenset({"starmap", "starmap_async"})
 
 
 class ReferenceCarrier(NamedTuple):
@@ -741,9 +751,14 @@ def _carried_by(
             else:
                 results = [ReferenceArguments(reference, own_args, own_keywords)]
             add(results)
+        # Построчный носитель (`ROW_CARRIERS`) читается построчно у ОБОИХ гейтов, без флага
+        # (ревью WR-25, план 16-38): получатель `methodcaller` у `starmap(mc, [(logger,)])`
+        # лежит в строке. Литеральные кортежи прочих носителей — по-прежнему только под
+        # `every_reading` (гейт писателя). Итерируемая целиком остаётся общим прочтением выше.
+        rows = positional_reference and _callee_name(source.func) in ROW_CARRIERS
         tuples = (
             iterable_elements(after[0])
-            if every_reading and positional_reference and not elementwise and after
+            if (every_reading or rows) and positional_reference and not elementwise and after
             and not isinstance(after[0], ast.Starred)
             else None
         )
@@ -794,8 +809,13 @@ def reference_arguments(
     4. К аргументам добавляется общее правило `literal_keyword_arguments` над прочими
        именованными аргументами носителя, затем аргументы применения (у его именованных —
        то же правило).
-    5. У носителя из `ELEMENTWISE_CARRIERS` при позиционной ссылке — по одному результату на
-       каждую позицию `elementwise_arguments`.
+    5. У носителя из `ELEMENTWISE_CARRIERS` (`map`, `imap`, `imap_unordered`, `map_async`) при
+       позиционной ссылке — по одному результату на каждую позицию `elementwise_arguments`. У
+       носителя из `ROW_CARRIERS` (`starmap`, `starmap_async`) при позиционной ссылке — сверх
+       общего прочтения (итерируемая целиком) по результату на каждую литеральную строку
+       первой итерируемой за ссылкой: элементы строки — позиционные аргументы ссылки. Это
+       прочтение — у обоих гейтов, без флага (ревью WR-25, план 16-38). Обе таблицы — одно
+       правило общего модуля, сверенное сторожем правила-паритета с установленным stdlib.
     6. Нет ссылки — пустой список.
     7. `every_reading=True` (гейт писателя, план 16-34; у него вид находки зависит от имени
        параметра и от того, какая из ссылок носителя — вызываемая) — каждое прочтение:
@@ -806,9 +826,15 @@ def reference_arguments(
        подают `run_sync(fn, *arg, **kw)` и `partial`: `mappings={"id": 1, "phone": p}` —
        строка executemany, а не `id=1, phone=p`); (в) общее правило и над ПОЗИЦИОННЫМИ
        аргументами за ссылкой (`_spread_arguments`: `pool.apply_async(func, (…), {…})`
-       подаёт `*args, **kwds`). Равные прочтения не повторяются; цена — в сторону лишней
-       находки. Гейт приватности судит номер в любом аргументе и зовёт функцию без флага:
-       лишние прочтения ему ничего не добавляют.
+       подаёт `*args, **kwds`); (г) элементы литеральных кортежей первой итерируемой за
+       позиционной ссылкой и у носителя вне `ROW_CARRIERS`. Равные прочтения не повторяются;
+       цена — в сторону лишней находки. Какое прочтение какому гейту нужно: гейту писателя —
+       `every_reading` (вид его находки зависит от того, какая ссылка вызываемая и как
+       поданы аргументы); гейту приватности — `keep_iterables` в правиле носителя (правило
+       8: он судит имена итерируемых) и построчное прочтение `ROW_CARRIERS` в пути
+       `methodcaller` (правило 5): получатель `methodcaller` у `starmap(mc, [(logger,)])`
+       лежит в строке, и без этого прочтения форма уходила мимо гейта приватности, хотя гейт
+       писателя ту же форму ловил (ревью WR-25, верификация раунда 7).
     8. `keep_iterables=True` (правило носителя гейта приватности, `_carried_log_calls`; ревью
        CR-02, решение владельца О-16 (а), свойство 4) — у носителя из `ELEMENTWISE_CARRIERS`
        ссылка получает итерируемые КАК ЕСТЬ, а не элементы правила 5: не-литерал — самим

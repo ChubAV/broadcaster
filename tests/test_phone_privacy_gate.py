@@ -395,14 +395,16 @@ import pytest
 # извлечения аргументов ссылки, неподвижной точки «имя → обёртки», ручного применения
 # обёртки) гейт не держит. `iterable_elements` гейт зовёт и сам — в пути `methodcaller`
 # (`_applied_log_methodcaller`: получатель — первый элемент литерального списка, поданного
-# ссылке); общая `reference_arguments` доходит до неё только через `elementwise_arguments`
-# у поэлементного носителя. Ввоз держит и имена, которые гейт не зовёт, — для
-# правила-паритета: `ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
+# ссылке); общая `reference_arguments` доходит до неё через `elementwise_arguments` у
+# поэлементного носителя (`ELEMENTWISE_CARRIERS`, кроме правила носителя гейта — там
+# `keep_iterables`) и в построчном прочтении `ROW_CARRIERS` (план 16-38). Ввоз держит и имена, которые гейт не зовёт, — для
+# правила-паритета: `ELEMENTWISE_CARRIERS`, `ROW_CARRIERS`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
 # `applied_wrapper` (применение строит `wrapper_applications`).
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
+    ROW_CARRIERS,
     Binding,
     BindingForm,
     IdentificationValue,
@@ -1179,7 +1181,9 @@ def _applied_log_methodcaller(
     именованный аргумент (`call(R, fn=mc)`, `Thread(target=mc, args=(R,))`), применённая
     обёртка носителя (`partial(asyncio.to_thread, mc)(R)`), у поэлементного носителя —
     элемент литеральной итерируемой, в том числе в обёртке (`map(mc, [R])`,
-    `map(mc, list([R]))`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
+    `map(mc, list([R]))`), у построчного носителя (`ROW_CARRIERS`: `starmap`,
+    `starmap_async`) — первый элемент каждой литеральной строки (`starmap(mc, [(R,)])`; его
+    даёт построчное прочтение общей функции, ревью WR-25, план 16-38). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
     — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
     `methodcaller` после имени метода. Без опознанного получателя — пустой список: имя
     метода объект журналом не делает (D-17, угадывания по имени нет). `as_carrier=False` —

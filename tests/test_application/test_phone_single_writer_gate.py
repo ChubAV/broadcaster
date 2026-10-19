@@ -521,6 +521,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     LITERAL_CONTAINER_WRAPPERS,
     OUT_OF_GRAMMAR_BINDING_FORMS,
     REFERENCE_CARRIERS,
+    ROW_CARRIERS,
     UNJUDGED_ELEMENT,
     BindingForm,
     IdentificationValue,
