@@ -82,6 +82,8 @@ CARRIER_SEMANTICS = (
     # структурная половина не видит по построению; перевод — за следующим планом.
     "carrier_wrapper_bindings",
     "applied_wrapper",
+    "named_wrappers",
+    "is_carrier_wrapper",
 )
 
 # Функции грамматики связывания И семантики носителя, которые модуль гейта не определяет
@@ -104,6 +106,9 @@ GRAMMAR_TABLES = frozenset(
 REQUIRED_SHARED_NAMES = frozenset(
     {"module_bindings", "REFERENCE_CARRIERS", "BINDING_FORMS"}
     | {"reference_arguments", "iterable_elements", "getattr_literal"}
+    # Семантика обёртки носителя (ревью WR-24, решение владельца О-16 (а), свойство 5): оба
+    # гейта держат эти функции общего модуля теми же объектами.
+    | {"carrier_wrapper_bindings", "applied_wrapper", "named_wrappers", "is_carrier_wrapper"}
 )
 
 # Имя на месте вызова, которое ничем не связано: база сверки форм вне грамматики.

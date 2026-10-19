@@ -1886,6 +1886,55 @@ def test_a_planted_log_reference_handed_to_a_thread_target_reddens_the_gate(tmp_
     )
 
 
+def test_a_planted_log_wrapper_called_through_a_getattr_string_reddens_the_gate(tmp_path):
+    """WR-24 (D-11, D-17): обёртка журнала в атрибуте, вызванная getattr-строкой, — вызов журнала.
+
+    `self.emit_later = functools.partial(asyncio.to_thread, logger.info)` в `__init__` и
+    `await getattr(self, "emit_later")("synced %s", account.phone)` в методе — обычный код
+    службы синхронизации, какой напишут Фазы 17–20: обёртка носителя лежит в атрибуте, а имя
+    её читается getattr-строкой. До плана 16-37 гейт приватности держал свою копию семантики
+    обёртки (`_carrier_wrappers` и ручное применение, коммит `5e57325d`, самопроверка 16-32,
+    цикл 2) и искал имя обёртки только как `Name` / `Attribute`: форма уходила мимо гейта, а
+    гейт писателя ту же форму с `setattr` ловил (ревью WR-24, верификация раунда 7,
+    2026-10-16: номер напечатан). Решение владельца О-16 (а), 2026-10-18, и О-15: семантика
+    обёртки живёт один раз — в общем модуле. Подложенный файл находится тем же обходом
+    `python_sources(root)`, что и живое дерево; находка в файле ровно одна.
+    """
+    planted = tmp_path / "app" / "services" / "phone_sync.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import asyncio\n"
+        "import functools\n"
+        "import logging\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "class PhoneSync:\n"
+        "    def __init__(self):\n"
+        "        self.emit_later = functools.partial(asyncio.to_thread, logger.info)\n"
+        "\n"
+        "    async def report(self, account):\n"
+        '        await getattr(self, "emit_later")("synced %s", account.phone)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_sync.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_sync.py:13 — имя — phone (владелец report)"
+    ], (
+        "обёртка журнала, вызванная getattr-строкой, не опознана: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о "
+        f'`await getattr(self, "emit_later")("synced %s", account.phone)`: {offences}'
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -2569,7 +2618,36 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="carrier-wrapper-bound-to-a-name-methodcaller",
     ),
+    # Ревью WR-24 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 1):
+    # гейт держал свою копию семантики обёртки (`_carrier_wrappers`, коммит `5e57325d`) и искал
+    # имя обёртки только как `Name` / `Attribute` — обёртка, вызванная getattr-строкой, давала
+    # `[]`, а гейт писателя ту же форму ловил; та же копия судила обёртку с аргументами дважды
+    # на одном месте (на `5e57325d^` — одна находка, на `5e57325d` — две: регрессия счёта).
+    pytest.param(
+        "app/x.py",
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.w = functools.partial(asyncio.to_thread, logger.info)\n"
+        "\n"
+        "    async def go(self, account):\n"
+        '        await getattr(self, "w")("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-on-an-attribute-called-by-a-getattr-string",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    w = functools.partial(asyncio.to_thread, logger.info, "x %s", account.phone)\n'
+        "    await w()\n",
+        "phone",
+        id="log-wrapper-with-arguments-called-once-per-place",
+    ),
 ]
+
+
+def _offence_place(offence: str) -> str:
+    """Находка без владельца — тройка «`путь:строка` — вид — предмет», место находки."""
+    return offence.rsplit(" (владелец ", 1)[0]
 
 
 @pytest.mark.parametrize(("path", "source", "subject"), NEGATIVE_CONTROLS)
@@ -2580,6 +2658,10 @@ def test_a_number_handed_to_a_python_log_call_is_found(path, source, subject):
     assert any(subject in offence and offence.startswith(f"{path}:") for offence in offences), (
         f"находка не называет предмет {subject!r}: {offences}"
     )
+    # Одно место — одна находка (ревью WR-24, решение владельца О-16 (а), свойство 1): тройка
+    # «строка, вид, предмет» не повторяется, какими бы путями гейт ни дошёл до места.
+    places = [_offence_place(offence) for offence in offences]
+    assert len(places) == len(set(places)), f"одно место дало находку дважды: {offences}"
 
 
 def test_a_number_handed_to_a_logger_bound_by_assignment_is_found():
