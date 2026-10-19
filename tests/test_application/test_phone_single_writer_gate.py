@@ -3212,6 +3212,60 @@ def test_a_planted_backfill_with_a_context_run_wrapper_handed_to_an_executor_red
     )
 
 
+def test_a_planted_backfill_with_a_methodcaller_read_by_a_getattr_string_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-28: дескриптор колонки через `methodcaller` в атрибуте, прочитанном getattr-строкой.
+
+    `self.apply = operator.methodcaller("__set__", account, number)` в `__init__` и
+    `getattr(self, "apply")(MessengerAccount.phone)` в методе — естественный путь скрипта
+    дозаполнения Фазы 20, который держит применитель номера атрибутом объекта (D-13). До
+    плана 16-42 гейт читал имя, связанное с `methodcaller`, только у `Name` / `Attribute` —
+    в получателях `methodcaller` и в предикате ссылки обёртки, — хотя имя обёртки
+    getattr-строкой читал с раунда 7 (`named_wrappers`): форма уходила мимо гейта (ревью
+    WR-28, верификация раунда 8, 2026-10-19: SQLite записал `+71`). Решение владельца
+    О-18 (а), свойство 2: имя читает один общий читатель `reading_name` везде, где
+    читается имя связанного. Подложенный файл находится тем же обходом, что и живое
+    дерево; место находки — строка связывания `self.apply = …`: находка вида 4 у
+    `methodcaller` стоит на самом `methodcaller`, как у чтения атрибутом.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_descriptor.py",
+        "import operator\n"
+        "\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "\n"
+        "\n"
+        "class DescriptorBackfill:\n"
+        "    def __init__(self, account, number):\n"
+        '        self.apply = operator.methodcaller("__set__", account, number)\n'
+        "\n"
+        "    def run(self):\n"
+        '        getattr(self, "apply")(MessengerAccount.phone)\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_descriptor.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    in_file = [offence for offence in offences if offence.startswith("scripts/backfill_descriptor.py:")]
+    assert in_file, (
+        "имя, связанное с `operator.methodcaller` и прочитанное getattr-строкой, гейт не читает: "
+        "`self.apply = operator.methodcaller('__set__', account, number)` и "
+        "`getattr(self, 'apply')(MessengerAccount.phone)` в scripts/backfill_descriptor.py "
+        f"гейт пропустил: {offences}"
+    )
+    assert len(in_file) == 1, (
+        f"у подложенного скрипта не ровно одна находка — одно место, одна запись: {in_file}"
+    )
+    assert in_file[0].startswith(f"scripts/backfill_descriptor.py:8 — {KIND_SETATTR} — "), (
+        f"находка не на строке связывания `self.apply = …` или не вида «{KIND_SETATTR}»: {in_file}"
+    )
+    assert "__set__" in in_file[0] and "phone" in in_file[0], (
+        f"предмет находки не называет `__set__` и колонку `phone`: {in_file}"
+    )
+
+
 def test_a_planted_backfill_with_a_nested_column_naming_reddens_the_gate(tmp_path):
     """ТРАСЕР WR-15: ключ `MessengerAccount.__table__.c[MessengerAccount.phone.key]` в `values`.
 
@@ -6730,6 +6784,36 @@ LITERAL_FORM_CASES = [
         "phone",
         id="starmap-methodcaller-descriptor-set",
     ),
+    # Ревью WR-28 (верификация раунда 8, 2026-10-19; решение владельца О-18 (а), свойства 1
+    # и 2; план 16-42): имя, связанное с `operator.methodcaller`, прочитанное getattr-строкой.
+    # Давний пропуск, не регрессия — форма проходила и на `1c243203`, и на `2f8c1656`: гейт
+    # читал имя `methodcaller` только у `Name` / `Attribute`, а getattr-строку — только для
+    # имени обёртки (`named_wrappers`, раунд 7). SQLite записал `+71`, `+72`. Формы WR-28-W-1
+    # и WR-28-W-2 таблицы «Формы ревью раунда 8» плана 16-41 — дословно.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("__set__", account, x)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-receiver-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("__set__", account, x)\n'
+        "\n"
+        "    async def go(self):\n"
+        '        await asyncio.to_thread(getattr(self, "f"), MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-receiver-read-by-a-getattr-string-handed-to-to-thread",
+    ),
 ]
 
 
@@ -7226,6 +7310,26 @@ LEGITIMATE_CASES = [
         "    b = functools.partial(ctx.run, a)\n"
         '    a(account, "phone", x)\n',
         id="carrier-wrapper-cycle-without-a-writer",
+    ),
+    # Ревью WR-28 (план 16-42): тот же `methodcaller`, прочитанный getattr-строкой, с чужой
+    # колонкой получателя, и не-пишущий `methodcaller("noop")` — не запись номера.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("__set__", account, x)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(MessengerAccount.status)\n',
+        id="methodcaller-receiver-read-by-a-getattr-string-other-column",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("noop")\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(MessengerAccount.phone)\n',
+        id="noop-methodcaller-read-by-a-getattr-string",
     ),
 ]
 
