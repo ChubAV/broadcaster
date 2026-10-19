@@ -74,8 +74,18 @@ args=(…))` (`Timer(…, args=…)`) и очереди с выдуманной 
 аргументов — тоже судимое имя: `pool.call(MessengerAccount, rows,
 target=s.bulk_update_mappings)`); обёртка носителя, связанная с именем любой формой общей
 грамматики (`w = functools.partial(asyncio.to_thread, setattr); w(account, "phone", x)`,
-`self.write = …`, цепочка `h = w`), судится как применённая на месте вызова `w(…)`
-(самопроверка исполнителя 16-34, заход 1); именованная ссылка в применённой обёртке
+`self.write = …`, цепочка `h = w`), судится везде, где её имя прочитано, — вызовом
+(`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), подачей другому носителю позицией или
+любым именованным аргументом (`run_in_executor(None, func_call)`, `Thread(target=job)`,
+`call_soon(job)`, `tasks.append(job)`), а без использования — на месте связывания
+(самопроверка исполнителя 16-34, заход 1; ревью CR-03, план 16-36); обёртка, поданная
+носителю литералом или именем, и обёртка, обёрнутая ещё одним `partial`
+(`partial(partial(ctx.run, setattr))(…)`, имя поверх имени: `w2 = partial(asyncio.to_thread,
+w)`), судится как применённая с аргументами внешнего носителя — рекурсивно, с защитой от
+цикла, и `methodcaller`, лежащий в такой обёртке, получает получателя от внешнего носителя
+(ревью WR-26, план 16-36); семантика — функции общего модуля `wrapper_applications`,
+`named_wrappers` и `is_carrier_wrapper` (та же у гейта приватности с плана 16-37; решение
+владельца О-16 (а)); именованная ссылка в применённой обёртке
 судится и без позиционных `partial` — первый из них сам носитель:
 `functools.partial(threading.Thread, target=setattr)(args=(…))`; `starmap` (`itertools.
 starmap`, `pool.starmap`) подаёт функции элементы каждого литерального кортежа первой
@@ -272,7 +282,12 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 аргумента (О-14 (а), план 16-34): имя пишущего API, поданное именованным аргументом рядом
 с литеральным словарём (`handler(fn=update, data={"phone": x})`), судится как вызов API
 (`update(phone=x)`), и литеральный кортеж у ключа, который API ссылке не подаёт, — тоже:
-цена в сторону лишней находки, а не пропуска.
+цена в сторону лишней находки, а не пропуска. Одно место — одна находка и у обёртки
+носителя под именем (ревью CR-03, план 16-36): суд на месте связывания снимается, только
+когда КАЖДОЕ чтение её имени гейт судит как применение (вызов, подача носителю, звено
+цепочки `h = w`); обёртка, прочитанная и вне вызова (в списке, в `return`), и подачей,
+судится на обоих местах — две находки на двух местах: цена в сторону лишней находки, а не
+пропуска.
 
 ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА. `setattr(obj, name, value, /)` и
 `object.__setattr__(self, name, value, /)` — позиционно-только:
@@ -317,6 +332,9 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 поданная любому вызову, носители `REFERENCE_CARRIERS` включительно (`map` —
 поэлементно), позицией, любым именованным аргументом или в применённой обёртке, с
 литеральными аргументами того же вызова по общему правилу (`reference_arguments`);
+обёртка носителя — вызванная, поданная носителю литералом или именем, вложенная в
+`partial` — как применённая с аргументами внешнего носителя, на каждом чтении её имени
+(`wrapper_applications`);
 судимый параметр — при любом литеральном связывании
 (`JUDGED_PARAMETERS`); атрибут номера — в любой позиции цели присваивания. Вне
 охвата, каждая форма с правдивой причиной:
@@ -458,6 +476,19 @@ INTO 'messenger_accounts'` проходили (ревью WR-21); голова �
 предложение таблицы ключей отдельных API вытеснено общим правилом, варианты (а′) и (б)
 ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ; О-15 — IN-15 закрыт попутно. Ни одна форма WR-20 в «ГРАНИЦЕ
 ПРЕДИКАТА» не названа: пункт (1) называет только аргументы, пришедшие нелитералом.
+До плана 16-36 заявление в седьмой раз было шире предиката — и впервые партия сузила гейт
+против его собственной базы: коммит `147f5e46` (16-34, самопроверка, цикл 1) поглощал
+обёртку носителя под именем по любому чтению, а судил только у вызова, и дословное тело
+`asyncio.to_thread` — `partial(ctx.run, func, …)`, поданный `run_in_executor`, —
+ловившееся на `147f5e46^`, уходило мимо (ревью CR-03, верификация раунда 7, 2026-10-16;
+SQLite — `+71`, `+72`); обёртку, поданную носителю или обёрнутую `partial`, не ловил ни
+один гейт и на базе (ревью WR-26; `+73`…`+75`); седьмой круг одной оси (WR-01 → WR-08 →
+WR-10 → WR-12 → WR-14 / WR-15 / WR-16 → WR-18 / WR-20…WR-23 → CR-03 / WR-26); самопроверки
+партии раунда 6 (≈550 000 форм) сравнивали предикат с заявлением, но не с собственной
+базой. План 16-36 сделал суд обёртки судом каждого чтения, раскрытие поданной и вложенной
+обёртки — функцией общего модуля и завёл сверку «база ↔ HEAD» каждого GREEN; решение
+владельца О-16 (а), 2026-10-18: заявление прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ в
+четвёртый раз. Ни одна форма CR-03 / WR-26 в «ГРАНИЦЕ ПРЕДИКАТА» не названа: они ловятся.
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -502,8 +533,11 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     iterable_elements,
     applied_wrapper,
     carrier_wrapper_bindings,
+    is_carrier_wrapper,
     module_bindings,
+    named_wrappers,
     reference_arguments,
+    wrapper_applications,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1042,24 +1076,61 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # WR-14, план 16-27): вызов и ссылка такого имени судятся как `partial(…)(…)`.
     partial_aliases = _partial_aliases(tree, referable, partial_names, judged_names)
     # Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)` (самопроверка
-    # исполнителя 16-34; у гейта приватности — план 16-32): вызов такого имени судится как
-    # применённая обёртка `partial(…)(…)` на его месте.
-    carrier_wrappers = _carrier_wrappers(tree, referable, partial_names, partial_aliases, judged_names)
-    methodcaller_receivers = _methodcaller_receivers(tree, judged_names, carrier_wrappers)
+    # исполнителя 16-34; у гейта приватности — план 16-32), и предикат обёртки гейта.
+    carrier_wrappers, is_wrapper = _carrier_wrappers(
+        tree, referable, partial_names, partial_aliases, judged_names
+    )
+
+    def wrappers_of(read: ast.AST) -> list[ast.Call]:
+        return named_wrappers(read, is_wrapper, carrier_wrappers)
+
+    methodcaller_receivers = _methodcaller_receivers(tree, judged_names, wrappers_of)
     references = {
-        id(node): _referenced_calls(
-            node, referable, partial_names, partial_aliases, carrier_wrappers
-        )
+        id(node): _referenced_calls(node, referable, partial_names, partial_aliases)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (id(node) not in applied or _call_name(node) == "methodcaller")
     }
+    # Обёртка носителя судится везде, где её прочитали (ревью CR-03, WR-26; О-16 (а), план
+    # 16-36): вызванная (`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), поданная другому
+    # носителю литералом или именем, обёрнутая ещё одним `partial` — функция общего модуля
+    # `wrapper_applications` находит каждое применение, рекурсивно, и каждое судится как
+    # носитель на месте внешнего вызова: одно место — одна находка.
+    applications = {
+        id(node): wrapper_applications(node, wrappers_of, IDENTIFICATION_CARRIERS, every_reading=True)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and id(node) not in applied
+    }
+    applied_reads: dict[int, list[ast.expr]] = {}
+    handed_literals: list[tuple[int, ast.Call]] = []
+    for key, items in applications.items():
+        producing: set[int] = set()
+        for item in items:
+            triples = _referenced_calls(item.application, referable, partial_names, partial_aliases)
+            references.setdefault(key, []).extend(triples)
+            applied_reads.setdefault(key, []).append(item.read)
+            if triples:
+                producing.add(id(item.wrapper))
+        # Литерал обёртки, прочитанный применением, поглощается, если запись нашло применение
+        # его самого или обёртки, вложенной в него (`partial(partial(to_thread, setattr,
+        # account, "phone", x))`): иначе каждый уровень вложенности судил бы ту же запись у
+        # себя (сверка «база ↔ HEAD» самопроверки 16-36: 796 ячеек на `44452e68`).
+        handed_literals += [
+            (key, item.wrapper)
+            for item in items
+            if item.read is item.wrapper
+            and any(id(inner) in producing for inner in ast.walk(item.wrapper))
+        ]
     consumed = {
         id(carrier)
         for triples in references.values()
         for _synthetic, _referenced, carrier in triples
         if isinstance(carrier, ast.Call)
     }
+    # Литеральная обёртка, поданная носителю (`run_in_executor(None, partial(ctx.run,
+    # setattr, account, "phone", x))`), судится у применения — на месте внешнего вызова, —
+    # а не ещё раз у себя.
+    consumed |= {id(wrapper) for key, wrapper in handed_literals if key not in consumed}
     # `partial(…)`, связанный с именем, которое модуль зовёт или подаёт, судится у
     # использования — с аргументами применения, — а не на месте связывания: иначе
     # `w = partial(setattr, account, "phone"); w(x)` дал бы две находки.
@@ -1074,14 +1145,15 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         if alias in used
         for value in values
     }
-    # Та же причина у обёртки носителя под именем: `w = partial(asyncio.to_thread, setattr,
-    # account, "phone"); w(x)` судится у `w(x)`, а не ещё раз у связывания.
-    consumed |= {
-        id(wrapper)
-        for alias, wrappers in carrier_wrappers.items()
-        if alias in used
-        for wrapper in wrappers
-    }
+    # Обёртка носителя под именем судится у применений, а не ещё раз у связывания, ТОЛЬКО
+    # если каждое чтение её имени гейт судит как применение (ревью CR-03; О-16 (а), свойство
+    # 2; план 16-36). До плана поглощение шло по любому чтению `Load` (коммит `147f5e46`),
+    # а судилась обёртка только у вызова — и переданное имя не судилось нигде.
+    consumed |= _absorbed_carrier_wrappers(
+        tree,
+        carrier_wrappers,
+        {id(read) for key, reads in applied_reads.items() if key not in consumed for read in reads},
+    )
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -1648,7 +1720,7 @@ def _methodcaller_aliases(
 def _methodcaller_receivers(
     tree: ast.AST,
     judged_names: frozenset[str],
-    carrier_wrappers: dict[str, list[ast.Call]] | None = None,
+    wrappers_of: Callable[[ast.AST], list[ast.Call]] | None = None,
 ) -> dict[int, list[ast.expr]]:
     """Получатели каждого `operator.methodcaller(…)` модуля: «id вызова → объекты применения».
 
@@ -1664,9 +1736,14 @@ def _methodcaller_receivers(
     ЛЮБОЙ именованный аргумент с общим правилом литеральных аргументов того же вызова
     (`Thread(target=mc, args=(obj,))`), применённая обёртка носителя
     (`partial(asyncio.to_thread, mc)(obj)`), у поэлементного носителя — первый элемент
-    каждой позиции (`map(mc, [obj])`, `map(mc, list([obj]))`), и вызов имени, связанного с
-    обёрткой носителя (`w = partial(asyncio.to_thread, mc); w(obj)`, `carrier_wrappers`).
-    До самопроверки исполнителя 16-27 получатель брался только у прямого применения:
+    каждой позиции (`map(mc, [obj])`, `map(mc, list([obj]))`), и КАЖДОЕ применение обёртки
+    носителя, которое находит функция общего модуля `wrapper_applications` (`wrappers_of` —
+    обёртки, которые называет узел): вызов имени обёртки (`w = partial(asyncio.to_thread,
+    mc); w(obj)`), обёртка, поданная носителю литералом или именем, и обёртка в обёртке —
+    `methodcaller`, лежащий в поданной обёртке, получает получателя от внешнего носителя
+    (`run_in_executor(None, partial(ctx.run, methodcaller("__set__", a, x)), M.phone)`;
+    ревью WR-26, план 16-36). До самопроверки исполнителя 16-27 получатель брался только у
+    прямого применения:
     `set_phone = methodcaller("__set__", account, x); set_phone(MessengerAccount.phone)`
     проходил; до плана 16-34 — только у позиционной подачи.
     """
@@ -1701,10 +1778,16 @@ def _methodcaller_receivers(
             continue
         if _call_name(node) == "methodcaller":
             continue
-        carriers = [node] + [
-            applied_wrapper(node, wrapper)
-            for wrapper in (carrier_wrappers or {}).get(_call_name(node) or "", [])
-        ]
+        carriers = [node] + (
+            [
+                item.application
+                for item in wrapper_applications(
+                    node, wrappers_of, IDENTIFICATION_CARRIERS, every_reading=True
+                )
+            ]
+            if wrappers_of is not None
+            else []
+        )
         for carrier in carriers:
             for carried in reference_arguments(
                 carrier,
@@ -1719,23 +1802,83 @@ def _methodcaller_receivers(
     return {key: list(receivers.values()) for key, receivers in found.items()}
 
 
+def _absorbed_carrier_wrappers(
+    tree: ast.AST, carrier_wrappers: dict[str, list[ast.Call]], judged_reads: set[int]
+) -> set[int]:
+    """Обёртки носителя под именем, которые судятся у применений, а не на месте связывания.
+
+    Правило «каждое чтение судится» (ревью CR-03, верификация раунда 7; решение владельца
+    О-16 (а), свойство 2; план 16-36): обёртка `W` поглощается, только если у имён,
+    связанных с `W`, есть хотя бы одно чтение, которое гейт судит как применение обёртки
+    (`judged_reads` — узлы `read` функции общего модуля `wrapper_applications`: вызов `w(…)`
+    / `self.w(…)` / `getattr(obj, "w")(…)` и подача носителю), и КАЖДОЕ чтение этих имён —
+    `Load` имени или атрибута и getattr-строка с этим именем — либо такое применение, либо
+    значение связывания общей грамматики, цель которого тоже связана с `W` (звено цепочки
+    `h = w`). Иначе `W` судится и на месте связывания, как до коммита `147f5e46`: обёртка,
+    прочитанная вне вызова (список, `return`) и ещё поданная носителю, даёт по находке на
+    каждом месте — цена в сторону лишней находки, а не пропуска. Коммит `147f5e46` (16-34,
+    самопроверка, цикл 1) поглощал обёртку по ЛЮБОМУ чтению, а судил её только у вызова, и
+    имя, переданное ссылкой (`run_in_executor(None, func_call)`), не судилось нигде.
+    """
+
+    def place(node: ast.AST) -> tuple[int, int, int | None, int | None]:
+        return (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+
+    # Звенья цепочки: место значения связывания → цели (getattr-строка в значении — узел
+    # `Attribute` на месте вызова `getattr`, `getattr_as_attribute`).
+    link_targets: dict[tuple[int, int, int | None, int | None], set[str]] = {}
+    for binding in module_bindings(tree):
+        target = binding_name(binding.target)
+        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+            link_targets.setdefault(place(binding.value), set()).add(target)
+    reads: dict[str, list[ast.AST]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
+            name = binding_name(node)
+        else:
+            literal = getattr_literal(node)
+            name = literal[1] if literal is not None else None
+        if name is not None and name in carrier_wrappers:
+            reads.setdefault(name, []).append(node)
+    names_of: dict[int, set[str]] = {}
+    for name, wrappers in carrier_wrappers.items():
+        for wrapper in wrappers:
+            names_of.setdefault(id(wrapper), set()).add(name)
+    absorbed: set[int] = set()
+    for key, names in names_of.items():
+        every = [read for name in sorted(names) for read in reads.get(name, [])]
+        if not any(id(read) in judged_reads for read in every):
+            continue
+        if all(
+            id(read) in judged_reads or bool(link_targets.get(place(read), set()) & names)
+            for read in every
+        ):
+            absorbed.add(key)
+    return absorbed
+
+
 def _carrier_wrappers(
     tree: ast.AST,
     referable: frozenset[str],
     partial_names: frozenset[str],
     partial_aliases: dict[str, list[ast.expr]],
     judged_names: frozenset[str],
-) -> dict[str, list[ast.Call]]:
-    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)`: «имя → обёртки».
+) -> tuple[dict[str, list[ast.Call]], Callable[[ast.Call], bool]]:
+    """Обёртки носителя `partial(<носитель>, <ссылка>, …)`: «имя → обёртки» и предикат обёртки.
 
     Отображение строит функция общего модуля `carrier_wrapper_bindings` (самопроверка
     исполнителя 16-34, заход 1: `w = functools.partial(asyncio.to_thread, setattr);
     w(account, "phone", x)` давал `[]`, а та же обёртка, применённая на месте, —
-    находку; у гейта приватности форма поймана планом 16-32). Предикат обёртки — гейта:
-    `partial` (или его псевдоним в модуле), первым аргументом которого стоит не ссылка на
-    судимый API (такой `partial` — псевдоним с привязанными аргументами, `_partial_aliases`),
-    а носитель, в аргументах которого `reference_arguments` находит ссылку на судимый API
-    или `operator.methodcaller(…)`.
+    находку; у гейта приватности форма поймана планом 16-32), неподвижной точкой с
+    вложенными обёртками. Что такое обёртка, решает ОБЩИЙ рекурсивный предикат
+    `is_carrier_wrapper` (ревью WR-26, план 16-36; О-16 (а), свойства 3 и 5): гейт даёт ему
+    имена `partial` модуля и свой предикат ссылки — ссылка на судимый API
+    (`_bound_reference`, в том числе через `_partial_aliases`), `operator.methodcaller(…)` и
+    имя, связанное с ним; своей проверки «аргументы содержат ссылку» у гейта нет. Обёртка
+    поверх обёртки — литералом (`partial(partial(ctx.run, setattr))`) и именем (`w2 =
+    partial(asyncio.to_thread, w)`) — тоже обёртка. Предикат возвращается вместе с
+    отображением: функции общего модуля `named_wrappers` / `wrapper_applications` опознают
+    им литеральную обёртку, поданную носителю.
     """
     mc_aliases = _methodcaller_aliases(tree, judged_names)
 
@@ -1749,14 +1892,11 @@ def _carrier_wrappers(
             for bound in _bound_reference(node, partial_names, partial_aliases)
         )
 
-    def is_wrapper(value: ast.Call) -> bool:
-        if _call_name(value) not in partial_names:
-            return False
-        if any(bound[0] in referable for bound in _bound_reference(value, partial_names, partial_aliases)):
-            return False
-        return bool(reference_arguments(value, is_reference, IDENTIFICATION_CARRIERS))
+    def is_wrapper(value: ast.Call, known: dict[str, list[ast.Call]]) -> bool:
+        return is_carrier_wrapper(value, partial_names, is_reference, IDENTIFICATION_CARRIERS, known)
 
-    return carrier_wrapper_bindings(module_bindings(tree), is_wrapper)
+    bound = carrier_wrapper_bindings(module_bindings(tree), is_wrapper, nested=True)
+    return bound, lambda value: is_wrapper(value, bound)
 
 
 def _referenced_calls(
@@ -1764,7 +1904,6 @@ def _referenced_calls(
     judged_names: frozenset[str],
     partial_names: frozenset[str] = PARTIAL_NAMES,
     partial_aliases: dict[str, list[ast.expr]] | None = None,
-    carrier_wrappers: dict[str, list[ast.Call]] | None = None,
 ) -> list[tuple[ast.Call, str, ast.expr | None]]:
     """Вызовы пишущего API, названного в `call` ссылкой или строкой.
 
@@ -1794,11 +1933,11 @@ def _referenced_calls(
       функцию с `every_reading=True`: каждая ссылка носителя, прочтение «как есть»
       (`run_sync(fn=…, mappings={…})`) и общее правило над позиционными литералами за
       ссылкой (`pool.apply_async(setattr, (account, "phone", x), {})`) — самопроверка
-      исполнителя 16-34, заход 1;
-    - вызов имени, связанного с обёрткой носителя (`carrier_wrappers`: `w =
-      functools.partial(asyncio.to_thread, setattr); w(account, "phone", x)`), — как
-      применённая обёртка на его месте (`applied_wrapper` общего модуля; самопроверка
-      исполнителя 16-34, заход 1).
+      исполнителя 16-34, заход 1.
+    Обёртку носителя — под именем (`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), поданную
+    носителю литералом или именем, обёрнутую ещё одним `partial` — здесь не раскрывают:
+    её применения находит функция общего модуля `wrapper_applications`, и `_phone_writes`
+    судит каждое применение этой же функцией как носитель (ревью CR-03, WR-26; план 16-36).
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
     Ссылка, за которой стоит несколько связываний (`partial_aliases` многозначна — ревью
     WR-18, план 16-31), даёт синтетический вызов на КАЖДОЕ; находки одного места
@@ -1872,16 +2011,6 @@ def _referenced_calls(
             for referenced, func, bound_args, bound_keywords in bounds_of(carried.reference)
         ]
 
-    if carrier_wrappers and name in carrier_wrappers:
-        # `w = partial(asyncio.to_thread, setattr); w(…)` — как `partial(…)(…)` на месте
-        # `w(…)`, по каждому связыванию `w` с обёрткой (самопроверка исполнителя 16-34).
-        applications = [
-            write
-            for wrapper in carrier_wrappers[name]
-            for write in carried_writes(applied_wrapper(call, wrapper))
-        ]
-        if applications:
-            return applications
     return carried_writes(call)
 
 
@@ -2998,6 +3127,64 @@ def test_a_planted_backfill_with_a_threaded_writer_reference_reddens_the_gate(tm
     ]
     assert len(at_call) == 1, (
         f"у вызова `threading.Thread(target=setattr, …)` не ровно одна находка: {at_call}"
+    )
+
+
+def test_a_planted_backfill_with_a_context_run_wrapper_handed_to_an_executor_reddens_the_gate(
+    tmp_path,
+):
+    """ТРАСЕР CR-03: `functools.partial(ctx.run, setattr, account, "phone", number)`, поданный исполнителю.
+
+    Это дословное тело `asyncio.to_thread` в CPython (`asyncio/threads.py`: `func_call =
+    functools.partial(ctx.run, func, *args, **kwargs)`, `await loop.run_in_executor(None,
+    func_call)`) — естественный путь скрипта дозаполнения Фазы 20, которому нужен
+    `to_thread` с копией контекста (D-13). На `147f5e46^` форма ловилась: обёртку носителя
+    судили на месте связывания; коммит `147f5e46` (16-34, самопроверка, цикл 1) стал
+    «поглощать» обёртку под именем по любому чтению, а судил её только у вызова `w(…)`, и
+    переданное имя уходило мимо гейта (ревью CR-03, регрессия партии раунда 6; верификация
+    раунда 7: на SQLite форма пишет колонку, `+71`). Решение владельца О-16 (а): обёртка
+    носителя под именем судится везде, где её имя прочитано. Подложенный файл находится
+    тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_context_run.py",
+        "import asyncio\n"
+        "import contextvars\n"
+        "import functools\n"
+        "\n"
+        "\n"
+        "async def backfill(rows):\n"
+        "    loop = asyncio.get_running_loop()\n"
+        "    for account, number in rows:\n"
+        "        ctx = contextvars.copy_context()\n"
+        '        func_call = functools.partial(ctx.run, setattr, account, "phone", number)\n'
+        "        await loop.run_in_executor(None, func_call)\n",
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_context_run.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        # Строка 11 — место, где обёртку прочитали и подали исполнителю: там она судится.
+        if offence.startswith(f"scripts/backfill_context_run.py:11 — {KIND_SETATTR} — ")
+    ]
+    assert found, (
+        "обёртка носителя под именем, поданная, а не вызванная, не судится: "
+        "`func_call = functools.partial(ctx.run, setattr, account, 'phone', number); "
+        "await loop.run_in_executor(None, func_call)` в scripts/backfill_context_run.py "
+        f"гейт пропустил: {offences}"
+    )
+    assert all("setattr" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет `setattr` и колонку `phone`: {found}"
+    )
+    in_file = [offence for offence in offences if offence.startswith("scripts/backfill_context_run.py:")]
+    assert len(in_file) == 1, (
+        f"у подложенного скрипта не ровно одна находка — одно место, одна запись: {in_file}"
     )
 
 
@@ -4137,7 +4324,9 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     `REFERENCE_CARRIERS`, формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`) — в
     «ГРАНИЦЕ ПРЕДИКАТА» с причиной, а пойманный теперь связанный `partial` — не в пункте
     (1). Заявление не сужено (решение владельца О-12 (а); запреты 16-09 №2, 16-12 №2,
-    16-17 №2, 16-22 №2).
+    16-17 №2, 16-22 №2). С плана 16-36 (ревью CR-03, WR-26; О-16 (а)) — и ось «где прочитано
+    имя обёртки»: шапка называет суд обёртки на каждом чтении через `wrapper_applications`
+    и летопись регрессии `147f5e46`, а пункт (1) не называет поданную обёртку границей.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4224,6 +4413,34 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     ):
         if claim not in flat:
             missing.append(f"заявление сужено: нет «{claim}»")
+    # Ось «где прочитано имя обёртки» (ревью CR-03, WR-26; решение владельца О-16 (а), план
+    # 16-36): обёртка носителя под именем судится везде, где её имя прочитано, поданная и
+    # вложенная обёртка раскрывается функцией общего модуля, а летопись называет регрессию
+    # `147f5e46`, внесённую самой партией.
+    for needle in (
+        "везде, где её имя прочитано",
+        "`wrapper_applications`",
+        "CR-03",
+        "WR-26",
+        "147f5e46",
+        "О-16 (а)",
+    ):
+        if needle not in flat:
+            missing.append(f"нет суда обёртки на каждом чтении: нет «{needle}»")
+    if "судится как применённая на месте вызова `w(…)`" in flat:
+        missing.append(
+            "шапка всё ещё сужает суд обёртки под именем до вызова: «судится как применённая "
+            "на месте вызова `w(…)`»"
+        )
+    if boundary_start >= 0 and boundary_end >= 0 and item:
+        for match in re.finditer("обёртк", item):
+            nearby = item[max(0, match.start() - 80) : match.end() + 80]
+            if "подан" in nearby:
+                missing.append(
+                    "пункт (1) «ГРАНИЦЫ ПРЕДИКАТА» называет обёртку носителя, поданную "
+                    f"носителю, границей: «{nearby}»"
+                )
+                break
 
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "
@@ -6253,6 +6470,178 @@ LITERAL_FORM_CASES = [
         "phone",
         id="starmap-literal-argument-tuples-bulk-update",
     ),
+    # Ревью CR-03 и WR-26 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а)).
+    # CR-03 — регрессия `147f5e46` (16-34, самопроверка, цикл 1): обёртка носителя под
+    # именем, которую подают, а не вызывают, «поглощалась» по любому чтению и не судилась
+    # нигде; на `147f5e46^` и на базе `2f8c1656` каждая форма давала одну находку (SQLite:
+    # `+71`, `+72`). Первая — дословное тело `asyncio.to_thread`. Та же обёртка без
+    # использования — контроль: одна находка и без чтения, и с ним. WR-26 — пробел
+    # композиции, был и на `2f8c1656`: обёртка носителя, поданная другому носителю
+    # литералом или именем, и обёртка, обёрнутая ещё одним `partial` (`+73`…`+75`).
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    func_call = functools.partial(ctx.run, setattr, account, "phone", x)\n'
+        "    await loop.run_in_executor(None, func_call)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-handed-to-run-in-executor",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    job = functools.partial(\n"
+        '        contextvars.copy_context().run, setattr, account, "phone", x\n'
+        "    )\n"
+        "    threading.Thread(target=job).start()\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-as-a-thread-target",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    job = functools.partial(\n"
+        '        contextvars.copy_context().run, setattr, account, "phone", x\n'
+        "    )\n"
+        "    loop.call_soon(job)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-handed-to-call-soon",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    job = functools.partial(asyncio.to_thread, setattr, account, "phone", x)\n'
+        "    tasks.append(job)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-appended-to-a-list",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    func_call = functools.partial(ctx.run, setattr, account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-unused",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    await loop.run_in_executor(\n"
+        '        None, functools.partial(ctx.run, setattr), account, "phone", x\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="literal-carrier-wrapper-handed-to-run-in-executor",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    list(map(functools.partial(ctx.run, setattr), [account], ["phone"], [x]))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="literal-carrier-wrapper-mapped",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(ctx.run, setattr)\n"
+        '    await asyncio.to_thread(w, account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="named-carrier-wrapper-handed-to-to-thread",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    functools.partial(functools.partial(ctx.run, setattr))(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-wrapped-in-partial",
+    ),
+    # Самопроверка-прототип планирования раунда 7 (ревью WR-26; О-16 (а), свойство 3): без
+    # рекурсивного предиката обёртки эти формы проходили — обёртка поверх обёртки под
+    # именем, тройная вложенность литералом и именем и `methodcaller`, лежащий в поданной
+    # обёртке: получатель ему подаёт внешний носитель.
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(ctx.run, setattr)\n"
+        "    w2 = functools.partial(asyncio.to_thread, w)\n"
+        '    await w2(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-over-a-named-carrier-wrapper",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    functools.partial(functools.partial(functools.partial(ctx.run, setattr)))(\n"
+        '        account, "phone", x\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(functools.partial(functools.partial(ctx.run, setattr)))\n"
+        '    w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="named-carrier-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    await loop.run_in_executor(\n"
+        "        None,\n"
+        '        functools.partial(ctx.run, operator.methodcaller("__set__", account, x)),\n'
+        "        MessengerAccount.phone,\n"
+        "    )\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-in-a-handed-carrier-wrapper",
+    ),
+    # Сверка «база ↔ HEAD» самопроверки исполнителя 16-36 (свойство 7 О-16 (а)): обёртка с
+    # аргументами записи, вложенная в `partial` литералом, давала одну находку у родителя
+    # GREEN `44452e68` и на базе плана и две — на `44452e68`: рекурсивный предикат сделал
+    # вложенные литералы обёртками, и каждый уровень судил ту же запись у себя. Одно
+    # место — одна находка.
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    runner.call(\n"
+        '        functools.partial(functools.partial(asyncio.to_thread, setattr, account, "phone", x))\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="nested-carrier-wrapper-with-arguments-handed",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(\n"
+        '        functools.partial(functools.partial(asyncio.to_thread, setattr, account, "phone", x))\n'
+        "    )\n"
+        "    w()\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="named-nested-carrier-wrapper-with-arguments-called",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    functools.partial(\n"
+        '        functools.partial(functools.partial(ctx.run, setattr, account, "phone", x))\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="nested-carrier-wrapper-with-arguments-unused",
+    ),
 ]
 
 
@@ -6732,6 +7121,23 @@ LEGITIMATE_CASES = [
     pytest.param(
         'pool.apply_async(setattr, (account, "status", x), {})\n',
         id="apply-async-literal-argument-tuple-other-attribute",
+    ),
+    # Ревью WR-26 (план 16-36): обёртка носителя, поданная исполнителю с ЧУЖИМ атрибутом, —
+    # не запись номера; цикл обёрток без пишущей ссылки — ноль находок, и раскрытие обёрток
+    # на нём не зависает (защита от цикла общего модуля).
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    await loop.run_in_executor(\n"
+        '        None, functools.partial(ctx.run, setattr), account, "status", x\n'
+        "    )\n",
+        id="literal-carrier-wrapper-handed-other-attribute",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    a = functools.partial(asyncio.to_thread, b)\n"
+        "    b = functools.partial(ctx.run, a)\n"
+        '    a(account, "phone", x)\n',
+        id="carrier-wrapper-cycle-without-a-writer",
     ),
 ]
 
