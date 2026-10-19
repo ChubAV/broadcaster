@@ -348,6 +348,7 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
 from __future__ import annotations
 
 import ast
+import itertools
 import os
 import re
 from dataclasses import dataclass, replace
@@ -2987,6 +2988,35 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     data_item = boundary[boundary.rfind("* ", 0, data_start) : data_end] if 0 <= data_start < data_end else ""
     if "поток данных" not in data_item:
         missing.append("граница не называет аргументы ссылки, пришедшие нелитералом (`args=row`), с причиной «поток данных»")
+    # Ось «где прочитано имя обёртки» (ревью WR-24, WR-26; решение владельца О-16 (а), план
+    # 16-37): шапка называет функции общего модуля семантики обёртки, имя обёртки,
+    # прочитанное getattr-строкой, и раскрытие поданной и вложенной обёртки; фраза «своих
+    # копий нет» правдива только вместе с ними.
+    for needle in ("`carrier_wrapper_bindings`", "`wrapper_applications`", "getattr-строк", "WR-24", "WR-26", "О-16 (а)"):
+        if needle not in flat:
+            missing.append(f"нет «{needle}»")
+    if paragraph:
+        for needle in ("поданная другому носителю", "`partial(partial("):
+            if needle not in paragraph:
+                missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+    # Строки `REFERENCE_CARRIERS` плана 16-34 вписаны — шапка не говорит о них в будущем
+    # времени (ревью IN-17, решение владельца О-17).
+    if re.search(r"впишет[^.]*16-34|16-34[^.]*впишет", flat):
+        missing.append("шапка говорит о строках плана 16-34 в будущем времени («впишет»)")
+    # Комментарий ввоза (ревью IN-16, О-17): строки `#` прямо над ввозом общего модуля не
+    # называют выведенную таблицу ключа ссылки (имя склеено, чтобы правило её не цитировало)
+    # и называют путь `methodcaller`, в котором гейт сам зовёт `iterable_elements`.
+    lines = Path(__file__).read_text(encoding="utf-8").splitlines()
+    start = next(index for index, line in enumerate(lines) if line.startswith("from tests.phone_gate_grammar import"))
+    comment = " ".join(line for line in reversed(list(itertools.takewhile(
+        lambda line: line.startswith("#"), reversed(lines[:start])
+    ))))
+    if not comment:
+        missing.append("над ввозом общего модуля нет комментария")
+    if "REFERENCE_" + "KEYWORDS" in comment:
+        missing.append("комментарий ввоза называет выведенную таблицу ключа ссылки")
+    if "methodcaller" not in comment or "iterable_elements" not in comment:
+        missing.append("комментарий ввоза не называет путь `methodcaller`, где гейт зовёт `iterable_elements`")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
