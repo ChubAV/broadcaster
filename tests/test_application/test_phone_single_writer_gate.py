@@ -503,7 +503,9 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     applied_wrapper,
     carrier_wrapper_bindings,
     module_bindings,
+    named_wrappers,
     reference_arguments,
+    wrapper_applications,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1042,24 +1044,51 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # WR-14, план 16-27): вызов и ссылка такого имени судятся как `partial(…)(…)`.
     partial_aliases = _partial_aliases(tree, referable, partial_names, judged_names)
     # Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)` (самопроверка
-    # исполнителя 16-34; у гейта приватности — план 16-32): вызов такого имени судится как
-    # применённая обёртка `partial(…)(…)` на его месте.
-    carrier_wrappers = _carrier_wrappers(tree, referable, partial_names, partial_aliases, judged_names)
+    # исполнителя 16-34; у гейта приватности — план 16-32), и предикат обёртки гейта.
+    carrier_wrappers, is_wrapper = _carrier_wrappers(
+        tree, referable, partial_names, partial_aliases, judged_names
+    )
     methodcaller_receivers = _methodcaller_receivers(tree, judged_names, carrier_wrappers)
     references = {
-        id(node): _referenced_calls(
-            node, referable, partial_names, partial_aliases, carrier_wrappers
-        )
+        id(node): _referenced_calls(node, referable, partial_names, partial_aliases)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (id(node) not in applied or _call_name(node) == "methodcaller")
     }
+    # Обёртка носителя судится везде, где её прочитали (ревью CR-03, WR-26; О-16 (а), план
+    # 16-36): вызванная (`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), поданная другому
+    # носителю литералом или именем, обёрнутая ещё одним `partial` — функция общего модуля
+    # `wrapper_applications` находит каждое применение, рекурсивно, и каждое судится как
+    # носитель на месте внешнего вызова: одно место — одна находка.
+    applications = {
+        id(node): wrapper_applications(
+            node,
+            lambda read: named_wrappers(read, is_wrapper, carrier_wrappers),
+            IDENTIFICATION_CARRIERS,
+            every_reading=True,
+        )
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and id(node) not in applied
+    }
+    applied_reads: dict[int, list[ast.expr]] = {}
+    handed_literals: list[tuple[int, ast.Call]] = []
+    for key, items in applications.items():
+        for item in items:
+            triples = _referenced_calls(item.application, referable, partial_names, partial_aliases)
+            references.setdefault(key, []).extend(triples)
+            applied_reads.setdefault(key, []).append(item.read)
+            if item.read is item.wrapper and triples:
+                handed_literals.append((key, item.wrapper))
     consumed = {
         id(carrier)
         for triples in references.values()
         for _synthetic, _referenced, carrier in triples
         if isinstance(carrier, ast.Call)
     }
+    # Литеральная обёртка, поданная носителю (`run_in_executor(None, partial(ctx.run,
+    # setattr, account, "phone", x))`), судится у применения — на месте внешнего вызова, —
+    # а не ещё раз у себя.
+    consumed |= {id(wrapper) for key, wrapper in handed_literals if key not in consumed}
     # `partial(…)`, связанный с именем, которое модуль зовёт или подаёт, судится у
     # использования — с аргументами применения, — а не на месте связывания: иначе
     # `w = partial(setattr, account, "phone"); w(x)` дал бы две находки.
@@ -1074,14 +1103,15 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
         if alias in used
         for value in values
     }
-    # Та же причина у обёртки носителя под именем: `w = partial(asyncio.to_thread, setattr,
-    # account, "phone"); w(x)` судится у `w(x)`, а не ещё раз у связывания.
-    consumed |= {
-        id(wrapper)
-        for alias, wrappers in carrier_wrappers.items()
-        if alias in used
-        for wrapper in wrappers
-    }
+    # Обёртка носителя под именем судится у применений, а не ещё раз у связывания, ТОЛЬКО
+    # если каждое чтение её имени гейт судит как применение (ревью CR-03; О-16 (а), свойство
+    # 2; план 16-36). До плана поглощение шло по любому чтению `Load` (коммит `147f5e46`),
+    # а судилась обёртка только у вызова — и переданное имя не судилось нигде.
+    consumed |= _absorbed_carrier_wrappers(
+        tree,
+        carrier_wrappers,
+        {id(read) for key, reads in applied_reads.items() if key not in consumed for read in reads},
+    )
     found: list[tuple[int, int, str, str]] = []
 
     def record(node: ast.AST, kind: str, subject: str) -> None:
@@ -1719,14 +1749,69 @@ def _methodcaller_receivers(
     return {key: list(receivers.values()) for key, receivers in found.items()}
 
 
+def _absorbed_carrier_wrappers(
+    tree: ast.AST, carrier_wrappers: dict[str, list[ast.Call]], judged_reads: set[int]
+) -> set[int]:
+    """Обёртки носителя под именем, которые судятся у применений, а не на месте связывания.
+
+    Правило «каждое чтение судится» (ревью CR-03, верификация раунда 7; решение владельца
+    О-16 (а), свойство 2; план 16-36): обёртка `W` поглощается, только если у имён,
+    связанных с `W`, есть хотя бы одно чтение, которое гейт судит как применение обёртки
+    (`judged_reads` — узлы `read` функции общего модуля `wrapper_applications`: вызов `w(…)`
+    / `self.w(…)` / `getattr(obj, "w")(…)` и подача носителю), и КАЖДОЕ чтение этих имён —
+    `Load` имени или атрибута и getattr-строка с этим именем — либо такое применение, либо
+    значение связывания общей грамматики, цель которого тоже связана с `W` (звено цепочки
+    `h = w`). Иначе `W` судится и на месте связывания, как до коммита `147f5e46`: обёртка,
+    прочитанная вне вызова (список, `return`) и ещё поданная носителю, даёт по находке на
+    каждом месте — цена в сторону лишней находки, а не пропуска. Коммит `147f5e46` (16-34,
+    самопроверка, цикл 1) поглощал обёртку по ЛЮБОМУ чтению, а судил её только у вызова, и
+    имя, переданное ссылкой (`run_in_executor(None, func_call)`), не судилось нигде.
+    """
+
+    def place(node: ast.AST) -> tuple[int, int, int | None, int | None]:
+        return (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+
+    # Звенья цепочки: место значения связывания → цели (getattr-строка в значении — узел
+    # `Attribute` на месте вызова `getattr`, `getattr_as_attribute`).
+    link_targets: dict[tuple[int, int, int | None, int | None], set[str]] = {}
+    for binding in module_bindings(tree):
+        target = binding_name(binding.target)
+        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+            link_targets.setdefault(place(binding.value), set()).add(target)
+    reads: dict[str, list[ast.AST]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
+            name = binding_name(node)
+        else:
+            literal = getattr_literal(node)
+            name = literal[1] if literal is not None else None
+        if name is not None and name in carrier_wrappers:
+            reads.setdefault(name, []).append(node)
+    names_of: dict[int, set[str]] = {}
+    for name, wrappers in carrier_wrappers.items():
+        for wrapper in wrappers:
+            names_of.setdefault(id(wrapper), set()).add(name)
+    absorbed: set[int] = set()
+    for key, names in names_of.items():
+        every = [read for name in sorted(names) for read in reads.get(name, [])]
+        if not any(id(read) in judged_reads for read in every):
+            continue
+        if all(
+            id(read) in judged_reads or bool(link_targets.get(place(read), set()) & names)
+            for read in every
+        ):
+            absorbed.add(key)
+    return absorbed
+
+
 def _carrier_wrappers(
     tree: ast.AST,
     referable: frozenset[str],
     partial_names: frozenset[str],
     partial_aliases: dict[str, list[ast.expr]],
     judged_names: frozenset[str],
-) -> dict[str, list[ast.Call]]:
-    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)`: «имя → обёртки».
+) -> tuple[dict[str, list[ast.Call]], Callable[[ast.Call], bool]]:
+    """Обёртки носителя `partial(<носитель>, <ссылка>, …)`: «имя → обёртки» и предикат обёртки.
 
     Отображение строит функция общего модуля `carrier_wrapper_bindings` (самопроверка
     исполнителя 16-34, заход 1: `w = functools.partial(asyncio.to_thread, setattr);
@@ -1735,7 +1820,9 @@ def _carrier_wrappers(
     `partial` (или его псевдоним в модуле), первым аргументом которого стоит не ссылка на
     судимый API (такой `partial` — псевдоним с привязанными аргументами, `_partial_aliases`),
     а носитель, в аргументах которого `reference_arguments` находит ссылку на судимый API
-    или `operator.methodcaller(…)`.
+    или `operator.methodcaller(…)`. Предикат возвращается вместе с отображением: функции
+    общего модуля `named_wrappers` / `wrapper_applications` опознают им и литеральную
+    обёртку, поданную носителю (ревью WR-26, план 16-36).
     """
     mc_aliases = _methodcaller_aliases(tree, judged_names)
 
@@ -1756,7 +1843,7 @@ def _carrier_wrappers(
             return False
         return bool(reference_arguments(value, is_reference, IDENTIFICATION_CARRIERS))
 
-    return carrier_wrapper_bindings(module_bindings(tree), is_wrapper)
+    return carrier_wrapper_bindings(module_bindings(tree), is_wrapper), is_wrapper
 
 
 def _referenced_calls(
@@ -1764,7 +1851,6 @@ def _referenced_calls(
     judged_names: frozenset[str],
     partial_names: frozenset[str] = PARTIAL_NAMES,
     partial_aliases: dict[str, list[ast.expr]] | None = None,
-    carrier_wrappers: dict[str, list[ast.Call]] | None = None,
 ) -> list[tuple[ast.Call, str, ast.expr | None]]:
     """Вызовы пишущего API, названного в `call` ссылкой или строкой.
 
@@ -1794,11 +1880,11 @@ def _referenced_calls(
       функцию с `every_reading=True`: каждая ссылка носителя, прочтение «как есть»
       (`run_sync(fn=…, mappings={…})`) и общее правило над позиционными литералами за
       ссылкой (`pool.apply_async(setattr, (account, "phone", x), {})`) — самопроверка
-      исполнителя 16-34, заход 1;
-    - вызов имени, связанного с обёрткой носителя (`carrier_wrappers`: `w =
-      functools.partial(asyncio.to_thread, setattr); w(account, "phone", x)`), — как
-      применённая обёртка на его месте (`applied_wrapper` общего модуля; самопроверка
-      исполнителя 16-34, заход 1).
+      исполнителя 16-34, заход 1.
+    Обёртку носителя — под именем (`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), поданную
+    носителю литералом или именем, обёрнутую ещё одним `partial` — здесь не раскрывают:
+    её применения находит функция общего модуля `wrapper_applications`, и `_phone_writes`
+    судит каждое применение этой же функцией как носитель (ревью CR-03, WR-26; план 16-36).
     Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
     Ссылка, за которой стоит несколько связываний (`partial_aliases` многозначна — ревью
     WR-18, план 16-31), даёт синтетический вызов на КАЖДОЕ; находки одного места
@@ -1872,16 +1958,6 @@ def _referenced_calls(
             for referenced, func, bound_args, bound_keywords in bounds_of(carried.reference)
         ]
 
-    if carrier_wrappers and name in carrier_wrappers:
-        # `w = partial(asyncio.to_thread, setattr); w(…)` — как `partial(…)(…)` на месте
-        # `w(…)`, по каждому связыванию `w` с обёрткой (самопроверка исполнителя 16-34).
-        applications = [
-            write
-            for wrapper in carrier_wrappers[name]
-            for write in carried_writes(applied_wrapper(call, wrapper))
-        ]
-        if applications:
-            return applications
     return carried_writes(call)
 
 

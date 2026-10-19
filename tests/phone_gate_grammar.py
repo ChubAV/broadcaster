@@ -857,6 +857,103 @@ def applied_wrapper(call: ast.Call, wrapper: ast.Call) -> ast.Call:
     )
 
 
+def named_wrappers(node: ast.AST, is_wrapper, bound: dict[str, list[ast.Call]]) -> list[ast.Call]:
+    """Обёртки носителя, которые называет выражение `node` (ревью CR-03, WR-26; О-16 (а)).
+
+    Литеральный вызов, на котором предикат гейта `is_wrapper` истинен, — сама обёртка;
+    имя (`Name.id`), атрибут (`Attribute.attr`) и getattr-строка (`getattr_literal`) —
+    обёртки, связанные с этим именем (`bound`, отображение `carrier_wrapper_bindings`);
+    иначе — пусто. Одна и та же функция судит обёртку и там, где её вызывают
+    (`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), и там, где её подают носителю.
+    """
+    if isinstance(node, ast.Call):
+        if is_wrapper(node):
+            return [node]
+        literal = getattr_literal(node)
+        return list(bound.get(literal[1], ())) if literal is not None else []
+    if isinstance(node, (ast.Name, ast.Attribute)):
+        return list(bound.get(binding_name(node) or "", ()))
+    return []
+
+
+class WrapperApplication(NamedTuple):
+    """Одно применение обёртки носителя: где её прочитали, какая она и как применена.
+
+    `read` — узел, которым обёртка прочитана (вызываемое `w` / `self.w` / `getattr(obj,
+    "w")` или ссылка, поданная носителю, — имя или сам литерал обёртки); `wrapper` — вызов
+    `partial(<носитель>, …)`; `application` — синтетический вызов `applied_wrapper` на месте
+    внешнего вызова, с аргументами, которые обёртке подаст внешний вызов.
+    """
+
+    read: ast.expr
+    wrapper: ast.Call
+    application: ast.Call
+
+
+def wrapper_applications(
+    call: ast.Call, wrappers_of, not_carriers, every_reading: bool = False
+) -> list[WrapperApplication]:
+    """Применения обёрток носителя в вызове `call` — рекурсивно, с защитой от цикла.
+
+    Ревью CR-03 и WR-26 (верификация раунда 7, 2026-10-16), решение владельца О-16 (а),
+    свойства 2 и 3: обёртка носителя под именем судится ВЕЗДЕ, где её имя прочитано, а
+    не только у вызова, и аргумент-обёртка раскрывается. До плана 16-36 гейт писателя
+    судил обёртку под именем только у вызова `w(…)`, а поглощал её по любому чтению
+    (коммит `147f5e46`): `func_call = partial(ctx.run, setattr, account, "phone", x);
+    await loop.run_in_executor(None, func_call)` — дословное тело `asyncio.to_thread` —
+    уходил мимо гейта; обёртку, поданную другому носителю (`run_in_executor(None,
+    partial(ctx.run, setattr), account, "phone", x)`) или обёрнутую ещё одним `partial`,
+    не ловил ни один гейт. `wrappers_of(node)` — обёртки, которые называет узел
+    (`named_wrappers` с предикатом и отображением гейта). Применения:
+    1. Вызываемое `call.func` называет обёртку — `w(…)`, `self.w(…)`, `getattr(obj,
+       "w")(…)`: применение `applied_wrapper(call, w)`. Литеральный `partial(…)(…)` здесь
+       не повторяется — его судит правило 1 `reference_arguments`.
+    2. Обёртка, поданная носителю `call`, — каждая ссылка, которую `reference_arguments(call,
+       <узел называет обёртку>, not_carriers, every_reading)` находит: позицией, `*[…]`,
+       любым именованным аргументом, внутри применённого `X(…)(…)` (так раскрывается и
+       `partial(<обёртка>)(…)`), литералом и именем: применение `applied_wrapper(<вызов
+       «ссылка(аргументы ссылки)» на месте call>, w)`.
+    3. Рекурсивно — применения каждого полученного применения (обёртка, поданная обёртке);
+       обёртка, уже стоящая на пути, второй раз не раскрывается (защита от цикла по `id`).
+    Вызывающий гейт судит каждое `application` как носитель, а `read` — как чтение имени
+    обёртки, которое судится: одно место — одна находка.
+    """
+    found: list[WrapperApplication] = []
+
+    def is_named(node: ast.expr) -> bool:
+        return bool(wrappers_of(node))
+
+    def visit(node: ast.Call, path: frozenset[int]) -> None:
+        own: list[WrapperApplication] = []
+        callee = node.func
+        if not isinstance(callee, ast.Call) or getattr_literal(callee) is not None:
+            own += [
+                WrapperApplication(callee, wrapper, applied_wrapper(node, wrapper))
+                for wrapper in wrappers_of(callee)
+            ]
+        for carried in reference_arguments(node, is_named, not_carriers, every_reading):
+            handed = ast.copy_location(
+                ast.Call(
+                    func=carried.reference,
+                    args=list(carried.args),
+                    keywords=list(carried.keywords),
+                ),
+                node,
+            )
+            own += [
+                WrapperApplication(carried.reference, wrapper, applied_wrapper(handed, wrapper))
+                for wrapper in wrappers_of(carried.reference)
+            ]
+        for item in own:
+            if id(item.wrapper) in path:
+                continue
+            found.append(item)
+            visit(item.application, path | {id(item.wrapper)})
+
+    visit(call, frozenset())
+    return found
+
+
 class IdentificationValue(NamedTuple):
     """Значение опознания: выражение, которое называет судимый объект, и аргументы применения.
 
