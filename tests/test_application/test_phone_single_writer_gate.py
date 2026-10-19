@@ -502,6 +502,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     iterable_elements,
     applied_wrapper,
     carrier_wrapper_bindings,
+    is_carrier_wrapper,
     module_bindings,
     named_wrappers,
     reference_arguments,
@@ -1048,7 +1049,11 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     carrier_wrappers, is_wrapper = _carrier_wrappers(
         tree, referable, partial_names, partial_aliases, judged_names
     )
-    methodcaller_receivers = _methodcaller_receivers(tree, judged_names, carrier_wrappers)
+
+    def wrappers_of(read: ast.AST) -> list[ast.Call]:
+        return named_wrappers(read, is_wrapper, carrier_wrappers)
+
+    methodcaller_receivers = _methodcaller_receivers(tree, judged_names, wrappers_of)
     references = {
         id(node): _referenced_calls(node, referable, partial_names, partial_aliases)
         for node in ast.walk(tree)
@@ -1061,12 +1066,7 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # `wrapper_applications` находит каждое применение, рекурсивно, и каждое судится как
     # носитель на месте внешнего вызова: одно место — одна находка.
     applications = {
-        id(node): wrapper_applications(
-            node,
-            lambda read: named_wrappers(read, is_wrapper, carrier_wrappers),
-            IDENTIFICATION_CARRIERS,
-            every_reading=True,
-        )
+        id(node): wrapper_applications(node, wrappers_of, IDENTIFICATION_CARRIERS, every_reading=True)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call) and id(node) not in applied
     }
@@ -1678,7 +1678,7 @@ def _methodcaller_aliases(
 def _methodcaller_receivers(
     tree: ast.AST,
     judged_names: frozenset[str],
-    carrier_wrappers: dict[str, list[ast.Call]] | None = None,
+    wrappers_of: Callable[[ast.AST], list[ast.Call]] | None = None,
 ) -> dict[int, list[ast.expr]]:
     """Получатели каждого `operator.methodcaller(…)` модуля: «id вызова → объекты применения».
 
@@ -1694,9 +1694,14 @@ def _methodcaller_receivers(
     ЛЮБОЙ именованный аргумент с общим правилом литеральных аргументов того же вызова
     (`Thread(target=mc, args=(obj,))`), применённая обёртка носителя
     (`partial(asyncio.to_thread, mc)(obj)`), у поэлементного носителя — первый элемент
-    каждой позиции (`map(mc, [obj])`, `map(mc, list([obj]))`), и вызов имени, связанного с
-    обёрткой носителя (`w = partial(asyncio.to_thread, mc); w(obj)`, `carrier_wrappers`).
-    До самопроверки исполнителя 16-27 получатель брался только у прямого применения:
+    каждой позиции (`map(mc, [obj])`, `map(mc, list([obj]))`), и КАЖДОЕ применение обёртки
+    носителя, которое находит функция общего модуля `wrapper_applications` (`wrappers_of` —
+    обёртки, которые называет узел): вызов имени обёртки (`w = partial(asyncio.to_thread,
+    mc); w(obj)`), обёртка, поданная носителю литералом или именем, и обёртка в обёртке —
+    `methodcaller`, лежащий в поданной обёртке, получает получателя от внешнего носителя
+    (`run_in_executor(None, partial(ctx.run, methodcaller("__set__", a, x)), M.phone)`;
+    ревью WR-26, план 16-36). До самопроверки исполнителя 16-27 получатель брался только у
+    прямого применения:
     `set_phone = methodcaller("__set__", account, x); set_phone(MessengerAccount.phone)`
     проходил; до плана 16-34 — только у позиционной подачи.
     """
@@ -1731,10 +1736,16 @@ def _methodcaller_receivers(
             continue
         if _call_name(node) == "methodcaller":
             continue
-        carriers = [node] + [
-            applied_wrapper(node, wrapper)
-            for wrapper in (carrier_wrappers or {}).get(_call_name(node) or "", [])
-        ]
+        carriers = [node] + (
+            [
+                item.application
+                for item in wrapper_applications(
+                    node, wrappers_of, IDENTIFICATION_CARRIERS, every_reading=True
+                )
+            ]
+            if wrappers_of is not None
+            else []
+        )
         for carrier in carriers:
             for carried in reference_arguments(
                 carrier,
@@ -1816,13 +1827,16 @@ def _carrier_wrappers(
     Отображение строит функция общего модуля `carrier_wrapper_bindings` (самопроверка
     исполнителя 16-34, заход 1: `w = functools.partial(asyncio.to_thread, setattr);
     w(account, "phone", x)` давал `[]`, а та же обёртка, применённая на месте, —
-    находку; у гейта приватности форма поймана планом 16-32). Предикат обёртки — гейта:
-    `partial` (или его псевдоним в модуле), первым аргументом которого стоит не ссылка на
-    судимый API (такой `partial` — псевдоним с привязанными аргументами, `_partial_aliases`),
-    а носитель, в аргументах которого `reference_arguments` находит ссылку на судимый API
-    или `operator.methodcaller(…)`. Предикат возвращается вместе с отображением: функции
-    общего модуля `named_wrappers` / `wrapper_applications` опознают им и литеральную
-    обёртку, поданную носителю (ревью WR-26, план 16-36).
+    находку; у гейта приватности форма поймана планом 16-32), неподвижной точкой с
+    вложенными обёртками. Что такое обёртка, решает ОБЩИЙ рекурсивный предикат
+    `is_carrier_wrapper` (ревью WR-26, план 16-36; О-16 (а), свойства 3 и 5): гейт даёт ему
+    имена `partial` модуля и свой предикат ссылки — ссылка на судимый API
+    (`_bound_reference`, в том числе через `_partial_aliases`), `operator.methodcaller(…)` и
+    имя, связанное с ним; своей проверки «аргументы содержат ссылку» у гейта нет. Обёртка
+    поверх обёртки — литералом (`partial(partial(ctx.run, setattr))`) и именем (`w2 =
+    partial(asyncio.to_thread, w)`) — тоже обёртка. Предикат возвращается вместе с
+    отображением: функции общего модуля `named_wrappers` / `wrapper_applications` опознают
+    им литеральную обёртку, поданную носителю.
     """
     mc_aliases = _methodcaller_aliases(tree, judged_names)
 
@@ -1836,14 +1850,11 @@ def _carrier_wrappers(
             for bound in _bound_reference(node, partial_names, partial_aliases)
         )
 
-    def is_wrapper(value: ast.Call) -> bool:
-        if _call_name(value) not in partial_names:
-            return False
-        if any(bound[0] in referable for bound in _bound_reference(value, partial_names, partial_aliases)):
-            return False
-        return bool(reference_arguments(value, is_reference, IDENTIFICATION_CARRIERS))
+    def is_wrapper(value: ast.Call, known: dict[str, list[ast.Call]]) -> bool:
+        return is_carrier_wrapper(value, partial_names, is_reference, IDENTIFICATION_CARRIERS, known)
 
-    return carrier_wrapper_bindings(module_bindings(tree), is_wrapper), is_wrapper
+    bound = carrier_wrapper_bindings(module_bindings(tree), is_wrapper, nested=True)
+    return bound, lambda value: is_wrapper(value, bound)
 
 
 def _referenced_calls(

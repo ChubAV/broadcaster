@@ -813,7 +813,9 @@ def reference_arguments(
     return _carried_by(call, is_reference, [], [], every_reading)
 
 
-def carrier_wrapper_bindings(bindings: list[Binding], is_wrapper) -> dict[str, list[ast.Call]]:
+def carrier_wrapper_bindings(
+    bindings: list[Binding], is_wrapper, nested: bool = False
+) -> dict[str, list[ast.Call]]:
     """Имена, связанные с обёрткой носителя: «имя → обёртки» (самопроверка исполнителя 16-34).
 
     `w = functools.partial(asyncio.to_thread, setattr); w(account, "phone", x)` — то же
@@ -823,9 +825,15 @@ def carrier_wrapper_bindings(bindings: list[Binding], is_wrapper) -> dict[str, l
     в аргументах которого `reference_arguments` находит ссылку). Связывание — любой формой
     общей грамматики (`module_bindings`), цепочка `h = w` — тоже, до неподвижной точки;
     каждое связывание имени судится (ревью WR-18). У гейта приватности та же семантика —
-    его `_carrier_wrappers` (самопроверка исполнителя 16-32, цикл 2); план 16-34 правит
-    модуль гейта приватности только строкой ввоза, и перевод его на эту функцию — за
-    следующим планом.
+    его `_carrier_wrappers` (самопроверка исполнителя 16-32, цикл 2); перевод его на эту
+    функцию — за планом 16-37.
+
+    `nested=True` (ревью WR-26, план 16-36; О-16 (а), свойство 3): предикат зовётся
+    `is_wrapper(value, found)` и видит уже найденные связывания — обёртка поверх обёртки
+    под именем (`w2 = partial(asyncio.to_thread, w)`) становится обёрткой, как только `w`
+    найдена; неподвижная точка — та же, рекурсивно, с защитой от цикла (имя, ещё не
+    найденное, обёрткой не считается: `a = partial(to_thread, b); b = partial(ctx.run, a)`
+    без пишущей ссылки — пусто). При `nested=False` предикат зовётся как прежде.
     """
     found: dict[str, list[ast.Call]] = {}
     changed = True
@@ -837,7 +845,8 @@ def carrier_wrapper_bindings(bindings: list[Binding], is_wrapper) -> dict[str, l
                 continue
             value = binding.value
             if isinstance(value, ast.Call):
-                values = [value] if is_wrapper(value) else []
+                wrapper = is_wrapper(value, found) if nested else is_wrapper(value)
+                values = [value] if wrapper else []
             elif isinstance(value, (ast.Name, ast.Attribute)):
                 values = list(found.get(binding_name(value) or "", ()))
             else:
@@ -855,6 +864,47 @@ def applied_wrapper(call: ast.Call, wrapper: ast.Call) -> ast.Call:
     return ast.copy_location(
         ast.Call(func=wrapper, args=list(call.args), keywords=list(call.keywords)), call
     )
+
+
+def is_carrier_wrapper(
+    value: ast.AST,
+    partial_names,
+    is_reference,
+    not_carriers,
+    known: dict[str, list[ast.Call]],
+    _seen: frozenset[int] = frozenset(),
+) -> bool:
+    """Обёртка ли носителя `value` — общий рекурсивный предикат обоих гейтов (ревью WR-26; О-16 (а)).
+
+    Обёртка носителя — вызов, последнее имя которого в `partial_names` (`functools.partial`
+    и его псевдонимы в модуле), первым позиционным которого стоит НЕ ссылка (`is_reference`
+    гейта: такой `partial` — псевдоним с привязанными аргументами, его гейт судит по-своему),
+    и в аргументах которого `reference_arguments` находит ссылку ИЛИ другую обёртку —
+    литералом (этот же предикат, рекурсивно: `partial(partial(ctx.run, setattr))`, глубина
+    любая) или именем из `known` (обёртка под именем, уже найденная `carrier_wrapper_bindings`:
+    `w2 = partial(asyncio.to_thread, w)`). Защита от цикла — по `id` узла (`_seen`). Свойства
+    3 и 5 решения владельца О-16 (а): аргумент-обёртка раскрывается, и семантика обёртки
+    живёт один раз — здесь; гейт даёт только имена `partial` и свой предикат ссылки. До плана
+    16-36 у гейта писателя предикат обёртки знал только ссылку, и обёртку, обёрнутую ещё
+    одним `partial` или поданную `partial` под именем, не видел ни один гейт.
+    """
+    if not isinstance(value, ast.Call) or id(value) in _seen:
+        return False
+    if _callee_name(value.func) not in partial_names:
+        return False
+    positional = expanded_arguments(list(value.args))
+    if positional and positional[0] is not None and is_reference(positional[0]):
+        return False
+    seen = _seen | {id(value)}
+
+    def carried(node: ast.expr) -> bool:
+        if is_reference(node):
+            return True
+        if isinstance(node, ast.Call) and getattr_literal(node) is None:
+            return is_carrier_wrapper(node, partial_names, is_reference, not_carriers, known, seen)
+        return bool(named_wrappers(node, lambda _call: False, known))
+
+    return bool(reference_arguments(value, carried, not_carriers))
 
 
 def named_wrappers(node: ast.AST, is_wrapper, bound: dict[str, list[ast.Call]]) -> list[ast.Call]:
