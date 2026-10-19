@@ -2584,6 +2584,13 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
     и `getattr`-строка проходили гейт (ревью WR-14). Область видимости плоская — весь
     модуль, без учёта функций и классов; псевдоним, заведённый в другом модуле, —
     поток данных между модулями, и это названная граница предиката.
+
+    Звено цепочки читает общий читатель `reading_name` (ревью WR-28, план 16-42; О-18 (а),
+    свойство 2): `Y = X`, `Y = self.X` и `Y = getattr(self, "X")` (getattr-строка в
+    значении — атрибут, `getattr_as_attribute`) — одно и то же чтение имени `X`. До плана
+    16-42 цепочка шла только через имя, а атрибут признавался лишь с исходным именем
+    (`module.<name>`): `self.s = setattr; s2 = self.s; s2(account, "phone", x)` и
+    `s2 = getattr(self, "s")` теряли псевдоним (зонд исполнителя 16-42).
     """
     known = {name}
     for node in ast.walk(tree):
@@ -2596,10 +2603,7 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
     while changed:
         changed = False
         for binding in bindings:
-            value = binding.value
-            if (isinstance(value, ast.Name) and value.id in known) or (
-                isinstance(value, ast.Attribute) and value.attr == name
-            ):
+            if reading_name(binding.value) in known:
                 target = binding_name(binding.target)
                 if target is not None and target not in known:
                     known.add(target)
@@ -2618,6 +2622,12 @@ def _rename_aliases(tree: ast.AST, name: str) -> None:
     (`attr = getattr`), зовут через атрибут — `self.mc(…)`, `K.attr(…)`, — и до
     самопроверки исполнителя 16-27 такой вызов носителем не опознавался. Область
     видимости плоская, по последнему звену, как у псевдонимов пишущих API.
+
+    Имя псевдонима на месте чтения читает общий читатель `reading_name` (ревью WR-28, план
+    16-42; О-18 (а), свойство 2): чтение getattr-строкой `getattr(self, "mc")` — тоже
+    псевдоним, узлом `Name(name)` на его месте. До плана 16-42 getattr-строка здесь не
+    читалась: `self.mc = operator.methodcaller; getattr(self, "mc")("__set__", account,
+    x)(MessengerAccount.phone)` уходил мимо гейта (зонд исполнителя 16-42).
     """
     aliases = _module_aliases(tree, name)
     if not aliases:
@@ -2625,13 +2635,19 @@ def _rename_aliases(tree: ast.AST, name: str) -> None:
 
     class _Rename(ast.NodeTransformer):
         def visit_Name(self, node: ast.Name) -> ast.AST:
-            if isinstance(node.ctx, ast.Load) and node.id in aliases:
+            if isinstance(node.ctx, ast.Load) and reading_name(node) in aliases:
                 node.id = name
             return node
 
         def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
             self.generic_visit(node)
-            if isinstance(node.ctx, ast.Load) and node.attr in aliases:
+            if isinstance(node.ctx, ast.Load) and reading_name(node) in aliases:
+                return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
+            return node
+
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            self.generic_visit(node)
+            if getattr_literal(node) is not None and reading_name(node) in aliases:
                 return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
             return node
 
@@ -2664,10 +2680,9 @@ def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, froze
         if isinstance(node, ast.ImportFrom):
             bound.update(alias.name for alias in node.names if alias.asname)
     for binding in module_bindings(tree):
-        if isinstance(binding.value, ast.Name):
-            bound.add(binding.value.id)
-        elif isinstance(binding.value, ast.Attribute):
-            bound.add(binding.value.attr)
+        # Имя в значении связывания — общим читателем `reading_name` (план 16-42).
+        if (read := reading_name(binding.value)) is not None:
+            bound.add(read)
     aliases: dict[str, set[str]] = {}
     for name in sorted(judged_names & bound):
         for alias in sorted(_module_aliases(tree, name)):
