@@ -6642,6 +6642,27 @@ LITERAL_FORM_CASES = [
         "phone",
         id="nested-carrier-wrapper-with-arguments-unused",
     ),
+    # Ревью CR-02 / WR-25 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а),
+    # свойство 4, план 16-38): какие носители поэлементны (`ELEMENTWISE_CARRIERS`: `map`,
+    # `imap`, `imap_unordered`, `map_async`) и построчны (`ROW_CARRIERS`: `starmap`,
+    # `starmap_async`), решает одно правило общего модуля для обоих гейтов. Закрепки одного
+    # правила: `imap` гейт писателя ловил и до плана (общим правилом над литеральными
+    # итерируемыми), `starmap(methodcaller(…), [(MessengerAccount.phone,)])` — построчным
+    # прочтением под `every_reading`; ответ прежний, меняется путь прочтения.
+    pytest.param(
+        'list(pool.imap(setattr, [account], ["phone"], [x]))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="imap-elementwise-setattr",
+    ),
+    pytest.param(
+        'list(itertools.starmap(operator.methodcaller("__set__", account, x), [(MessengerAccount.phone,)]))\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="starmap-methodcaller-descriptor-set",
+    ),
 ]
 
 

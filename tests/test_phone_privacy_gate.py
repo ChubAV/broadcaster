@@ -2856,6 +2856,51 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="map-over-a-name-bound-to-phones",
     ),
+    # Ревью WR-25 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 4):
+    # `methodcaller`, поданный построчному носителю, получает получателя из строки — до плана
+    # 16-38 прочтение строк `starmap` жило только под `every_reading` (у гейта писателя), и
+    # гейт приватности получателя внутри кортежа не видел; исполнение напечатало номер, а гейт
+    # писателя ту же форму ловил.
+    pytest.param(
+        "app/x.py",
+        'list(itertools.starmap(operator.methodcaller("info", "x %s", account.phone), [(logger,)]))\n',
+        "phone",
+        id="starmap-methodcaller-applied-to-a-logger-row",
+    ),
+    pytest.param(
+        "app/x.py",
+        'pool.starmap(operator.methodcaller("info", "x %s", account.phone), [(logger,)])\n',
+        "phone",
+        id="pool-starmap-methodcaller-applied-to-a-logger-row",
+    ),
+    # Закрепки одного правила носителей (план 16-38): до плана `imap`, `imap_unordered`,
+    # `map_async` и `starmap` не были поэлементными, и гейт судил их аргументы целиком; после
+    # того как таблицы общего модуля сделали их поэлементными и построчными, суд итерируемой
+    # целиком держит только `keep_iterables`.
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    list(pool.imap(logger.info, account.phones))\n",
+        "phone",
+        id="imap-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    list(pool.imap_unordered(logger.info, account.phones))\n",
+        "phone",
+        id="imap-unordered-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    pool.map_async(logger.info, account.phones).get()\n",
+        "phone",
+        id="map-async-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(pool, phone_rows):\n    pool.starmap(logger.info, phone_rows)\n",
+        "phone",
+        id="pool-starmap-over-phone-rows",
+    ),
 ]
 
 
