@@ -85,7 +85,7 @@
   именованными (`kwargs={"phone": …}`), прочие именованные — как есть; затем аргументы
   применения обёртки. Тот же довод, что у `functools.partial`: эти аргументы уйдут в
   журнал. Носитель — любой вызов; перечень `REFERENCE_CARRIERS` общего модуля — `run_sync`,
-  `to_thread`, `run_in_executor`, `map`, `Context.run` и шесть строк, которые впишет план
+  `to_thread`, `run_in_executor`, `map`, `Context.run` и шесть строк, вписанные планом
   16-34: `to_thread(*[…])`, `partial(to_thread, …)(…)`, `Thread(target=…, args=…)`,
   `Timer(…, args=…)`, `enqueue(job=…, payload=…)` и `map` с обёрткой итерируемой
   `list([…])` — словарь, общий с гейтом писателя, а не закрытый список:
@@ -95,9 +95,26 @@
   `contextvars.copy_context().run(logger.info, …)`, `session.run_sync(logger.info, …)`,
   `emit = logger.info; await asyncio.to_thread(emit, …)`. У `map` ссылке подаются элементы
   литеральной итерируемой, в том числе в обёртке `list([…])`, `tuple(…)`, `set(…)`, `iter(…)`.
-  Семантика носителя — функции общего модуля `reference_arguments`,
-  `literal_keyword_arguments`, `iterable_elements`, `getattr_literal` (план 16-32, решение
-  владельца О-15: своих копий у гейта нет; паритет — `tests/test_phone_gates_parity.py`).
+  Обёртка носителя, связанная с именем, судится везде, где её имя прочитано: вызовом
+  (`w(…)`, `self.w(…)`, `getattr(self, "w")(…)` — имя обёртки читается и getattr-строкой),
+  подачей носителю, а на месте связывания — всегда. Обёртка журнала, поданная другому
+  носителю литералом или именем (`loop.run_in_executor(None, partial(ctx.run, logger.info),
+  "x %s", account.phone)`, `w = partial(ctx.run, logger.info); asyncio.to_thread(w, …)`), и
+  обёртка, обёрнутая ещё одним `partial` (`partial(partial(ctx.run, logger.info))(…)`) или
+  вложенная глубже, литералом и под именем (`w2 = partial(asyncio.to_thread, w)`), судится
+  как применённая с аргументами внешнего носителя — рекурсивно, с защитой от цикла;
+  `methodcaller` в поданной обёртке применяется к первому аргументу внешнего носителя.
+  Одно место — одна находка: тройка «строка, вид, предмет» не повторяется, какими бы путями
+  гейт ни дошёл до места (обёртка с аргументами судится и на месте связывания, и на месте
+  применения, а находка стоит на одном и том же узле аргумента). Семантика носителя и
+  обёртки носителя — функции общего модуля `reference_arguments`,
+  `literal_keyword_arguments`, `iterable_elements`, `getattr_literal`,
+  `carrier_wrapper_bindings`, `is_carrier_wrapper`, `named_wrappers`, `applied_wrapper`,
+  `wrapper_applications` — те же, что у гейта писателя; гейт даёт им только имена
+  `partial` модуля и свой предикат ссылки (вызываемое журнала или `methodcaller`). Своих
+  копий у гейта нет — с плана 16-37 это правда и для семантики обёртки (решения владельца
+  О-15 и О-16 (а); паритет — `tests/test_phone_gates_parity.py`, его `REQUIRED_SHARED_NAMES`
+  требуют эти имена).
   Прежняя оговорка, исключавшая звёздную распаковку и ключи, кроме `fn=`, снята планом 16-32:
   эти формы ловятся. Аргумент ДО позиционной ссылки (исполнитель у `run_in_executor`) в
   журнал не уходит; ссылка без аргументов (`to_thread(logger.flush)`,
@@ -238,6 +255,19 @@ IN-15); `Timer(…, args=…)` ловился случайно. Пятый кр�
 и (б) — сузить заявления до перечня грамматики — ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ; О-15 — копии сняты
 попутно.
 
+Летопись WR-24: до плана 16-37 гейт держал свою копию семантики обёртки носителя
+(`_carrier_wrappers` и ручное применение, самопроверка 16-32, цикл 2, `5e57325d`), имя
+обёртки искал только как `Name` / `Attribute`, и `getattr(self, "w")(…)` уходил мимо, а гейт
+писателя ту же форму ловил; та же копия судила обёртку дважды на одном месте; шапка при этом
+утверждала, что копий нет (ревью WR-24, верификация раунда 7, 2026-10-16); план 16-34
+перевести гейт не мог — его запрет №4 и истина 3 были несовместимы; решение владельца
+О-16 (а), 2026-10-18: семантика обёртки — один раз, в общем модуле, план 16-37 вправе править
+этот модуль.
+
+Летопись WR-26: обёртку журнала, поданную носителю или обёрнутую `partial`, не ловил ни один
+гейт и на базе `2f8c1656` (номер напечатан); шестой круг оси «как опознан журнал» (IN-06 →
+IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20 → CR-02 / WR-24 / WR-25 / WR-26).
+
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
     разделителями и 7…15 цифрами; 11 цифр подряд с ведущей 7/8; русская разбивка
@@ -318,7 +348,10 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
     (`def g(emit=logger.info): emit(…)`), взятая из контейнера (`fns["i"](…)` после
     `fns = {"i": logger.info}`) или результатом не-`partial` вызова
     (`staticmethod(logger.info)` в теле класса, `operator.attrgetter("info")(logger)`,
-    `fn = make_emitter()`), обёрнутая `lambda` (`f = lambda *a: logger.info(*a)` — та же
+    `fn = make_emitter()`; обёртка носителя — `partial` над носителем, вызванная, поданная
+    другому носителю или вложенная в `partial`, — не результат не-`partial` вызова и
+    ловится, см. «ПО НОСИТЕЛЮ ССЫЛКИ»), обёрнутая `lambda`
+    (`f = lambda *a: logger.info(*a)` — та же
     функция-обёртка, что `def note(x): …` выше), и связывание не оператором, а вызовом или
     через пространство имён — `setattr(self, "f", logger.info)`,
     `globals()["f"] = logger.info`, `vars(obj)["f"] = logger.info`: ссылка кладётся в
@@ -348,19 +381,24 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
 from __future__ import annotations
 
 import ast
+import itertools
 import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Mapping
+from typing import Callable, Mapping
 
 import pytest
 
-# Семантика носителя — функции общего модуля (план 16-32, О-14 (а), О-15): своих копий
-# (`_iterable_elements`, `_getattr_literal`, извлечения аргументов ссылки) гейт не держит.
-# `iterable_elements` здесь зовёт `reference_arguments`; ввоз держит имя для
-# правила-паритета, как и `ELEMENTWISE_CARRIERS` и `REFERENCE_KEYWORDS` (ключ ссылки
-# правилом носителя больше не читается — ссылку несёт любой именованный аргумент).
+# Семантика носителя и обёртки носителя — функции общего модуля (планы 16-32 и 16-37;
+# О-14 (а), О-15, О-16 (а)): своих копий (`_iterable_elements`, `_getattr_literal`,
+# извлечения аргументов ссылки, неподвижной точки «имя → обёртки», ручного применения
+# обёртки) гейт не держит. `iterable_elements` гейт зовёт и сам — в пути `methodcaller`
+# (`_applied_log_methodcaller`: получатель — первый элемент литерального списка, поданного
+# ссылке); общая `reference_arguments` доходит до неё только через `elementwise_arguments`
+# у поэлементного носителя. Ввоз держит и имена, которые гейт не зовёт, — для
+# правила-паритета: `ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
+# `applied_wrapper` (применение строит `wrapper_applications`).
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
@@ -368,12 +406,17 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     Binding,
     BindingForm,
     IdentificationValue,
+    applied_wrapper,
     binding_form_source,
     binding_name,
+    carrier_wrapper_bindings,
     getattr_literal,
+    is_carrier_wrapper,
     iterable_elements,
     module_bindings,
+    named_wrappers,
     reference_arguments,
+    wrapper_applications,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -619,8 +662,11 @@ class ModuleLogNames:
     исполнителя 16-29 — гейт писателя разрешает псевдонимы `partial` с плана 16-22).
     `carrier_wrappers` — пары «имя → обёртка носителя»: имя, связанное общей грамматикой с
     `partial(<носитель>, <ссылка на вызываемое журнала или methodcaller>, …)`
-    (`w = functools.partial(asyncio.to_thread, logger.info)`); вызов `w(…)` судится, как
-    применённая обёртка `partial(…)(…)` (самопроверка исполнителя 16-32, цикл 2).
+    (`w = functools.partial(asyncio.to_thread, logger.info)`); вызов `w(…)`, `self.w(…)`,
+    `getattr(self, "w")(…)` судится, как применённая обёртка `partial(…)(…)` (самопроверка
+    исполнителя 16-32, цикл 2). Отображение строит функция общего модуля
+    `carrier_wrapper_bindings` с общим предикатом `is_carrier_wrapper` (ревью WR-24, план
+    16-37; О-16 (а), свойство 5).
     Область видимости — весь модуль. Новые поля — с умолчаниями, чтобы позиционное
     создание по трём прежним полям не ломалось.
     """
@@ -879,53 +925,60 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     return replace(names, carrier_wrappers=_carrier_wrappers(bindings, names))
 
 
-def _carrier_wrappers(bindings: list[Binding], names: ModuleLogNames) -> tuple[tuple[str, ast.Call], ...]:
-    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)` (самопроверка 16-32).
+def _log_wrapper_reference(names: ModuleLogNames) -> Callable[[ast.expr], bool]:
+    """Предикат ссылки гейта для обёртки носителя: вызываемое журнала или `methodcaller`.
 
-    `w = functools.partial(asyncio.to_thread, logger.info); w("x %s", account.phone)` —
-    то же применение `partial(…)(…)`, что и на месте, разделённое связыванием: ссылка — в
-    аргументах `partial` (`reference_arguments` общего модуля находит её там), аргументы
-    применения приходят с вызова `w(…)`. Связывание — любой формой общей грамматики, цепочка
-    `g = w` — тоже, до неподвижной точки; каждое связывание имени судится. `partial` над
-    самим вызываемым журнала (`partial(logger.info, …)`) — уже функция журнала, здесь не
-    повторяется.
+    Вызываемое журнала (`_is_log_callable`: `logger.info`, `print`, `partial(logger.info, …)`
+    — `partial` над самим вызываемым журнала остаётся функцией журнала, а не обёрткой) и
+    `operator.methodcaller(…)` или имя, связанное с ним (`_methodcaller_calls`).
     """
     grouped = _grouped(names.methodcallers)
-    not_carriers = _not_carriers(names)
 
     def is_reference(node: ast.expr) -> bool:
         return _is_log_callable(node, names) or bool(
             _methodcaller_calls(node, names.methodcaller_names, grouped)
         )
 
-    found: dict[str, list[ast.Call]] = {}
-    changed = True
-    while changed:
-        changed = False
-        for target, value, _in_class_body in bindings:
-            name = binding_name(target)
-            if name is None:
-                continue
-            if isinstance(value, ast.Call):
-                values = (
-                    [value]
-                    if _last_name(value.func) in names.partial_names
-                    and not _is_log_partial(value, names)
-                    and reference_arguments(value, is_reference, not_carriers)
-                    else []
-                )
-            elif isinstance(value, ast.Name):
-                values = list(found.get(value.id, ()))
-            elif isinstance(value, ast.Attribute):
-                values = list(found.get(value.attr, ()))
-            else:
-                values = []
-            for wrapper in values:
-                known = found.setdefault(name, [])
-                if all(wrapper is not other for other in known):
-                    known.append(wrapper)
-                    changed = True
+    return is_reference
+
+
+def _carrier_wrappers(bindings: list[Binding], names: ModuleLogNames) -> tuple[tuple[str, ast.Call], ...]:
+    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)`: пары «имя → обёртка».
+
+    `w = functools.partial(asyncio.to_thread, logger.info); w("x %s", account.phone)` —
+    то же применение `partial(…)(…)`, что и на месте, разделённое связыванием. Отображение
+    строит функция общего модуля `carrier_wrapper_bindings` (неподвижная точка «имя →
+    обёртки», цепочка `g = w`, каждое связывание имени судится), что такое обёртка — общий
+    рекурсивный предикат `is_carrier_wrapper`; гейт даёт им только имена `partial` модуля
+    (`names.partial_names`) и свой предикат ссылки (`_log_wrapper_reference`). Решение
+    владельца О-16 (а), свойство 5, и О-15; ревью WR-24: до плана 16-37 здесь жила своя копия
+    неподвижной точки и проверки аргументов (самопроверка 16-32, цикл 2, коммит `5e57325d`),
+    и она уже расходилась с гейтом писателя.
+    """
+    is_reference = _log_wrapper_reference(names)
+    not_carriers = _not_carriers(names)
+
+    def is_wrapper(value: ast.Call, known: dict[str, list[ast.Call]]) -> bool:
+        return is_carrier_wrapper(value, names.partial_names, is_reference, not_carriers, known)
+
+    found = carrier_wrapper_bindings(bindings, is_wrapper, nested=True)
     return tuple((name, wrapper) for name, wrappers in sorted(found.items()) for wrapper in wrappers)
+
+
+def _log_wrappers_of(names: ModuleLogNames) -> Callable[[ast.AST], list[ast.Call]]:
+    """Обёртки носителя, которые называет узел, — функцией общего модуля `named_wrappers`.
+
+    Литерал обёртки (общий предикат `is_carrier_wrapper`), имя, атрибут и getattr-строка,
+    связанные с обёрткой (`names.carrier_wrappers`): `w`, `self.w`, `getattr(self, "w")`.
+    """
+    bound = _grouped(names.carrier_wrappers)
+    is_reference = _log_wrapper_reference(names)
+    not_carriers = _not_carriers(names)
+
+    def is_wrapper(value: ast.Call) -> bool:
+        return is_carrier_wrapper(value, names.partial_names, is_reference, not_carriers, bound)
+
+    return lambda node: named_wrappers(node, is_wrapper, bound)
 
 
 def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozenset[str]) -> frozenset[str]:
@@ -1190,12 +1243,14 @@ def python_log_calls(source: str) -> list[ast.Call]:
     Прежние вызовы журнала (`_is_identified_log_call`) и синтетические вызовы, которые
     сделает носитель ссылки на вызываемое журнала (`_carried_log_calls`) и
     `operator.methodcaller`, применённый к опознанному журналу
-    (`_applied_log_methodcaller`), — ревью WR-17.
+    (`_applied_log_methodcaller`), — ревью WR-17; те же две функции судят каждое применение
+    обёртки носителя, которое находит функция общего модуля `wrapper_applications` (ревью
+    WR-24, WR-26, план 16-37).
     """
     tree = ast.parse(source)
     names = module_log_names(tree)
     applied = _applied_carriers(tree, names)
-    wrappers = _grouped(names.carrier_wrappers)
+    wrappers_of = _log_wrappers_of(names)
     calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -1209,21 +1264,18 @@ def python_log_calls(source: str) -> list[ast.Call]:
             calls.extend(_carried_log_calls(node, names))
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
         calls.extend(_applied_log_methodcaller(node, names, as_carrier=id(node) not in applied))
-        # Вызов имени, связанного с обёрткой носителя (`w = partial(asyncio.to_thread,
-        # logger.info); w(…)`), — как применённая обёртка `partial(…)(…)` на этом месте.
-        bound = (
-            wrappers.get(node.func.id, [])
-            if isinstance(node.func, ast.Name)
-            else wrappers.get(node.func.attr, [])
-            if isinstance(node.func, ast.Attribute)
-            else []
-        )
-        for wrapper in bound:
-            application = ast.copy_location(
-                ast.Call(func=wrapper, args=list(node.args), keywords=list(node.keywords)), node
-            )
-            calls.extend(_carried_log_calls(application, names))
-            calls.extend(_applied_log_methodcaller(application, names))
+        # Обёртка носителя судится везде, где её прочитали (ревью WR-24, WR-26; решение
+        # владельца О-16 (а), свойства 2 и 3): вызванная (`w(…)`, `self.w(…)`,
+        # `getattr(self, "w")(…)`), поданная другому носителю литералом или именем, обёрнутая
+        # ещё одним `partial` или вложенная глубже — каждое применение находит функция общего
+        # модуля `wrapper_applications` (рекурсивно, с защитой от цикла), и каждое судится как
+        # носитель на месте внешнего вызова; на месте связывания обёртка судится всегда (выше).
+        # `X(…)` в `X(…)(…)` носителем не судится — его судит применение.
+        if id(node) in applied:
+            continue
+        for item in wrapper_applications(node, wrappers_of, _not_carriers(names)):
+            calls.extend(_carried_log_calls(item.application, names))
+            calls.extend(_applied_log_methodcaller(item.application, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
@@ -1304,16 +1356,27 @@ def python_log_offences(source: str, path: str) -> list[str]:
 
     `path` — путь от корня проекта (`app/x.py`): по нему решается, читает ли вывод
     `print` человек (`scripts/`), и по нему же строится ключ реестра исключений.
+
+    Одно место — одна находка (ревью WR-24, решение владельца О-16 (а), свойство 1): находка
+    стоит на узле аргумента с номером, и обёртка носителя, судимая и на месте связывания, и
+    на месте применения, указывает на тот же узел — тройка (строка, вид, предмет) не
+    повторяется, остаётся первая по порядку. До плана 16-37 копия семантики обёртки давала
+    здесь две находки на одном месте (`w = partial(asyncio.to_thread, logger.info, "x %s",
+    account.phone); await w()`, коммит `5e57325d`).
     """
     tree = ast.parse(source)
     ranges = _function_ranges(tree)
     in_scripts = PurePosixPath(path).parts[:1] == ("scripts",)
     offences: list[str] = []
+    places: set[tuple[int, str, str]] = set()
     for call in python_log_calls(source):
         if f"{path}::{_owner(ranges, call.lineno)}" in PHONE_LOG_EXCEPTIONS:
             continue
         mask_for_a_reader = in_scripts and _is_print(call)
         for line, kind, subject in sorted(_judge_arguments(call, mask_for_a_reader=mask_for_a_reader)):
+            if (line, kind, subject) in places:
+                continue
+            places.add((line, kind, subject))
             offences.append(f"{path}:{line} — {kind} — {subject} (владелец {_owner(ranges, call.lineno)})")
     return offences
 
@@ -1883,6 +1946,55 @@ def test_a_planted_log_reference_handed_to_a_thread_target_reddens_the_gate(tmp_
         "ссылка на метод журнала, поданная именованным аргументом, не опознана: гейт обошёл "
         f"синтетическое дерево ({_render(scans)}) и промолчал о "
         f"`threading.Thread(target=logger.info, args=(…, account.phone))`: {offences}"
+    )
+
+
+def test_a_planted_log_wrapper_called_through_a_getattr_string_reddens_the_gate(tmp_path):
+    """WR-24 (D-11, D-17): обёртка журнала в атрибуте, вызванная getattr-строкой, — вызов журнала.
+
+    `self.emit_later = functools.partial(asyncio.to_thread, logger.info)` в `__init__` и
+    `await getattr(self, "emit_later")("synced %s", account.phone)` в методе — обычный код
+    службы синхронизации, какой напишут Фазы 17–20: обёртка носителя лежит в атрибуте, а имя
+    её читается getattr-строкой. До плана 16-37 гейт приватности держал свою копию семантики
+    обёртки (`_carrier_wrappers` и ручное применение, коммит `5e57325d`, самопроверка 16-32,
+    цикл 2) и искал имя обёртки только как `Name` / `Attribute`: форма уходила мимо гейта, а
+    гейт писателя ту же форму с `setattr` ловил (ревью WR-24, верификация раунда 7,
+    2026-10-16: номер напечатан). Решение владельца О-16 (а), 2026-10-18, и О-15: семантика
+    обёртки живёт один раз — в общем модуле. Подложенный файл находится тем же обходом
+    `python_sources(root)`, что и живое дерево; находка в файле ровно одна.
+    """
+    planted = tmp_path / "app" / "services" / "phone_sync.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import asyncio\n"
+        "import functools\n"
+        "import logging\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "class PhoneSync:\n"
+        "    def __init__(self):\n"
+        "        self.emit_later = functools.partial(asyncio.to_thread, logger.info)\n"
+        "\n"
+        "    async def report(self, account):\n"
+        '        await getattr(self, "emit_later")("synced %s", account.phone)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_sync.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_sync.py:13 — имя — phone (владелец report)"
+    ], (
+        "обёртка журнала, вызванная getattr-строкой, не опознана: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и промолчал о "
+        f'`await getattr(self, "emit_later")("synced %s", account.phone)`: {offences}'
     )
 
 
@@ -2569,7 +2681,90 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="carrier-wrapper-bound-to-a-name-methodcaller",
     ),
+    # Ревью WR-24 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 1):
+    # гейт держал свою копию семантики обёртки (`_carrier_wrappers`, коммит `5e57325d`) и искал
+    # имя обёртки только как `Name` / `Attribute` — обёртка, вызванная getattr-строкой, давала
+    # `[]`, а гейт писателя ту же форму ловил; та же копия судила обёртку с аргументами дважды
+    # на одном месте (на `5e57325d^` — одна находка, на `5e57325d` — две: регрессия счёта).
+    pytest.param(
+        "app/x.py",
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.w = functools.partial(asyncio.to_thread, logger.info)\n"
+        "\n"
+        "    async def go(self, account):\n"
+        '        await getattr(self, "w")("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-on-an-attribute-called-by-a-getattr-string",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    w = functools.partial(asyncio.to_thread, logger.info, "x %s", account.phone)\n'
+        "    await w()\n",
+        "phone",
+        id="log-wrapper-with-arguments-called-once-per-place",
+    ),
+    # Ревью WR-26 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 3):
+    # обёртку журнала, поданную другому носителю литералом или именем, обёрнутую ещё одним
+    # `partial` или вложенную глубже, не ловил ни один гейт и на базе `2f8c1656` — исполнение
+    # напечатало номер; `methodcaller` в поданной обёртке получает получателя от внешнего носителя.
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    await loop.run_in_executor(None, functools.partial(ctx.run, logger.info), "x %s", account.phone)\n',
+        "phone",
+        id="literal-log-wrapper-handed-to-run-in-executor",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    w = functools.partial(ctx.run, logger.info); await asyncio.to_thread(w, "x %s", account.phone)\n',
+        "phone",
+        id="named-log-wrapper-handed-to-to-thread",
+    ),
+    pytest.param(
+        "app/x.py",
+        'functools.partial(functools.partial(ctx.run, logger.info))("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-wrapped-in-partial",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        "    w = functools.partial(ctx.run, logger.info)\n"
+        "    w2 = functools.partial(asyncio.to_thread, w)\n"
+        '    await w2("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-over-a-named-log-wrapper",
+    ),
+    pytest.param(
+        "app/x.py",
+        'functools.partial(functools.partial(functools.partial(ctx.run, logger.info)))("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "app/x.py",
+        "w = functools.partial(functools.partial(functools.partial(ctx.run, logger.info)))\n"
+        'w("x %s", account.phone)\n',
+        "phone",
+        id="named-log-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        "    await loop.run_in_executor(None, functools.partial(ctx.run, "
+        'operator.methodcaller("info", "x %s", account.phone)), logger)\n',
+        "phone",
+        id="methodcaller-in-a-handed-log-wrapper",
+    ),
 ]
+
+
+def _offence_place(offence: str) -> str:
+    """Находка без владельца — тройка «`путь:строка` — вид — предмет», место находки."""
+    return offence.rsplit(" (владелец ", 1)[0]
 
 
 @pytest.mark.parametrize(("path", "source", "subject"), NEGATIVE_CONTROLS)
@@ -2580,6 +2775,10 @@ def test_a_number_handed_to_a_python_log_call_is_found(path, source, subject):
     assert any(subject in offence and offence.startswith(f"{path}:") for offence in offences), (
         f"находка не называет предмет {subject!r}: {offences}"
     )
+    # Одно место — одна находка (ревью WR-24, решение владельца О-16 (а), свойство 1): тройка
+    # «строка, вид, предмет» не повторяется, какими бы путями гейт ни дошёл до места.
+    places = [_offence_place(offence) for offence in offences]
+    assert len(places) == len(set(places)), f"одно место дало находку дважды: {offences}"
 
 
 def test_a_number_handed_to_a_logger_bound_by_assignment_is_found():
@@ -2791,7 +2990,7 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     # абзац носителя называет ссылку, поданную любым именованным аргументом, литеральной
     # `*`-распаковкой и в применённой обёртке, общее правило литеральных аргументов того же
     # вызова и не сужает правило прежней оговоркой о звёздочке; шапка называет шесть
-    # носителей, которые план 16-34 впишет в `REFERENCE_CARRIERS`, и обёртку итерируемой у
+    # носителей, вписанных планом 16-34 в `REFERENCE_CARRIERS`, и обёртку итерируемой у
     # `map`, место цены строгости и пункт границы об аргументах, пришедших нелитералом.
     if paragraph:
         for needle in (
@@ -2826,6 +3025,35 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     data_item = boundary[boundary.rfind("* ", 0, data_start) : data_end] if 0 <= data_start < data_end else ""
     if "поток данных" not in data_item:
         missing.append("граница не называет аргументы ссылки, пришедшие нелитералом (`args=row`), с причиной «поток данных»")
+    # Ось «где прочитано имя обёртки» (ревью WR-24, WR-26; решение владельца О-16 (а), план
+    # 16-37): шапка называет функции общего модуля семантики обёртки, имя обёртки,
+    # прочитанное getattr-строкой, и раскрытие поданной и вложенной обёртки; фраза «своих
+    # копий нет» правдива только вместе с ними.
+    for needle in ("`carrier_wrapper_bindings`", "`wrapper_applications`", "getattr-строк", "WR-24", "WR-26", "О-16 (а)"):
+        if needle not in flat:
+            missing.append(f"нет «{needle}»")
+    if paragraph:
+        for needle in ("поданная другому носителю", "`partial(partial("):
+            if needle not in paragraph:
+                missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+    # Строки `REFERENCE_CARRIERS` плана 16-34 вписаны — шапка не говорит о них в будущем
+    # времени (ревью IN-17, решение владельца О-17).
+    if re.search(r"впишет[^.]*16-34|16-34[^.]*впишет", flat):
+        missing.append("шапка говорит о строках плана 16-34 в будущем времени («впишет»)")
+    # Комментарий ввоза (ревью IN-16, О-17): строки `#` прямо над ввозом общего модуля не
+    # называют выведенную таблицу ключа ссылки (имя склеено, чтобы правило её не цитировало)
+    # и называют путь `methodcaller`, в котором гейт сам зовёт `iterable_elements`.
+    lines = Path(__file__).read_text(encoding="utf-8").splitlines()
+    start = next(index for index, line in enumerate(lines) if line.startswith("from tests.phone_gate_grammar import"))
+    comment = " ".join(line for line in reversed(list(itertools.takewhile(
+        lambda line: line.startswith("#"), reversed(lines[:start])
+    ))))
+    if not comment:
+        missing.append("над ввозом общего модуля нет комментария")
+    if "REFERENCE_" + "KEYWORDS" in comment:
+        missing.append("комментарий ввоза называет выведенную таблицу ключа ссылки")
+    if "methodcaller" not in comment or "iterable_elements" not in comment:
+        missing.append("комментарий ввоза не называет путь `methodcaller`, где гейт зовёт `iterable_elements`")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
@@ -3127,6 +3355,15 @@ POSITIVE_CONTROLS = [
         "w = functools.partial(asyncio.to_thread, prepare_upload)\nw(content)\n",
         False,
         id="carrier-wrapper-bound-to-a-name-non-log-reference-is-not-a-log",
+    ),
+    # Ревью WR-26 (план 16-37): обёртка носителя с не-журнальной ссылкой, поданная исполнителю, —
+    # не вызов журнала: раскрытие поданной обёртки ищет ссылку на журнал, а не любую.
+    pytest.param(
+        "app/x.py",
+        "async def f(content):\n"
+        "    await loop.run_in_executor(None, functools.partial(ctx.run, prepare_upload), content)\n",
+        False,
+        id="handed-carrier-wrapper-non-log-reference-is-not-a-log",
     ),
 ]
 
