@@ -6789,6 +6789,76 @@ LITERAL_FORM_CASES = [
         "phone",
         id="methodcaller-receiver-read-by-a-getattr-string-handed-to-to-thread",
     ),
+    # Зонд исполнителя 16-42 (та же ось «где прочитано имя», О-18 (а), свойство 2): псевдоним
+    # самого `operator.methodcaller` и пишущего API, прочитанный getattr-строкой или звеном
+    # цепочки через атрибут / getattr-строку. До плана 16-42 переименование псевдонимов
+    # носителя (`_rename_aliases`) getattr-строку не читало, а цепочка псевдонима
+    # (`_module_aliases`) шла только через имя: `m2 = self.mc` и `s2 = getattr(self, "s")`
+    # теряли псевдоним, и все пять форм давали `[]`.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "mc")("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-alias-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        m2 = self.mc\n"
+        '        m2("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-alias-chained-through-an-attribute",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        m2 = getattr(self, "mc")\n'
+        '        m2("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-alias-chained-through-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.s = setattr\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.s\n"
+        '        s2(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-alias-chained-through-an-attribute",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.s = setattr\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        s2 = getattr(self, "s")\n'
+        '        s2(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-alias-chained-through-a-getattr-string",
+    ),
 ]
 
 
@@ -7305,6 +7375,27 @@ LEGITIMATE_CASES = [
         "    def go(self):\n"
         '        getattr(self, "f")(MessengerAccount.phone)\n',
         id="noop-methodcaller-read-by-a-getattr-string",
+    ),
+    # Зонд исполнителя 16-42: те же псевдонимы, прочитанные getattr-строкой и звеном цепочки,
+    # с чужой колонкой — не запись номера.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "mc")("__set__", account, x)(MessengerAccount.status)\n',
+        id="methodcaller-alias-read-by-a-getattr-string-other-column",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.s = setattr\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.s\n"
+        '        s2(account, "status", x)\n',
+        id="setattr-alias-chained-through-an-attribute-other-column",
     ),
 ]
 
