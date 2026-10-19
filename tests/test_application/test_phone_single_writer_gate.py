@@ -4597,7 +4597,21 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     wr28 = _chronicle_segment(flat, "Летопись WR-28")
     if not wr28:
         missing.append("нет «Летопись WR-28»")
-    for needle in ("восьм", "getattr-строк", "reading_name", "О-18 (а)"):
+    # Перепись мест чтения имени (план 16-42): летопись называет каждое место, переведённое на
+    # общий читатель после зонда исполнителя, — переименование и цепочку псевдонимов, поглощение
+    # `partial` у использования, получатель `__init__` псевдонима модели, цепочку псевдонима
+    # дескриптора.
+    for needle in (
+        "восьм",
+        "getattr-строк",
+        "reading_name",
+        "О-18 (а)",
+        "`_rename_aliases`",
+        "`_module_aliases`",
+        "поглощени",
+        "`__init__`",
+        "`_api_alias_targets`",
+    ):
         if wr28 and needle not in wr28:
             missing.append(f"летопись WR-28 не называет «{needle}»")
     out_of_scope = flat.find("Вне охвата", boundary_start) if boundary_start >= 0 else -1
