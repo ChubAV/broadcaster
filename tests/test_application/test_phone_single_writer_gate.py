@@ -4282,7 +4282,9 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     `REFERENCE_CARRIERS`, формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`) — в
     «ГРАНИЦЕ ПРЕДИКАТА» с причиной, а пойманный теперь связанный `partial` — не в пункте
     (1). Заявление не сужено (решение владельца О-12 (а); запреты 16-09 №2, 16-12 №2,
-    16-17 №2, 16-22 №2).
+    16-17 №2, 16-22 №2). С плана 16-36 (ревью CR-03, WR-26; О-16 (а)) — и ось «где прочитано
+    имя обёртки»: шапка называет суд обёртки на каждом чтении через `wrapper_applications`
+    и летопись регрессии `147f5e46`, а пункт (1) не называет поданную обёртку границей.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4369,6 +4371,34 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     ):
         if claim not in flat:
             missing.append(f"заявление сужено: нет «{claim}»")
+    # Ось «где прочитано имя обёртки» (ревью CR-03, WR-26; решение владельца О-16 (а), план
+    # 16-36): обёртка носителя под именем судится везде, где её имя прочитано, поданная и
+    # вложенная обёртка раскрывается функцией общего модуля, а летопись называет регрессию
+    # `147f5e46`, внесённую самой партией.
+    for needle in (
+        "везде, где её имя прочитано",
+        "`wrapper_applications`",
+        "CR-03",
+        "WR-26",
+        "147f5e46",
+        "О-16 (а)",
+    ):
+        if needle not in flat:
+            missing.append(f"нет суда обёртки на каждом чтении: нет «{needle}»")
+    if "судится как применённая на месте вызова `w(…)`" in flat:
+        missing.append(
+            "шапка всё ещё сужает суд обёртки под именем до вызова: «судится как применённая "
+            "на месте вызова `w(…)`»"
+        )
+    if boundary_start >= 0 and boundary_end >= 0 and item:
+        for match in re.finditer("обёртк", item):
+            nearby = item[max(0, match.start() - 80) : match.end() + 80]
+            if "подан" in nearby:
+                missing.append(
+                    "пункт (1) «ГРАНИЦЫ ПРЕДИКАТА» называет обёртку носителя, поданную "
+                    f"носителю, границей: «{nearby}»"
+                )
+                break
 
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "
