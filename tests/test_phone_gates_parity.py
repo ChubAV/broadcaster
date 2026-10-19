@@ -42,6 +42,11 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   и каждый носитель `REFERENCE_CARRIERS`» оба гейта находят — писатель запись номера,
   приватность номер в журнале. Ячейку обоих гейтов собирает одна функция
   `binding_form_source` общего модуля; своей сборки исходников здесь нет.
+* Словарь седьмого круга (`test_the_shared_dictionary_holds_the_round_seven_axes`, план 16-39):
+  девять строк `REFERENCE_CARRIERS` — поданная обёртка, обёртка в обёртке, именованная обёртка
+  (вызов, передача, передача с аргументами, getattr-вариант), `starmap`, `apply_async` и место
+  не-литеральной итерируемой у `map` (`ReferenceCarrier.last`), — так что регрессии
+  `c6953017` и `147f5e46` краснят обе матрицы и это правило по построению.
 * Формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`): ни один гейт не разрешает их
   связывание, и у каждой формы есть причина. Сравнивается связывание, а не сырое число
   находок: гейт писателя находит запись и там, где значение несёт её само
@@ -242,6 +247,76 @@ def test_the_elementwise_and_row_carriers_name_the_installed_apis():
         f"нет в таблицах {sorted(installed - (elementwise | rows))}, "
         f"нет в stdlib {sorted((elementwise | rows) - installed)}, "
         f"в обеих таблицах {sorted(elementwise & rows)}"
+    )
+
+
+# Девять строк словаря седьмого круга (ревью CR-02, CR-03, WR-24, WR-25, WR-26; верификация
+# раунда 7; решение владельца О-16 (а), свойство 6; план 16-39).
+ROUND_SEVEN_CARRIERS = (
+    "wrapper-handed",
+    "wrapper-of-wrapper",
+    "named-wrapper-called",
+    "named-wrapper-handed",
+    "named-wrapper-bound-handed",
+    "named-wrapper-getattr",
+    "starmap",
+    "apply-async",
+    "map-named-iterable",
+)
+
+
+def test_the_shared_dictionary_holds_the_round_seven_axes():
+    """Словарь матриц и паритета держит оси седьмого круга и смысл места `last`.
+
+    Ни одно правило суиты не краснело на регрессиях `c6953017` (CR-02: итерируемая
+    поэлементного носителя у гейта приватности судилась поэлементно) и `147f5e46` (CR-03:
+    обёртка под именем, переданная исполнителю, не судилась гейтом писателя): строки `map`
+    словаря литеральны, именованной и поданной обёртки, `starmap` и `apply_async` в словаре не
+    было. Матрицы зелёные и без этих строк, поэтому их удаление ничего бы не покраснило — это
+    правило держит (а) девять `id` и не меньше 20 носителей; (б) у `map-named-iterable` поле
+    `last` — выражение-не-литерал (не список, кортеж или набор), называющее `phone`; (в) смысл
+    места: `binding_form_source` ставит `last` на место ПОСЛЕДНЕГО позиционного аргумента
+    применения, когда их два и более, а у значения с одним позиционным (получатель
+    `methodcaller`) места нет — аргументы прежние, получатель обязан быть опознан (D-17). Без
+    места ячейка видела бы регрессию CR-02 только по литералу (решение владельца О-16 (а),
+    свойство 6; план 16-39).
+    """
+    problems: list[str] = []
+    carriers = {carrier.id: carrier for carrier in grammar.REFERENCE_CARRIERS}
+    for carrier_id in ROUND_SEVEN_CARRIERS:
+        if carrier_id not in carriers:
+            problems.append(f"нет строки `{carrier_id}`")
+    if len(grammar.REFERENCE_CARRIERS) < 20:
+        problems.append(f"носителей {len(grammar.REFERENCE_CARRIERS)} — меньше 20")
+    named_iterable = carriers.get("map-named-iterable")
+    last = getattr(named_iterable, "last", "") if named_iterable is not None else ""
+    if not last:
+        problems.append("у `map-named-iterable` нет места не-литеральной итерируемой (`last`)")
+    else:
+        node = ast.parse(last, mode="eval").body
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            problems.append(f"`last` строки `map-named-iterable` — литерал: `{last}`")
+        if "phone" not in last:
+            problems.append(f"`last` строки `map-named-iterable` не называет `phone`: `{last}`")
+    if named_iterable is not None and named_iterable.name not in grammar.ELEMENTWISE_CARRIERS:
+        problems.append(f"`map-named-iterable` не поэлементный носитель: `{named_iterable.name}`")
+    if named_iterable is not None and last:
+        form = grammar.BINDING_FORMS[0]
+        two = grammar.IdentificationValue("two", "probe_fn", "(first, second)")
+        one = grammar.IdentificationValue("one", "probe_fn", "(receiver)")
+        for value, expected in ((two, ["[first]", last]), (one, ["[receiver]"])):
+            source = grammar.binding_form_source(form, value, named_iterable)
+            calls = [
+                node
+                for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "map"
+            ]
+            got = [ast.unparse(argument) for argument in calls[0].args[1:]] if calls else None
+            if got != expected:
+                problems.append(f"ячейка `{value.id}`: аргументы `map` {got}, ожидалось {expected}")
+
+    assert not problems, "словарь матриц и паритета не держит ось седьмого круга:\n" + "\n".join(
+        f"  {problem}" for problem in problems
     )
 
 

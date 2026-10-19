@@ -88,7 +88,18 @@
   `to_thread`, `run_in_executor`, `map`, `Context.run` и шесть строк, вписанные планом
   16-34: `to_thread(*[…])`, `partial(to_thread, …)(…)`, `Thread(target=…, args=…)`,
   `Timer(…, args=…)`, `enqueue(job=…, payload=…)` и `map` с обёрткой итерируемой
-  `list([…])` — словарь, общий с гейтом писателя, а не закрытый список:
+  `list([…])`; девять строк седьмого круга, вписанные планом 16-39 (ревью CR-02, CR-03,
+  WR-24, WR-25, WR-26; их держат обе матрицы и правило-паритет): обёртка носителя, поданная
+  исполнителю (`run_in_executor(None, partial(Context.run, …), …)`), обёртка в обёртке
+  (`partial(partial(Context.run, …))(…)`), обёртка под именем — вызванная
+  (`w = partial(to_thread, …); w(…)`), переданная исполнителю
+  (`w = partial(Context.run, …); run_in_executor(None, w, …)`), переданная вместе с
+  аргументами журнала, как дословное тело `asyncio.to_thread`
+  (`w = partial(Context.run, …, args); run_in_executor(None, w)`), вызванная getattr-строкой
+  (`getattr(holder, "w")(…)`), — `starmap`, `apply_async` и `map` с не-литеральной
+  итерируемой на месте последнего позиционного аргумента (`account.phones` — место
+  `ReferenceCarrier.last`: такая итерируемая судится целиком, план 16-38); словарь, общий с
+  гейтом писателя, а не закрытый список:
   `await asyncio.to_thread(logger.info, "x %s", account.phone)`,
   `await loop.run_in_executor(None, logger.info, …)`,
   `list(map(logger.info, [a.phone for a in accounts]))`,
@@ -294,6 +305,13 @@ IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20 → CR-02 / WR-24 / WR-25 / 
 оси «как опознан журнал» гейт стал слабее, чем был; план 16-38 вернул суд итерируемой
 целиком параметром общей функции и сделал поэлементные и построчные носители одним
 правилом; решение владельца О-16 (а), 2026-10-18.
+
+Летопись словаря седьмого круга: план 16-39 вписал в общий словарь девять носителей седьмого
+круга — обёртку, поданную носителю, обёртку в обёртке, именованную обёртку (вызов, передача,
+передача с аргументами, getattr-вариант), `starmap`, `apply_async` и не-литеральную
+итерируемую у `map` — так, что регрессии `c6953017` и `147f5e46` краснят обе матрицы и
+правило-паритет; партия раунда 7 сверила каждый GREEN с родителем и итог — с базой партии и с
+`2f8c1656` (мера «база ↔ HEAD», решение владельца О-16 (а), 2026-10-18).
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -3165,6 +3183,19 @@ def test_every_binding_form_of_a_log_reference_is_judged(form: BindingForm):
     )
 
 
+def _chronicle_segment(flat: str, heading: str) -> str:
+    """Абзац летописи шапки: от заголовка до следующей летописи или раздела шапки."""
+    start = flat.find(heading)
+    if start < 0:
+        return ""
+    ends = [
+        index
+        for marker in ("Летопись", "РЕЕСТР ИСКЛЮЧЕНИЙ", "ЧТО КРАСНИТ")
+        if (index := flat.find(marker, start + len(heading))) >= 0
+    ]
+    return flat[start : min(ends, default=len(flat))]
+
+
 def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     """Шапка обещает ровно то, что видит предикат по оси «как опознан журнал».
 
@@ -3176,6 +3207,9 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     каждый носитель `REFERENCE_CARRIERS`, `methodcaller`, правило «судятся аргументы после
     ссылки» и цену строгости носителя местами живого дерева; прежние пункты «ГРАНИЦЫ
     СРЕДСТВА» не стёрты (решение владельца О-12 (а); запреты 16-09 №2, 16-18 №2, 16-23 №2).
+    С плана 16-39 (итог партии раунда 7, О-16 (а), свойства 6, 7) — и летопись словаря
+    седьмого круга: девять носителей, регрессии `c6953017` и `147f5e46`, мера «база ↔ HEAD»
+    против базы партии и `2f8c1656`.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -3292,6 +3326,27 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("CR-02", "c6953017", "WR-25"):
         if needle not in flat:
             missing.append(f"нет летописи CR-02 / WR-25: нет «{needle}»")
+    # Итог партии раунда 7 (решение владельца О-16 (а), свойства 6, 7; план 16-39): летопись
+    # словаря седьмого круга называет девять носителей, регрессии, которые они краснят, и меру
+    # «база ↔ HEAD» — каждый GREEN против родителя, итог против базы партии и `2f8c1656`.
+    for needle in ("16-39", "база ↔ HEAD", "О-16 (а)"):
+        if needle not in flat:
+            missing.append(f"нет итога партии раунда 7: нет «{needle}»")
+    chronicle = _chronicle_segment(flat, "Летопись словаря седьмого круга")
+    if not chronicle:
+        missing.append("нет «Летопись словаря седьмого круга»")
+    for needle in (
+        "16-39",
+        "девять носителей седьмого круга",
+        "c6953017",
+        "147f5e46",
+        "базой партии",
+        "2f8c1656",
+        "база ↔ HEAD",
+        "О-16 (а)",
+    ):
+        if chronicle and needle not in chronicle:
+            missing.append(f"летопись словаря седьмого круга не называет «{needle}»")
     if "судится само выражение" not in data_item:
         missing.append("пункт границы об аргументах нелитералом больше не обещает «судится само выражение»")
     # Строки `REFERENCE_CARRIERS` плана 16-34 вписаны — шапка не говорит о них в будущем
