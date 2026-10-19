@@ -6595,6 +6595,42 @@ LITERAL_FORM_CASES = [
         "phone",
         id="methodcaller-in-a-handed-carrier-wrapper",
     ),
+    # Сверка «база ↔ HEAD» самопроверки исполнителя 16-36 (свойство 7 О-16 (а)): обёртка с
+    # аргументами записи, вложенная в `partial` литералом, давала одну находку у родителя
+    # GREEN `44452e68` и на базе плана и две — на `44452e68`: рекурсивный предикат сделал
+    # вложенные литералы обёртками, и каждый уровень судил ту же запись у себя. Одно
+    # место — одна находка.
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    runner.call(\n"
+        '        functools.partial(functools.partial(asyncio.to_thread, setattr, account, "phone", x))\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="nested-carrier-wrapper-with-arguments-handed",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(\n"
+        '        functools.partial(functools.partial(asyncio.to_thread, setattr, account, "phone", x))\n'
+        "    )\n"
+        "    w()\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="named-nested-carrier-wrapper-with-arguments-called",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    functools.partial(\n"
+        '        functools.partial(functools.partial(ctx.run, setattr, account, "phone", x))\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="nested-carrier-wrapper-with-arguments-unused",
+    ),
 ]
 
 
