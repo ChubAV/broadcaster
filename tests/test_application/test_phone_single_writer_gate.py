@@ -560,6 +560,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     is_carrier_wrapper,
     module_bindings,
     named_wrappers,
+    reading_name,
     reference_arguments,
     wrapper_applications,
 )
@@ -1565,30 +1566,12 @@ def _callee_receiver(func: ast.expr) -> ast.expr | None:
     return literal[0] if literal is not None else None
 
 
-def _getattr_string(node: ast.AST | None) -> str | None:
-    """Строка `getattr(<obj>, "<строка>")` по читателю общего модуля `getattr_literal`, иначе `None`.
-
-    Читатель getattr-литерала один на оба гейта (план 16-32 вынес его в общий модуль, план
-    16-34 перевёл на него гейт писателя; ревью IN-15, О-15): строгая форма — два или три
-    позиционных аргумента, без именованных и звёздочки. До плана 16-34 у гейта писателя
-    была своя копия `_getattr_literal` (два и более аргументов, любые именованные); замер
-    планирования: строгая форма не меняет ни одного ответа строк, матриц и живого дерева.
-    """
-    literal = getattr_literal(node) if node is not None else None
-    return literal[1] if literal is not None else None
-
-
-def _reference_name(node: ast.AST | None) -> str | None:
-    """Имя ССЫЛКИ на функцию: `Name.id`, `Attribute.attr` или строка `getattr(…, "…")`.
-
-    Ссылка — функция, поданная другому вызову без вызова: `run_sync(Session.
-    bulk_update_mappings, …)`, `partial(set_attribute, …)`. У прочих узлов — `None`.
-    """
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return _getattr_string(node)
+# Имя связанного в месте чтения — вызываемого, ссылки, значения-звена цепочки, получателя
+# `methodcaller` и предиката ссылки обёртки — гейт читает ОДНИМ общим читателем
+# `reading_name` (ревью WR-28, план 16-42; решение владельца О-18 (а), свойство 2): своих
+# копий у гейта нет. До плана 16-42 здесь были `_reference_name` (имя, атрибут, getattr-строка)
+# и `_getattr_string` (только getattr-строка, план 16-34), а получатели `methodcaller` и
+# предикат ссылки обёртки читали имя своими проверками `Name` / `Attribute` без getattr-строки.
 
 
 # Ссылка с привязанными аргументами: (имя API, узел ссылки, позиционные, именованные).
@@ -1618,7 +1601,7 @@ def _bound_reference(
     а не первая), и само имя остаётся ссылкой — на случай, если оно ещё и
     псевдоним пишущего API; вызывающий отбирает ссылки на судимые имена.
     """
-    name = _reference_name(node)
+    name = reading_name(node)
     if name is not None:
         assert node is not None
         found: list[BoundReference] = []
@@ -1700,11 +1683,7 @@ def _partial_aliases(
                 bounds = _bound_reference(value, partial_names, found)
                 if any(bound[0] in judged_names for bound in bounds):
                     changed |= _add_bound_values(found, name, [value])
-            elif (
-                isinstance(value, (ast.Name, ast.Attribute))
-                and (reference := _reference_name(value)) in found
-                and reference != name
-            ):
+            elif (reference := reading_name(value)) in found and reference != name:
                 changed |= _add_bound_values(found, name, list(found[reference]))
     return found
 
@@ -1732,11 +1711,7 @@ def _methodcaller_aliases(
             value = binding.value
             if isinstance(value, ast.Call) and _call_name(value) == "methodcaller":
                 changed |= _add_bound_values(found, name, [value])
-            elif (
-                isinstance(value, (ast.Name, ast.Attribute))
-                and (reference := _reference_name(value)) in found
-                and reference != name
-            ):
+            elif (reference := reading_name(value)) in found and reference != name:
                 changed |= _add_bound_values(found, name, list(found[reference]))
     return found
 
@@ -1775,12 +1750,12 @@ def _methodcaller_receivers(
 
     def methodcallers_of(node: ast.expr) -> list[ast.expr]:
         # Имя, связанное с `methodcaller(…)` несколько раз, применяет КАЖДОЕ своё
-        # значение (ревью WR-18, план 16-31).
+        # значение (ревью WR-18, план 16-31). Имя читает один общий читатель
+        # `reading_name` — вызовом, атрибутом и getattr-строкой (ревью WR-28, план 16-42;
+        # до плана getattr-строка у получателей `methodcaller` не читалась).
         if isinstance(node, ast.Call) and _call_name(node) == "methodcaller":
             return [node]
-        if isinstance(node, (ast.Name, ast.Attribute)):
-            return list(aliases.get(_reference_name(node) or "", []))
-        return []
+        return list(aliases.get(reading_name(node), []))
 
     found: dict[int, dict[int, ast.expr]] = {}
 
@@ -1857,11 +1832,11 @@ def _absorbed_carrier_wrappers(
             link_targets.setdefault(place(binding.value), set()).add(target)
     reads: dict[str, list[ast.AST]] = {}
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
-            name = binding_name(node)
-        else:
-            literal = getattr_literal(node)
-            name = literal[1] if literal is not None else None
+        # Чтение — общим читателем `reading_name` (план 16-42); цель связывания (`Store`) —
+        # не чтение.
+        if isinstance(node, (ast.Name, ast.Attribute)) and not isinstance(node.ctx, ast.Load):
+            continue
+        name = reading_name(node)
         if name is not None and name in carrier_wrappers:
             reads.setdefault(name, []).append(node)
     names_of: dict[int, set[str]] = {}
@@ -1907,9 +1882,12 @@ def _carrier_wrappers(
     mc_aliases = _methodcaller_aliases(tree, judged_names)
 
     def is_reference(node: ast.expr) -> bool:
+        # Имя, связанное с `methodcaller`, — по общему читателю `reading_name` (ревью WR-28,
+        # план 16-42): обёртка `partial(asyncio.to_thread, getattr(self, "f"))` с `self.f =
+        # methodcaller(…)` — тоже обёртка ссылки.
         if isinstance(node, ast.Call) and _call_name(node) == "methodcaller":
             return True
-        if isinstance(node, (ast.Name, ast.Attribute)) and (_reference_name(node) or "") in mc_aliases:
+        if reading_name(node) in mc_aliases:
             return True
         return any(
             bound[0] in referable
@@ -2634,7 +2612,7 @@ def _rename_aliases(tree: ast.AST, name: str) -> None:
 
     Только узлы в контексте чтения: присваивание псевдонима остаётся, а его
     использования читаются как исходное имя всеми ветками, опознающими носитель по
-    имени (`_call_name`, `_getattr_string`, `_referenced_calls`). Имя `Name` — на
+    имени (`_call_name`, `reading_name`, `_referenced_calls`). Имя `Name` — на
     месте; атрибут `<obj>.<псевдоним>` — узлом `Name(name)` вместо атрибута: псевдоним,
     связанный целью-атрибутом `self.mc = operator.methodcaller` или в теле класса
     (`attr = getattr`), зовут через атрибут — `self.mc(…)`, `K.attr(…)`, — и до
@@ -2800,13 +2778,10 @@ def _call_name(call: ast.Call) -> str | None:
 
     Последнее звено вызываемого: `update(...)` → `update`, `stmt.values(...)` →
     `values`; строка вызываемого `getattr(<что угодно>, "<строка>")(…)` →
-    `<строка>` (ревью WR-10: `getattr(session, "bulk_update_mappings")(…)`).
+    `<строка>` (ревью WR-10: `getattr(session, "bulk_update_mappings")(…)`). Имя
+    вызываемого читает общий читатель `reading_name` (ревью WR-28, план 16-42).
     """
-    if isinstance(call.func, ast.Name):
-        return call.func.id
-    if isinstance(call.func, ast.Attribute):
-        return call.func.attr
-    return _getattr_string(call.func)
+    return reading_name(call.func)
 
 
 def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
