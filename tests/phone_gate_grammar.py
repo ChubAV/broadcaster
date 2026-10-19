@@ -303,8 +303,18 @@ OUT_OF_GRAMMAR_BINDING_FORMS: tuple[OutOfGrammarForm, ...] = (
 
 # Носитель, который подаёт функции ЭЛЕМЕНТЫ итерируемых, а не сами итерируемые:
 # функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
-# [x])` зовёт `setattr(account, "phone", x)`).
-ELEMENTWISE_CARRIERS = frozenset({"map"})
+# [x])` зовёт `setattr(account, "phone", x)`). Построчный носитель подаёт функции элементы
+# каждой СТРОКИ первой итерируемой позиционными аргументами (`starmap(setattr,
+# [(account, "phone", x)])`). Какие носители поэлементны и построчны, решает одно правило
+# для обоих гейтов (ревью CR-02 / WR-25, решение владельца О-16 (а), свойство 4, план
+# 16-38): до плана таблица знала один `map`, и `pool.imap(logger.info, …)` гейт приватности
+# судил целиком, а `map(logger.info, …)` — поэлементно; прочтение строк `starmap` было
+# только у гейта писателя. Состав — замер stdlib 3.12: методы с `map` у
+# `multiprocessing.pool.Pool`, `concurrent.futures.Executor` и модуля `itertools`; сторож
+# правила-паритета `test_the_elementwise_and_row_carriers_name_the_installed_apis` краснит,
+# когда установленный stdlib назовёт метод с `map`, которого нет ни в одной таблице.
+ELEMENTWISE_CARRIERS = frozenset({"map", "imap", "imap_unordered", "map_async"})
+ROW_CARRIERS = frozenset({"starmap", "starmap_async"})
 
 
 class ReferenceCarrier(NamedTuple):
@@ -668,6 +678,7 @@ def _carried_by(
     outer_args: list[ast.expr],
     outer_keywords: list[ast.keyword],
     every_reading: bool = False,
+    keep_iterables: bool = False,
 ) -> list[ReferenceArguments]:
     """Ссылки одного носителя `source` и их аргументы (с хвостом применения `outer_*`)."""
     forwarded = forwarded_arguments(list(source.args))
@@ -726,7 +737,10 @@ def _carried_by(
             spread_args, spread_keywords = _spread_arguments(after + outer_args)
             readings.append((spread_args + literal_args + applied_args, keywords + spread_keywords))
         for index, (own_args, own_keywords) in enumerate(readings):
-            if elementwise:
+            # `keep_iterables` (гейт приватности, ревью CR-02): итерируемые поэлементного
+            # носителя подаются ссылке КАК ЕСТЬ — не-литерал самим выражением, comprehension
+            # целиком с источником итерации, `*name` узлом `Starred`, — а не элементами.
+            if elementwise and not keep_iterables:
                 # `map`: позиционные за ссылкой — итерируемые; литеральные именованные
                 # аргументы общего правила — хвостом (у прочтения «как есть» — нет).
                 tail = [] if every_reading and index == 0 else literal_args
@@ -737,9 +751,14 @@ def _carried_by(
             else:
                 results = [ReferenceArguments(reference, own_args, own_keywords)]
             add(results)
+        # Построчный носитель (`ROW_CARRIERS`) читается построчно у ОБОИХ гейтов, без флага
+        # (ревью WR-25, план 16-38): получатель `methodcaller` у `starmap(mc, [(logger,)])`
+        # лежит в строке. Литеральные кортежи прочих носителей — по-прежнему только под
+        # `every_reading` (гейт писателя). Итерируемая целиком остаётся общим прочтением выше.
+        rows = positional_reference and _callee_name(source.func) in ROW_CARRIERS
         tuples = (
             iterable_elements(after[0])
-            if every_reading and positional_reference and not elementwise and after
+            if (every_reading or rows) and positional_reference and not elementwise and after
             and not isinstance(after[0], ast.Starred)
             else None
         )
@@ -763,7 +782,11 @@ def _dump(carried: ReferenceArguments) -> str:
 
 
 def reference_arguments(
-    call: ast.Call, is_reference, not_carriers, every_reading: bool = False
+    call: ast.Call,
+    is_reference,
+    not_carriers,
+    every_reading: bool = False,
+    keep_iterables: bool = False,
 ) -> list[ReferenceArguments]:
     """Ссылки на функцию, которые вызов-носитель `call` подаёт дальше, и их аргументы.
 
@@ -786,8 +809,13 @@ def reference_arguments(
     4. К аргументам добавляется общее правило `literal_keyword_arguments` над прочими
        именованными аргументами носителя, затем аргументы применения (у его именованных —
        то же правило).
-    5. У носителя из `ELEMENTWISE_CARRIERS` при позиционной ссылке — по одному результату на
-       каждую позицию `elementwise_arguments`.
+    5. У носителя из `ELEMENTWISE_CARRIERS` (`map`, `imap`, `imap_unordered`, `map_async`) при
+       позиционной ссылке — по одному результату на каждую позицию `elementwise_arguments`. У
+       носителя из `ROW_CARRIERS` (`starmap`, `starmap_async`) при позиционной ссылке — сверх
+       общего прочтения (итерируемая целиком) по результату на каждую литеральную строку
+       первой итерируемой за ссылкой: элементы строки — позиционные аргументы ссылки. Это
+       прочтение — у обоих гейтов, без флага (ревью WR-25, план 16-38). Обе таблицы — одно
+       правило общего модуля, сверенное сторожем правила-паритета с установленным stdlib.
     6. Нет ссылки — пустой список.
     7. `every_reading=True` (гейт писателя, план 16-34; у него вид находки зависит от имени
        параметра и от того, какая из ссылок носителя — вызываемая) — каждое прочтение:
@@ -798,19 +826,43 @@ def reference_arguments(
        подают `run_sync(fn, *arg, **kw)` и `partial`: `mappings={"id": 1, "phone": p}` —
        строка executemany, а не `id=1, phone=p`); (в) общее правило и над ПОЗИЦИОННЫМИ
        аргументами за ссылкой (`_spread_arguments`: `pool.apply_async(func, (…), {…})`
-       подаёт `*args, **kwds`). Равные прочтения не повторяются; цена — в сторону лишней
-       находки. Гейт приватности судит номер в любом аргументе и зовёт функцию без флага:
-       лишние прочтения ему ничего не добавляют.
+       подаёт `*args, **kwds`); (г) элементы литеральных кортежей первой итерируемой за
+       позиционной ссылкой и у носителя вне `ROW_CARRIERS`. Равные прочтения не повторяются;
+       цена — в сторону лишней находки. Какое прочтение какому гейту нужно: гейту писателя —
+       `every_reading` (вид его находки зависит от того, какая ссылка вызываемая и как
+       поданы аргументы); гейту приватности — `keep_iterables` в правиле носителя и в
+       применениях обёртки (правило 8: он судит имена итерируемых), построчное прочтение
+       `ROW_CARRIERS` (правило 5) и `every_reading` в пути `methodcaller`: получатель
+       `methodcaller` лежит там, где его подаёт прочтение, — в строке `starmap(mc,
+       [(logger,)])`, в аргументах применения `partial(threading.Thread, target=mc)(args=
+       (logger,))`, — и без этих прочтений формы уходили мимо гейта приватности, хотя гейт
+       писателя те же формы ловил (ревью WR-25, верификация раунда 7; сверка «база ↔ HEAD»
+       плана 16-38).
+    8. `keep_iterables=True` (правило носителя гейта приватности, `_carried_log_calls`; ревью
+       CR-02, решение владельца О-16 (а), свойство 4) — у носителя из `ELEMENTWISE_CARRIERS`
+       ссылка получает итерируемые КАК ЕСТЬ, а не элементы правила 5: не-литерал — самим
+       выражением (не `UNJUDGED_ELEMENT`), comprehension — целиком, с источником итерации,
+       распаковка не-литерала `*name` — узлом `Starred`, и перечень ею не обрывается. Гейту
+       писателя имя итерируемой безразлично — колонку оно не называет (граница (1) его шапки), —
+       и он зовёт функцию без параметра: его ответ прежний. Гейт приватности судит именно
+       имена (правило (б) D-17): до плана 16-38 общая функция гасила у `map` не-литеральную
+       итерируемую, и `list(map(logger.info, account.phones))`, ловившийся на `c6953017^`,
+       уходил мимо после коммита `c6953017` (16-32), который перевёл гейт на эту функцию.
     Пустые `args` и `keywords` значат, что ссылке ничего не подано: судить нечего, и
     вызывающий гейт решает, считать ли это вызовом.
     """
     if isinstance(call.func, ast.Call) and _callee_name(call.func.func) not in not_carriers:
         found = _carried_by(
-            call.func, is_reference, list(call.args), list(call.keywords), every_reading
+            call.func,
+            is_reference,
+            list(call.args),
+            list(call.keywords),
+            every_reading,
+            keep_iterables,
         )
         if found:
             return found
-    return _carried_by(call, is_reference, [], [], every_reading)
+    return _carried_by(call, is_reference, [], [], every_reading, keep_iterables)
 
 
 def carrier_wrapper_bindings(
@@ -943,7 +995,11 @@ class WrapperApplication(NamedTuple):
 
 
 def wrapper_applications(
-    call: ast.Call, wrappers_of, not_carriers, every_reading: bool = False
+    call: ast.Call,
+    wrappers_of,
+    not_carriers,
+    every_reading: bool = False,
+    keep_iterables: bool = False,
 ) -> list[WrapperApplication]:
     """Применения обёрток носителя в вызове `call` — рекурсивно, с защитой от цикла.
 
@@ -967,6 +1023,13 @@ def wrapper_applications(
        «ссылка(аргументы ссылки)» на месте call>, w)`.
     3. Рекурсивно — применения каждого полученного применения (обёртка, поданная обёртке);
        обёртка, уже стоящая на пути, второй раз не раскрывается (защита от цикла по `id`).
+    4. `keep_iterables=True` (гейт приватности; самопроверка исполнителя 16-38, заход 1) —
+       обёртка, поданная поэлементному носителю, получает и элементы (правило 5
+       `reference_arguments`), и итерируемые целиком (правило 8): у обёртки журнала,
+       поданной `map` / `pool.imap` над не-литералом или comprehension, имя итерируемой с
+       `phone` судится, как у `map(logger.info, account.phones)` (ревью CR-02); элементы
+       остаются — из них путь `methodcaller` берёт получателя. Равные применения не
+       повторяются.
     Вызывающий гейт судит каждое `application` как носитель, а `read` — как чтение имени
     обёртки, которое судится: одно место — одна находка.
     """
@@ -974,6 +1037,17 @@ def wrapper_applications(
 
     def is_named(node: ast.expr) -> bool:
         return bool(wrappers_of(node))
+
+    def handed_readings(node: ast.Call) -> list[ReferenceArguments]:
+        readings = reference_arguments(node, is_named, not_carriers, every_reading)
+        if keep_iterables:
+            known = {_dump(carried) for carried in readings}
+            readings += [
+                carried
+                for carried in reference_arguments(node, is_named, not_carriers, every_reading, True)
+                if _dump(carried) not in known
+            ]
+        return readings
 
     def visit(node: ast.Call, path: frozenset[int]) -> None:
         own: list[WrapperApplication] = []
@@ -983,7 +1057,7 @@ def wrapper_applications(
                 WrapperApplication(callee, wrapper, applied_wrapper(node, wrapper))
                 for wrapper in wrappers_of(callee)
             ]
-        for carried in reference_arguments(node, is_named, not_carriers, every_reading):
+        for carried in handed_readings(node):
             handed = ast.copy_location(
                 ast.Call(
                     func=carried.reference,

@@ -93,8 +93,21 @@
   `await loop.run_in_executor(None, logger.info, …)`,
   `list(map(logger.info, [a.phone for a in accounts]))`,
   `contextvars.copy_context().run(logger.info, …)`, `session.run_sync(logger.info, …)`,
-  `emit = logger.info; await asyncio.to_thread(emit, …)`. У `map` ссылке подаются элементы
-  литеральной итерируемой, в том числе в обёртке `list([…])`, `tuple(…)`, `set(…)`, `iter(…)`.
+  `emit = logger.info; await asyncio.to_thread(emit, …)`. Какие носители поэлементны
+  (`map`, `imap`, `imap_unordered`, `map_async` — `ELEMENTWISE_CARRIERS`: функция получает
+  элемент каждой итерируемой) и построчны (`starmap`, `starmap_async` — `ROW_CARRIERS`:
+  функция получает элементы каждой строки), решает одно правило общего модуля для обоих
+  гейтов, сверенное сторожем правила-паритета с установленным stdlib (решение владельца
+  О-16 (а), свойство 4). Итерируемые таких носителей гейт судит ЦЕЛИКОМ: не-литерал — как
+  само выражение (`list(map(logger.info, account.phones))`, `pool.map(logger.info, phones)`,
+  `list(pool.imap(logger.info, account.phones))` — имя с `phone` краснит, `account.names` —
+  нет), comprehension — с источником итерации (`map(logger.info, [f"n {p}" for p in
+  account.phones])`), `*`-распаковку не-литерала — как есть (`map(logger.info, "x %s",
+  *phone_lists)`); литеральная итерируемая, в том числе в обёртке `list([…])`, `tuple(…)`,
+  `set(…)`, `iter(…)`, судится со всеми своими элементами (`reference_arguments(…,
+  keep_iterables=True)`). У построчного носителя итерируемая судится целиком тоже, а
+  литеральные строки ещё и построчно. Гейт писателя зовёт ту же функцию без
+  `keep_iterables`: имя итерируемой колонку не называет, его ответ прежний.
   Обёртка носителя, связанная с именем, судится везде, где её имя прочитано: вызовом
   (`w(…)`, `self.w(…)`, `getattr(self, "w")(…)` — имя обёртки читается и getattr-строкой),
   подачей носителю, а на месте связывания — всегда. Обёртка журнала, поданная другому
@@ -126,8 +139,12 @@
   (`emit = methodcaller(…); emit(logger)`, `self.emit(logger)`), или поданный ЛЮБОМУ
   носителю, — применяется к первому аргументу, который носитель подаст ссылке
   (`to_thread(mc, logger)`, `to_thread(*[mc, logger])`, `Thread(target=mc, args=(logger,))`,
-  `call(logger, fn=mc)`, `partial(asyncio.to_thread, mc)(logger)`, у `map` — элементом
-  литеральной итерируемой: `map(mc, [logger])`, `map(mc, list([logger]))`), — вызов
+  `call(logger, fn=mc)`, `partial(asyncio.to_thread, mc)(logger)`,
+  `partial(threading.Thread, target=mc)(args=(logger,))` — каждое прочтение носителя, как у
+  гейта писателя, сверка «база ↔ HEAD» плана 16-38; у поэлементного
+  носителя — элементом литеральной итерируемой: `map(mc, [logger])`, `map(mc,
+  list([logger]))`; у построчного — первым элементом каждой литеральной строки:
+  `starmap(mc, [(logger,)])`, `pool.starmap(mc, [(logger,)])`, ревью WR-25), — вызов
   `<получатель>.<метод>(…)`: судятся аргументы `methodcaller` после имени метода;
   `methodcaller` под псевдонимом ввоза или связывания — тот же. Без опознанного получателя
   `methodcaller` вызовом журнала не считается: имя метода объект журналом не делает
@@ -268,6 +285,16 @@ IN-15); `Timer(…, args=…)` ловился случайно. Пятый кр�
 гейт и на базе `2f8c1656` (номер напечатан); шестой круг оси «как опознан журнал» (IN-06 →
 IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20 → CR-02 / WR-24 / WR-25 / WR-26).
 
+Летопись CR-02 / WR-25: коммит `c6953017` (16-32, задача 1) перевёл правило носителя на
+общую `reference_arguments`, написанную по семантике гейта писателя, и у `map` она гасила
+не-литеральную итерируемую — `list(map(logger.info, account.phones))`, ловившийся до партии
+раунда 6, уходил мимо, а `pool.imap` ловился (ревью CR-02, верификация раунда 7, 2026-10-16:
+дифференциал 340 ячеек — 70 регрессий, номер напечатан); `starmap(methodcaller(…),
+[(logger,)])` гейт не читал, хотя гейт писателя ту же форму ловил (ревью WR-25); впервые на
+оси «как опознан журнал» гейт стал слабее, чем был; план 16-38 вернул суд итерируемой
+целиком параметром общей функции и сделал поэлементные и построчные носители одним
+правилом; решение владельца О-16 (а), 2026-10-18.
+
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
     разделителями и 7…15 цифрами; 11 цифр подряд с ведущей 7/8; русская разбивка
@@ -395,14 +422,16 @@ import pytest
 # извлечения аргументов ссылки, неподвижной точки «имя → обёртки», ручного применения
 # обёртки) гейт не держит. `iterable_elements` гейт зовёт и сам — в пути `methodcaller`
 # (`_applied_log_methodcaller`: получатель — первый элемент литерального списка, поданного
-# ссылке); общая `reference_arguments` доходит до неё только через `elementwise_arguments`
-# у поэлементного носителя. Ввоз держит и имена, которые гейт не зовёт, — для
-# правила-паритета: `ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
+# ссылке); общая `reference_arguments` доходит до неё через `elementwise_arguments` у
+# поэлементного носителя (`ELEMENTWISE_CARRIERS`, кроме правила носителя гейта — там
+# `keep_iterables`) и в построчном прочтении `ROW_CARRIERS` (план 16-38). Ввоз держит и имена, которые гейт не зовёт, — для
+# правила-паритета: `ELEMENTWISE_CARRIERS`, `ROW_CARRIERS`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
 # `applied_wrapper` (применение строит `wrapper_applications`).
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
+    ROW_CARRIERS,
     Binding,
     BindingForm,
     IdentificationValue,
@@ -1138,7 +1167,9 @@ def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
     позиционные ЗА ссылкой (у именованной — все позиционные носителя) и литеральные
     аргументы того же вызова по общему правилу `literal_keyword_arguments` (литеральный
     кортеж или список — позиционные, литеральный словарь — именованные), затем аргументы
-    применения; у `map` — элементы литеральных итерируемых. Тот же довод, что у
+    применения; у поэлементного носителя (`ELEMENTWISE_CARRIERS`) — сами итерируемые, целиком
+    (`keep_iterables=True`, ревью CR-02: имя итерируемой с `phone` краснит, comprehension
+    судится с источником итерации). Тот же довод, что у
     `functools.partial`: эти аргументы уйдут в журнал. Синтетический вызов
     `<ссылка>(<аргументы>)` встаёт на место носителя (`ast.copy_location`). Ссылка без
     аргументов в журнал ничего не подаёт — судить нечего, и вызовом журнала она не
@@ -1152,7 +1183,10 @@ def _carried_log_calls(call: ast.Call, names: ModuleLogNames) -> list[ast.Call]:
             ast.Call(func=carried.reference, args=carried.args, keywords=carried.keywords), call
         )
         for carried in reference_arguments(
-            call, lambda node: _is_log_callable(node, names), _not_carriers(names)
+            call,
+            lambda node: _is_log_callable(node, names),
+            _not_carriers(names),
+            keep_iterables=True,
         )
         if carried.args or carried.keywords
     ]
@@ -1174,7 +1208,12 @@ def _applied_log_methodcaller(
     именованный аргумент (`call(R, fn=mc)`, `Thread(target=mc, args=(R,))`), применённая
     обёртка носителя (`partial(asyncio.to_thread, mc)(R)`), у поэлементного носителя —
     элемент литеральной итерируемой, в том числе в обёртке (`map(mc, [R])`,
-    `map(mc, list([R]))`). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
+    `map(mc, list([R]))`), у построчного носителя (`ROW_CARRIERS`: `starmap`,
+    `starmap_async`) — первый элемент каждой литеральной строки (`starmap(mc, [(R,)])`; его
+    даёт построчное прочтение общей функции, ревью WR-25, план 16-38). Общая функция зовётся
+    с `every_reading=True`, как у гейта писателя: получатель — первый аргумент любого
+    прочтения, и именованная ссылка применённой обёртки получает аргументы применения
+    (`partial(threading.Thread, target=mc)(args=(R,))`; сверка «база ↔ HEAD» плана 16-38). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
     — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
     `methodcaller` после имени метода. Без опознанного получателя — пустой список: имя
     метода объект журналом не делает (D-17, угадывания по имени нет). `as_carrier=False` —
@@ -1197,7 +1236,13 @@ def _applied_log_methodcaller(
         if len(call.args) == 1 and not isinstance(call.args[0], ast.Starred) and not call.keywords:
             candidates = [(methodcaller, call.args[0]) for methodcaller in applied]
     elif as_carrier and _last_name(call.func) not in names.methodcaller_names:
-        for carried in reference_arguments(call, lambda node: bool(named(node)), _not_carriers(names)):
+        # Каждое прочтение носителя (`every_reading`, как у гейта писателя): получатель — первый
+        # аргумент ЛЮБОГО прочтения, в том числе именованной ссылки применённой обёртки без
+        # позиционных `partial` (`partial(threading.Thread, target=mc)(args=(logger,))`; сверка
+        # «база ↔ HEAD» плана 16-38, класс WR-25).
+        for carried in reference_arguments(
+            call, lambda node: bool(named(node)), _not_carriers(names), every_reading=True
+        ):
             if not carried.args or isinstance(carried.args[0], ast.Starred):
                 continue
             receivers = [carried.args[0]]
@@ -1273,7 +1318,9 @@ def python_log_calls(source: str) -> list[ast.Call]:
         # `X(…)` в `X(…)(…)` носителем не судится — его судит применение.
         if id(node) in applied:
             continue
-        for item in wrapper_applications(node, wrappers_of, _not_carriers(names)):
+        # Поэлементному носителю обёртка подана — она получает и элементы, и итерируемые
+        # целиком (`keep_iterables`, самопроверка исполнителя 16-38, заход 1; ревью CR-02).
+        for item in wrapper_applications(node, wrappers_of, _not_carriers(names), keep_iterables=True):
             calls.extend(_carried_log_calls(item.application, names))
             calls.extend(_applied_log_methodcaller(item.application, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
@@ -1995,6 +2042,49 @@ def test_a_planted_log_wrapper_called_through_a_getattr_string_reddens_the_gate(
         "обёртка журнала, вызванная getattr-строкой, не опознана: гейт обошёл синтетическое "
         f"дерево ({_render(scans)}) и промолчал о "
         f'`await getattr(self, "emit_later")("synced %s", account.phone)`: {offences}'
+    )
+
+
+def test_a_planted_log_reference_mapped_over_an_account_attribute_reddens_the_gate(tmp_path):
+    """CR-02 (D-11, D-17): журнал, поданный `map` над атрибутом аккаунта, — вызов журнала с номером.
+
+    `list(map(logger.info, account.phones))` — естественная форма отчёта, какой Фазы 17–20
+    журналируют список номеров аккаунта: `map` зовёт `logger.info` с каждым номером, и номер
+    уходит в Loki. На `c6953017^` форма ловилась: гейт судил итерируемые `map` целиком. Коммит
+    `c6953017` (16-32, задача 1) перевёл гейт на общую `reference_arguments`, написанную по
+    семантике гейта писателя, и у `map` не-литеральная итерируемая гасла в `UNJUDGED_ELEMENT` —
+    форма уходила мимо (ревью CR-02, регрессия партии раунда 6; номер напечатан `logging`).
+    Граница гейта обещает: аргумент, пришедший нелитералом, — «судится само выражение (имя с
+    `phone` краснит)». Решение владельца О-16 (а), 2026-10-18, свойство 4: гейт приватности снова
+    судит итерируемую поэлементного носителя целиком, не меняя семантики гейта писателя.
+    Подложенный файл находится тем же обходом `python_sources(root)`, что и живое дерево;
+    находка в файле ровно одна.
+    """
+    planted = tmp_path / "app" / "services" / "phone_report.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import logging\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "def report(account):\n"
+        "    list(map(logger.info, account.phones))\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_report.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_report.py:7 — имя — phones (владелец report)"
+    ], (
+        "итерируемая поэлементного носителя не судится: гейт обошёл синтетическое дерево "
+        f"({_render(scans)}) и промолчал о `list(map(logger.info, account.phones))`: {offences}"
     )
 
 
@@ -2759,6 +2849,160 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-in-a-handed-log-wrapper",
     ),
+    # Ревью CR-02 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 4):
+    # до плана 16-38 у `map` итерируемая не-литерал гасла в `UNJUDGED_ELEMENT` — общая
+    # `reference_arguments`, на которую коммит `c6953017` (16-32) перевёл гейт, подавала ссылке
+    # только элементы литеральной итерируемой. Каждая форма ловилась на `c6953017^` и уходила
+    # мимо после него; исполнение с `logging` напечатало номер.
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    list(map(logger.info, account.phones))\n",
+        "phone",
+        id="map-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n"
+        "    with ThreadPoolExecutor() as ex:\n"
+        "        list(ex.map(logger.info, account.phones))\n",
+        "phone",
+        id="executor-map-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    pool.map(logger.info, account.phones)\n",
+        "phone",
+        id="pool-map-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        'def f(account):\n    list(map(logger.info, [f"n {p}" for p in account.phones]))\n',
+        "phone",
+        id="map-over-a-comprehension-of-phones",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    list(map(logger.info, iter(account.phones)))\n",
+        "phone",
+        id="map-over-iter-of-phones",
+    ),
+    pytest.param(
+        "app/x.py",
+        'def f(phone_lists):\n    list(map(logger.info, "x %s", *phone_lists))\n',
+        "phone",
+        id="map-over-a-starred-name",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    phones = account.phones; list(map(logger.info, phones))\n",
+        "phone",
+        id="map-over-a-name-bound-to-phones",
+    ),
+    # Ревью WR-25 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 4):
+    # `methodcaller`, поданный построчному носителю, получает получателя из строки — до плана
+    # 16-38 прочтение строк `starmap` жило только под `every_reading` (у гейта писателя), и
+    # гейт приватности получателя внутри кортежа не видел; исполнение напечатало номер, а гейт
+    # писателя ту же форму ловил.
+    pytest.param(
+        "app/x.py",
+        'list(itertools.starmap(operator.methodcaller("info", "x %s", account.phone), [(logger,)]))\n',
+        "phone",
+        id="starmap-methodcaller-applied-to-a-logger-row",
+    ),
+    pytest.param(
+        "app/x.py",
+        'pool.starmap(operator.methodcaller("info", "x %s", account.phone), [(logger,)])\n',
+        "phone",
+        id="pool-starmap-methodcaller-applied-to-a-logger-row",
+    ),
+    # Закрепки одного правила носителей (план 16-38): до плана `imap`, `imap_unordered`,
+    # `map_async` и `starmap` не были поэлементными, и гейт судил их аргументы целиком; после
+    # того как таблицы общего модуля сделали их поэлементными и построчными, суд итерируемой
+    # целиком держит только `keep_iterables`.
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    list(pool.imap(logger.info, account.phones))\n",
+        "phone",
+        id="imap-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    list(pool.imap_unordered(logger.info, account.phones))\n",
+        "phone",
+        id="imap-unordered-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n    pool.map_async(logger.info, account.phones).get()\n",
+        "phone",
+        id="map-async-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(pool, phone_rows):\n    pool.starmap(logger.info, phone_rows)\n",
+        "phone",
+        id="pool-starmap-over-phone-rows",
+    ),
+    # Самопроверка исполнителя 16-38, заход 1 (ось «итерируемая поэлементного и построчного
+    # носителя», 432 промаха из 9 180 форм): обёртка носителя с журналом, поданная
+    # поэлементному носителю, получала от общей `wrapper_applications` только элементы —
+    # итерируемая не-литерал и comprehension гасли так же, как у `map(logger.info, …)` до
+    # задачи 1 (класс CR-02 на оси обёртки).
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n"
+        "    list(map(functools.partial(contextvars.copy_context().run, logger.info), account.phones))\n",
+        "phone",
+        id="carrier-wrapper-mapped-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n"
+        "    w = functools.partial(contextvars.copy_context().run, logger.info)\n"
+        '    pool.imap(w, [f"n {p}" for p in account.phones])\n',
+        "phone",
+        id="named-carrier-wrapper-imapped-over-a-comprehension-of-phones",
+    ),
+    # Сверка «база ↔ HEAD» плана 16-38 (свойство 7 О-16 (а)): GREEN задачи 2 (`b953ce0d`) сделал
+    # `imap`, `imap_unordered`, `map_async` поэлементными, и обёртка журнала, поданная им над
+    # не-литералом, потеряла итерируемую целиком — 217 ячеек, верных у родителя `3b503f81`
+    # (216 ячеек самопроверки и строка выше); закрыл GREEN захода 1 самопроверки (`85ac9a2e`).
+    # Строки повторяют регрессировавшие ячейки двух прочих носителей.
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n"
+        "    list(pool.imap_unordered(functools.partial(contextvars.copy_context().run, logger.info), "
+        "account.phones))\n",
+        "phone",
+        id="carrier-wrapper-imap-unordered-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(pool, phones):\n"
+        "    pool.map_async(functools.partial(contextvars.copy_context().run, logger.info), phones).get()\n",
+        "phone",
+        id="carrier-wrapper-map-async-over-a-phone-name",
+    ),
+    # Сверка «база ↔ HEAD» плана 16-38, корпус (д) «способ подачи ссылки» (самопроверки 16-32,
+    # 16-34): `methodcaller`, поданный применённой обёртке именованной ссылкой, получает
+    # получателя из аргументов применения — `partial(threading.Thread, target=mc)(args=(R,))`
+    # зовёт `mc(R)`. Гейт писателя ту же форму ловил (прочтение «именованная ссылка без
+    # позиционных `partial`» под `every_reading`), гейт приватности — нет (класс WR-25: путь
+    # `methodcaller` уже, чем у писателя); ячейки были неверны и на базе плана.
+    pytest.param(
+        "app/x.py",
+        "functools.partial(threading.Thread, "
+        'target=operator.methodcaller("info", "x %s", account.phone))(args=(logger,)).start()\n',
+        "phone",
+        id="methodcaller-keyword-reference-in-an-applied-thread-wrapper",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = operator.methodcaller("info", "x %s", account.phone)\n'
+        "functools.partial(threading.Thread, target=f)(args=(logger,), kwargs={})\n",
+        "phone",
+        id="named-methodcaller-keyword-reference-in-an-applied-thread-wrapper",
+    ),
 ]
 
 
@@ -3036,6 +3280,20 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
         for needle in ("поданная другому носителю", "`partial(partial("):
             if needle not in paragraph:
                 missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+    # Ось «итерируемая поэлементного и построчного носителя» (ревью CR-02, WR-25; решение
+    # владельца О-16 (а), свойство 4, план 16-38): абзац носителя называет одно правило
+    # поэлементных и построчных носителей общего модуля и суд итерируемой целиком; летопись
+    # называет регрессию `c6953017`; пункт границы об аргументах нелитералом по-прежнему
+    # обещает судить само выражение — сужения нет.
+    if paragraph:
+        for needle in ("`ELEMENTWISE_CARRIERS`", "`ROW_CARRIERS`", "`imap`", "`starmap`", "целиком"):
+            if needle not in paragraph:
+                missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+    for needle in ("CR-02", "c6953017", "WR-25"):
+        if needle not in flat:
+            missing.append(f"нет летописи CR-02 / WR-25: нет «{needle}»")
+    if "судится само выражение" not in data_item:
+        missing.append("пункт границы об аргументах нелитералом больше не обещает «судится само выражение»")
     # Строки `REFERENCE_CARRIERS` плана 16-34 вписаны — шапка не говорит о них в будущем
     # времени (ревью IN-17, решение владельца О-17).
     if re.search(r"впишет[^.]*16-34|16-34[^.]*впишет", flat):
@@ -3364,6 +3622,14 @@ POSITIVE_CONTROLS = [
         "    await loop.run_in_executor(None, functools.partial(ctx.run, prepare_upload), content)\n",
         False,
         id="handed-carrier-wrapper-non-log-reference-is-not-a-log",
+    ),
+    # Ревью CR-02 (план 16-38): журнал, поданный `map` над итерируемой без номера, — вызов
+    # журнала без находки: суд итерируемой целиком краснит имя с `phone`, а не любое имя.
+    pytest.param(
+        "app/x.py",
+        "def f(account):\n    list(map(logger.info, account.names))\n",
+        True,
+        id="map-over-a-non-phone-attribute-is-a-log-without-a-finding",
     ),
 ]
 

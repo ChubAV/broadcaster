@@ -51,7 +51,12 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 план 16-29): `session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
 `asyncio.to_thread(…)`, `loop.run_in_executor(None, …)`, `map(…)` — поэлементно,
 функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
-[x])` — вызов `setattr(account, "phone", x)`), `contextvars.copy_context().run(…)`
+[x])` — вызов `setattr(account, "phone", x)`; поэлементны `map`, `imap`,
+`imap_unordered`, `map_async` — `ELEMENTWISE_CARRIERS`, построчны `starmap`,
+`starmap_async` — `ROW_CARRIERS`: одно правило общего модуля с гейтом приватности,
+сверенное сторожем правила-паритета с установленным stdlib, ревью CR-02 / WR-25, план
+16-38; итерируемая не-литерал у гейта писателя по-прежнему — пункт (1) границы, прочтение
+`keep_iterables` ему не нужно: имя итерируемой колонку не называет), `contextvars.copy_context().run(…)`
 (`Context.run`), литеральной распаковкой `asyncio.to_thread(*[ref, …])`
 (`to_thread(*[…])`), в применённой обёртке носителя
 `functools.partial(asyncio.to_thread, ref)(…)` (`partial(to_thread, …)(…)`), `map` с
@@ -521,6 +526,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     LITERAL_CONTAINER_WRAPPERS,
     OUT_OF_GRAMMAR_BINDING_FORMS,
     REFERENCE_CARRIERS,
+    ROW_CARRIERS,
     UNJUDGED_ELEMENT,
     BindingForm,
     IdentificationValue,
@@ -4427,6 +4433,12 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     ):
         if needle not in flat:
             missing.append(f"нет суда обёртки на каждом чтении: нет «{needle}»")
+    # Ось «итерируемая поэлементного и построчного носителя» (ревью CR-02, WR-25; решение
+    # владельца О-16 (а), свойство 4, план 16-38): поэлементные и построчные носители — одно
+    # правило общего модуля с гейтом приватности; шапка называет обе таблицы.
+    for needle in ("`ELEMENTWISE_CARRIERS`", "`ROW_CARRIERS`"):
+        if needle not in flat:
+            missing.append(f"нет одного правила поэлементных и построчных носителей: нет «{needle}»")
     if "судится как применённая на месте вызова `w(…)`" in flat:
         missing.append(
             "шапка всё ещё сужает суд обёртки под именем до вызова: «судится как применённая "
@@ -6641,6 +6653,27 @@ LITERAL_FORM_CASES = [
         "setattr",
         "phone",
         id="nested-carrier-wrapper-with-arguments-unused",
+    ),
+    # Ревью CR-02 / WR-25 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а),
+    # свойство 4, план 16-38): какие носители поэлементны (`ELEMENTWISE_CARRIERS`: `map`,
+    # `imap`, `imap_unordered`, `map_async`) и построчны (`ROW_CARRIERS`: `starmap`,
+    # `starmap_async`), решает одно правило общего модуля для обоих гейтов. Закрепки одного
+    # правила: `imap` гейт писателя ловил и до плана (общим правилом над литеральными
+    # итерируемыми), `starmap(methodcaller(…), [(MessengerAccount.phone,)])` — построчным
+    # прочтением под `every_reading`; ответ прежний, меняется путь прочтения.
+    pytest.param(
+        'list(pool.imap(setattr, [account], ["phone"], [x]))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="imap-elementwise-setattr",
+    ),
+    pytest.param(
+        'list(itertools.starmap(operator.methodcaller("__set__", account, x), [(MessengerAccount.phone,)]))\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="starmap-methodcaller-descriptor-set",
     ),
 ]
 

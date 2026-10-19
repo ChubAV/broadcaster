@@ -103,7 +103,15 @@ GRAMMAR_FUNCTIONS = frozenset(
 GRAMMAR_TABLES = frozenset(
     {"REFERENCE_KEYWORDS", "ELEMENTWISE_CARRIERS", "REFERENCE_CARRIERS", "BINDING_FORMS"}
     | {"LITERAL_CONTAINER_WRAPPERS", "UNJUDGED_ELEMENT", "_UNJUDGED_ELEMENT"}
+    # Построчные носители (`starmap`, `starmap_async`) — одно правило обоих гейтов (ревью
+    # CR-02 / WR-25, решение владельца О-16 (а), свойство 4, план 16-38).
+    | {"ROW_CARRIERS", "_ROW_CARRIERS"}
 )
+
+# Объекты установленного stdlib, чьи методы с `map` в имени — носители, подающие функции
+# элементы итерируемых (`multiprocessing.pool.Pool`, `concurrent.futures.Executor`, модуль
+# `itertools`; замер stdlib 3.12, план 16-38).
+MAP_CARRIER_OWNERS = ("multiprocessing.pool.Pool", "concurrent.futures.Executor", "itertools")
 
 # Имена общего модуля, которые обязан держать (ввозом) каждый гейт — тем же объектом.
 REQUIRED_SHARED_NAMES = frozenset(
@@ -201,6 +209,39 @@ def test_both_gates_take_the_binding_grammar_and_carriers_from_one_module():
 
     assert not problems, "гейты номера не делят одну грамматику связывания:\n" + "\n".join(
         f"  {problem}" for problem in problems
+    )
+
+
+def test_the_elementwise_and_row_carriers_name_the_installed_apis():
+    """Сторож таблиц носителей: `ELEMENTWISE_CARRIERS | ROW_CARRIERS` — ровно методы с `map` stdlib.
+
+    Какие носители поэлементны (`map`, `imap`, `imap_unordered`, `map_async` — функция
+    получает элемент каждой итерируемой) и построчны (`starmap`, `starmap_async` — функция
+    получает элементы каждой строки), решает одно правило общего модуля для обоих гейтов
+    (ревью CR-02 / WR-25, решение владельца О-16 (а), свойство 4). До плана 16-38 таблица
+    знала один `map`: `pool.imap(logger.info, …)` гейт приватности судил целиком, а
+    `map(logger.info, …)` — поэлементно (правило противоречило себе внутри гейта), прочтение
+    строк `starmap` было только у гейта писателя. Публичные методы с `map` в имени у
+    `MAP_CARRIER_OWNERS` (`dir()`, без ведущего `_`) — ровно объединение таблиц, а таблицы не
+    пересекаются: подъём Python, назвавший новый такой метод, краснит суиту, а не оставляет
+    его гейтам неклассифицированным (по образцу сторожа асинхронных уровней structlog).
+    """
+    import concurrent.futures
+    import itertools
+    import multiprocessing.pool
+
+    owners = (multiprocessing.pool.Pool, concurrent.futures.Executor, itertools)
+    installed = {name for owner in owners for name in dir(owner) if "map" in name and not name.startswith("_")}
+    elementwise = getattr(grammar, "ELEMENTWISE_CARRIERS", frozenset())
+    rows = getattr(grammar, "ROW_CARRIERS", frozenset())
+
+    assert installed, "у установленного stdlib не найдено ни одного метода с `map` — сверка вакуумна"
+    assert installed == elementwise | rows and not (elementwise & rows), (
+        "носитель с `map` не классифицирован как поэлементный или построчный: "
+        f"установлено {sorted(installed)} ({', '.join(MAP_CARRIER_OWNERS)}), "
+        f"нет в таблицах {sorted(installed - (elementwise | rows))}, "
+        f"нет в stdlib {sorted((elementwise | rows) - installed)}, "
+        f"в обеих таблицах {sorted(elementwise & rows)}"
     )
 
 
