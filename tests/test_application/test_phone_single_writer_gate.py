@@ -6478,6 +6478,51 @@ LITERAL_FORM_CASES = [
         "phone",
         id="carrier-wrapper-wrapped-in-partial",
     ),
+    # Самопроверка-прототип планирования раунда 7 (ревью WR-26; О-16 (а), свойство 3): без
+    # рекурсивного предиката обёртки эти формы проходили — обёртка поверх обёртки под
+    # именем, тройная вложенность литералом и именем и `methodcaller`, лежащий в поданной
+    # обёртке: получатель ему подаёт внешний носитель.
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(ctx.run, setattr)\n"
+        "    w2 = functools.partial(asyncio.to_thread, w)\n"
+        '    await w2(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-over-a-named-carrier-wrapper",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    functools.partial(functools.partial(functools.partial(ctx.run, setattr)))(\n"
+        '        account, "phone", x\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(functools.partial(functools.partial(ctx.run, setattr)))\n"
+        '    w(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="named-carrier-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    await loop.run_in_executor(\n"
+        "        None,\n"
+        '        functools.partial(ctx.run, operator.methodcaller("__set__", account, x)),\n'
+        "        MessengerAccount.phone,\n"
+        "    )\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-in-a-handed-carrier-wrapper",
+    ),
 ]
 
 
@@ -6957,6 +7002,23 @@ LEGITIMATE_CASES = [
     pytest.param(
         'pool.apply_async(setattr, (account, "status", x), {})\n',
         id="apply-async-literal-argument-tuple-other-attribute",
+    ),
+    # Ревью WR-26 (план 16-36): обёртка носителя, поданная исполнителю с ЧУЖИМ атрибутом, —
+    # не запись номера; цикл обёрток без пишущей ссылки — ноль находок, и раскрытие обёрток
+    # на нём не зависает (защита от цикла общего модуля).
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    await loop.run_in_executor(\n"
+        '        None, functools.partial(ctx.run, setattr), account, "status", x\n'
+        "    )\n",
+        id="literal-carrier-wrapper-handed-other-attribute",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    a = functools.partial(asyncio.to_thread, b)\n"
+        "    b = functools.partial(ctx.run, a)\n"
+        '    a(account, "phone", x)\n',
+        id="carrier-wrapper-cycle-without-a-writer",
     ),
 ]
 
