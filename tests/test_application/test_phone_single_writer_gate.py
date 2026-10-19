@@ -51,7 +51,12 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 план 16-29): `session.run_sync(Session.bulk_update_mappings, M, rows)` (и `fn=`),
 `asyncio.to_thread(…)`, `loop.run_in_executor(None, …)`, `map(…)` — поэлементно,
 функция получает элемент каждой итерируемой (`map(setattr, [account], ["phone"],
-[x])` — вызов `setattr(account, "phone", x)`), `contextvars.copy_context().run(…)`
+[x])` — вызов `setattr(account, "phone", x)`; поэлементны `map`, `imap`,
+`imap_unordered`, `map_async` — `ELEMENTWISE_CARRIERS`, построчны `starmap`,
+`starmap_async` — `ROW_CARRIERS`: одно правило общего модуля с гейтом приватности,
+сверенное сторожем правила-паритета с установленным stdlib, ревью CR-02 / WR-25, план
+16-38; итерируемая не-литерал у гейта писателя по-прежнему — пункт (1) границы, прочтение
+`keep_iterables` ему не нужно: имя итерируемой колонку не называет), `contextvars.copy_context().run(…)`
 (`Context.run`), литеральной распаковкой `asyncio.to_thread(*[ref, …])`
 (`to_thread(*[…])`), в применённой обёртке носителя
 `functools.partial(asyncio.to_thread, ref)(…)` (`partial(to_thread, …)(…)`), `map` с
