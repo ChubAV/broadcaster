@@ -139,7 +139,9 @@
   (`emit = methodcaller(…); emit(logger)`, `self.emit(logger)`), или поданный ЛЮБОМУ
   носителю, — применяется к первому аргументу, который носитель подаст ссылке
   (`to_thread(mc, logger)`, `to_thread(*[mc, logger])`, `Thread(target=mc, args=(logger,))`,
-  `call(logger, fn=mc)`, `partial(asyncio.to_thread, mc)(logger)`, у поэлементного
+  `call(logger, fn=mc)`, `partial(asyncio.to_thread, mc)(logger)`,
+  `partial(threading.Thread, target=mc)(args=(logger,))` — каждое прочтение носителя, как у
+  гейта писателя, сверка «база ↔ HEAD» плана 16-38; у поэлементного
   носителя — элементом литеральной итерируемой: `map(mc, [logger])`, `map(mc,
   list([logger]))`; у построчного — первым элементом каждой литеральной строки:
   `starmap(mc, [(logger,)])`, `pool.starmap(mc, [(logger,)])`, ревью WR-25), — вызов
@@ -1208,7 +1210,10 @@ def _applied_log_methodcaller(
     элемент литеральной итерируемой, в том числе в обёртке (`map(mc, [R])`,
     `map(mc, list([R]))`), у построчного носителя (`ROW_CARRIERS`: `starmap`,
     `starmap_async`) — первый элемент каждой литеральной строки (`starmap(mc, [(R,)])`; его
-    даёт построчное прочтение общей функции, ревью WR-25, план 16-38). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
+    даёт построчное прочтение общей функции, ревью WR-25, план 16-38). Общая функция зовётся
+    с `every_reading=True`, как у гейта писателя: получатель — первый аргумент любого
+    прочтения, и именованная ссылка применённой обёртки получает аргументы применения
+    (`partial(threading.Thread, target=mc)(args=(R,))`; сверка «база ↔ HEAD» плана 16-38). Когда получатель — опознанный журнал (`_is_log_receiver`), вызов
     — синтетический `R.<метод>(*a, **k)` на месте применения; судятся аргументы
     `methodcaller` после имени метода. Без опознанного получателя — пустой список: имя
     метода объект журналом не делает (D-17, угадывания по имени нет). `as_carrier=False` —
@@ -1231,7 +1236,13 @@ def _applied_log_methodcaller(
         if len(call.args) == 1 and not isinstance(call.args[0], ast.Starred) and not call.keywords:
             candidates = [(methodcaller, call.args[0]) for methodcaller in applied]
     elif as_carrier and _last_name(call.func) not in names.methodcaller_names:
-        for carried in reference_arguments(call, lambda node: bool(named(node)), _not_carriers(names)):
+        # Каждое прочтение носителя (`every_reading`, как у гейта писателя): получатель — первый
+        # аргумент ЛЮБОГО прочтения, в том числе именованной ссылки применённой обёртки без
+        # позиционных `partial` (`partial(threading.Thread, target=mc)(args=(logger,))`; сверка
+        # «база ↔ HEAD» плана 16-38, класс WR-25).
+        for carried in reference_arguments(
+            call, lambda node: bool(named(node)), _not_carriers(names), every_reading=True
+        ):
             if not carried.args or isinstance(carried.args[0], ast.Starred):
                 continue
             receivers = [carried.args[0]]
