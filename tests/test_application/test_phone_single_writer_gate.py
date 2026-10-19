@@ -4410,7 +4410,10 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     и летопись регрессии `147f5e46`, а пункт (1) не называет поданную обёртку границей. С
     плана 16-39 (итог партии раунда 7, свойства 6, 7) — и летопись словаря седьмого круга:
     девять носителей, регрессии `c6953017` и `147f5e46`, мера «база ↔ HEAD» против базы партии
-    и `2f8c1656`.
+    и `2f8c1656`. С плана 16-42 (ревью WR-28, верификация раунда 8; О-18 (а), свойство 2) — и
+    ось «где прочитано имя» целиком: шапка называет один общий читатель имени `reading_name`,
+    перечень пойманного «ГРАНИЦЫ ПРЕДИКАТА» — его рядом со значением `methodcaller`, пункты
+    границы `methodcaller` не называют, летопись WR-28 — восьмой круг и getattr-строку.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4552,6 +4555,33 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
                     f"носителю, границей: «{nearby}»"
                 )
                 break
+    # Ось «где прочитано имя» (ревью WR-28, верификация раунда 8, 2026-10-19; решение владельца
+    # О-18 (а), свойство 2; план 16-42): имя, связанное с `operator.methodcaller`, читается
+    # везде, где читается имя связанного, — одним общим читателем `reading_name`. Шапка
+    # называет его, перечень пойманного «ГРАНИЦЫ ПРЕДИКАТА» (до «Вне охвата») — рядом со
+    # значением `methodcaller`, пункты границы `methodcaller` не называют (он ловится), летопись
+    # WR-28 — восьмой круг одной оси и чтение getattr-строкой.
+    for needle in ("`reading_name`", "WR-28", "О-18 (а)"):
+        if needle not in flat:
+            missing.append(f"нет одного читателя имени: нет «{needle}»")
+    wr28 = _chronicle_segment(flat, "Летопись WR-28")
+    if not wr28:
+        missing.append("нет «Летопись WR-28»")
+    for needle in ("восьм", "getattr-строк", "reading_name", "О-18 (а)"):
+        if wr28 and needle not in wr28:
+            missing.append(f"летопись WR-28 не называет «{needle}»")
+    out_of_scope = flat.find("Вне охвата", boundary_start) if boundary_start >= 0 else -1
+    caught = flat[boundary_start:out_of_scope] if 0 <= boundary_start < out_of_scope else ""
+    if not any(
+        "methodcaller" in caught[max(0, match.start() - 200) : match.end() + 200]
+        for match in re.finditer("`reading_name`", caught)
+    ):
+        missing.append(
+            "перечень пойманного «ГРАНИЦЫ ПРЕДИКАТА» не называет общий читатель `reading_name` "
+            "рядом со значением `methodcaller`"
+        )
+    if 0 <= out_of_scope < boundary_end and "methodcaller" in flat[out_of_scope:boundary_end]:
+        missing.append("пункты «ГРАНИЦЫ ПРЕДИКАТА» называют `methodcaller` границей, а он ловится")
 
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "
