@@ -379,6 +379,18 @@ REFERENCE_CARRIERS: tuple[ReferenceCarrier, ...] = (
         "enqueue(job=…, payload=…)",
         "scheduler.enqueue(job={ref}, payload=({positional},), options={keywords})",
     ),
+    # Ось «где прочитано имя обёртки» (ревью CR-03, верификация раунда 7, 2026-10-18; решение
+    # владельца О-16 (а), свойство 6; план 16-39): обёртку носителя под именем, связанную с
+    # аргументами записи / журнала и ПЕРЕДАННУЮ исполнителю, а не вызванную, — дословное тело
+    # `asyncio.to_thread` — гейт писателя после `147f5e46` не судил нигде (поглощение по любому
+    # чтению), и ни одна ячейка словаря её не держала: регрессия прошла суиту зелёной. Строка
+    # краснит обе матрицы на предикатах `147f5e46` (48 ячеек гейта писателя) и зелёная с плана 16-36.
+    ReferenceCarrier(
+        "named-wrapper-bound-handed",
+        "w = partial(Context.run, …, args); run_in_executor(None, w)",
+        "wrapped = functools.partial(contextvars.copy_context().run, {ref}, {args}); "
+        "loop.run_in_executor(None, wrapped)",
+    ),
 )
 
 
