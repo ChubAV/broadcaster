@@ -391,6 +391,44 @@ REFERENCE_CARRIERS: tuple[ReferenceCarrier, ...] = (
         "wrapped = functools.partial(contextvars.copy_context().run, {ref}, {args}); "
         "loop.run_in_executor(None, wrapped)",
     ),
+    # Оси седьмого круга (ревью CR-02, WR-24, WR-25, WR-26, верификация раунда 7, 2026-10-18;
+    # решение владельца О-16 (а), свойство 6; план 16-39): ни одна ячейка словаря не держала
+    # обёртку под именем (вызов, передача, getattr-вариант), обёртку, поданную носителю, обёртку
+    # в обёртке, `starmap`, `apply_async` и не-литеральную итерируемую у `map` — и регрессии
+    # `c6953017` (CR-02) и `147f5e46` (CR-03) прошли суиту зелёными. Шаблоны однострочные (`;`):
+    # место `{use}` формы связывания стоит на строке с её отступом, и составной оператор на одной
+    # строке годится в любой форме `BINDING_FORMS`.
+    ReferenceCarrier(
+        "wrapper-handed",
+        "run_in_executor(None, partial(Context.run, …), …)",
+        "loop.run_in_executor(None, functools.partial(contextvars.copy_context().run, {ref}), {args})",
+    ),
+    ReferenceCarrier(
+        "wrapper-of-wrapper",
+        "partial(partial(Context.run, …))(…)",
+        "functools.partial(functools.partial(contextvars.copy_context().run, {ref}))({args})",
+    ),
+    ReferenceCarrier(
+        "named-wrapper-called",
+        "w = partial(to_thread, …); w(…)",
+        "wrapped = functools.partial(asyncio.to_thread, {ref}); wrapped({args})",
+    ),
+    ReferenceCarrier(
+        "named-wrapper-handed",
+        "w = partial(Context.run, …); run_in_executor(None, w, …)",
+        "wrapped = functools.partial(contextvars.copy_context().run, {ref}); "
+        "loop.run_in_executor(None, wrapped, {args})",
+    ),
+    ReferenceCarrier(
+        "named-wrapper-getattr",
+        'getattr(holder, "w")(…)',
+        'holder.wrapped = functools.partial(asyncio.to_thread, {ref}); getattr(holder, "wrapped")({args})',
+    ),
+    ReferenceCarrier("starmap", "starmap", "list(itertools.starmap({ref}, [({positional},)]))"),
+    ReferenceCarrier("apply-async", "apply_async", "pool.apply_async({ref}, ({positional},), {keywords})"),
+    # Место не-литеральной итерируемой у поэлементного носителя: литерал — прежняя строка `map`,
+    # имя с `phone` — эта строка (на предикатах `c6953017` — 36 промахов гейта приватности).
+    ReferenceCarrier("map-named-iterable", "map", "list(map({ref}, {args}))"),
 )
 
 
