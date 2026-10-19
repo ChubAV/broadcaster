@@ -1,10 +1,11 @@
 ---
 phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel
-reviewed: 2026-10-16T13:53:17Z
+reviewed: 2026-10-19T15:12:18Z
 depth: standard
 review_kind: incremental
-diff_base: 2f8c1656b4dadc1506c7b6b8f5ab445bc58ed631
-head: a3f3ee0d
+diff_base: 38675285b996822a2b5495033b8760f363cab05a
+batch_base: 1c243203
+head: 52fcbadc
 files_reviewed: 4
 files_reviewed_list:
   - tests/phone_gate_grammar.py
@@ -12,220 +13,168 @@ files_reviewed_list:
   - tests/test_phone_gates_parity.py
   - tests/test_phone_privacy_gate.py
 findings:
-  critical: 2
-  warning: 3
-  info: 2
-  total: 7
+  critical: 0
+  warning: 2
+  info: 3
+  total: 5
 carried_forward: 0
 closed_prior: 7
 status: issues_found
 ---
 
-# Phase 16: Code Review Report (инкрементальное повторное ревью партии раунда 6, 16-31…16-35)
+# Phase 16: Code Review Report (инкрементальное повторное ревью партии раунда 7, 16-36…16-40)
 
-**Reviewed:** 2026-10-16T13:53:17Z
+**Reviewed:** 2026-10-19T15:12:18Z
 **Depth:** standard
 **Files Reviewed:** 4
 **Status:** issues_found
 
 ## Summary
 
-Инкрементальное ревью: база диффа `2f8c1656`, `HEAD` `a3f3ee0d`. С базы изменились только четыре файла тестовых гейтов: общий модуль `tests/phone_gate_grammar.py`, гейт писателя, гейт приватности и правило-паритет. `app/`, `scripts/` и `main.py` не менялись (`git diff --stat 2f8c1656 HEAD`). Этот отчёт заменяет прежний `16-REVIEW.md`. Каждая из семи прежних находок стоит один раз — в таблице диспозиций ниже.
+Инкрементальное ревью. База партии — `1c243203`: код гейтов там совпадает с `21d463f0` и с `a3f3ee0d`, на котором писался прошлый отчёт (`git diff --stat` пуст). `HEAD` — `52fcbadc`. С базы изменились только четыре файла тестовых гейтов. `app/`, `scripts/` и `main.py` не менялись. После `defeaae4` код гейтов тоже не менялся. Этот отчёт заменяет прежний `16-REVIEW.md`. Каждая из семи прежних находок стоит один раз — в таблице диспозиций ниже.
 
 Что проверено:
-- **Тесты.** Модули гейтов и паритета зелёные: `792 passed` (`uv run pytest tests/test_phone_gates_parity.py tests/test_phone_privacy_gate.py tests/test_application/test_phone_single_writer_gate.py -q -p no:randomly`).
-- **Коммиты.** Все 19 исправляющих хешей из клеток диспозиций и коммит теста «9dc72673» — предки `HEAD` (`git merge-base --is-ancestor`); темы совпадают с заявленным.
-- **Формы прежних находок.** Каждая форма из блоков кода WR-18…WR-23 прогнана через `phone_write_offences` / `python_log_offences`: 22 формы, у каждой ровно одна находка. Сверх них прогнаны варианты осей: тройное и разнородное повторное связывание (10 форм), 15 лексических вариантов SQL, `Process(target=)` и `initializer=`/`initargs=` — всё поймано.
-- **Дифференциал база ↔ `HEAD`.** Для каждого гейта собран корпус «ссылка × носитель × форма аргументов» и прогнан на дереве `2f8c1656` (`git archive`) и на `HEAD`:
-  - гейт приватности — 765 ячеек; ловилось на базе и пропускается на `HEAD` — 55, все на носителе `map` (CR-02);
-  - гейт писателя — 432 ячейки, ни одной регрессии. Отдельным зондом найдена регрессия формы «обёртка носителя под именем, переданная, а не вызванная» (CR-03).
-- **Исполнение.** Каждая новая форма-пропуск исполнена. Номер печатается в журнал `logging` (CR-02, WR-24, WR-25). Колонка пишется на SQLAlchemy 2.0.46 / SQLite в памяти (CR-03: `+71`, `+72`). Атрибут пишется через сам носитель (WR-26: `+71`…`+74`).
+- **Тесты.** Три модуля гейтов зелёные: `847 passed` (`uv run pytest tests/test_phone_gates_parity.py tests/test_phone_privacy_gate.py tests/test_application/test_phone_single_writer_gate.py -q -p no:randomly`, под `flock`).
+- **Коммиты.** Все 16 исправляющих хешей из клеток диспозиций семи находок — предки `HEAD` (`git merge-base --is-ancestor`). Темы — `feat(16-36…16-39)` / `test(16-39)`, как заявлено.
+- **Формы прежних находок.** Каждая форма из блоков кода CR-02, CR-03, WR-24, WR-25 и WR-26 прогнана через `python_log_offences` / `phone_write_offences` на трёх деревьях: `2f8c1656`, `1c243203` и `HEAD`. Это 26 форм и 2 контроля. На `HEAD` каждая форма даёт ровно одну находку. Контроль `map(logger.info, account.names)` даёт ноль, контроль «обёртка без использования» — одну.
+- **Сверка «база ↔ HEAD» собственным корпусом.** Генератор свой: `review-r7/tools/corpus.py`, `extras.py`, `probe2.py`. Он не ввозит таблиц дерева. Ячейки судит `judge.py` в отдельном процессе для каждого дерева (`git archive`):
+  - **Матрица M — 8 145 ячеек.** Это 10 значений опознания писателя и 9 значений приватности, умноженные на 9 форм связывания ссылки (`BINDING_FORMS` плюс чтение `getattr(self, "f")`) и на 34–49 носителей.
+  - **Ось обёрток W — 17 724 ячейки.** Это 4 носителя обёртки, 13 форм связывания обёртки (имя, аннотация, кортеж, `:=`, `self.` в `__init__` и в методе, тело класса, getattr-строка, цепочка, повторное связывание прямое и обратное, псевдоним `partial`, функция) и 10 чтений (вызов, подача исполнителю, `to_thread`, `Thread(target=)`, `*[…]`, `partial`, `map`, `starmap`, `apply_async`). К ним добавлены 9 чтений обёртки с привязанными аргументами: вызов, исполнитель, поток, `call_soon`, `append`, без использования, список вместе с подачей, `submit`, `callback=`.
+  - **Безопасные двойники S и SW — 25 689 ячеек.** Та же форма без номера, ожидание — ноль находок.
+  - **Добавки X — 78 ручных форм.** Формы прежних находок и формы против новой логики: `return`, `if w:`, словарь, затенение, цикл обёрток, глубина 10, самоссылка, `**{"target": w}`, носитель под именем.
+  - **Семейство D — 429 ячеек.** Одна и та же подача журналу дважды на одной строке.
+  - **Всего — 52 072 ячейки** (с 7 зондами самоссылки, глубины и счёта). На `1c243203` и на `HEAD` они дали: верно → верно 38 948, неверно → верно 13 022, неверно → неверно 102, верно → неверно по оси «есть находка / нет находки» — **0**. Из 102 общих пропусков 101 — WR-28, а один — названная граница D-17: получатель `methodcaller` из не-литеральной итерируемой. По оси счёта регрессий **225**: 223 ячейки D и 2 формы X. Две находки на двух местах одной строки на базе стали одной на `HEAD` — это **WR-27**. Ещё 24 ячейки писателя, где одна находка стала двумя (обёртка `getattr(self, "w")` в списке и в подаче), — названная шапкой цена «две находки на двух местах», а не дефект.
+  - **Девять строк словаря седьмого круга.** Их 1 080 ячеек обеих матриц собраны таблицами `HEAD` и судимы предикатами `147f5e46^`, `147f5e46`, `c6953017^`, `c6953017` и `HEAD`. На `HEAD` красных ноль. Строка `map-named-iterable` краснит матрицу приватности на `c6953017` (36 ячеек), а на `c6953017^` красных нет. Строка `named-wrapper-bound-handed` краснит матрицу писателя на `147f5e46` (48 ячеек), а на `147f5e46^` красных нет. Матрицу приватности на `147f5e46` она НЕ краснит — **IN-18**.
+- **Сверх инструмента исполнителей** (`r7diff-16-39`; поячеечно его корпус я не сверял) мой корпус добавляет:
+  - форму связывания «чтение getattr-строкой» для ссылок и `methodcaller`. Её нет в `BINDING_FORMS`, а значит, и в семействах (б)/(д)/(е);
+  - ось счёта у гейта приватности. Ожидания приватности у них — `phone`, `subject_all`, `subject`, и число находок не сверяет ни одно. Сверка `unique` после WR-24 вакуумна по построению (WR-27);
+  - носители вне словаря: `ex.submit`, `Process(target=)`, `pool.apply`, `call_soon`, `pool.starmap`/`starmap_async`, `imap`/`imap_unordered`/`map_async`/`ex.map` со всеми значениями;
+  - обёртку, поданную ключом, `*[…]`, глубиной 3, в `to_thread`; обёртку под именем — цепочкой, вложенной, ключом, звёздой, в `partial`, с разделёнными аргументами, в `map`/`starmap`/`pool.imap`;
+  - всю ось W с безопасными двойниками и семейство D.
+- **Исполнение.** Каждая новая форма-пропуск исполнена на SQLAlchemy 2.0.46 / SQLite в памяти и `logging` (Python 3.12.13). Для WR-28 колонка записана (`+71`, `+72`) и номер напечатан (`LOG x +79991234567`). Для WR-27 оба номера одной строки напечатаны.
 
 Что партия сделала верно:
-- Все семь прежних находок закрыты (таблица ниже). Карты псевдонимов многозначны. Одинарная кавычка — четвёртый вид кавычек. Голова видов 5 (в)/(г) судится по видимому SQL. `Column` / `ColumnClause` — в `COLUMN_CONSTRUCTORS`. Ссылка поданная любым именованным аргументом судится общим правилом. Докстринг паритета называет ровно то, что проверяет.
-- Лексер SQL `_sql_scan` выдержал все мои зонды: комментарий вплотную к ключевому слову, `''` внутри литерала, схема в одинарных кавычках, `UPDATE OR REPLACE`, `ON CONFLICT … SET 'phone'`.
+- Все семь прежних находок закрыты (таблица ниже).
+- Регрессии `c6953017` и `147f5e46` сняты. Их формы — строки словаря, а строки различают регрессию и её родителя.
+- Поглощение обёртки по правилу «каждое чтение судится» выдержало все мои зонды: `return`, список вместе с подачей, `if w:`, словарь, затенение в другой функции, цепочку с подачей, `getattr` в связывании, повторное связывание, обратный порядок связываний, цикл без ссылки, самоссылку и глубину 10.
+- Ни одного ложного срабатывания на 25 689 безопасных двойниках.
 
 Новые проблемы:
-- **Две регрессии, внесённые самой партией.** Обе формы ловились на базе `2f8c1656`:
-  - гейт приватности, после перевода на общую семантику носителя (`c6953017`), пропускает `map(logger.info, account.phones)` и все `.map(…)` с не-литеральной итерируемой (CR-02);
-  - гейт писателя, после правила «поглощения» обёртки носителя (`147f5e46`), пропускает дословное тело `asyncio.to_thread` — `func_call = functools.partial(ctx.run, setattr, account, "phone", x); await loop.run_in_executor(None, func_call)` (CR-03).
-- **Остаток 16-34 (а) — не только копия под О-15, но и расхождение гейтов.** Гейт приватности держит свою `_carrier_wrappers` и вручную повторяет `applied_wrapper`. Вызов `getattr(self, "w")(…)` гейт писателя ловит, а гейт приватности нет. Структурная половина паритета эту копию не видит: это ровно класс, который называла IN-15 (WR-24).
-- **Остаток 16-34 (в) подтверждён и содержит живое расхождение.** Ячеек `starmap`, `apply_async` и именованной обёртки у поведенческой половины паритета нет. А `starmap(methodcaller("info", …, account.phone), [(logger,)])` гейт писателя в своей форме ловит, гейт приватности — нет. Докстринг общего модуля утверждает обратное (WR-25).
-- **Обёртку носителя, поданную другому носителю, не ловит ни один гейт.** Ни одна граница эту композицию не называет (WR-26).
-- **Остаток 16-34 (б) подтверждён:** комментарий о выведенной `REFERENCE_KEYWORDS` (IN-16). Отдельно — устаревшее будущее время «впишет план 16-34» в шапке гейта приватности (IN-17).
+- **Регрессия счёта, внесённая партией (WR-27).** Гейт приватности дедуплицирует находки по тройке «строка, вид, предмет» (`51d0d766`). Две РАЗНЫЕ подачи номера на одной строке — два аргумента или два вызова журнала — дают одну находку, а на базе давали две. Правило «одно место — одна находка» этого направления не видит по построению: оно меряет выход той же дедупликации.
+- **Давний пропуск оси «где прочитано имя» (WR-28).** Имя, связанное с `methodcaller`, прочитанное getattr-строкой (`getattr(self, "f")(MessengerAccount.phone)`, `getattr(self, "f")(logger)`), не ловит ни один гейт — ни прямо, ни через носитель. Раунд 7 закрыл это чтение для имени обёртки (`named_wrappers`), но не для `methodcaller`. Шапка гейта писателя такое чтение имени псевдонима заявляет.
+- Информационные: ложная фраза о строке словаря (IN-18), докстринг паритета называет меньше, чем проверяет (IN-19), довод `ReferenceCarrier.last` для `partial` (IN-20).
 
 ## Prior findings — disposition
 
 | ID | Title | State | Evidence |
 |----|-------|-------|----------|
-| WR-18 | A name bound twice in one module resolves only to its FIRST binding: a writer API, descriptor, `partial` or `methodcaller` bound second under a reused name passes both gates | closed | GREEN `d3304aab`, `0b7a503b`, `2a506aea`, `ebe466ac` (предки `HEAD`). Карты многозначны: `_api_aliases` даёт «псевдоним → frozenset» (`tests/test_application/test_phone_single_writer_gate.py:2540-2545`); `_api_alias_targets` прослеживает каждое связывание (`:2569-2593`); `_partial_aliases` (`:1594-1613`) и `_methodcaller_aliases` (`:1628-1645`) хранят списки через `_add_bound_values` (`:1556-1566`). Толкования одного вызова сводятся в одну находку (`:1111-1156`, `:1186-1189`). `_applied_log_methodcaller` судит каждого кандидата (`tests/test_phone_privacy_gate.py:1136-1176`). Строки `rebound`, `rebound-reversed`, `rebound-across-classes` — `tests/phone_gate_grammar.py:236-262`. Зонд: пять форм писателя и форма приватности из блока WR-18 — по одной находке; тройное и разнородное повторное связывание (`partial`→API, API→`methodcaller`, обёртка→API, цель `for`) — по одной находке в обоих гейтах. |
-| WR-19 | The privacy gate's carrier rule is narrower than the writer's: `*[…]`-delivered references, `partial`-wrapped carriers and wrapped iterables pass, and the parity matrix has no cell that could see it | closed | GREEN `c6953017`, `50d6e5cf`, `8a28d2e7`, `6231a0b3`, `5e57325d`, `a28d6efc`. Гейт приватности ищет ссылку общей `reference_arguments` (`tests/test_phone_privacy_gate.py:1097-1105`; `tests/phone_gate_grammar.py:765-813`). `iterable_elements` раскрывает `list([…])` (`tests/phone_gate_grammar.py:452-460`). Ячейки `starred`, `partial-wrapped`, `map-wrapped-iterable` есть в `REFERENCE_CARRIERS` (`:348-356`), обе матрицы и паритет их держат. Зонд: все четыре формы блока WR-19 — по одной находке. Тот же перевод на общую семантику (`c6953017`) сузил `map` у гейта приватности — это новая **CR-02**, а не продолжение WR-19: WR-19 говорила, что приватность уже писателя, а CR-02 — что приватность уже собственной базы и собственной шапки. |
-| WR-20 | A reference handed by a keyword other than `fn=` passes (`threading.Thread(target=…, args=…)`), neither boundary names it, and the gates disagree on `Timer(…, args=…)` | closed | GREEN `c6953017`, `94b6c25d`, `a28d6efc`, `e5987a35`, `147f5e46`, `21d463f0`. Общее правило `literal_keyword_arguments` — `tests/phone_gate_grammar.py:555-604`. Именованная ссылка с любым ключом — `_carried_by`, `:682-687`. `REFERENCE_KEYWORDS` выведена (летопись `:293-302`; ввоза нет ни в одном гейте). Строки `thread-target`, `timer-args`, `invented-keyword` — `:357-371`. Зонд: `Thread(target=…, args=…)` и `Timer(1.0, …, args=…)` — по одной находке у обоих гейтов, расхождения нет; `multiprocessing.Process(target=, args=)`, `initializer=`/`initargs=`, `kwargs={…}` — по одной находке в обоих; идиома `celery_app.py:196` — ноль. Коммит `147f5e46` того же ряда внёс регрессию — новая **CR-03**. |
-| WR-21 | Kind 5 misses SQLite's single-quoted identifiers; 16-28's "text inside a literal is not a write" hides `SET 'phone' = …` and `INSERT INTO 'messenger_accounts'` | closed | GREEN `e478c8c2`, `6fbc414c`, `e72a8e53`, `c5e82453`. `_SQL_QUOTE` содержит `'` (`tests/test_application/test_phone_single_writer_gate.py:658`). Ветка одинарной кавычки `_sql_scan` оставляет видимым однословный отрезок и понимает `''` (`:2027-2038`). Шапка называет четыре вида кавычек (`:191-197`). Зонд: три оператора блока WR-21 — по одной находке; ещё `INSERT INTO main.'messenger_accounts'`, `SET 'phone'=:p` после `AS m`, `SET note = 'a''b', phone = :p`, `ON CONFLICT … DO UPDATE SET 'phone' = …` — по одной находке. |
-| WR-22 | Kind 5 (в) and (г) still run a `\s+` regex over raw text, so a SQL comment inside the statement head hides an `INSERT` / `REPLACE` / `COPY` into the accounts table | closed | GREEN `e478c8c2`, `e72a8e53`. `_raw_sql_write` ищет `RAW_SQL_PHONE_WRITE` в `_sql_visible(text)` (`tests/test_application/test_phone_single_writer_gate.py:1914-1917`); `_SQL_HEAD_GAP` — `:692`. Зонд: три оператора блока WR-22 — по одной находке; комментарий вплотную без пробелов (`INSERT/**/INTO`, `INTO/**/messenger_accounts`, `OR/**/REPLACE`) — по одной находке. |
-| WR-23 | `Column("phone")` / `ColumnClause("phone")` as a `values` key pass, though the column is named literally in the writing call | closed | GREEN `8aba9962`, `6fbc414c`. `COLUMN_CONSTRUCTORS = {"column", "literal_column", "Column", "ColumnClause"}` (`tests/test_application/test_phone_single_writer_gate.py:617`); `name` в `COLUMN_NAME_KEYWORDS` (`:631`). Зонд: обе формы блока WR-23 — по одной находке вида «ключ словаря values». |
-| IN-15 | The parity rule's structural half matches four function names and four table names, not "no own copy"; a private grammar or carrier copy under any other name passes it | closed | GREEN `50d6e5cf`, `a28d6efc`. Ревью предлагало «или переформулировать докстринг, или перенести копии»; сделано и то и другое. Докстринги паритета называют проверяемое — «названные точки не переопределены», копию под другим именем видит только поведенческая половина (`tests/test_phone_gates_parity.py:28-30`, `:170-172`, `:203-205`). `_iterable_elements` и `_getattr_literal` нет ни в одном модуле гейта (grep по `def _iterable_elements\|def _getattr_literal` пуст). `GRAMMAR_FUNCTIONS` — 24 имени (`:89-93`), контроль `test_the_structural_half_reddens_a_redefined_grammar_point` (`:197-225`). Но класс, названный IN-15, получил в этой же партии новый живой экземпляр: `_carrier_wrappers` гейта приватности родилась в `5e57325d`, структурная половина её не видит и копия расходится с гейтом писателя. Это новая **WR-24**: экземпляр родился после находки и нарушает О-15, а не продолжает невыполненное исправление IN-15. |
+| CR-02 | Гейт приватности после перевода на общую семантику носителя пропускает `map` с не-литеральной итерируемой: `list(map(logger.info, account.phones))` ловился на базе, на `HEAD` — нет | closed | GREEN `3a7fe75b`, `d7013797`, `85ac9a2e` — предки `HEAD`; строка словаря `7a3a7b46` / `bb6ce1be` — тоже. Механизм: `_carried_log_calls` зовёт `reference_arguments(…, keep_iterables=True)` (`tests/test_phone_privacy_gate.py:1199-1210`); у поэлементного носителя итерируемые подаются как есть (`tests/phone_gate_grammar.py:799-813`). Таблица `ELEMENTWISE_CARRIERS` знает `map`, `imap`, `imap_unordered`, `map_async` (`:316`), и внутреннее противоречие «`imap` ловится, `map` — нет» снято. Прогон на `HEAD`: пять форм блока CR-02, а также `pool.map(logger.info, phones)` и `map(logger.info, iter(account.phones))` — по одной находке. На `1c243203` они давали `[]`, кроме `imap`. Контроль `map(logger.info, account.names)` — `[]`. Строка `map-named-iterable` краснит матрицу приватности на `c6953017` (36 ячеек), на `c6953017^` красных нет. |
+| CR-03 | Гейт писателя после правила «поглощения» обёртки носителя (`147f5e46`) пропускает обёртку под именем, которую передают, а не вызывают — дословное тело `asyncio.to_thread` | closed | GREEN `b67495dc`, `b8d557f0`, `4ffef0c1` — предки `HEAD`; строка `named-wrapper-bound-handed` `f684dc45` / `59654f01` — тоже. Поглощение — только когда каждое чтение судится как применение (`_absorbed_carrier_wrappers`, `tests/test_application/test_phone_single_writer_gate.py:1829-1881`, вызов `:1176-1180`); применения ищет общая `wrapper_applications` (`:1123-1137`). Прогон на `HEAD`: четыре формы блока CR-03 — по одной находке (на `1c243203` — `[]`), контроль «без использования» — одна. Строка словаря краснит матрицу писателя на `147f5e46` (48 ячеек), на `147f5e46^` красных нет. Ось W (9 чтений обёртки с привязанными аргументами × 13 форм связывания × 4 носителя × 6 значений писателя): пропусков ноль. |
+| WR-24 | Гейт приватности держит свою копию семантики обёртки носителя под именем (`_carrier_wrappers`, ручной `applied_wrapper`) — копия расходится с гейтом писателя, а структурная половина паритета её не видит (остаток 16-34 (а), класс IN-15) | closed | GREEN `51d0d766`, `2d59adff`, `0a4e4411` — предки `HEAD`. `_carrier_wrappers` теперь — тонкая обёртка над общими `carrier_wrapper_bindings(…, nested=True)` и `is_carrier_wrapper` (`tests/test_phone_privacy_gate.py:992-1012`). Обёртки узла даёт общая `named_wrappers` (`:1015-1028`), применения — общая `wrapper_applications` (`:1341-1343`); ручной сборки применения нет. `REQUIRED_SHARED_NAMES` требует пять имён семантики обёртки (`tests/test_phone_gates_parity.py:122-130`). Прогон на `HEAD`: форма `getattr(self, "w")("x %s", account.phone)` блока WR-24 — одна находка (на `1c243203` — `[]`); то же с `methodcaller`-обёрткой — одна; парная форма писателя — одна. Двойной счёт `w = partial(asyncio.to_thread, logger.info, "x %s", account.phone); w()` — одна находка (на `1c243203` — две). Средство снятия двойного счёта — дедупликация по тройке «строка, вид, предмет» (`:1436-1445`). Оно внесло новый дефект обратного направления: две разные подачи на одной строке сливаются в одну находку. Это новая **WR-27**, а не продолжение WR-24: WR-24 говорила об одном месте, давшем две находки, WR-27 — о двух местах, давших одну. |
+| WR-25 | Поведенческая половина паритета не держит формы самопроверки 16-34 (`starmap`, `apply_async`, именованная обёртка), и в этих ячейках гейты уже расходятся: `starmap(methodcaller(…), [(logger,)])` гейт приватности пропускает (остаток 16-34 (в)) | closed | GREEN `b953ce0d`, `85ac9a2e`, `9ce79852`, `7a3a7b46` — предки `HEAD`. Строки `starmap`, `apply-async`, `named-wrapper-called`, `named-wrapper-handed`, `named-wrapper-getattr` есть в `REFERENCE_CARRIERS` (`tests/phone_gate_grammar.py:419-436`), и паритет собирает из них ячейки (`tests/test_phone_gates_parity.py`, поведенческая половина). Построчное прочтение `ROW_CARRIERS` работает у обоих гейтов без флага (`tests/phone_gate_grammar.py:814-835`). Путь `methodcaller` гейта приватности идёт с `every_reading=True` (`tests/test_phone_privacy_gate.py:1261-1263`). Прогон на `HEAD`: обе формы блока WR-25 — по одной находке (на `1c243203` — `[]`), форма писателя — одна. Ложная фраза докстринга о «лишних прочтениях» снята (`tests/phone_gate_grammar.py:891-900`). |
+| WR-26 | Обёртка носителя, поданная другому носителю (а не применённая), или обёрнутая ещё одним `partial` — не ловит ни один гейт, и ни одна граница её не называет | closed | GREEN `b67495dc`, `44452e68`, `4ffef0c1`, `2d59adff` — предки `HEAD`. Рекурсивный предикат `is_carrier_wrapper` (`tests/phone_gate_grammar.py:983-1021`) и `wrapper_applications` с защитой от цикла (`:1057-1140`) раскрывают поданную и вложенную обёртку у обоих гейтов. Прогон на `HEAD`: четыре формы писателя блока WR-26 и четыре журнальные пары — по одной находке (на `1c243203` и на `2f8c1656` — `[]`). Сверх блока по одной находке дают: глубина 3, глубина 10 под именами, `**{"target": w, "args": …}`, литерал в `**{…}`, обёртка поданная ключом и `*[…]`, обёртка у `map`/`starmap`/`pool.imap`, цикл `a`/`b` без ссылки — `[]`. Строки `wrapper-handed`, `wrapper-of-wrapper` — в словаре. |
+| IN-16 | Комментарий ввоза гейта приватности называет выведенную `REFERENCE_KEYWORDS` и путает, кто кого зовёт (остаток 16-34 (б)) | closed | GREEN `0a4e4411` — предок `HEAD`. Комментарий `tests/test_phone_privacy_gate.py:438-447` не называет выведенную таблицу. Он называет путь `methodcaller`, где гейт сам зовёт `iterable_elements` (вызов `:1270`). Фраза о том, что `reference_arguments` доходит до `iterable_elements` через `elementwise_arguments` и построчное прочтение, верна (`tests/phone_gate_grammar.py:550`, `:820`). Имена, которые предикат не зовёт (`ELEMENTWISE_CARRIERS`, `ROW_CARRIERS`, `applied_wrapper`), действительно в коде гейта не используются. Правило шапки держит оба места (`:3356-3369`). |
+| IN-17 | Шапка гейта приватности и комментарий её правила говорят о строках `REFERENCE_CARRIERS` в будущем времени — «впишет план 16-34» | closed | GREEN `0a4e4411` — предок `HEAD`. Шапка: «шесть строк, вписанные планом 16-34» (`tests/test_phone_privacy_gate.py:88-89`). Комментарий правила говорит в прошедшем времени (`:3270-3272`). Слово «впишет» в модуле осталось только в регулярном выражении правила (`:3354`), и правило краснеет, если оно встанет рядом с «16-34». |
 
 ## Narrative Findings (AI reviewer)
 
-## Critical Issues
-
-### CR-02: Гейт приватности после перевода на общую семантику носителя пропускает `map` с не-литеральной итерируемой: `list(map(logger.info, account.phones))` ловился на базе, на `HEAD` — нет
-
-**File:**
-- `tests/phone_gate_grammar.py:476-495` — `elementwise_arguments`: итерируемая не-литерал заменяется именем `UNJUDGED_ELEMENT` (`:487-490`), `Starred` обрывает перечень (`:478-479`).
-- `tests/phone_gate_grammar.py:450-451` — `iterable_elements`: у comprehension остаётся только `node.elt`, источник итерации теряется.
-- `tests/phone_gate_grammar.py:709`, `:729-736` — `_carried_by`: у `ELEMENTWISE_CARRIERS` аргументы ссылки — только элементы.
-- `tests/test_phone_privacy_gate.py:1097-1105` — `_carried_log_calls` зовёт `reference_arguments` и судит только эти элементы.
-- Заявление: `tests/test_phone_privacy_gate.py:328-332` — «аргументы ссылки на журнал, пришедшие нелитералом (… распаковка `*rows` …) — … судится само выражение (имя с `phone` краснит, `row` — нет)». А также `:78-79` — «Судятся аргументы после ссылки».
-
-**Issue:** На базе `2f8c1656` гейт приватности судил итерируемые `map` целиком: `_carried_log_calls` подавал синтетическому вызову все аргументы за ссылкой. Коммит `c6953017` (16-32, задача 1) перевёл гейт на `reference_arguments`, написанную «по семантике гейта писателя — она полнее» (`tests/phone_gate_grammar.py:384`). Писателю безразлично имя итерируемой, поэтому общая функция гасит его в `UNJUDGED_ELEMENT`. А приватность судит именно имена (правило (б)). Мой дифференциал на 765 ячейках (носитель × ссылка × форма аргументов) нашёл 55 ячеек, которые ловились на `c6953017^` и не ловятся на `c6953017` и на `HEAD`. Все 55 — носитель `map`. Исполнены с `logging` (номер напечатан):
-```python
-list(map(logger.info, account.phones))                          # []   LOG +79990000001, LOG +79990000002
-with ThreadPoolExecutor() as ex:
-    list(ex.map(logger.info, account.phones))                    # []   (последнее имя `map` — поэлементный носитель)
-list(map(logger.info, [f"n {p}" for p in account.phones]))       # []   LOG n +79990000001 …
-list(map(logger.info, "x %s", *phone_lists))                     # []
-list(pool.imap(logger.info, account.phones))                     # находка: `imap` не в ELEMENTWISE_CARRIERS
-```
-Последняя строка показывает, что правило противоречиво внутри одного гейта: `imap` ловится, `map` — нет. Это регрессия, а не старый пробел. Строки `NEGATIVE_CONTROLS` с `map` (`tests/test_phone_privacy_gate.py:2381`, `:2421`, `:2519`) все литеральные, поэтому ни одно правило не краснеет. Ячейки паритета собираются из литеральных одноэлементных списков (`binding_form_source`, `tests/phone_gate_grammar.py:913-914`) и не видят этого тоже. Гейт приватности — единственная защита D-11 от номера в Loki. BLOCKER: форма проходила гейт до партии и уходит мимо после неё, против явного пункта собственной границы.
-
-**Fix:** Вернуть гейту приватности суд итерируемых целиком, не трогая семантику писателя. Например, отдельное прочтение у поэлементного носителя, где за ссылкой стоят исходные итерируемые:
-```python
-# tests/test_phone_privacy_gate.py, _carried_log_calls
-carried = reference_arguments(call, is_reference, _not_carriers(names))
-found = [... как сейчас ...]
-if _callee_name(call.func) in ELEMENTWISE_CARRIERS:
-    for item in carried:
-        # приватность судит имя итерируемой и источник comprehension (правило (б), граница :328-332)
-        found.append(ast.copy_location(
-            ast.Call(func=item.reference, args=forwarded_arguments(list(call.args))[1:], keywords=[]), call))
-```
-Либо параметр общей функции: например, `reference_arguments(…, keep_iterables=True)` подставляет на место `UNJUDGED_ELEMENT` саму итерируемую и оставляет comprehension целиком. Вписать в `NEGATIVE_CONTROLS` пять строк выше (плюс `pool.map`, `map(…, iter(phones))`) и трасер с подложенным `map(logger.info, account.phones)`.
-
-### CR-03: Гейт писателя после правила «поглощения» обёртки носителя (`147f5e46`) пропускает обёртку под именем, которую передают, а не вызывают — дословное тело `asyncio.to_thread`
-
-**File:**
-- `tests/test_application/test_phone_single_writer_gate.py:1066-1070` — `used`: любое имя в контексте `Load`, в том числе переданное ссылкой.
-- `:1077-1084` — обёртка носителя `carrier_wrappers[alias]` поглощается, если имя `alias` есть в `used`.
-- `:1875-1884` — обёртка под именем судится только у ВЫЗОВА `w(…)` (`_call_name(call) in carrier_wrappers`).
-- Заявление: `:75-78` — «обёртка носителя, связанная с именем любой формой общей грамматики … судится как применённая на месте вызова `w(…)`».
-
-**Issue:** Коммит `147f5e46` (16-34, самопроверка, заход 1) ввёл поглощение, чтобы `w = partial(asyncio.to_thread, setattr, account, "phone"); w(x)` давал одну находку, а не две. Но `used` включает и передачу имени ссылкой. Поглощённая обёртка, которую ни разу не вызвали, не судится ни у связывания, ни у использования. На `147f5e46^` и на базе `2f8c1656` каждая форма ниже давала одну находку (обёртку судили на месте связывания как носитель), на `147f5e46` и `HEAD` — `[]`:
-```python
-func_call = functools.partial(ctx.run, setattr, account, "phone", x)   # тело asyncio.to_thread (CPython,
-await loop.run_in_executor(None, func_call)                            # asyncio/threads.py) — []  SQLite: +71
-job = functools.partial(contextvars.copy_context().run, setattr, account, "phone", x)
-threading.Thread(target=job).start()                                   # []  SQLite: +72
-loop.call_soon(job)                                                    # []
-job = functools.partial(asyncio.to_thread, setattr, account, "phone", x); tasks.append(job)   # []
-```
-Абсурдный контроль: та же обёртка без единого использования (`job = …` и больше ничего) ловится. Добавление использования снимает находку. Для сравнения, псевдоним `partial(<API>, …)`, переданный тем же способом (`job = partial(setattr, account, "phone", x); Thread(target=job)`), ловится: он разрешается как ссылка через `_bound_reference`. Обёртка носителя ссылкой не разрешается. Гейт приватности на той же форме находку даёт (у него поглощения нет), так что гейты здесь расходятся. Паритет не видит: ячейки «именованная обёртка» в нём нет (WR-25). Строки `LITERAL_FORM_CASES` закрепляют только вызванную обёртку (`:6189`). BLOCKER: регрессия партии, форма — естественный путь скрипта, который хочет `to_thread` с копией контекста.
-
-**Fix:** Поглощать обёртку только у имени, каждое чтение которого — вызываемое вызова; иначе судить её на месте связывания, как до `147f5e46`:
-```python
-called_only = {
-    alias for alias in carrier_wrappers
-    if all(_is_callee(load) for load in loads_of(tree, alias))  # Load, который не стоит в Call.func
-}
-consumed |= {id(w) for alias, ws in carrier_wrappers.items() if alias in called_only for w in ws}
-```
-Либо, полнее, разрешать имя обёртки, поданное носителю, как применённую обёртку с аргументами внешнего носителя (это закроет и WR-26). Вписать четыре формы выше в `LITERAL_FORM_CASES` и трасер.
-
 ## Warnings
 
-### WR-24: Гейт приватности держит свою копию семантики обёртки носителя под именем (`_carrier_wrappers`, ручной `applied_wrapper`) — копия расходится с гейтом писателя, а структурная половина паритета её не видит (остаток 16-34 (а), класс IN-15)
+### WR-27: Гейт приватности сливает две разные подачи номера на одной строке в одну находку — регрессия счёта `51d0d766` против базы `1c243203`, и правило «одно место — одна находка» этого направления не видит по построению
 
 **File:**
-- `tests/test_phone_privacy_gate.py:882-928` — `_carrier_wrappers`: та же неподвижная точка «имя → обёртки», что у `carrier_wrapper_bindings` (`tests/phone_gate_grammar.py:816-850`); родилась в `5e57325d` (16-32, цикл 2).
-- `tests/test_phone_privacy_gate.py:1212-1226` — имя обёртки ищется только как `node.func.id` / `node.func.attr`; применение собирается вручную (`:1222-1224`) — тело `applied_wrapper` (`tests/phone_gate_grammar.py:853-857`).
-- Ложные заявления: `tests/test_phone_privacy_gate.py:98-100` («решение владельца О-15: своих копий у гейта нет») и `:359-360` («своих копий … гейт не держит»).
-- `tests/test_phone_gates_parity.py:79-85` — сам паритет записывает копию комментарием; `REQUIRED_SHARED_NAMES` (`:104-107`) не требует ни `carrier_wrapper_bindings`, ни `applied_wrapper`; имя `_carrier_wrappers` не входит в `GRAMMAR_FUNCTIONS` (`:89-93`).
+- `tests/test_phone_privacy_gate.py:1436-1445` — `python_log_offences`: множество `places` по тройке `(line, kind, subject)` на весь модуль, без столбца и без вызова.
+- `tests/test_phone_privacy_gate.py:1425-1430` и шапка `:131-133` — «Одно место — одна находка: тройка «строка, вид, предмет» не повторяется, какими бы путями гейт ни дошёл до места».
+- `tests/test_phone_privacy_gate.py:3040-3043` — сверка `len(places) == len(set(places))` над выходом той же функции.
 
-**Issue:** О-15 требует, чтобы семантика носителя жила один раз, в общем модуле. Здесь она живёт дважды, и копии уже расходятся. Гейт писателя ищет обёртку по `_call_name` и потому читает `getattr`-строку. Гейт приватности — только по `Name`/`Attribute`:
+**Issue:** До `51d0d766` (16-37) находка ставилась на каждый узел аргумента, и двойной счёт WR-24 был реальным. Средство — дедупликация по тексту тройки, а не по узлу. Предмет `phone` у `a.phone` и у `b.phone` один и тот же, у двух вызовов на одной строке — тоже. Поэтому разные места сливаются:
+```python
+logger.info("%s %s", a.phone, b.phone)                    # 1c243203: 2 находки   HEAD: 1
+logger.info("%s", account.phone); print(account.phone)   # 1c243203: 2 находки   HEAD: 1
+```
+Исполнено: `LOG +79991234567 +79990000002` и `LOG +79991234567` / `+79990000002` — номера уходят из обоих мест. Семейство D моего корпуса — 429 ячеек: каждая подача журналу из матрицы M (9 значений × носители, форма `direct`) повторена дважды на одной строке. На `HEAD` каждая ячейка даёт ровно столько находок, сколько одна подача, — второе место не видно никогда. На `1c243203` 223 из 429 давали ровно вдвое больше.
+
+Гейт краснеет всё равно, так что номер не уходит мимо — поэтому WARNING, а не BLOCKER. Но отчёт гейта лжёт о числе мест: автор, исправивший названное место, узнаёт о втором только на следующем прогоне. Число находок у гейта писателя (место — строка и столбец) и у гейта приватности теперь значит разное.
+
+Правило `:3042-3043` сверяет строки `path:line — kind — subject`. Это взаимно-однозначная функция той же тройки, которую `python_log_offences` уже сделала уникальной, поэтому сверка не может покраснеть ни на каком исходнике. Тем же вакуумом заданы «0 повторов места» самопроверки 16-37 (16 634 формы) и проверка `unique` / `phone_unique` инструмента сверки. Регрессия «два места → одна находка» невидима для меры «база ↔ HEAD» партии: ни одно ожидание приватности в ней не считает находки.
+
+**Fix:** Дедуплицировать по узлу, на котором стоит находка, а не по тексту. Синтетические вызовы держат исходные узлы аргументов, а синтетический `ast.keyword` получает место ключа:
+```python
+# tests/test_phone_privacy_gate.py, _judge_arguments: возвращать и столбец узла
+found.append((node.lineno, node.col_offset, "имя", node.id))
+...
+# python_log_offences
+places: set[tuple[int, int, str, str]] = set()
+for line, column, kind, subject in sorted(_judge_arguments(call, mask_for_a_reader=…)):
+    if (line, column, kind, subject) in places:
+        continue
+```
+Правило `:3042-3043` переписать на ожидаемое число мест. Вписать в `NEGATIVE_CONTROLS` две формы выше с ожиданием «ровно две находки». В шапке назвать место как «строка, столбец, вид, предмет».
+
+### WR-28: Имя, связанное с `methodcaller` и прочитанное getattr-строкой, не ловит ни один гейт — раунд 7 закрыл это чтение только для имени обёртки, а шапка гейта писателя его заявляет
+
+**File:**
+- `tests/test_application/test_phone_single_writer_gate.py:1776-1783` — `methodcallers_of` (получатели `methodcaller`): имя ищется только у `Name` / `Attribute`. Так же устроен предикат обёртки `:1909-1913`.
+- `tests/test_phone_privacy_gate.py:1060-1070` — `_methodcaller_calls`: только литерал, `Name`, `Attribute`.
+- Образец правильного чтения — `tests/phone_gate_grammar.py:1036-1037`: `named_wrappers` читает getattr-строку для имени обёртки (план 16-37, WR-24).
+- Заявление: `tests/test_application/test_phone_single_writer_gate.py:40-48` — значение связывания псевдонима включает `operator.methodcaller("<api>", …)`, «где бы имя ни стояло: … строка вызываемого `getattr(obj, "bulk_update_mappings")(…)`»; получатель — у применения (`:118-119`, `:1753-1755`). У гейта приватности (`:148-150`) — «через имя или атрибут, связанные с ним общей грамматикой».
+- `tests/phone_gate_grammar.py:185-263` — в `BINDING_FORMS` нет формы «чтение getattr-строкой», поэтому ни матрицы, ни паритет это чтение не собирают.
+
+**Issue:** На `2f8c1656`, `1c243203` и `HEAD` одинаково — `[]`:
 ```python
 class K:
     def __init__(self):
-        self.w = functools.partial(asyncio.to_thread, logger.info)
-    async def go(self):
-        await getattr(self, "w")("x %s", account.phone)    # приватность: []   LOG x +79991234567
-# писатель на той же форме (setattr, account, "phone", x) — одна находка; то же с methodcaller-обёрткой
-```
-Второе расхождение — счёт: `w = partial(asyncio.to_thread, logger.info, "x %s", account.phone); w()` даёт у гейта приватности две одинаковые находки на одном месте. У писателя на той же форме одна: у него есть поглощение, у копии нет. Структурная половина паритета эту копию пропускает по построению. Поведенческая тоже: ячейки «именованная обёртка» нет (WR-25). Это ровно класс, который описала IN-15, и новый экземпляр родился в той же партии, что закрывала IN-15. Шапка гейта при этом утверждает, что копий нет.
+        self.f = operator.methodcaller("__set__", account, x)
+    def go(self):
+        getattr(self, "f")(MessengerAccount.phone)                     # писатель: []   SQLite: +71
+    async def go2(self):
+        await asyncio.to_thread(getattr(self, "f"), MessengerAccount.phone)  # писатель: []   SQLite: +72
 
-**Fix:** Заменить копию вызовом общего модуля и сделать имена обязательными:
+class P:
+    def __init__(self):
+        self.f = operator.methodcaller("info", "x %s", account.phone)
+    def go(self):
+        getattr(self, "f")(logger)                                     # приватность: []   LOG x +79991234567
+```
+В матрице M это 98 ячеек: `methodcaller` с получателем × чтение `getattr(self, "f")` × все 49 носителей, по 49 у каждого гейта. Других пропусков у неё нет. Та же форма с любым другим значением опознания ловится: `self.f = setattr`, `partial(setattr, account)`, `logger.info`, `partial(logger.info, …)`. Ловится и `methodcaller` с колонкой литералом в своих аргументах (`methodcaller("set_committed_value", account, "phone", x)` судится у себя). Значит, ось «где прочитано имя» закрыта для всех видов имени, кроме `methodcaller` с получателем. Раунд 7 открыл и закрыл её для имени обёртки (WR-24: «имя обёртки читается и getattr-строкой»), а соседний вид оставил.
+
+Регрессии нет: форма проходила и до партии. Поэтому WARNING. Но форма ровно того класса, что О-14 (а) велит закрывать по оси целиком. И её не видит ни одна мера суиты: в `BINDING_FORMS` нет такой формы, а корпус исполнителей строится из `BINDING_FORMS`.
+
+**Fix:** Один читатель имени для обоих видов — getattr-строка через `getattr_literal`, как в `named_wrappers`:
 ```python
-# tests/test_phone_privacy_gate.py
-def _is_carrier_wrapper(value: ast.Call) -> bool:
-    return (_last_name(value.func) in names.partial_names and not _is_log_partial(value, names)
-            and bool(reference_arguments(value, is_reference, not_carriers)))
-wrappers = carrier_wrapper_bindings(bindings, _is_carrier_wrapper)
-...
-for wrapper in wrappers.get(_last_name(node.func) or "", []):   # _last_name читает getattr-строку
-    application = applied_wrapper(node, wrapper)
+# tests/test_application/test_phone_single_writer_gate.py, methodcallers_of
+literal = getattr_literal(node)
+if literal is not None:
+    return list(aliases.get(literal[1], []))
+# tests/test_phone_privacy_gate.py, _methodcaller_calls
+literal = getattr_literal(node)
+if literal is not None:
+    return list(methodcallers.get(literal[1], ()))
 ```
-```python
-# tests/test_phone_gates_parity.py
-REQUIRED_SHARED_NAMES |= {"carrier_wrapper_bindings", "applied_wrapper"}
-```
-Снять ложные фразы `:98-100` и `:359-360` (или оставить их, но после перевода). Дедуплицировать находки `python_log_offences` по строке и предмету, как гейт писателя.
-
-### WR-25: Поведенческая половина паритета не держит формы самопроверки 16-34 (`starmap`, `apply_async`, именованная обёртка), и в этих ячейках гейты уже расходятся: `starmap(methodcaller(…), [(logger,)])` гейт приватности пропускает (остаток 16-34 (в))
-
-**File:**
-- `tests/phone_gate_grammar.py:333-372` — `REFERENCE_CARRIERS`: 11 строк, ни `starmap`, ни `apply_async`, ни обёртки под именем.
-- `tests/test_phone_gates_parity.py:239-245` — ячейки паритета собираются только из `REFERENCE_CARRIERS`.
-- `tests/phone_gate_grammar.py:792-803` — докстринг `reference_arguments`: «Гейт приватности … зовёт функцию без флага: лишние прочтения ему ничего не добавляют».
-- `tests/test_phone_privacy_gate.py:1147` — `_applied_log_methodcaller` зовёт `reference_arguments` без `every_reading`, поэтому прочтения `starmap` (`tests/phone_gate_grammar.py:740-756`) у него нет.
-- Строки только у писателя: `tests/test_application/test_phone_single_writer_gate.py:6189`, `:6209`, `:6243`, `:6250`.
-
-**Issue:** Формы, которые нашла самопроверка 16-34, закреплены строками гейта писателя, но не строками общего словаря. Правило-паритет их не собирает. Гейт приватности ловит `starmap` и `apply_async` со ссылкой-журналом только потому, что судит поддерево целиком. Как только ссылка — `methodcaller`, получатель надо достать из кортежа `starmap`, а это прочтение есть лишь при `every_reading=True`:
-```python
-list(itertools.starmap(operator.methodcaller("info", "x %s", account.phone), [(logger,)]))   # приватность: []
-pool.starmap(operator.methodcaller("info", "x %s", account.phone), [(logger,)])              # приватность: []
-# писатель: starmap(methodcaller("__set__", account, x), [(MessengerAccount.phone,)]) — одна находка
-```
-Исполнено: `LOG x +79991234567`. Значит, докстринг общего модуля ложен: лишнее прочтение даёт приватности получателя `methodcaller`. Второе расхождение в той же непокрытой оси — `getattr(self, "w")(…)` (WR-24). О-12 (а) требует, чтобы расхождение гейтов краснило паритет. На этих ячейках он не может покраснеть.
-
-**Fix:**
-- Вписать в `REFERENCE_CARRIERS` строки `starmap` (`"list(itertools.starmap({ref}, [({positional},)]))"`) и `apply-async` (`"pool.apply_async({ref}, ({positional},), {keywords})"`).
-- Обёртку под именем вписать в паритет отдельной осью, например `CARRIER_BINDING_FORMS` с шаблонами `w = functools.partial(asyncio.to_thread, {ref})\nw({args})\n` и `getattr(self, "w")`-вариантом.
-- В `_applied_log_methodcaller` звать `reference_arguments(…, every_reading=True)` — или исправить докстринг `:802-803`, — тогда строка `starmap` позеленеет у обоих гейтов.
-
-### WR-26: Обёртка носителя, поданная другому носителю (а не применённая), или обёрнутая ещё одним `partial` — не ловит ни один гейт, и ни одна граница её не называет
-
-**File:**
-- `tests/phone_gate_grammar.py:807-813` — правило 1 `reference_arguments` смотрит на один уровень `X(…)(…)`. Обёртку носителя среди аргументов носитель ссылкой не считает: у писателя `_bound_reference` видит только `partial(<API>, …)` (`tests/test_application/test_phone_single_writer_gate.py:1536-1545`), у приватности `_is_log_partial` — только `partial(<вызываемое журнала>, …)` (`tests/test_phone_privacy_gate.py:726-734`).
-- Заявления: писатель `:56-57`, `:75-78`, `:86-91`; приватность `:74-78`.
-- Границы: писатель (1) `:323-341` и приватность `:301-332` называют только «результат не-`partial` вызова».
-
-**Issue:** Каждая строка даёт `[]` у обоих гейтов. Так было и на базе, то есть это пробел композиции, а не регрессия. Исполнено: носитель вызывает `setattr(account, "phone", x)`, атрибут записан (`+71`…`+74`); журнал на журнальном варианте тоже печатает номер.
-```python
-await loop.run_in_executor(None, functools.partial(ctx.run, setattr), account, "phone", x)
-list(map(functools.partial(ctx.run, setattr), [account], ["phone"], [x]))
-w = functools.partial(ctx.run, setattr); await asyncio.to_thread(w, account, "phone", x)
-functools.partial(functools.partial(ctx.run, setattr))(account, "phone", x)
-```
-Обе части заявлены по отдельности: «ссылка … в применённой обёртке носителя» и «ссылка может стоять и внутри `functools.partial(ref, …)` … поданного другому вызову». Их композиция не ловится. Это та же ось «как подана ссылка», которую О-14 (а) велит закрывать целиком. `partial(ctx.run, func)` — не экзотика: так устроен сам `asyncio.to_thread`.
-
-**Fix:** Научить `_carried_by` раскрывать аргумент-обёртку носителя: позиционный или именованный аргумент, который предикат гейта признаёт обёрткой (тот же `is_wrapper`, что у `carrier_wrapper_bindings`), — или имя, связанное с ней, — судится как `applied_wrapper(<синтетический вызов с аргументами за ним>, wrapper)`, рекурсивно, с защитой от цикла. Тот же механизм закроет CR-03 без отдельного правила поглощения. Вписать в `REFERENCE_CARRIERS` строку `wrapper-handed`: `"loop.run_in_executor(None, functools.partial(contextvars.copy_context().run, {ref}), {args})"`.
+То же нужно в предикате ссылки обёртки писателя (`:1912`). Вписать в `BINDING_FORMS` форму `getattr-read`: `self.f = {value}` в `__init__`, `{use}` в методе, `ref` = `getattr(self, "f")`. Тогда обе матрицы и паритет держат чтение для каждого значения и носителя.
 
 ## Info
 
-### IN-16: Комментарий ввоза гейта приватности называет выведенную `REFERENCE_KEYWORDS` и путает, кто кого зовёт (остаток 16-34 (б))
+### IN-18: Комментарий строки `named-wrapper-bound-handed` говорит, что она «краснит обе матрицы на предикатах `147f5e46`», — матрицу приватности она там не краснит
 
-**File:** `tests/test_phone_privacy_gate.py:359-363`
-**Issue:** «ввоз держит имя для правила-паритета, как и `ELEMENTWISE_CARRIERS` и `REFERENCE_KEYWORDS`». В ввозе (`:364-377`) `REFERENCE_KEYWORDS` нет: таблицу вывел `a28d6efc`, строку ввоза снял 16-34. Фраза «`iterable_elements` здесь зовёт `reference_arguments`» неверна: гейт зовёт `iterable_elements` сам (`:1154`), а `reference_arguments` её не зовёт.
-**Fix:** Убрать `REFERENCE_KEYWORDS` из комментария. Написать, что `iterable_elements` гейт зовёт в пути `methodcaller` (`_applied_log_methodcaller`).
+**File:** `tests/phone_gate_grammar.py:390-395`
+**Issue:** Замер: 120 ячеек строки (12 форм × 5 значений × 2 гейта), собранные таблицами `HEAD`. На предикатах `147f5e46` красных у писателя 48, у приватности 0. Гейт приватности на `147f5e46` судил обёртку с аргументами на месте связывания: своё поглощение у него не стояло. На `147f5e46^` красных ноль у обоих. Строка различает регрессию CR-03 только в матрице писателя и в паритете. Это и нужно, но фраза «обе матрицы» ложна. Те же общие слова стоят в шапках обоих гейтов («краснят обе матрицы и правило-паритет») и в докстринге паритета (`tests/test_phone_gates_parity.py:45-49`). Там они верны только в совокупности: `c6953017` краснит матрицу приватности, `147f5e46` — матрицу писателя.
+**Fix:** «Строка краснит матрицу гейта писателя (48 ячеек) и правило-паритет на предикатах `147f5e46`». В шапках и докстринге паритета так же развести, какая регрессия какую матрицу краснит.
 
-### IN-17: Шапка гейта приватности и комментарий её правила говорят о строках `REFERENCE_CARRIERS` в будущем времени — «впишет план 16-34»
+### IN-19: Докстринг правила-паритета называет меньше, чем проверяет: нет `wrapper_applications`, `ROW_CARRIERS` и сторожа stdlib
 
-**File:** `tests/test_phone_privacy_gate.py:87-91`, `:2793-2795`
-**Issue:** «`REFERENCE_CARRIERS` общего модуля — … и шесть строк, которые впишет план 16-34». Строки вписаны (`tests/phone_gate_grammar.py:348-371`), их держат обе матрицы. Шапка описывает дерево до 16-34. Правило шапки сверяет только имена носителей (`:2810-2823`), а не время глагола, поэтому молчит.
-**Fix:** «… и шесть строк плана 16-34: …». То же в комментарии правила.
+**File:** `tests/test_phone_gates_parity.py:17-49`; код — `:84-94`, `:110-113`, `:122-130`, `:220`
+**Issue:** Раздел «ЧТО ПРОВЕРЯЕТСЯ» перечисляет `REQUIRED_SHARED_NAMES` и `GRAMMAR_FUNCTIONS` без `wrapper_applications`, хотя оба набора его держат. `GRAMMAR_TABLES` он называет без `ROW_CARRIERS` / `_ROW_CARRIERS`. Правило `test_the_elementwise_and_row_carriers_name_the_installed_apis` не названо вовсе. Закрытие IN-15 держалось на том, что докстринг паритета называет ровно проверяемое; партия добавила проверки, а перечень не дописала.
+**Fix:** Дописать три имени в перечни раздела и пункт о стороже `MAP_CARRIER_OWNERS`.
+
+### IN-20: Довод `ReferenceCarrier.last` «получатель обязан быть опознан (D-17)» отнесён и к `partial`, у которого единственный позиционный аргумент — значение журнала, а не получатель
+
+**File:** `tests/phone_gate_grammar.py:332-338`, `:1201-1202`
+**Issue:** «У значения с одним позиционным аргументом — получатель `methodcaller`, единственный аргумент `partial` — места нет: получатель обязан быть опознан (D-17)». Довод верен для `methodcaller`. У значения `partial` (`functools.partial(logger.info, "x %s")` с `(account.phone)`) единственный позиционный аргумент — номер, и форма `list(map(functools.partial(logger.info, "x %s"), account.phones))` естественна. На `HEAD` она ловится (одна находка; на `1c243203` — `[]`), но строка `map-named-iterable` её не собирает, и для значения `partial` ячейка повторяет строку `map`.
+**Fix:** Ставить `last` и при одном позиционном аргументе, кроме значения-получателя (флаг на `IdentificationValue` или проверка `id != "methodcaller"`). Либо поправить довод докстринга: у `partial` места нет по выбору, а не по D-17.
 
 ---
 
-_Reviewed: 2026-10-16T13:53:17Z_
+_Reviewed: 2026-10-19T15:12:18Z_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: standard (incremental, diff base `2f8c1656`, head `a3f3ee0d`)_
+_Depth: standard (incremental, diff base `38675285`, batch base `1c243203`, head `52fcbadc`)_
