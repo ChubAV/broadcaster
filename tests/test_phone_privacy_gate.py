@@ -3544,6 +3544,25 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
         missing.append("комментарий ввоза называет выведенную таблицу ключа ссылки")
     if "methodcaller" not in comment or "iterable_elements" not in comment:
         missing.append("комментарий ввоза не называет путь `methodcaller`, где гейт зовёт `iterable_elements`")
+    # Ось счёта (ревью WR-27, верификация раунда 8, 2026-10-19; решение владельца О-18 (а),
+    # свойство 4; план 16-41): шапка определяет место находки как «строка, столбец, вид,
+    # предмет» — узел подачи, — и предложение об одном месте называет столбец; летопись WR-27
+    # называет базу партии, коммит регрессии счёта и правило строк, которое её закрепляло;
+    # докстринг `python_log_offences` называет то же место.
+    for needle in ("строка, столбец, вид, предмет", "WR-27", "51d0d766", "О-18 (а)"):
+        if needle not in flat:
+            missing.append(f"нет места находки по оси счёта: нет «{needle}»")
+    one_place = flat.find("Одно место — одна находка")
+    if one_place < 0 or "столбец" not in flat[one_place : one_place + 400]:
+        missing.append("предложение «Одно место — одна находка» не называет столбец")
+    count_chronicle = _chronicle_segment(flat, "Летопись WR-27")
+    if not count_chronicle:
+        missing.append("нет «Летопись WR-27»")
+    for needle in ("1c243203", "51d0d766", "правило строк"):
+        if count_chronicle and needle not in count_chronicle:
+            missing.append(f"летопись WR-27 не называет «{needle}»")
+    if "строка, столбец, вид, предмет" not in " ".join((python_log_offences.__doc__ or "").split()):
+        missing.append("докстринг `python_log_offences` не называет место «строка, столбец, вид, предмет»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
