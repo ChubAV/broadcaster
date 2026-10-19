@@ -2952,6 +2952,46 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="named-carrier-wrapper-imapped-over-a-comprehension-of-phones",
     ),
+    # Сверка «база ↔ HEAD» плана 16-38 (свойство 7 О-16 (а)): GREEN задачи 2 (`b953ce0d`) сделал
+    # `imap`, `imap_unordered`, `map_async` поэлементными, и обёртка журнала, поданная им над
+    # не-литералом, потеряла итерируемую целиком — 217 ячеек, верных у родителя `3b503f81`
+    # (216 ячеек самопроверки и строка выше); закрыл GREEN захода 1 самопроверки (`85ac9a2e`).
+    # Строки повторяют регрессировавшие ячейки двух прочих носителей.
+    pytest.param(
+        "app/x.py",
+        "def f(account, pool):\n"
+        "    list(pool.imap_unordered(functools.partial(contextvars.copy_context().run, logger.info), "
+        "account.phones))\n",
+        "phone",
+        id="carrier-wrapper-imap-unordered-over-a-phone-attribute",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(pool, phones):\n"
+        "    pool.map_async(functools.partial(contextvars.copy_context().run, logger.info), phones).get()\n",
+        "phone",
+        id="carrier-wrapper-map-async-over-a-phone-name",
+    ),
+    # Сверка «база ↔ HEAD» плана 16-38, корпус (д) «способ подачи ссылки» (самопроверки 16-32,
+    # 16-34): `methodcaller`, поданный применённой обёртке именованной ссылкой, получает
+    # получателя из аргументов применения — `partial(threading.Thread, target=mc)(args=(R,))`
+    # зовёт `mc(R)`. Гейт писателя ту же форму ловил (прочтение «именованная ссылка без
+    # позиционных `partial`» под `every_reading`), гейт приватности — нет (класс WR-25: путь
+    # `methodcaller` уже, чем у писателя); ячейки были неверны и на базе плана.
+    pytest.param(
+        "app/x.py",
+        "functools.partial(threading.Thread, "
+        'target=operator.methodcaller("info", "x %s", account.phone))(args=(logger,)).start()\n',
+        "phone",
+        id="methodcaller-keyword-reference-in-an-applied-thread-wrapper",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = operator.methodcaller("info", "x %s", account.phone)\n'
+        "functools.partial(threading.Thread, target=f)(args=(logger,), kwargs={})\n",
+        "phone",
+        id="named-methodcaller-keyword-reference-in-an-applied-thread-wrapper",
+    ),
 ]
 
 
