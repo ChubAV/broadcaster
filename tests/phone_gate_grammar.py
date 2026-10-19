@@ -163,6 +163,28 @@ def binding_name(target: ast.expr) -> str | None:
     return None
 
 
+def reading_name(node: ast.AST | None) -> str | None:
+    """Имя, которым выражение `node` ЧИТАЕТ связанное: `Name.id`, `Attribute.attr`, строка getattr.
+
+    Один читатель имени обоих гейтов номера (ревью WR-28, верификация раунда 8; решение
+    владельца О-18 (а), свойство 2; план 16-42): `f`, `self.f` и `getattr(self, "f")` (и
+    с умолчанием третьим аргументом — форма `getattr_literal`) читают одно имя `f`. У
+    прочих узлов и у `None` — `None`. Ось «где прочитано имя» закрыта по оси целиком, а
+    не по видам имени: до плана 16-42 getattr-строку читала только `named_wrappers` (имя
+    обёртки, раунд 7), а имя, связанное с `operator.methodcaller`, гейт писателя читал
+    своими проверками `Name` / `Attribute` — `self.f = operator.methodcaller("__set__",
+    account, x)` с `getattr(self, "f")(MessengerAccount.phone)` уходил мимо (SQLite записал
+    `+71`). Теперь имя обёртки, имя `methodcaller` и ссылку читает эта функция. Цель
+    связывания читает `binding_name`, а не эта функция: цель не место чтения.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    literal = getattr_literal(node) if node is not None else None
+    return literal[1] if literal is not None else None
+
+
 class BindingForm(NamedTuple):
     """Форма связывания Python, которую грамматика разрешает.
 
@@ -1028,16 +1050,14 @@ def named_wrappers(node: ast.AST, is_wrapper, bound: dict[str, list[ast.Call]]) 
     имя (`Name.id`), атрибут (`Attribute.attr`) и getattr-строка (`getattr_literal`) —
     обёртки, связанные с этим именем (`bound`, отображение `carrier_wrapper_bindings`);
     иначе — пусто. Одна и та же функция судит обёртку и там, где её вызывают
-    (`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), и там, где её подают носителю.
+    (`w(…)`, `self.w(…)`, `getattr(obj, "w")(…)`), и там, где её подают носителю. Имя
+    читает общий читатель `reading_name` (ревью WR-28, план 16-42; О-18 (а), свойство 2) —
+    тот же, что у имени `methodcaller` и у ссылки гейта писателя.
     """
-    if isinstance(node, ast.Call):
-        if is_wrapper(node):
-            return [node]
-        literal = getattr_literal(node)
-        return list(bound.get(literal[1], ())) if literal is not None else []
-    if isinstance(node, (ast.Name, ast.Attribute)):
-        return list(bound.get(binding_name(node) or "", ()))
-    return []
+    if isinstance(node, ast.Call) and is_wrapper(node):
+        return [node]
+    name = reading_name(node)
+    return list(bound.get(name, ())) if name is not None else []
 
 
 class WrapperApplication(NamedTuple):

@@ -41,8 +41,14 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 атрибут, `getattr(<obj>, "<api>")` (читается как атрибут `<obj>.<api>`, с
 получателем), `functools.partial(<api>, …)` — псевдоним с привязанными аргументами
 (`_partial_aliases`: `w = partial(s.bulk_update_mappings, M); w(rows)` судится как
-`partial(…)(rows)`), `operator.methodcaller("<api>", …)` (судится у себя)
-(`_api_aliases` — тем же разрешением `_module_aliases`, что у модели и
+`partial(…)(rows)`), `operator.methodcaller("<api>", …)` (судится у себя; имя, связанное
+с ним, — псевдоним, который читается везде, где читается имя связанного: вызовом,
+getattr-строкой — с умолчанием третьим аргументом тоже, — подачей носителю, звеном
+цепочки; получатель — у применения `methodcaller(…)(obj)`, в том числе дескриптор колонки
+`MessengerAccount.phone` и `getattr(MessengerAccount, "phone")`; имя читает ОДИН общий
+читатель `reading_name` общего модуля — тот же, что у имени обёртки и у гейта приватности
+с плана 16-43, и тот же у псевдонимов самих носителей и пишущих API: ревью WR-28, решение
+владельца О-18 (а)) (`_api_aliases` — тем же разрешением `_module_aliases`, что у модели и
 `functools.partial`; план 16-22, ревью WR-12), — где бы имя ни стояло: последнее
 звено вызываемого (`stmt.values(…)`, `self.bum(…)`); строка вызываемого
 `getattr(obj, "bulk_update_mappings")(…)`; ссылка на пишущий API, поданная другому
@@ -344,7 +350,10 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 связывания `tests/phone_gate_grammar.py` — присваивание имени либо атрибута,
 аннотированное, распаковка кортежа на кортеж попарно, `:=`, цель-атрибут `self.<x>` /
 `cls.<x>` в любом методе, тело класса; значение — имя, атрибут, `getattr(<obj>,
-"<api>")`, `functools.partial(<api>, …)` с привязанными аргументами; ссылка —
+"<api>")`, `functools.partial(<api>, …)` с привязанными аргументами,
+`operator.methodcaller(…)` — на каждом чтении его имени, getattr-строкой тоже (общий
+читатель имени `reading_name`); псевдоним — и звеном цепочки через имя, атрибут или
+getattr-строку; ссылка —
 поданная любому вызову, носители `REFERENCE_CARRIERS` включительно (`map` —
 поэлементно), позицией, любым именованным аргументом или в применённой обёртке, с
 литеральными аргументами того же вызова по общему правилу (`reference_arguments`);
@@ -513,6 +522,24 @@ WR-10 → WR-12 → WR-14 / WR-15 / WR-16 → WR-18 / WR-20…WR-23 → CR-03 / 
 правило-паритет; партия раунда 7 сверила каждый GREEN с родителем и итог — с базой партии и с
 `2f8c1656` (мера «база ↔ HEAD», решение владельца О-16 (а), 2026-10-18).
 
+Летопись WR-28: до плана 16-42 имя, связанное с `operator.methodcaller`, гейт читал только у
+`Name` / `Attribute` — в получателях `methodcaller` и в предикате ссылки обёртки, — хотя имя
+обёртки getattr-строкой читал с раунда 7 (`named_wrappers`); `self.f =
+operator.methodcaller("__set__", account, x)` с `getattr(self, "f")(MessengerAccount.phone)`
+уходил мимо, SQLite записал `+71`, `+72` (ревью WR-28, верификация раунда 8, 2026-10-19);
+давний пропуск, не регрессия; восьмой круг одной оси (WR-01 → WR-08 → WR-10 → WR-12 → WR-14 /
+WR-15 / WR-16 → WR-18 / WR-20…WR-23 → CR-03 / WR-26 → WR-28): ось «где прочитано имя»
+закрывалась по видам имени, а не по оси. План 16-42 сделал читатель имени одним — общий
+`reading_name`; зонд исполнителя нашёл на той же оси ещё псевдоним самого
+`operator.methodcaller` и пишущего API, прочитанный getattr-строкой и звеном цепочки через
+атрибут или getattr-строку (`_rename_aliases`, `_module_aliases`), `partial` с колонкой,
+прочитанный getattr-строкой, — две находки вместо одной (поглощение `partial` у использования
+не видело getattr-строку), псевдоним модели получателем `__init__` (`self.M.__init__(…,
+phone=x)`) и цепочку псевдонима дескриптора колонки (`_api_alias_targets`), — их читает тот же
+читатель; все давние, так же на базе. Решение владельца О-18 (а), 2026-10-19: заявление
+прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ в пятый раз. Ни одна форма WR-28 в «ГРАНИЦЕ
+ПРЕДИКАТА» не названа: они ловятся.
+
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
 расширение реестра — решение владельца, а не правка ради зелени; состав реестра
@@ -560,6 +587,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     is_carrier_wrapper,
     module_bindings,
     named_wrappers,
+    reading_name,
     reference_arguments,
     wrapper_applications,
 )
@@ -1158,11 +1186,14 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     # `partial(…)`, связанный с именем, которое модуль зовёт или подаёт, судится у
     # использования — с аргументами применения, — а не на месте связывания: иначе
     # `w = partial(setattr, account, "phone"); w(x)` дал бы две находки.
+    # Имя на месте чтения — общим читателем `reading_name`: getattr-строка тоже чтение (ревью
+    # WR-28, план 16-42; до плана `getattr(self, "w")(x)` не поглощал `partial`, и связывание
+    # судилось второй находкой). Цель связывания (`Store`) — не чтение.
     used = {
-        node.id if isinstance(node, ast.Name) else node.attr
+        reading_name(node)
         for node in ast.walk(tree)
-        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load)
-    }
+        if not (isinstance(node, (ast.Name, ast.Attribute)) and not isinstance(node.ctx, ast.Load))
+    } - {None}
     consumed |= {
         id(value)
         for alias, values in partial_aliases.items()
@@ -1421,14 +1452,16 @@ def _judge_call(
                 break
     if (
         name == MODEL_INIT
-        and isinstance(receiver, ast.Name)
-        and receiver.id in (write_names - WRITE_CALL_NAMES) | {MODEL_NAME}
+        # Получатель — имя модели или её псевдонима, прочитанное общим читателем
+        # `reading_name`: `M.__init__`, `self.M.__init__`, `getattr(self, "M").__init__` (план
+        # 16-42; до плана — только `Name`).
+        and reading_name(receiver) in (write_names - WRITE_CALL_NAMES) | {MODEL_NAME}
     ):
         # `MessengerAccount.__init__(account, phone=x)` — повторный конструктор
         # модели (или её псевдонима в модуле). `obj.__init__(phone=…)` у объекта,
         # тип которого по исходнику не назван, сюда не попадает: без типов он
         # неотличим от `super().__init__(phone=…)` любого класса.
-        shown = f"{receiver.id}.__init__"
+        shown = f"{reading_name(receiver)}.__init__"
         for keyword in node.keywords:
             if keyword.arg in PHONE_COLUMNS:
                 record(keyword, KIND_KEYWORD, f"{shown}({keyword.arg}=…)")
@@ -1565,30 +1598,12 @@ def _callee_receiver(func: ast.expr) -> ast.expr | None:
     return literal[0] if literal is not None else None
 
 
-def _getattr_string(node: ast.AST | None) -> str | None:
-    """Строка `getattr(<obj>, "<строка>")` по читателю общего модуля `getattr_literal`, иначе `None`.
-
-    Читатель getattr-литерала один на оба гейта (план 16-32 вынес его в общий модуль, план
-    16-34 перевёл на него гейт писателя; ревью IN-15, О-15): строгая форма — два или три
-    позиционных аргумента, без именованных и звёздочки. До плана 16-34 у гейта писателя
-    была своя копия `_getattr_literal` (два и более аргументов, любые именованные); замер
-    планирования: строгая форма не меняет ни одного ответа строк, матриц и живого дерева.
-    """
-    literal = getattr_literal(node) if node is not None else None
-    return literal[1] if literal is not None else None
-
-
-def _reference_name(node: ast.AST | None) -> str | None:
-    """Имя ССЫЛКИ на функцию: `Name.id`, `Attribute.attr` или строка `getattr(…, "…")`.
-
-    Ссылка — функция, поданная другому вызову без вызова: `run_sync(Session.
-    bulk_update_mappings, …)`, `partial(set_attribute, …)`. У прочих узлов — `None`.
-    """
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return _getattr_string(node)
+# Имя связанного в месте чтения — вызываемого, ссылки, значения-звена цепочки, получателя
+# `methodcaller` и предиката ссылки обёртки — гейт читает ОДНИМ общим читателем
+# `reading_name` (ревью WR-28, план 16-42; решение владельца О-18 (а), свойство 2): своих
+# копий у гейта нет. До плана 16-42 здесь были `_reference_name` (имя, атрибут, getattr-строка)
+# и `_getattr_string` (только getattr-строка, план 16-34), а получатели `methodcaller` и
+# предикат ссылки обёртки читали имя своими проверками `Name` / `Attribute` без getattr-строки.
 
 
 # Ссылка с привязанными аргументами: (имя API, узел ссылки, позиционные, именованные).
@@ -1618,7 +1633,7 @@ def _bound_reference(
     а не первая), и само имя остаётся ссылкой — на случай, если оно ещё и
     псевдоним пишущего API; вызывающий отбирает ссылки на судимые имена.
     """
-    name = _reference_name(node)
+    name = reading_name(node)
     if name is not None:
         assert node is not None
         found: list[BoundReference] = []
@@ -1700,11 +1715,7 @@ def _partial_aliases(
                 bounds = _bound_reference(value, partial_names, found)
                 if any(bound[0] in judged_names for bound in bounds):
                     changed |= _add_bound_values(found, name, [value])
-            elif (
-                isinstance(value, (ast.Name, ast.Attribute))
-                and (reference := _reference_name(value)) in found
-                and reference != name
-            ):
+            elif (reference := reading_name(value)) in found and reference != name:
                 changed |= _add_bound_values(found, name, list(found[reference]))
     return found
 
@@ -1732,11 +1743,7 @@ def _methodcaller_aliases(
             value = binding.value
             if isinstance(value, ast.Call) and _call_name(value) == "methodcaller":
                 changed |= _add_bound_values(found, name, [value])
-            elif (
-                isinstance(value, (ast.Name, ast.Attribute))
-                and (reference := _reference_name(value)) in found
-                and reference != name
-            ):
+            elif (reference := reading_name(value)) in found and reference != name:
                 changed |= _add_bound_values(found, name, list(found[reference]))
     return found
 
@@ -1775,12 +1782,12 @@ def _methodcaller_receivers(
 
     def methodcallers_of(node: ast.expr) -> list[ast.expr]:
         # Имя, связанное с `methodcaller(…)` несколько раз, применяет КАЖДОЕ своё
-        # значение (ревью WR-18, план 16-31).
+        # значение (ревью WR-18, план 16-31). Имя читает один общий читатель
+        # `reading_name` — вызовом, атрибутом и getattr-строкой (ревью WR-28, план 16-42;
+        # до плана getattr-строка у получателей `methodcaller` не читалась).
         if isinstance(node, ast.Call) and _call_name(node) == "methodcaller":
             return [node]
-        if isinstance(node, (ast.Name, ast.Attribute)):
-            return list(aliases.get(_reference_name(node) or "", []))
-        return []
+        return list(aliases.get(reading_name(node), []))
 
     found: dict[int, dict[int, ast.expr]] = {}
 
@@ -1853,15 +1860,15 @@ def _absorbed_carrier_wrappers(
     link_targets: dict[tuple[int, int, int | None, int | None], set[str]] = {}
     for binding in module_bindings(tree):
         target = binding_name(binding.target)
-        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+        if target is not None and reading_name(binding.value) is not None:
             link_targets.setdefault(place(binding.value), set()).add(target)
     reads: dict[str, list[ast.AST]] = {}
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
-            name = binding_name(node)
-        else:
-            literal = getattr_literal(node)
-            name = literal[1] if literal is not None else None
+        # Чтение — общим читателем `reading_name` (план 16-42); цель связывания (`Store`) —
+        # не чтение.
+        if isinstance(node, (ast.Name, ast.Attribute)) and not isinstance(node.ctx, ast.Load):
+            continue
+        name = reading_name(node)
         if name is not None and name in carrier_wrappers:
             reads.setdefault(name, []).append(node)
     names_of: dict[int, set[str]] = {}
@@ -1907,9 +1914,12 @@ def _carrier_wrappers(
     mc_aliases = _methodcaller_aliases(tree, judged_names)
 
     def is_reference(node: ast.expr) -> bool:
+        # Имя, связанное с `methodcaller`, — по общему читателю `reading_name` (ревью WR-28,
+        # план 16-42): обёртка `partial(asyncio.to_thread, getattr(self, "f"))` с `self.f =
+        # methodcaller(…)` — тоже обёртка ссылки.
         if isinstance(node, ast.Call) and _call_name(node) == "methodcaller":
             return True
-        if isinstance(node, (ast.Name, ast.Attribute)) and (_reference_name(node) or "") in mc_aliases:
+        if reading_name(node) in mc_aliases:
             return True
         return any(
             bound[0] in referable
@@ -2606,6 +2616,13 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
     и `getattr`-строка проходили гейт (ревью WR-14). Область видимости плоская — весь
     модуль, без учёта функций и классов; псевдоним, заведённый в другом модуле, —
     поток данных между модулями, и это названная граница предиката.
+
+    Звено цепочки читает общий читатель `reading_name` (ревью WR-28, план 16-42; О-18 (а),
+    свойство 2): `Y = X`, `Y = self.X` и `Y = getattr(self, "X")` (getattr-строка в
+    значении — атрибут, `getattr_as_attribute`) — одно и то же чтение имени `X`. До плана
+    16-42 цепочка шла только через имя, а атрибут признавался лишь с исходным именем
+    (`module.<name>`): `self.s = setattr; s2 = self.s; s2(account, "phone", x)` и
+    `s2 = getattr(self, "s")` теряли псевдоним (зонд исполнителя 16-42).
     """
     known = {name}
     for node in ast.walk(tree):
@@ -2618,10 +2635,7 @@ def _module_aliases(tree: ast.AST, name: str) -> frozenset[str]:
     while changed:
         changed = False
         for binding in bindings:
-            value = binding.value
-            if (isinstance(value, ast.Name) and value.id in known) or (
-                isinstance(value, ast.Attribute) and value.attr == name
-            ):
+            if reading_name(binding.value) in known:
                 target = binding_name(binding.target)
                 if target is not None and target not in known:
                     known.add(target)
@@ -2634,12 +2648,18 @@ def _rename_aliases(tree: ast.AST, name: str) -> None:
 
     Только узлы в контексте чтения: присваивание псевдонима остаётся, а его
     использования читаются как исходное имя всеми ветками, опознающими носитель по
-    имени (`_call_name`, `_getattr_string`, `_referenced_calls`). Имя `Name` — на
+    имени (`_call_name`, `reading_name`, `_referenced_calls`). Имя `Name` — на
     месте; атрибут `<obj>.<псевдоним>` — узлом `Name(name)` вместо атрибута: псевдоним,
     связанный целью-атрибутом `self.mc = operator.methodcaller` или в теле класса
     (`attr = getattr`), зовут через атрибут — `self.mc(…)`, `K.attr(…)`, — и до
     самопроверки исполнителя 16-27 такой вызов носителем не опознавался. Область
     видимости плоская, по последнему звену, как у псевдонимов пишущих API.
+
+    Имя псевдонима на месте чтения читает общий читатель `reading_name` (ревью WR-28, план
+    16-42; О-18 (а), свойство 2): чтение getattr-строкой `getattr(self, "mc")` — тоже
+    псевдоним, узлом `Name(name)` на его месте. До плана 16-42 getattr-строка здесь не
+    читалась: `self.mc = operator.methodcaller; getattr(self, "mc")("__set__", account,
+    x)(MessengerAccount.phone)` уходил мимо гейта (зонд исполнителя 16-42).
     """
     aliases = _module_aliases(tree, name)
     if not aliases:
@@ -2647,13 +2667,19 @@ def _rename_aliases(tree: ast.AST, name: str) -> None:
 
     class _Rename(ast.NodeTransformer):
         def visit_Name(self, node: ast.Name) -> ast.AST:
-            if isinstance(node.ctx, ast.Load) and node.id in aliases:
+            if isinstance(node.ctx, ast.Load) and reading_name(node) in aliases:
                 node.id = name
             return node
 
         def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
             self.generic_visit(node)
-            if isinstance(node.ctx, ast.Load) and node.attr in aliases:
+            if isinstance(node.ctx, ast.Load) and reading_name(node) in aliases:
+                return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
+            return node
+
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            self.generic_visit(node)
+            if getattr_literal(node) is not None and reading_name(node) in aliases:
                 return ast.copy_location(ast.Name(id=name, ctx=ast.Load()), node)
             return node
 
@@ -2686,10 +2712,9 @@ def _api_aliases(tree: ast.AST, judged_names: frozenset[str]) -> dict[str, froze
         if isinstance(node, ast.ImportFrom):
             bound.update(alias.name for alias in node.names if alias.asname)
     for binding in module_bindings(tree):
-        if isinstance(binding.value, ast.Name):
-            bound.add(binding.value.id)
-        elif isinstance(binding.value, ast.Attribute):
-            bound.add(binding.value.attr)
+        # Имя в значении связывания — общим читателем `reading_name` (план 16-42).
+        if (read := reading_name(binding.value)) is not None:
+            bound.add(read)
     aliases: dict[str, set[str]] = {}
     for name in sorted(judged_names & bound):
         for alias in sorted(_module_aliases(tree, name)):
@@ -2722,17 +2747,19 @@ def _api_alias_targets(
     bindings: dict[str, list[ast.expr]] = {}
     for binding in module_bindings(tree):
         target = binding_name(binding.target)
-        if target is not None and isinstance(binding.value, (ast.Name, ast.Attribute)):
+        if target is not None and reading_name(binding.value) is not None:
             bindings.setdefault(target, []).append(binding.value)
 
     def attributes(name: str, originals: frozenset[str], seen: frozenset[str]) -> list[ast.expr]:
+        # Звено цепочки читает общий читатель `reading_name` (план 16-42): `Y = X`, `Y = self.X`
+        # и `Y = getattr(self, "X")`; до плана цепочка шла только через имя, и псевдоним
+        # дескриптора, прочитанный атрибутом, терял получателя.
         found: list[ast.expr] = []
         for value in bindings.get(name, []):
-            if isinstance(value, ast.Name):
-                if value.id in bindings and value.id not in seen:
-                    found.extend(attributes(value.id, originals, seen | {value.id}))
-            elif value.attr in originals:
+            if isinstance(value, ast.Attribute) and value.attr in originals:
                 found.append(value)
+            elif (read := reading_name(value)) in bindings and read not in seen:
+                found.extend(attributes(read, originals, seen | {read}))
         return found
 
     targets: dict[str, list[ast.expr]] = {}
@@ -2800,13 +2827,10 @@ def _call_name(call: ast.Call) -> str | None:
 
     Последнее звено вызываемого: `update(...)` → `update`, `stmt.values(...)` →
     `values`; строка вызываемого `getattr(<что угодно>, "<строка>")(…)` →
-    `<строка>` (ревью WR-10: `getattr(session, "bulk_update_mappings")(…)`).
+    `<строка>` (ревью WR-10: `getattr(session, "bulk_update_mappings")(…)`). Имя
+    вызываемого читает общий читатель `reading_name` (ревью WR-28, план 16-42).
     """
-    if isinstance(call.func, ast.Name):
-        return call.func.id
-    if isinstance(call.func, ast.Attribute):
-        return call.func.attr
-    return _getattr_string(call.func)
+    return reading_name(call.func)
 
 
 def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
@@ -3209,6 +3233,60 @@ def test_a_planted_backfill_with_a_context_run_wrapper_handed_to_an_executor_red
     in_file = [offence for offence in offences if offence.startswith("scripts/backfill_context_run.py:")]
     assert len(in_file) == 1, (
         f"у подложенного скрипта не ровно одна находка — одно место, одна запись: {in_file}"
+    )
+
+
+def test_a_planted_backfill_with_a_methodcaller_read_by_a_getattr_string_reddens_the_gate(tmp_path):
+    """ТРАСЕР WR-28: дескриптор колонки через `methodcaller` в атрибуте, прочитанном getattr-строкой.
+
+    `self.apply = operator.methodcaller("__set__", account, number)` в `__init__` и
+    `getattr(self, "apply")(MessengerAccount.phone)` в методе — естественный путь скрипта
+    дозаполнения Фазы 20, который держит применитель номера атрибутом объекта (D-13). До
+    плана 16-42 гейт читал имя, связанное с `methodcaller`, только у `Name` / `Attribute` —
+    в получателях `methodcaller` и в предикате ссылки обёртки, — хотя имя обёртки
+    getattr-строкой читал с раунда 7 (`named_wrappers`): форма уходила мимо гейта (ревью
+    WR-28, верификация раунда 8, 2026-10-19: SQLite записал `+71`). Решение владельца
+    О-18 (а), свойство 2: имя читает один общий читатель `reading_name` везде, где
+    читается имя связанного. Подложенный файл находится тем же обходом, что и живое
+    дерево; место находки — строка связывания `self.apply = …`: находка вида 4 у
+    `methodcaller` стоит на самом `methodcaller`, как у чтения атрибутом.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_descriptor.py",
+        "import operator\n"
+        "\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "\n"
+        "\n"
+        "class DescriptorBackfill:\n"
+        "    def __init__(self, account, number):\n"
+        '        self.apply = operator.methodcaller("__set__", account, number)\n'
+        "\n"
+        "    def run(self):\n"
+        '        getattr(self, "apply")(MessengerAccount.phone)\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_descriptor.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    in_file = [offence for offence in offences if offence.startswith("scripts/backfill_descriptor.py:")]
+    assert in_file, (
+        "имя, связанное с `operator.methodcaller` и прочитанное getattr-строкой, гейт не читает: "
+        "`self.apply = operator.methodcaller('__set__', account, number)` и "
+        "`getattr(self, 'apply')(MessengerAccount.phone)` в scripts/backfill_descriptor.py "
+        f"гейт пропустил: {offences}"
+    )
+    assert len(in_file) == 1, (
+        f"у подложенного скрипта не ровно одна находка — одно место, одна запись: {in_file}"
+    )
+    assert in_file[0].startswith(f"scripts/backfill_descriptor.py:8 — {KIND_SETATTR} — "), (
+        f"находка не на строке связывания `self.apply = …` или не вида «{KIND_SETATTR}»: {in_file}"
+    )
+    assert "__set__" in in_file[0] and "phone" in in_file[0], (
+        f"предмет находки не называет `__set__` и колонку `phone`: {in_file}"
     )
 
 
@@ -4366,7 +4444,10 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     и летопись регрессии `147f5e46`, а пункт (1) не называет поданную обёртку границей. С
     плана 16-39 (итог партии раунда 7, свойства 6, 7) — и летопись словаря седьмого круга:
     девять носителей, регрессии `c6953017` и `147f5e46`, мера «база ↔ HEAD» против базы партии
-    и `2f8c1656`.
+    и `2f8c1656`. С плана 16-42 (ревью WR-28, верификация раунда 8; О-18 (а), свойство 2) — и
+    ось «где прочитано имя» целиком: шапка называет один общий читатель имени `reading_name`,
+    перечень пойманного «ГРАНИЦЫ ПРЕДИКАТА» — его рядом со значением `methodcaller`, пункты
+    границы `methodcaller` не называют, летопись WR-28 — восьмой круг и getattr-строку.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4508,6 +4589,47 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
                     f"носителю, границей: «{nearby}»"
                 )
                 break
+    # Ось «где прочитано имя» (ревью WR-28, верификация раунда 8, 2026-10-19; решение владельца
+    # О-18 (а), свойство 2; план 16-42): имя, связанное с `operator.methodcaller`, читается
+    # везде, где читается имя связанного, — одним общим читателем `reading_name`. Шапка
+    # называет его, перечень пойманного «ГРАНИЦЫ ПРЕДИКАТА» (до «Вне охвата») — рядом со
+    # значением `methodcaller`, пункты границы `methodcaller` не называют (он ловится), летопись
+    # WR-28 — восьмой круг одной оси и чтение getattr-строкой.
+    for needle in ("`reading_name`", "WR-28", "О-18 (а)"):
+        if needle not in flat:
+            missing.append(f"нет одного читателя имени: нет «{needle}»")
+    wr28 = _chronicle_segment(flat, "Летопись WR-28")
+    if not wr28:
+        missing.append("нет «Летопись WR-28»")
+    # Перепись мест чтения имени (план 16-42): летопись называет каждое место, переведённое на
+    # общий читатель после зонда исполнителя, — переименование и цепочку псевдонимов, поглощение
+    # `partial` у использования, получатель `__init__` псевдонима модели, цепочку псевдонима
+    # дескриптора.
+    for needle in (
+        "восьм",
+        "getattr-строк",
+        "reading_name",
+        "О-18 (а)",
+        "`_rename_aliases`",
+        "`_module_aliases`",
+        "поглощени",
+        "`__init__`",
+        "`_api_alias_targets`",
+    ):
+        if wr28 and needle not in wr28:
+            missing.append(f"летопись WR-28 не называет «{needle}»")
+    out_of_scope = flat.find("Вне охвата", boundary_start) if boundary_start >= 0 else -1
+    caught = flat[boundary_start:out_of_scope] if 0 <= boundary_start < out_of_scope else ""
+    if not any(
+        "methodcaller" in caught[max(0, match.start() - 200) : match.end() + 200]
+        for match in re.finditer("`reading_name`", caught)
+    ):
+        missing.append(
+            "перечень пойманного «ГРАНИЦЫ ПРЕДИКАТА» не называет общий читатель `reading_name` "
+            "рядом со значением `methodcaller`"
+        )
+    if 0 <= out_of_scope < boundary_end and "methodcaller" in flat[out_of_scope:boundary_end]:
+        missing.append("пункты «ГРАНИЦЫ ПРЕДИКАТА» называют `methodcaller` границей, а он ловится")
 
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "
@@ -6730,6 +6852,186 @@ LITERAL_FORM_CASES = [
         "phone",
         id="starmap-methodcaller-descriptor-set",
     ),
+    # Ревью WR-28 (верификация раунда 8, 2026-10-19; решение владельца О-18 (а), свойства 1
+    # и 2; план 16-42): имя, связанное с `operator.methodcaller`, прочитанное getattr-строкой.
+    # Давний пропуск, не регрессия — форма проходила и на `1c243203`, и на `2f8c1656`: гейт
+    # читал имя `methodcaller` только у `Name` / `Attribute`, а getattr-строку — только для
+    # имени обёртки (`named_wrappers`, раунд 7). SQLite записал `+71`, `+72`. Формы WR-28-W-1
+    # и WR-28-W-2 таблицы «Формы ревью раунда 8» плана 16-41 — дословно.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("__set__", account, x)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-receiver-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("__set__", account, x)\n'
+        "\n"
+        "    async def go(self):\n"
+        '        await asyncio.to_thread(getattr(self, "f"), MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-receiver-read-by-a-getattr-string-handed-to-to-thread",
+    ),
+    # Зонд исполнителя 16-42 (та же ось «где прочитано имя», О-18 (а), свойство 2): псевдоним
+    # самого `operator.methodcaller` и пишущего API, прочитанный getattr-строкой или звеном
+    # цепочки через атрибут / getattr-строку. До плана 16-42 переименование псевдонимов
+    # носителя (`_rename_aliases`) getattr-строку не читало, а цепочка псевдонима
+    # (`_module_aliases`) шла только через имя: `m2 = self.mc` и `s2 = getattr(self, "s")`
+    # теряли псевдоним, и все пять форм давали `[]`.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "mc")("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-alias-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        m2 = self.mc\n"
+        '        m2("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-alias-chained-through-an-attribute",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        m2 = getattr(self, "mc")\n'
+        '        m2("__set__", account, x)(MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-alias-chained-through-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.s = setattr\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.s\n"
+        '        s2(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-alias-chained-through-an-attribute",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.s = setattr\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        s2 = getattr(self, "s")\n'
+        '        s2(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="setattr-alias-chained-through-a-getattr-string",
+    ),
+    # Зонд исполнителя 16-42, второй заход (та же ось «где прочитано имя»): `partial` с колонкой
+    # в связывании, прочитанный getattr-строкой, давал ДВЕ находки — множество имён, которые
+    # модуль зовёт или подаёт (поглощение `partial` у использования), читало только `Name` /
+    # `Attribute`, и связывание судилось ещё раз; псевдоним модели, прочитанный атрибутом или
+    # getattr-строкой, как получатель `__init__`, и псевдоним дескриптора колонки звеном цепочки
+    # через атрибут или getattr-строку давали `[]`. Давние пропуски — так же на базе `d1743b4a`.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.w = functools.partial(setattr, account, "phone")\n'
+        "\n"
+        "    def go(self, x):\n"
+        '        getattr(self, "w")(x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="partial-with-column-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.w = functools.partial(setattr, account, "phone")\n'
+        "\n"
+        "    async def go(self, x):\n"
+        '        await asyncio.to_thread(getattr(self, "w"), x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="partial-with-column-read-by-a-getattr-string-handed-to-to-thread",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.M = MessengerAccount\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        self.M.__init__(account, phone=x)\n",
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="model-alias-attribute-as-init-receiver",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.M = MessengerAccount\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "M").__init__(account, phone=x)\n',
+        KIND_KEYWORD,
+        "__init__",
+        "phone",
+        id="model-alias-getattr-string-as-init-receiver",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.sp = MessengerAccount.phone.__set__\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.sp\n"
+        "        s2(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="descriptor-alias-chained-through-an-attribute",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.sp = MessengerAccount.phone.__set__\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        s2 = getattr(self, "sp")\n'
+        "        s2(account, x)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="descriptor-alias-chained-through-a-getattr-string",
+    ),
 ]
 
 
@@ -7226,6 +7528,76 @@ LEGITIMATE_CASES = [
         "    b = functools.partial(ctx.run, a)\n"
         '    a(account, "phone", x)\n',
         id="carrier-wrapper-cycle-without-a-writer",
+    ),
+    # Ревью WR-28 (план 16-42): тот же `methodcaller`, прочитанный getattr-строкой, с чужой
+    # колонкой получателя, и не-пишущий `methodcaller("noop")` — не запись номера.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("__set__", account, x)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(MessengerAccount.status)\n',
+        id="methodcaller-receiver-read-by-a-getattr-string-other-column",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("noop")\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(MessengerAccount.phone)\n',
+        id="noop-methodcaller-read-by-a-getattr-string",
+    ),
+    # Зонд исполнителя 16-42: те же псевдонимы, прочитанные getattr-строкой и звеном цепочки,
+    # с чужой колонкой — не запись номера.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.mc = operator.methodcaller\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "mc")("__set__", account, x)(MessengerAccount.status)\n',
+        id="methodcaller-alias-read-by-a-getattr-string-other-column",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.s = setattr\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.s\n"
+        '        s2(account, "status", x)\n',
+        id="setattr-alias-chained-through-an-attribute-other-column",
+    ),
+    # Зонд исполнителя 16-42, второй заход: те же чтения с чужой колонкой и чужой моделью.
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.w = functools.partial(setattr, account, "status")\n'
+        "\n"
+        "    def go(self, x):\n"
+        '        getattr(self, "w")(x)\n',
+        id="partial-with-other-column-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.M = Group\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        '        getattr(self, "M").__init__(account, phone=x)\n',
+        id="other-model-alias-getattr-string-as-init-receiver",
+    ),
+    pytest.param(
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.sp = MessengerAccount.status.__set__\n"
+        "\n"
+        "    def go(self, account, x):\n"
+        "        s2 = self.sp\n"
+        "        s2(account, x)\n",
+        id="other-column-descriptor-alias-chained-through-an-attribute",
     ),
 ]
 
