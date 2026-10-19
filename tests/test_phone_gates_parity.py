@@ -16,13 +16,15 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
 ЧТО ПРОВЕРЯЕТСЯ.
 * Построение: оба модуля гейтов ввозят `tests.phone_gate_grammar` и держат его имена
   `REQUIRED_SHARED_NAMES` (`module_bindings`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
-  `reference_arguments`, `iterable_elements`, `getattr_literal`) теми же объектами; на
+  `reference_arguments`, `iterable_elements`, `getattr_literal` и семантику обёртки
+  носителя `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
+  `is_carrier_wrapper` — ревью WR-24, план 16-37) теми же объектами; на
   верхнем уровне модуля гейта нет функции с именем из `GRAMMAR_FUNCTIONS` — грамматика
   связывания (`binding_pairs`, `module_bindings`, `getattr_as_attribute`) И семантика
   носителя ссылки (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
   `forwarded_arguments`, `elementwise_arguments`, `literal_keyword_arguments`,
-  `reference_arguments`, `carrier_wrapper_bindings`, `applied_wrapper`), каждое имя с
-  подчёркиванием и без, — и присваивания таблицы
+  `reference_arguments`, `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
+  `is_carrier_wrapper`), каждое имя с подчёркиванием и без, — и присваивания таблицы
   с именем из `GRAMMAR_TABLES` (`ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`,
   `BINDING_FORMS`, `LITERAL_CONTAINER_WRAPPERS`, `UNJUDGED_ELEMENT`, выведенная планом
   16-34 `REFERENCE_KEYWORDS`): названные точки не переопределены. Копию под другим
@@ -76,10 +78,10 @@ CARRIER_SEMANTICS = (
     "elementwise_arguments",
     "literal_keyword_arguments",
     "reference_arguments",
-    # Обёртка носителя под именем (самопроверка исполнителя 16-34, заход 1). Гейт
-    # приватности держит ту же семантику своей функцией `_carrier_wrappers` (план 16-32):
-    # план 16-34 правит его модуль только строкой ввоза — копия под другим именем, которую
-    # структурная половина не видит по построению; перевод — за следующим планом.
+    # Семантика обёртки носителя (самопроверка исполнителя 16-34, заход 1; ревью CR-03,
+    # WR-24, WR-26; решение владельца О-16 (а), свойство 5): оба гейта зовут эти функции
+    # общего модуля — гейт писателя с планов 16-34 и 16-36, гейт приватности с плана 16-37,
+    # который снял его копию (`_carrier_wrappers` с ручным применением, план 16-32).
     "carrier_wrapper_bindings",
     "applied_wrapper",
     "named_wrappers",

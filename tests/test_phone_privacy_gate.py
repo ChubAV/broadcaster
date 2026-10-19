@@ -352,7 +352,7 @@ import os
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Mapping
+from typing import Callable, Mapping
 
 import pytest
 
@@ -368,11 +368,15 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     Binding,
     BindingForm,
     IdentificationValue,
+    applied_wrapper,
     binding_form_source,
     binding_name,
+    carrier_wrapper_bindings,
     getattr_literal,
+    is_carrier_wrapper,
     iterable_elements,
     module_bindings,
+    named_wrappers,
     reference_arguments,
 )
 
@@ -619,8 +623,11 @@ class ModuleLogNames:
     исполнителя 16-29 — гейт писателя разрешает псевдонимы `partial` с плана 16-22).
     `carrier_wrappers` — пары «имя → обёртка носителя»: имя, связанное общей грамматикой с
     `partial(<носитель>, <ссылка на вызываемое журнала или methodcaller>, …)`
-    (`w = functools.partial(asyncio.to_thread, logger.info)`); вызов `w(…)` судится, как
-    применённая обёртка `partial(…)(…)` (самопроверка исполнителя 16-32, цикл 2).
+    (`w = functools.partial(asyncio.to_thread, logger.info)`); вызов `w(…)`, `self.w(…)`,
+    `getattr(self, "w")(…)` судится, как применённая обёртка `partial(…)(…)` (самопроверка
+    исполнителя 16-32, цикл 2). Отображение строит функция общего модуля
+    `carrier_wrapper_bindings` с общим предикатом `is_carrier_wrapper` (ревью WR-24, план
+    16-37; О-16 (а), свойство 5).
     Область видимости — весь модуль. Новые поля — с умолчаниями, чтобы позиционное
     создание по трём прежним полям не ломалось.
     """
@@ -879,53 +886,60 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     return replace(names, carrier_wrappers=_carrier_wrappers(bindings, names))
 
 
-def _carrier_wrappers(bindings: list[Binding], names: ModuleLogNames) -> tuple[tuple[str, ast.Call], ...]:
-    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)` (самопроверка 16-32).
+def _log_wrapper_reference(names: ModuleLogNames) -> Callable[[ast.expr], bool]:
+    """Предикат ссылки гейта для обёртки носителя: вызываемое журнала или `methodcaller`.
 
-    `w = functools.partial(asyncio.to_thread, logger.info); w("x %s", account.phone)` —
-    то же применение `partial(…)(…)`, что и на месте, разделённое связыванием: ссылка — в
-    аргументах `partial` (`reference_arguments` общего модуля находит её там), аргументы
-    применения приходят с вызова `w(…)`. Связывание — любой формой общей грамматики, цепочка
-    `g = w` — тоже, до неподвижной точки; каждое связывание имени судится. `partial` над
-    самим вызываемым журнала (`partial(logger.info, …)`) — уже функция журнала, здесь не
-    повторяется.
+    Вызываемое журнала (`_is_log_callable`: `logger.info`, `print`, `partial(logger.info, …)`
+    — `partial` над самим вызываемым журнала остаётся функцией журнала, а не обёрткой) и
+    `operator.methodcaller(…)` или имя, связанное с ним (`_methodcaller_calls`).
     """
     grouped = _grouped(names.methodcallers)
-    not_carriers = _not_carriers(names)
 
     def is_reference(node: ast.expr) -> bool:
         return _is_log_callable(node, names) or bool(
             _methodcaller_calls(node, names.methodcaller_names, grouped)
         )
 
-    found: dict[str, list[ast.Call]] = {}
-    changed = True
-    while changed:
-        changed = False
-        for target, value, _in_class_body in bindings:
-            name = binding_name(target)
-            if name is None:
-                continue
-            if isinstance(value, ast.Call):
-                values = (
-                    [value]
-                    if _last_name(value.func) in names.partial_names
-                    and not _is_log_partial(value, names)
-                    and reference_arguments(value, is_reference, not_carriers)
-                    else []
-                )
-            elif isinstance(value, ast.Name):
-                values = list(found.get(value.id, ()))
-            elif isinstance(value, ast.Attribute):
-                values = list(found.get(value.attr, ()))
-            else:
-                values = []
-            for wrapper in values:
-                known = found.setdefault(name, [])
-                if all(wrapper is not other for other in known):
-                    known.append(wrapper)
-                    changed = True
+    return is_reference
+
+
+def _carrier_wrappers(bindings: list[Binding], names: ModuleLogNames) -> tuple[tuple[str, ast.Call], ...]:
+    """Имена, связанные с обёрткой носителя `partial(<носитель>, <ссылка>, …)`: пары «имя → обёртка».
+
+    `w = functools.partial(asyncio.to_thread, logger.info); w("x %s", account.phone)` —
+    то же применение `partial(…)(…)`, что и на месте, разделённое связыванием. Отображение
+    строит функция общего модуля `carrier_wrapper_bindings` (неподвижная точка «имя →
+    обёртки», цепочка `g = w`, каждое связывание имени судится), что такое обёртка — общий
+    рекурсивный предикат `is_carrier_wrapper`; гейт даёт им только имена `partial` модуля
+    (`names.partial_names`) и свой предикат ссылки (`_log_wrapper_reference`). Решение
+    владельца О-16 (а), свойство 5, и О-15; ревью WR-24: до плана 16-37 здесь жила своя копия
+    неподвижной точки и проверки аргументов (самопроверка 16-32, цикл 2, коммит `5e57325d`),
+    и она уже расходилась с гейтом писателя.
+    """
+    is_reference = _log_wrapper_reference(names)
+    not_carriers = _not_carriers(names)
+
+    def is_wrapper(value: ast.Call, known: dict[str, list[ast.Call]]) -> bool:
+        return is_carrier_wrapper(value, names.partial_names, is_reference, not_carriers, known)
+
+    found = carrier_wrapper_bindings(bindings, is_wrapper, nested=True)
     return tuple((name, wrapper) for name, wrappers in sorted(found.items()) for wrapper in wrappers)
+
+
+def _log_wrappers_of(names: ModuleLogNames) -> Callable[[ast.AST], list[ast.Call]]:
+    """Обёртки носителя, которые называет узел, — функцией общего модуля `named_wrappers`.
+
+    Литерал обёртки (общий предикат `is_carrier_wrapper`), имя, атрибут и getattr-строка,
+    связанные с обёрткой (`names.carrier_wrappers`): `w`, `self.w`, `getattr(self, "w")`.
+    """
+    bound = _grouped(names.carrier_wrappers)
+    is_reference = _log_wrapper_reference(names)
+    not_carriers = _not_carriers(names)
+
+    def is_wrapper(value: ast.Call) -> bool:
+        return is_carrier_wrapper(value, names.partial_names, is_reference, not_carriers, bound)
+
+    return lambda node: named_wrappers(node, is_wrapper, bound)
 
 
 def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozenset[str]) -> frozenset[str]:
@@ -1195,7 +1209,7 @@ def python_log_calls(source: str) -> list[ast.Call]:
     tree = ast.parse(source)
     names = module_log_names(tree)
     applied = _applied_carriers(tree, names)
-    wrappers = _grouped(names.carrier_wrappers)
+    wrappers_of = _log_wrappers_of(names)
     calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -1210,20 +1224,16 @@ def python_log_calls(source: str) -> list[ast.Call]:
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
         calls.extend(_applied_log_methodcaller(node, names, as_carrier=id(node) not in applied))
         # Вызов имени, связанного с обёрткой носителя (`w = partial(asyncio.to_thread,
-        # logger.info); w(…)`), — как применённая обёртка `partial(…)(…)` на этом месте.
-        bound = (
-            wrappers.get(node.func.id, [])
-            if isinstance(node.func, ast.Name)
-            else wrappers.get(node.func.attr, [])
-            if isinstance(node.func, ast.Attribute)
-            else []
-        )
-        for wrapper in bound:
-            application = ast.copy_location(
-                ast.Call(func=wrapper, args=list(node.args), keywords=list(node.keywords)), node
-            )
-            calls.extend(_carried_log_calls(application, names))
-            calls.extend(_applied_log_methodcaller(application, names))
+        # logger.info); w(…)`, `self.w(…)`, `getattr(self, "w")(…)`), — как применённая
+        # обёртка `partial(…)(…)` на этом месте: имя ищет и применение строит общий модуль
+        # (`named_wrappers`, `applied_wrapper`; ревью WR-24, О-16 (а)). Литеральный
+        # `partial(…)(…)` здесь не повторяется — его судит правило 1 `reference_arguments`.
+        callee = node.func
+        if not isinstance(callee, ast.Call) or getattr_literal(callee) is not None:
+            for wrapper in wrappers_of(callee):
+                application = applied_wrapper(node, wrapper)
+                calls.extend(_carried_log_calls(application, names))
+                calls.extend(_applied_log_methodcaller(application, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
@@ -1304,16 +1314,27 @@ def python_log_offences(source: str, path: str) -> list[str]:
 
     `path` — путь от корня проекта (`app/x.py`): по нему решается, читает ли вывод
     `print` человек (`scripts/`), и по нему же строится ключ реестра исключений.
+
+    Одно место — одна находка (ревью WR-24, решение владельца О-16 (а), свойство 1): находка
+    стоит на узле аргумента с номером, и обёртка носителя, судимая и на месте связывания, и
+    на месте применения, указывает на тот же узел — тройка (строка, вид, предмет) не
+    повторяется, остаётся первая по порядку. До плана 16-37 копия семантики обёртки давала
+    здесь две находки на одном месте (`w = partial(asyncio.to_thread, logger.info, "x %s",
+    account.phone); await w()`, коммит `5e57325d`).
     """
     tree = ast.parse(source)
     ranges = _function_ranges(tree)
     in_scripts = PurePosixPath(path).parts[:1] == ("scripts",)
     offences: list[str] = []
+    places: set[tuple[int, str, str]] = set()
     for call in python_log_calls(source):
         if f"{path}::{_owner(ranges, call.lineno)}" in PHONE_LOG_EXCEPTIONS:
             continue
         mask_for_a_reader = in_scripts and _is_print(call)
         for line, kind, subject in sorted(_judge_arguments(call, mask_for_a_reader=mask_for_a_reader)):
+            if (line, kind, subject) in places:
+                continue
+            places.add((line, kind, subject))
             offences.append(f"{path}:{line} — {kind} — {subject} (владелец {_owner(ranges, call.lineno)})")
     return offences
 
