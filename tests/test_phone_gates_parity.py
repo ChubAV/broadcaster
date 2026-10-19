@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from collections import Counter
 from types import ModuleType
 
@@ -327,6 +328,83 @@ def test_the_shared_dictionary_holds_the_round_seven_axes():
 
     assert not problems, "словарь матриц и паритета не держит ось седьмого круга:\n" + "\n".join(
         f"  {problem}" for problem in problems
+    )
+
+
+# Строка гейта приватности, которая держит место не-литеральной итерируемой у значения `partial`
+# (ревью IN-20, решение владельца О-19, план 16-43).
+PARTIAL_VALUE_PLACE_ROW = "partial-log-reference-mapped-over-a-phone-attribute"
+
+
+def _sentences(text: str) -> list[str]:
+    """Предложения текста с схлопнутыми пробелами: граница — точка перед заглавной буквой."""
+    return re.split(r"(?<=\.)\s+(?=[А-ЯЁA-Z])", " ".join(text.split()))
+
+
+def test_the_partial_value_place_is_pinned_by_a_privacy_row():
+    """Место не-литеральной итерируемой у значения `partial` держит строка гейта приватности, довод правдив.
+
+    У значения `partial` (`functools.partial(logger.info, "x %s")` с `(account.phone)`) один
+    позиционный аргумент — номер, и `binding_form_source` места `last` ему не даёт: ячейка
+    `map-named-iterable` у этого значения совпадает с ячейкой `map`. Форму
+    `list(map(functools.partial(logger.info, "x %s"), account.phones))` гейт ловит с плана 16-38
+    (на `1c243203` — `[]`), но до плана 16-43 её не держали ни строка таблицы, ни ячейка матрицы, а
+    докстринг `ReferenceCarrier` объяснял отсутствие места у `partial` правилом получателя D-17 —
+    ложно: у `partial` единственный аргумент — номер, а не получатель (ревью IN-20, верификация
+    раунда 8). Решение владельца О-19: довод исправлен, форма закреплена строкой. Правило держит
+    (а) строку `PARTIAL_VALUE_PLACE_ROW` в `NEGATIVE_CONTROLS` гейта приватности: её исходник
+    применяет `map` к `functools.partial(logger.info, …)` над не-литеральной итерируемой с
+    `phone`, и гейт даёт ровно одну находку; (б) докстринг `ReferenceCarrier` называет `id`
+    строки; (в) D-17 он называет в одном предложении с `methodcaller` и ни в одном — с `partial`,
+    а у `partial` называет выбор словаря («по выбору словаря»).
+    """
+    problems: list[str] = []
+    rows = {param.id: param.values for param in privacy.NEGATIVE_CONTROLS}
+    row = rows.get(PARTIAL_VALUE_PLACE_ROW)
+    if row is None:
+        problems.append(f"в `NEGATIVE_CONTROLS` гейта приватности нет строки `{PARTIAL_VALUE_PLACE_ROW}`")
+    else:
+        path, source, _subject = row
+        mapped = [
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "map"
+            and node.args
+            and isinstance(node.args[0], ast.Call)
+            and ast.unparse(node.args[0].func).split(".")[-1] == "partial"
+            and node.args[0].args
+            and ast.unparse(node.args[0].args[0]) == "logger.info"
+            and any(
+                not isinstance(iterable, (ast.List, ast.Tuple, ast.Set)) and "phone" in ast.unparse(iterable)
+                for iterable in node.args[1:]
+            )
+        ]
+        if not mapped:
+            problems.append(
+                f"строка `{PARTIAL_VALUE_PLACE_ROW}` не применяет `map` к `functools.partial(logger.info, …)` "
+                f"над не-литеральной итерируемой с `phone`: {source!r}"
+            )
+        offences = privacy.python_log_offences(source, path)
+        if len(offences) != 1 or "phone" not in offences[0]:
+            problems.append(f"строка `{PARTIAL_VALUE_PLACE_ROW}`: гейт дал не одну находку с `phone`: {offences}")
+    doc = grammar.ReferenceCarrier.__doc__ or ""
+    if PARTIAL_VALUE_PLACE_ROW not in " ".join(doc.split()):
+        problems.append(f"докстринг `ReferenceCarrier` не называет строку `{PARTIAL_VALUE_PLACE_ROW}`")
+    sentences = _sentences(doc)
+    with_rule = [sentence for sentence in sentences if "D-17" in sentence]
+    if not any("methodcaller" in sentence for sentence in with_rule):
+        problems.append("докстринг `ReferenceCarrier` не называет D-17 в одном предложении с `methodcaller`")
+    for sentence in with_rule:
+        if "partial" in sentence:
+            problems.append(f"докстринг `ReferenceCarrier` относит D-17 к `partial`: «{sentence}»")
+    if not any("partial" in sentence and "по выбору словаря" in sentence for sentence in sentences):
+        problems.append("докстринг `ReferenceCarrier` не называет у `partial` выбор словаря («по выбору словаря»)")
+
+    assert not problems, (
+        "место значения `partial` у `map` над не-литеральной итерируемой не закреплено строкой гейта "
+        "приватности, или довод `ReferenceCarrier.last` ложен:\n" + "\n".join(f"  {problem}" for problem in problems)
     )
 
 

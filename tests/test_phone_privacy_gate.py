@@ -3204,6 +3204,19 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-read-by-a-getattr-string-handed-to-to-thread",
     ),
+    # Ревью IN-20 (верификация раунда 8, 2026-10-19): `partial` над журналом, поданный `map` над
+    # не-литеральной итерируемой с номером. Форма ловится с плана 16-38 (итерируемая поэлементного
+    # носителя судится целиком), на `1c243203` — `[]`; но ни строка таблицы, ни ячейка матрицы её не
+    # держали: у значения `partial` (один позиционный аргумент — номер) ячейка `map-named-iterable`
+    # совпадает с ячейкой `map`, и возврат класса CR-02 на этом значении прошёл бы суиту зелёным.
+    # Решение владельца О-19: довод `ReferenceCarrier.last` исправлен, форма закреплена этой строкой
+    # (план 16-43; правило-паритет `test_the_partial_value_place_is_pinned_by_a_privacy_row`).
+    pytest.param(
+        "app/x.py",
+        'def f(account):\n    list(map(functools.partial(logger.info, "x %s"), account.phones))\n',
+        "phone",
+        id="partial-log-reference-mapped-over-a-phone-attribute",
+    ),
 ]
 
 # Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
