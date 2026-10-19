@@ -378,6 +378,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     module_bindings,
     named_wrappers,
     reference_arguments,
+    wrapper_applications,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -1204,7 +1205,9 @@ def python_log_calls(source: str) -> list[ast.Call]:
     Прежние вызовы журнала (`_is_identified_log_call`) и синтетические вызовы, которые
     сделает носитель ссылки на вызываемое журнала (`_carried_log_calls`) и
     `operator.methodcaller`, применённый к опознанному журналу
-    (`_applied_log_methodcaller`), — ревью WR-17.
+    (`_applied_log_methodcaller`), — ревью WR-17; те же две функции судят каждое применение
+    обёртки носителя, которое находит функция общего модуля `wrapper_applications` (ревью
+    WR-24, WR-26, план 16-37).
     """
     tree = ast.parse(source)
     names = module_log_names(tree)
@@ -1223,17 +1226,18 @@ def python_log_calls(source: str) -> list[ast.Call]:
             calls.extend(_carried_log_calls(node, names))
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
         calls.extend(_applied_log_methodcaller(node, names, as_carrier=id(node) not in applied))
-        # Вызов имени, связанного с обёрткой носителя (`w = partial(asyncio.to_thread,
-        # logger.info); w(…)`, `self.w(…)`, `getattr(self, "w")(…)`), — как применённая
-        # обёртка `partial(…)(…)` на этом месте: имя ищет и применение строит общий модуль
-        # (`named_wrappers`, `applied_wrapper`; ревью WR-24, О-16 (а)). Литеральный
-        # `partial(…)(…)` здесь не повторяется — его судит правило 1 `reference_arguments`.
-        callee = node.func
-        if not isinstance(callee, ast.Call) or getattr_literal(callee) is not None:
-            for wrapper in wrappers_of(callee):
-                application = applied_wrapper(node, wrapper)
-                calls.extend(_carried_log_calls(application, names))
-                calls.extend(_applied_log_methodcaller(application, names))
+        # Обёртка носителя судится везде, где её прочитали (ревью WR-24, WR-26; решение
+        # владельца О-16 (а), свойства 2 и 3): вызванная (`w(…)`, `self.w(…)`,
+        # `getattr(self, "w")(…)`), поданная другому носителю литералом или именем, обёрнутая
+        # ещё одним `partial` или вложенная глубже — каждое применение находит функция общего
+        # модуля `wrapper_applications` (рекурсивно, с защитой от цикла), и каждое судится как
+        # носитель на месте внешнего вызова; на месте связывания обёртка судится всегда (выше).
+        # `X(…)` в `X(…)(…)` носителем не судится — его судит применение.
+        if id(node) in applied:
+            continue
+        for item in wrapper_applications(node, wrappers_of, _not_carriers(names)):
+            calls.extend(_carried_log_calls(item.application, names))
+            calls.extend(_applied_log_methodcaller(item.application, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))
 
 
