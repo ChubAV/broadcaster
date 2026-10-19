@@ -3001,6 +3001,64 @@ def test_a_planted_backfill_with_a_threaded_writer_reference_reddens_the_gate(tm
     )
 
 
+def test_a_planted_backfill_with_a_context_run_wrapper_handed_to_an_executor_reddens_the_gate(
+    tmp_path,
+):
+    """ТРАСЕР CR-03: `functools.partial(ctx.run, setattr, account, "phone", number)`, поданный исполнителю.
+
+    Это дословное тело `asyncio.to_thread` в CPython (`asyncio/threads.py`: `func_call =
+    functools.partial(ctx.run, func, *args, **kwargs)`, `await loop.run_in_executor(None,
+    func_call)`) — естественный путь скрипта дозаполнения Фазы 20, которому нужен
+    `to_thread` с копией контекста (D-13). На `147f5e46^` форма ловилась: обёртку носителя
+    судили на месте связывания; коммит `147f5e46` (16-34, самопроверка, цикл 1) стал
+    «поглощать» обёртку под именем по любому чтению, а судил её только у вызова `w(…)`, и
+    переданное имя уходило мимо гейта (ревью CR-03, регрессия партии раунда 6; верификация
+    раунда 7: на SQLite форма пишет колонку, `+71`). Решение владельца О-16 (а): обёртка
+    носителя под именем судится везде, где её имя прочитано. Подложенный файл находится
+    тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_context_run.py",
+        "import asyncio\n"
+        "import contextvars\n"
+        "import functools\n"
+        "\n"
+        "\n"
+        "async def backfill(rows):\n"
+        "    loop = asyncio.get_running_loop()\n"
+        "    for account, number in rows:\n"
+        "        ctx = contextvars.copy_context()\n"
+        '        func_call = functools.partial(ctx.run, setattr, account, "phone", number)\n'
+        "        await loop.run_in_executor(None, func_call)\n",
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_context_run.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    found = [
+        offence
+        for offence in offences
+        # Строка 11 — место, где обёртку прочитали и подали исполнителю: там она судится.
+        if offence.startswith(f"scripts/backfill_context_run.py:11 — {KIND_SETATTR} — ")
+    ]
+    assert found, (
+        "обёртка носителя под именем, поданная, а не вызванная, не судится: "
+        "`func_call = functools.partial(ctx.run, setattr, account, 'phone', number); "
+        "await loop.run_in_executor(None, func_call)` в scripts/backfill_context_run.py "
+        f"гейт пропустил: {offences}"
+    )
+    assert all("setattr" in offence and "phone" in offence for offence in found), (
+        f"предмет находки не называет `setattr` и колонку `phone`: {found}"
+    )
+    in_file = [offence for offence in offences if offence.startswith("scripts/backfill_context_run.py:")]
+    assert len(in_file) == 1, (
+        f"у подложенного скрипта не ровно одна находка — одно место, одна запись: {in_file}"
+    )
+
+
 def test_a_planted_backfill_with_a_nested_column_naming_reddens_the_gate(tmp_path):
     """ТРАСЕР WR-15: ключ `MessengerAccount.__table__.c[MessengerAccount.phone.key]` в `values`.
 
@@ -6252,6 +6310,97 @@ LITERAL_FORM_CASES = [
         "bulk_update_mappings",
         "phone",
         id="starmap-literal-argument-tuples-bulk-update",
+    ),
+    # Ревью CR-03 и WR-26 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а)).
+    # CR-03 — регрессия `147f5e46` (16-34, самопроверка, цикл 1): обёртка носителя под
+    # именем, которую подают, а не вызывают, «поглощалась» по любому чтению и не судилась
+    # нигде; на `147f5e46^` и на базе `2f8c1656` каждая форма давала одну находку (SQLite:
+    # `+71`, `+72`). Первая — дословное тело `asyncio.to_thread`. Та же обёртка без
+    # использования — контроль: одна находка и без чтения, и с ним. WR-26 — пробел
+    # композиции, был и на `2f8c1656`: обёртка носителя, поданная другому носителю
+    # литералом или именем, и обёртка, обёрнутая ещё одним `partial` (`+73`…`+75`).
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    func_call = functools.partial(ctx.run, setattr, account, "phone", x)\n'
+        "    await loop.run_in_executor(None, func_call)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-handed-to-run-in-executor",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    job = functools.partial(\n"
+        '        contextvars.copy_context().run, setattr, account, "phone", x\n'
+        "    )\n"
+        "    threading.Thread(target=job).start()\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-as-a-thread-target",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    job = functools.partial(\n"
+        '        contextvars.copy_context().run, setattr, account, "phone", x\n'
+        "    )\n"
+        "    loop.call_soon(job)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-handed-to-call-soon",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    job = functools.partial(asyncio.to_thread, setattr, account, "phone", x)\n'
+        "    tasks.append(job)\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-appended-to-a-list",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    func_call = functools.partial(ctx.run, setattr, account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-with-arguments-unused",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    await loop.run_in_executor(\n"
+        '        None, functools.partial(ctx.run, setattr), account, "phone", x\n'
+        "    )\n",
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="literal-carrier-wrapper-handed-to-run-in-executor",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    list(map(functools.partial(ctx.run, setattr), [account], ["phone"], [x]))\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="literal-carrier-wrapper-mapped",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        "    w = functools.partial(ctx.run, setattr)\n"
+        '    await asyncio.to_thread(w, account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="named-carrier-wrapper-handed-to-to-thread",
+    ),
+    pytest.param(
+        "async def f(account, x, loop, ctx, pool, tasks, phone_lists):\n"
+        '    functools.partial(functools.partial(ctx.run, setattr))(account, "phone", x)\n',
+        KIND_SETATTR,
+        "setattr",
+        "phone",
+        id="carrier-wrapper-wrapped-in-partial",
     ),
 ]
 
