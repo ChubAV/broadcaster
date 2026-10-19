@@ -1104,12 +1104,23 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
     applied_reads: dict[int, list[ast.expr]] = {}
     handed_literals: list[tuple[int, ast.Call]] = []
     for key, items in applications.items():
+        producing: set[int] = set()
         for item in items:
             triples = _referenced_calls(item.application, referable, partial_names, partial_aliases)
             references.setdefault(key, []).extend(triples)
             applied_reads.setdefault(key, []).append(item.read)
-            if item.read is item.wrapper and triples:
-                handed_literals.append((key, item.wrapper))
+            if triples:
+                producing.add(id(item.wrapper))
+        # Литерал обёртки, прочитанный применением, поглощается, если запись нашло применение
+        # его самого или обёртки, вложенной в него (`partial(partial(to_thread, setattr,
+        # account, "phone", x))`): иначе каждый уровень вложенности судил бы ту же запись у
+        # себя (сверка «база ↔ HEAD» самопроверки 16-36: 796 ячеек на `44452e68`).
+        handed_literals += [
+            (key, item.wrapper)
+            for item in items
+            if item.read is item.wrapper
+            and any(id(inner) in producing for inner in ast.walk(item.wrapper))
+        ]
     consumed = {
         id(carrier)
         for triples in references.values()
