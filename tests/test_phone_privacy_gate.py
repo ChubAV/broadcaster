@@ -3182,6 +3182,20 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
         for needle in ("поданная другому носителю", "`partial(partial("):
             if needle not in paragraph:
                 missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+    # Ось «итерируемая поэлементного и построчного носителя» (ревью CR-02, WR-25; решение
+    # владельца О-16 (а), свойство 4, план 16-38): абзац носителя называет одно правило
+    # поэлементных и построчных носителей общего модуля и суд итерируемой целиком; летопись
+    # называет регрессию `c6953017`; пункт границы об аргументах нелитералом по-прежнему
+    # обещает судить само выражение — сужения нет.
+    if paragraph:
+        for needle in ("`ELEMENTWISE_CARRIERS`", "`ROW_CARRIERS`", "`imap`", "`starmap`", "целиком"):
+            if needle not in paragraph:
+                missing.append(f"абзац «ПО НОСИТЕЛЮ ССЫЛКИ» не называет «{needle}»")
+    for needle in ("CR-02", "c6953017", "WR-25"):
+        if needle not in flat:
+            missing.append(f"нет летописи CR-02 / WR-25: нет «{needle}»")
+    if "судится само выражение" not in data_item:
+        missing.append("пункт границы об аргументах нелитералом больше не обещает «судится само выражение»")
     # Строки `REFERENCE_CARRIERS` плана 16-34 вписаны — шапка не говорит о них в будущем
     # времени (ревью IN-17, решение владельца О-17).
     if re.search(r"впишет[^.]*16-34|16-34[^.]*впишет", flat):
