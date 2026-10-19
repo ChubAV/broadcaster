@@ -64,10 +64,17 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 kwargs={…})` (`Thread(target=…, args=…)`), таймеру `threading.Timer(1.0, ref,
 args=(…))` (`Timer(…, args=…)`) и очереди с выдуманной парой ключей
 `scheduler.enqueue(job=ref, payload=(…))` (`enqueue(job=…, payload=…)`; план 16-34),
-обёртке носителя под именем, связанной с аргументами записи и переданной исполнителю, —
-дословному телу `asyncio.to_thread`:
-`w = partial(Context.run, …, args); run_in_executor(None, w)` (строка общего словаря
-плана 16-39, ревью CR-03: её держат обе матрицы и правило-паритет), —
+и девяти строкам седьмого круга (план 16-39, ревью CR-02, CR-03, WR-24, WR-25, WR-26:
+их держат обе матрицы и правило-паритет) — обёртке носителя, поданной исполнителю
+(`run_in_executor(None, partial(Context.run, …), …)`), обёртке в обёртке
+(`partial(partial(Context.run, …))(…)`), обёртке под именем — вызванной
+(`w = partial(to_thread, …); w(…)`), переданной исполнителю
+(`w = partial(Context.run, …); run_in_executor(None, w, …)`), переданной вместе с
+аргументами записи, как дословное тело `asyncio.to_thread`
+(`w = partial(Context.run, …, args); run_in_executor(None, w)`), вызванной getattr-строкой
+(`getattr(holder, "w")(…)`), — `starmap`, `apply_async` и `map` с не-литеральной
+итерируемой на месте последнего позиционного аргумента (`account.phones` — место
+`ReferenceCarrier.last`; значение не-литералом колонку не прячет: она остаётся литералом), —
 и по-прежнему любому другому вызову (цена строгости ниже). Ссылка подана носителю
 позицией (в том числе литеральной распаковкой `*[…]` / `*(…)`), любым именованным
 аргументом (`fn=`, `target=`, `function=`, `initializer=`, выдуманный `job=` — ключи не

@@ -88,10 +88,18 @@
   `to_thread`, `run_in_executor`, `map`, `Context.run` и шесть строк, вписанные планом
   16-34: `to_thread(*[…])`, `partial(to_thread, …)(…)`, `Thread(target=…, args=…)`,
   `Timer(…, args=…)`, `enqueue(job=…, payload=…)` и `map` с обёрткой итерируемой
-  `list([…])`; строка плана 16-39 — обёртка носителя под именем, связанная с аргументами
-  журнала и переданная исполнителю (дословное тело `asyncio.to_thread`, ревью CR-03):
-  `w = partial(Context.run, …, args); run_in_executor(None, w)` — её держат обе матрицы и
-  правило-паритет; словарь, общий с гейтом писателя, а не закрытый список:
+  `list([…])`; девять строк седьмого круга, вписанные планом 16-39 (ревью CR-02, CR-03,
+  WR-24, WR-25, WR-26; их держат обе матрицы и правило-паритет): обёртка носителя, поданная
+  исполнителю (`run_in_executor(None, partial(Context.run, …), …)`), обёртка в обёртке
+  (`partial(partial(Context.run, …))(…)`), обёртка под именем — вызванная
+  (`w = partial(to_thread, …); w(…)`), переданная исполнителю
+  (`w = partial(Context.run, …); run_in_executor(None, w, …)`), переданная вместе с
+  аргументами журнала, как дословное тело `asyncio.to_thread`
+  (`w = partial(Context.run, …, args); run_in_executor(None, w)`), вызванная getattr-строкой
+  (`getattr(holder, "w")(…)`), — `starmap`, `apply_async` и `map` с не-литеральной
+  итерируемой на месте последнего позиционного аргумента (`account.phones` — место
+  `ReferenceCarrier.last`: такая итерируемая судится целиком, план 16-38); словарь, общий с
+  гейтом писателя, а не закрытый список:
   `await asyncio.to_thread(logger.info, "x %s", account.phone)`,
   `await loop.run_in_executor(None, logger.info, …)`,
   `list(map(logger.info, [a.phone for a in accounts]))`,

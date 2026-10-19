@@ -329,12 +329,20 @@ class ReferenceCarrier(NamedTuple):
     `element` — как поэлементный носитель (`ELEMENTWISE_CARRIERS`) оборачивает каждый
     аргумент применения: одноэлементным списком (`"[{}]"`, умолчание) или обёрткой
     итерируемой (`"list([{}])"`, ревью WR-19).
+    `last` — не-литеральная итерируемая, которая встаёт на место ПОСЛЕДНЕГО позиционного
+    аргумента применения, когда их два и более (место «итерируемая не-литерал» у
+    поэлементного носителя: `account.phones`; ревью CR-02, решение владельца О-16 (а),
+    свойство 6, план 16-39). У значения с одним позиционным аргументом — получатель
+    `methodcaller`, единственный аргумент `partial` — места нет: получатель обязан быть
+    опознан (D-17). Пустая строка (умолчание) — места нет; прежние строки создаются
+    позиционно без изменений.
     """
 
     id: str
     name: str
     template: str
     element: str = "[{}]"
+    last: str = ""
 
 
 # Один перечень носителей ссылки обоих гейтов номера (решение владельца О-12 (а)).
@@ -428,7 +436,9 @@ REFERENCE_CARRIERS: tuple[ReferenceCarrier, ...] = (
     ReferenceCarrier("apply-async", "apply_async", "pool.apply_async({ref}, ({positional},), {keywords})"),
     # Место не-литеральной итерируемой у поэлементного носителя: литерал — прежняя строка `map`,
     # имя с `phone` — эта строка (на предикатах `c6953017` — 36 промахов гейта приватности).
-    ReferenceCarrier("map-named-iterable", "map", "list(map({ref}, {args}))"),
+    # Последний позиционный у гейта писателя — значение `x` (колонка остаётся литералом), у гейта
+    # приватности — `account.phone` (номер уходит в не-литерал, и итерируемая судится целиком).
+    ReferenceCarrier("map-named-iterable", "map", "list(map({ref}, {args}))", "[{}]", "account.phones"),
 )
 
 
@@ -1161,7 +1171,10 @@ def binding_form_source(
     Место `{use}` формы получает прямой вызов `ref + call` (при `carrier=None`) или
     выражение носителя: ссылка формы и аргументы `call`, разобранные через `ast`; у
     носителя из `ELEMENTWISE_CARRIERS` каждый позиционный аргумент оборачивается по
-    `carrier.element` (одноэлементный список или `list([…])`). Шаблон носителя получает
+    `carrier.element` (одноэлементный список или `list([…])`); у носителя с непустым
+    `carrier.last` и двумя и более позиционными аргументами последний заменяется на
+    `carrier.last` — место не-литеральной итерируемой (план 16-39; у одного позиционного
+    места нет). Шаблон носителя получает
     места `{args}` (все аргументы через запятую), `{positional}` (только позиционные) и
     `{keywords}` (литерал словаря именованных, `{}` — когда их нет; план 16-32). Той же
     функцией собирают ячейки правило-матрица гейта писателя, матрица
@@ -1185,6 +1198,8 @@ def binding_form_source(
         positional = [ast.unparse(argument) for argument in applied.args]
         if carrier.name in ELEMENTWISE_CARRIERS:
             positional = [carrier.element.format(argument) for argument in positional]
+        if carrier.last and len(positional) >= 2:
+            positional[-1] = carrier.last
         named = [
             f"{keyword.arg}={ast.unparse(keyword.value)}"
             if keyword.arg is not None
