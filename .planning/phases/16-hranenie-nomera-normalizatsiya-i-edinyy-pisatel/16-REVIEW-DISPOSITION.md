@@ -9,7 +9,7 @@ findings:
     title: "Гейт приватности после перевода на общую семантику носителя пропускает `map` с не-литеральной итерируемой: `list(map(logger.info, account.phones))` ловился на базе, на `HEAD` — нет"
   - id: CR-03
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "Гейт писателя после правила «поглощения» обёртки носителя (`147f5e46`) пропускает обёртку под именем, которую передают, а не вызывают — дословное тело `asyncio.to_thread`"
   - id: WR-24
     severity: warning
@@ -187,7 +187,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 7
+open: 6
 total: 46
 recorded: 2026-10-16T13:56:58.217Z
 ---
@@ -197,7 +197,7 @@ recorded: 2026-10-16T13:56:58.217Z
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
 | CR-02 | critical | open | - |
-| CR-03 | critical | open | - |
+| CR-03 | critical | fixed | `16-36` задачи 1 и 3, GREEN `b67495dc`, `b8d557f0`, и цикл сверки «база ↔ HEAD», GREEN `4ffef0c1` — решение владельца О-16 (а): регрессия партии раунда 6 («147f5e46», самопроверка 16-34, заход 1: обёртка носителя поглощалась по любому чтению её имени, и переданная, а не вызванная обёртка не судилась нигде); обёртка носителя под именем судится везде, где её имя прочитано — вызванная, поданная исполнителю, потоку или очереди («await loop.run_in_executor(None, func_call)» — дословное тело `asyncio.to_thread`), — а поглощение суда на месте связывания — только когда каждое чтение судится как применение (`_absorbed_carrier_wrappers`); применения обёрток — общая `wrapper_applications` модуля `tests/phone_gate_grammar.py` (с `named_wrappers` и `WrapperApplication`), гейт писателя судит каждое применение как носитель на месте внешнего вызова; трасер `test_a_planted_backfill_with_a_context_run_wrapper_handed_to_an_executor_reddens_the_gate`; четыре формы ревью и контроль «без использования» — строки `LITERAL_FORM_CASES` («244» строки на итоговом дереве 16-36, `LEGITIMATE_CASES` — «98»); цикл сверки закрыл собственную регрессию плана на «44452e68» (вложенный литерал обёртки с аргументами записи давал две находки вместо одной, «798» ячеек; RED «a5b43616»); итог сверки «база ↔ HEAD» плана — «BASE 1c243203 -> HEAD 4ffef0c1: cells=54001 regressions=0», «OPEN_REGRESSIONS=0», «SELFTEST» «43» и «52»; самопроверка — «34 243» формы, ноль промахов; коммиты RED — «388ed1a9», «ec639a54»; заявление шапки гейта писателя прежнее |
 | WR-24 | warning | open | - |
 | WR-25 | warning | open | - |
 | WR-26 | warning | open | - |
