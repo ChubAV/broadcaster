@@ -128,9 +128,12 @@
   вложенная глубже, литералом и под именем (`w2 = partial(asyncio.to_thread, w)`), судится
   как применённая с аргументами внешнего носителя — рекурсивно, с защитой от цикла;
   `methodcaller` в поданной обёртке применяется к первому аргументу внешнего носителя.
-  Одно место — одна находка: тройка «строка, вид, предмет» не повторяется, какими бы путями
-  гейт ни дошёл до места (обёртка с аргументами судится и на месте связывания, и на месте
-  применения, а находка стоит на одном и том же узле аргумента). Семантика носителя и
+  Одно место — одна находка в обе стороны: место находки — подача номера, узел, на котором
+  стоит находка, — «строка, столбец, вид, предмет»; синтетический именованный аргумент
+  получает место своего ключа. Обёртка с аргументами, судимая и на месте связывания, и на
+  месте применения, указывает на тот же узел — одна находка; две разные подачи на одной
+  строке — два узла — две находки, как у гейта писателя (ревью WR-27, решение владельца
+  О-18 (а)). Семантика носителя и
   обёртки носителя — функции общего модуля `reference_arguments`,
   `literal_keyword_arguments`, `iterable_elements`, `getattr_literal`,
   `carrier_wrapper_bindings`, `is_carrier_wrapper`, `named_wrappers`, `applied_wrapper`,
@@ -312,6 +315,17 @@ IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20 → CR-02 / WR-24 / WR-25 / 
 итерируемую у `map` — так, что регрессии `c6953017` и `147f5e46` краснят обе матрицы и
 правило-паритет; партия раунда 7 сверила каждый GREEN с родителем и итог — с базой партии и с
 `2f8c1656` (мера «база ↔ HEAD», решение владельца О-16 (а), 2026-10-18).
+
+Летопись WR-27: план 16-37 снял двойной счёт WR-24 дедупликацией по тексту тройки места без
+столбца (коммит `51d0d766`), и она слила РАЗНЫЕ подачи одной строки —
+`logger.info("%s %s", a.phone, b.phone)` давал одну находку, на `1c243203` — две, `logging`
+печатал оба номера (ревью WR-27, верификация раунда 8, 2026-10-19: 954 ячейки корпуса
+верификатора с меньшим числом находок, все у гейта приватности); правило строк сверяло выход
+той же дедупликации и покраснеть не могло, а мера «база ↔ HEAD» партии раунда 7 число находок
+приватности не мерила; план 16-41 сделал место узлом, правило строк — счётом мест по
+`NEGATIVE_CONTROL_PLACES` с контролем, а сверку — сверкой и по числу находок у обоих гейтов;
+решение владельца О-18 (а), 2026-10-19: заявление прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ в
+пятый раз.
 
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
@@ -1360,9 +1374,15 @@ def _is_presence_flag(value: ast.expr) -> bool:
     )
 
 
-def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[int, str, str]]:
-    """Находки (строка, вид, предмет) во всём поддереве аргументов вызова журнала."""
-    found: list[tuple[int, str, str]] = []
+def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[int, int, str, str]]:
+    """Находки (строка, столбец, вид, предмет) во всём поддереве аргументов вызова журнала.
+
+    Место находки — узел подачи номера, на котором она стоит: имя, атрибут, строковая
+    константа, ключ словаря, вызов `mask_phone(…)`, именованный аргумент (у синтетического
+    `ast.keyword` общего модуля — место его ключа, `ast.copy_location`). Строка и столбец —
+    `lineno` и `col_offset` этого узла (ревью WR-27, решение владельца О-18 (а), свойство 4).
+    """
+    found: list[tuple[int, int, str, str]] = []
     stack: list[ast.AST] = [*call.args, *call.keywords]
     while stack:
         node = stack.pop()
@@ -1370,7 +1390,7 @@ def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[i
             if node.arg in PRESENCE_FLAG_NAMES and _is_presence_flag(node.value):
                 continue
             if node.arg is not None and _mentions_phone(node.arg):
-                found.append((node.lineno, "имя", f"{node.arg}="))
+                found.append((node.lineno, node.col_offset, "имя", f"{node.arg}="))
             stack.append(node.value)
             continue
         if isinstance(node, ast.Dict):
@@ -1379,23 +1399,23 @@ def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[i
                     if key.value in PRESENCE_FLAG_NAMES and _is_presence_flag(value):
                         continue
                     if _mentions_phone(key.value):
-                        found.append((key.lineno, "ключ", repr(key.value)))
+                        found.append((key.lineno, key.col_offset, "ключ", repr(key.value)))
                 if key is not None:
                     stack.append(key)
                 stack.append(value)
             continue
         if isinstance(node, ast.Call) and _callee_name(node.func) == MASK_FUNCTION:
             if not mask_for_a_reader:
-                found.append((node.lineno, "маска", f"{MASK_FUNCTION}(...)"))
+                found.append((node.lineno, node.col_offset, "маска", f"{MASK_FUNCTION}(...)"))
             continue
         if isinstance(node, ast.Name) and _mentions_phone(node.id):
-            found.append((node.lineno, "имя", node.id))
+            found.append((node.lineno, node.col_offset, "имя", node.id))
         elif isinstance(node, ast.Attribute) and _mentions_phone(node.attr):
-            found.append((node.lineno, "имя", node.attr))
+            found.append((node.lineno, node.col_offset, "имя", node.attr))
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             literal = phone_like(node.value)
             if literal is not None:
-                found.append((node.lineno, "литерал", literal))
+                found.append((node.lineno, node.col_offset, "литерал", literal))
         stack.extend(ast.iter_child_nodes(node))
     return found
 
@@ -1422,26 +1442,30 @@ def python_log_offences(source: str, path: str) -> list[str]:
     `path` — путь от корня проекта (`app/x.py`): по нему решается, читает ли вывод
     `print` человек (`scripts/`), и по нему же строится ключ реестра исключений.
 
-    Одно место — одна находка (ревью WR-24, решение владельца О-16 (а), свойство 1): находка
-    стоит на узле аргумента с номером, и обёртка носителя, судимая и на месте связывания, и
-    на месте применения, указывает на тот же узел — тройка (строка, вид, предмет) не
-    повторяется, остаётся первая по порядку. До плана 16-37 копия семантики обёртки давала
-    здесь две находки на одном месте (`w = partial(asyncio.to_thread, logger.info, "x %s",
-    account.phone); await w()`, коммит `5e57325d`).
+    Одно место — одна находка в обе стороны (ревью WR-24 и WR-27, решение владельца О-18 (а),
+    свойство 4): место — «строка, столбец, вид, предмет» узла подачи номера, на котором стоит
+    находка. Обёртка носителя, судимая и на месте связывания, и на месте применения,
+    указывает на тот же узел — одна находка, остаётся первая по порядку (до плана 16-37 здесь
+    было две на одном месте: `w = partial(asyncio.to_thread, logger.info, "x %s",
+    account.phone); await w()`, коммит `5e57325d`). Две разные подачи на одной строке — два
+    узла — две находки, как у гейта писателя: дедупликация по тексту тройки «строка, вид,
+    предмет» без столбца (коммит `51d0d766`, план 16-37) сливала их в одну (ревью WR-27). Текст
+    находки прежний — две находки одной строки печатаются одинаково.
     """
     tree = ast.parse(source)
     ranges = _function_ranges(tree)
     in_scripts = PurePosixPath(path).parts[:1] == ("scripts",)
     offences: list[str] = []
-    places: set[tuple[int, str, str]] = set()
+    places: set[tuple[int, int, str, str]] = set()
     for call in python_log_calls(source):
         if f"{path}::{_owner(ranges, call.lineno)}" in PHONE_LOG_EXCEPTIONS:
             continue
         mask_for_a_reader = in_scripts and _is_print(call)
-        for line, kind, subject in sorted(_judge_arguments(call, mask_for_a_reader=mask_for_a_reader)):
-            if (line, kind, subject) in places:
+        for place in sorted(_judge_arguments(call, mask_for_a_reader=mask_for_a_reader)):
+            if place in places:
                 continue
-            places.add((line, kind, subject))
+            places.add(place)
+            line, _column, kind, subject = place
             offences.append(f"{path}:{line} — {kind} — {subject} (владелец {_owner(ranges, call.lineno)})")
     return offences
 
@@ -2060,6 +2084,47 @@ def test_a_planted_log_wrapper_called_through_a_getattr_string_reddens_the_gate(
         "обёртка журнала, вызванная getattr-строкой, не опознана: гейт обошёл синтетическое "
         f"дерево ({_render(scans)}) и промолчал о "
         f'`await getattr(self, "emit_later")("synced %s", account.phone)`: {offences}'
+    )
+
+
+def test_a_planted_report_with_two_numbers_on_one_line_reddens_the_gate_twice(tmp_path):
+    """WR-27 (D-11, D-17): две подачи номера в одном вызове журнала — две находки.
+
+    `logger.info("synced %s and %s", account.phone, twin.phone)` — обычная строка отчёта, какой
+    Фазы 17–20 журналируют пару аккаунтов: `logging` печатает оба номера. Дедупликация по тексту
+    тройки «строка, вид, предмет» (коммит `51d0d766`, план 16-37) сливала две подачи в одну
+    находку — предмет `phone` у обеих один; на базе партии `1c243203` их было две (ревью WR-27,
+    верификация раунда 8, 2026-10-19). Решение владельца О-18 (а), свойства 1 и 4: место находки —
+    узел подачи (строка и столбец), как у гейта писателя. Подложенный файл находится тем же
+    обходом `python_sources(root)`, что и живое дерево; находок в файле ровно две, на одной строке.
+    """
+    planted = tmp_path / "app" / "services" / "phone_report.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import logging\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "def report(account, twin):\n"
+        '    logger.info("synced %s and %s", account.phone, twin.phone)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_report.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_report.py:7 — имя — phone (владелец report)",
+        "app/services/phone_report.py:7 — имя — phone (владелец report)",
+    ], (
+        "две подачи номера на одной строке слиты в одну находку: гейт обошёл синтетическое "
+        f"дерево ({_render(scans)}) и назвал не два места "
+        f'`logger.info("synced %s and %s", account.phone, twin.phone)`: {offences}'
     )
 
 
@@ -3021,26 +3086,150 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="named-methodcaller-keyword-reference-in-an-applied-thread-wrapper",
     ),
+    # Ревью WR-27 (повторное ревью раунда 7; верификация раунда 8, 2026-10-19): регрессия счёта
+    # `51d0d766` (16-37) против базы партии `1c243203`. Дедупликация по тексту тройки «строка,
+    # вид, предмет» сливала две РАЗНЫЕ подачи номера на одной строке в одну находку: каждая
+    # форма ниже давала на `1c243203` две находки, на `51d0d766` и после — одну, а `logging`
+    # печатал оба номера. Решение владельца О-18 (а), свойства 1 и 4: место — узел подачи,
+    # две подачи — две находки (`NEGATIVE_CONTROL_PLACES`).
+    pytest.param(
+        "app/x.py",
+        'def f(a, b):\n    logger.info("%s %s", a.phone, b.phone)\n',
+        "phone",
+        id="two-numbers-in-one-log-call",
+    ),
+    pytest.param(
+        "app/x.py",
+        'def f(account):\n    logger.info("%s", account.phone); print(account.phone)\n',
+        "phone",
+        id="log-call-and-print-on-one-line",
+    ),
+    pytest.param(
+        "app/x.py",
+        "def f(a, b):\n    print(a.phone, b.phone)\n",
+        "phone",
+        id="print-of-two-numbers",
+    ),
+    pytest.param(
+        "app/x.py",
+        'def f(a, b):\n    logger.info("x %s", a.phone); logger.info("x %s", b.phone)\n',
+        "phone",
+        id="two-log-calls-on-one-line",
+    ),
 ]
+
+# Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
+# О-18 (а), свойство 5). Место — узел подачи номера: имя или атрибут с номером, литерал номера,
+# ключ словаря, `mask_phone(…)`, именованный аргумент `phone*=`. Число — число таких узлов в
+# исходнике строки, выведенное ЧТЕНИЕМ исходника, а не прогоном гейта: правило строк сверяет с
+# ним число находок, и возврат дедупликации по тексту места его краснит. Строка, не названная
+# здесь, — одно место.
+NEGATIVE_CONTROL_PLACES: dict[str, int] = {
+    # Ключ `phone=` и значение `….phone` — два узла, два предмета.
+    "structlog-bind-contextvars-phone": 2,
+    "aliased-import-bind-contextvars": 2,
+    "threadlocal-bind": 2,
+    "factory-assigned-attribute-receiver": 2,
+    "class-body-receiver-self": 2,
+    "factory-initial-values": 2,
+    "async-level-module-logger": 2,
+    "async-level-class-body-self": 2,
+    "keyword-dict-log-reference": 2,
+    # Две разные подачи на одной строке — два узла (ревью WR-27).
+    "two-numbers-in-one-log-call": 2,
+    "log-call-and-print-on-one-line": 2,
+    "print-of-two-numbers": 2,
+    "two-log-calls-on-one-line": 2,
+    # Одно место, два пути — обёртка судится на месте связывания и на месте применения, а
+    # находка стоит на одном узле (ревью WR-24): явная строка, а не умолчание.
+    "log-wrapper-with-arguments-called-once-per-place": 1,
+}
 
 
 def _offence_place(offence: str) -> str:
-    """Находка без владельца — тройка «`путь:строка` — вид — предмет», место находки."""
+    """Находка без владельца — текст «`путь:строка` — вид — предмет»."""
     return offence.rsplit(" (владелец ", 1)[0]
 
 
+def place_count_mismatch(row_id: str, offences: list[str]) -> str | None:
+    """Расхождение числа находок строки `NEGATIVE_CONTROLS` с числом её мест или `None`.
+
+    Ожидаемое число мест — `NEGATIVE_CONTROL_PLACES` (у строки, не названной там, — одно).
+    Правило счёта сверяет число находок с числом мест, а не уникальность выхода той же
+    дедупликации (ревью WR-27, решение владельца О-18 (а), свойство 5).
+    """
+    expected = NEGATIVE_CONTROL_PLACES.get(row_id, 1)
+    if len(offences) == expected:
+        return None
+    return f"строка `{row_id}`: мест {expected}, находок {len(offences)}"
+
+
 @pytest.mark.parametrize(("path", "source", "subject"), NEGATIVE_CONTROLS)
-def test_a_number_handed_to_a_python_log_call_is_found(path, source, subject):
+def test_a_number_handed_to_a_python_log_call_is_found(path, source, subject, request):
     offences = python_log_offences(source, path)
 
     assert offences, f"номер в вызове журнала не найден: {source!r} ({path})"
     assert any(subject in offence and offence.startswith(f"{path}:") for offence in offences), (
         f"находка не называет предмет {subject!r}: {offences}"
     )
-    # Одно место — одна находка (ревью WR-24, решение владельца О-16 (а), свойство 1): тройка
-    # «строка, вид, предмет» не повторяется, какими бы путями гейт ни дошёл до места.
-    places = [_offence_place(offence) for offence in offences]
-    assert len(places) == len(set(places)), f"одно место дало находку дважды: {offences}"
+    # Одно место — одна находка в обе стороны (ревью WR-24 и WR-27, решение владельца О-18 (а),
+    # свойства 4 и 5): число находок строки равно числу её мест — узлов подачи номера.
+    mismatch = place_count_mismatch(request.node.callspec.id, offences)
+    assert mismatch is None, f"число находок строки не равно числу её мест: {mismatch}: {offences}"
+
+
+WR27_ROWS = (
+    "two-numbers-in-one-log-call",
+    "log-call-and-print-on-one-line",
+    "print-of-two-numbers",
+    "two-log-calls-on-one-line",
+)
+
+
+def _merged_by_place_text(offences: list[str]) -> list[str]:
+    """Находки, слитые по тексту места «строка, вид, предмет», — дедупликация коммита `51d0d766`."""
+    seen: set[str] = set()
+    merged: list[str] = []
+    for offence in offences:
+        place = _offence_place(offence)
+        if place in seen:
+            continue
+        seen.add(place)
+        merged.append(offence)
+    return merged
+
+
+def test_the_place_count_rule_reddens_a_text_triple_dedupe():
+    """Правило счёта видит класс WR-27: дедупликация по тексту места его краснит.
+
+    Ревью WR-27 (верификация раунда 8, 2026-10-19): правило строк сверяло уникальность выхода
+    той же дедупликации, которую `python_log_offences` уже провела, и покраснеть не могло ни на
+    каком исходнике — фазовый тест закреплял регрессию счёта `51d0d766`. Контроль: (а) таблица
+    мест называет только строки `NEGATIVE_CONTROLS`, числа не меньше 1, у четырёх строк WR-27 —
+    2; (б) выход гейта на строках WR-27, слитый по тексту места, даёт расхождение на каждой —
+    правило видит класс WR-27; (в) настоящий выход тех же строк расхождения не даёт. Решение
+    владельца О-18 (а), свойство 5.
+    """
+    rows = {param.id: param.values for param in NEGATIVE_CONTROLS}
+    places = NEGATIVE_CONTROL_PLACES
+    assert set(places) <= set(rows), f"таблица мест называет не строки: {sorted(set(places) - set(rows))}"
+    assert all(count >= 1 for count in places.values()), f"число мест меньше 1: {places}"
+    assert all(places.get(row_id) == 2 for row_id in WR27_ROWS), f"строки WR-27 — не по два места: {places}"
+
+    unseen: list[str] = []
+    wrong: list[str] = []
+    for row_id in WR27_ROWS:
+        path, source, _subject = rows[row_id]
+        offences = python_log_offences(source, path)
+        if place_count_mismatch(row_id, _merged_by_place_text(offences)) is None:
+            unseen.append(row_id)
+        if (mismatch := place_count_mismatch(row_id, offences)) is not None:
+            wrong.append(mismatch)
+
+    assert not unseen, (
+        "правило счёта не видит дедупликацию по тексту места (класс WR-27): " + ", ".join(unseen)
+    )
+    assert not wrong, "число находок строк WR-27 не равно числу мест: " + "; ".join(wrong)
 
 
 def test_a_number_handed_to_a_logger_bound_by_assignment_is_found():
@@ -3159,7 +3348,9 @@ def test_every_binding_form_of_a_log_reference_is_judged(form: BindingForm):
     общего модуля подаётся с каждым значением `LOG_IDENTIFICATION_VALUES` прямым вызовом и
     через каждый носитель `REFERENCE_CARRIERS` (у `map` аргументы — одноэлементными
     списками), ячейку собирает `binding_form_source` — та же функция, что у гейта писателя;
-    находки ячейки непусты и называют `phone`. Решение владельца О-12 (а).
+    находка ячейки — ровно одна и называет `phone`, как у матрицы гейта писателя: подача в
+    ячейке одна, место одно, и двойной счёт одного места (ревью WR-24) краснит матрицу так же,
+    как пропуск (ревью WR-27, решение владельца О-18 (а), свойство 4). Решение владельца О-12 (а).
     """
     cells = [
         (value, carrier)
@@ -3171,7 +3362,7 @@ def test_every_binding_form_of_a_log_reference_is_judged(form: BindingForm):
     for value, carrier in cells:
         source = binding_form_source(form, value, carrier)
         offences = python_log_offences(source, "app/x.py")
-        if offences and all("phone" in offence for offence in offences):
+        if len(offences) == 1 and "phone" in offences[0]:
             continue
         way = carrier.name if carrier is not None else "прямой вызов"
         shown = " ⏎ ".join(line.strip() for line in source.strip().splitlines())
@@ -3179,7 +3370,7 @@ def test_every_binding_form_of_a_log_reference_is_judged(form: BindingForm):
 
     assert not misses, (
         f"форма связывания ссылки на журнал не опознана: `{form.id}` — {len(misses)} из "
-        f"{len(cells)} ячеек без находки, называющей `phone`:\n" + "\n".join(misses)
+        f"{len(cells)} ячеек не с одной находкой, называющей `phone`:\n" + "\n".join(misses)
     )
 
 
@@ -3367,6 +3558,25 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
         missing.append("комментарий ввоза называет выведенную таблицу ключа ссылки")
     if "methodcaller" not in comment or "iterable_elements" not in comment:
         missing.append("комментарий ввоза не называет путь `methodcaller`, где гейт зовёт `iterable_elements`")
+    # Ось счёта (ревью WR-27, верификация раунда 8, 2026-10-19; решение владельца О-18 (а),
+    # свойство 4; план 16-41): шапка определяет место находки как «строка, столбец, вид,
+    # предмет» — узел подачи, — и предложение об одном месте называет столбец; летопись WR-27
+    # называет базу партии, коммит регрессии счёта и правило строк, которое её закрепляло;
+    # докстринг `python_log_offences` называет то же место.
+    for needle in ("строка, столбец, вид, предмет", "WR-27", "51d0d766", "О-18 (а)"):
+        if needle not in flat:
+            missing.append(f"нет места находки по оси счёта: нет «{needle}»")
+    one_place = flat.find("Одно место — одна находка")
+    if one_place < 0 or "столбец" not in flat[one_place : one_place + 400]:
+        missing.append("предложение «Одно место — одна находка» не называет столбец")
+    count_chronicle = _chronicle_segment(flat, "Летопись WR-27")
+    if not count_chronicle:
+        missing.append("нет «Летопись WR-27»")
+    for needle in ("1c243203", "51d0d766", "правило строк"):
+        if count_chronicle and needle not in count_chronicle:
+            missing.append(f"летопись WR-27 не называет «{needle}»")
+    if "строка, столбец, вид, предмет" not in " ".join((python_log_offences.__doc__ or "").split()):
+        missing.append("докстринг `python_log_offences` не называет место «строка, столбец, вид, предмет»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
