@@ -86,6 +86,7 @@ CARRIER_SEMANTICS = (
     "applied_wrapper",
     "named_wrappers",
     "is_carrier_wrapper",
+    "wrapper_applications",
 )
 
 # Функции грамматики связывания И семантики носителя, которые модуль гейта не определяет
@@ -111,6 +112,8 @@ REQUIRED_SHARED_NAMES = frozenset(
     # Семантика обёртки носителя (ревью WR-24, решение владельца О-16 (а), свойство 5): оба
     # гейта держат эти функции общего модуля теми же объектами.
     | {"carrier_wrapper_bindings", "applied_wrapper", "named_wrappers", "is_carrier_wrapper"}
+    # Применения обёртки — вызванной и поданной, рекурсивно (ревью WR-26, О-16 (а), свойство 3).
+    | {"wrapper_applications"}
 )
 
 # Имя на месте вызова, которое ничем не связано: база сверки форм вне грамматики.

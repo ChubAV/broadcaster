@@ -2663,6 +2663,60 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="log-wrapper-with-arguments-called-once-per-place",
     ),
+    # Ревью WR-26 (верификация раунда 7, 2026-10-16; решение владельца О-16 (а), свойство 3):
+    # обёртку журнала, поданную другому носителю литералом или именем, обёрнутую ещё одним
+    # `partial` или вложенную глубже, не ловил ни один гейт и на базе `2f8c1656` — исполнение
+    # напечатало номер; `methodcaller` в поданной обёртке получает получателя от внешнего носителя.
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    await loop.run_in_executor(None, functools.partial(ctx.run, logger.info), "x %s", account.phone)\n',
+        "phone",
+        id="literal-log-wrapper-handed-to-run-in-executor",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        '    w = functools.partial(ctx.run, logger.info); await asyncio.to_thread(w, "x %s", account.phone)\n',
+        "phone",
+        id="named-log-wrapper-handed-to-to-thread",
+    ),
+    pytest.param(
+        "app/x.py",
+        'functools.partial(functools.partial(ctx.run, logger.info))("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-wrapped-in-partial",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        "    w = functools.partial(ctx.run, logger.info)\n"
+        "    w2 = functools.partial(asyncio.to_thread, w)\n"
+        '    await w2("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-over-a-named-log-wrapper",
+    ),
+    pytest.param(
+        "app/x.py",
+        'functools.partial(functools.partial(functools.partial(ctx.run, logger.info)))("x %s", account.phone)\n',
+        "phone",
+        id="log-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "app/x.py",
+        "w = functools.partial(functools.partial(functools.partial(ctx.run, logger.info)))\n"
+        'w("x %s", account.phone)\n',
+        "phone",
+        id="named-log-wrapper-nested-three-deep",
+    ),
+    pytest.param(
+        "app/x.py",
+        "async def f(account):\n"
+        "    await loop.run_in_executor(None, functools.partial(ctx.run, "
+        'operator.methodcaller("info", "x %s", account.phone)), logger)\n',
+        "phone",
+        id="methodcaller-in-a-handed-log-wrapper",
+    ),
 ]
 
 
@@ -3230,6 +3284,15 @@ POSITIVE_CONTROLS = [
         "w = functools.partial(asyncio.to_thread, prepare_upload)\nw(content)\n",
         False,
         id="carrier-wrapper-bound-to-a-name-non-log-reference-is-not-a-log",
+    ),
+    # Ревью WR-26 (план 16-37): обёртка носителя с не-журнальной ссылкой, поданная исполнителю, —
+    # не вызов журнала: раскрытие поданной обёртки ищет ссылку на журнал, а не любую.
+    pytest.param(
+        "app/x.py",
+        "async def f(content):\n"
+        "    await loop.run_in_executor(None, functools.partial(ctx.run, prepare_upload), content)\n",
+        False,
+        id="handed-carrier-wrapper-non-log-reference-is-not-a-log",
     ),
 ]
 
