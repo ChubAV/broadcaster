@@ -458,7 +458,11 @@ import pytest
 # поэлементного носителя (`ELEMENTWISE_CARRIERS`, кроме правила носителя гейта — там
 # `keep_iterables`) и в построчном прочтении `ROW_CARRIERS` (план 16-38). Ввоз держит и имена, которые гейт не зовёт, — для
 # правила-паритета: `ELEMENTWISE_CARRIERS`, `ROW_CARRIERS`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
-# `applied_wrapper` (применение строит `wrapper_applications`).
+# `applied_wrapper` (применение строит `wrapper_applications`). `reading_name` — один читатель
+# имени связанного в месте чтения обоих гейтов (ревью WR-28, решение владельца О-18 (а),
+# свойство 2; план 16-43): имя, связанное с `operator.methodcaller`, имя псевдонима обёртки
+# ссылки и последнее имя вызываемого гейт читает им — `f`, `self.f` и `getattr(self, "f")` (и с
+# умолчанием) читают одно имя `f`; своего читателя имени гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
@@ -476,6 +480,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     iterable_elements,
     module_bindings,
     named_wrappers,
+    reading_name,
     reference_arguments,
     wrapper_applications,
 )
@@ -765,11 +770,12 @@ def _member(node: ast.expr) -> tuple[ast.expr, str] | None:
 
 
 def _last_name(node: ast.expr) -> str | None:
-    """Последнее имя выражения: голое имя или имя члена (`X.name`, `getattr(X, "name")`)."""
-    if isinstance(node, ast.Name):
-        return node.id
-    member = _member(node)
-    return member[1] if member is not None else None
+    """Последнее имя выражения: голое имя или имя члена (`X.name`, `getattr(X, "name")`).
+
+    Читает общий `reading_name` (план 16-43, ревью WR-28; О-18 (а), свойство 2): до плана здесь
+    жила своя копия того же чтения (имя, `_member` — атрибут и getattr-строка).
+    """
+    return reading_name(node)
 
 
 def _is_factory_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -1060,12 +1066,8 @@ def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozense
         changed = False
         for target, value, _in_class_body in bindings:
             name = binding_name(target)
-            if (
-                name is not None
-                and name not in names
-                and isinstance(value, (ast.Name, ast.Attribute))
-                and _last_name(value) in names
-            ):
+            # Имя значения читает общий `reading_name` (план 16-43): имя, атрибут, getattr-строка.
+            if name is not None and name not in names and reading_name(value) in names:
                 names.add(name)
                 changed = True
     return frozenset(names)
@@ -1074,14 +1076,19 @@ def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozense
 def _methodcaller_calls(
     node: ast.expr, methodcaller_names: frozenset[str], methodcallers: Mapping[str, list[ast.Call]]
 ) -> list[ast.Call]:
-    """Вызовы `methodcaller(…)`, которые называет выражение: сам вызов или имя, связанное с ним."""
+    """Вызовы `methodcaller(…)`, которые называет выражение: сам вызов или имя, связанное с ним.
+
+    Литеральный вызов `methodcaller(…)` (по последнему имени вызываемого, и под псевдонимом) —
+    он сам. Иначе имя, которым выражение ЧИТАЕТ связанное, даёт общий читатель `reading_name`
+    обоих гейтов: `emit`, `self.emit` и `getattr(self, "emit")` (и с умолчанием) читают одно
+    имя `emit` (ревью WR-28, верификация раунда 8; решение владельца О-18 (а), свойство 2; план
+    16-43). До плана здесь были свои ветки `Name` / `Attribute`, и `getattr(self, "f")(logger)`
+    при `self.f = operator.methodcaller("info", "x %s", account.phone)` уходил мимо гейта.
+    """
     if isinstance(node, ast.Call) and _last_name(node.func) in methodcaller_names:
         return [node]
-    if isinstance(node, ast.Name):
-        return list(methodcallers.get(node.id, ()))
-    if isinstance(node, ast.Attribute):
-        return list(methodcallers.get(node.attr, ()))
-    return []
+    name = reading_name(node)
+    return list(methodcallers.get(name, ())) if name is not None else []
 
 
 def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -1175,14 +1182,19 @@ def _not_carriers(names: ModuleLogNames) -> frozenset[str]:
 
 
 def _applied_carriers(tree: ast.AST, names: ModuleLogNames) -> set[int]:
-    """`id` вызовов `X(…)`, применённых как `X(…)(…)`: их ссылку и аргументы судит применение."""
+    """`id` вызовов `X(…)`, применённых как `X(…)(…)`: их ссылку и аргументы судит применение.
+
+    Имя вызываемого `X` (`getattr`, `methodcaller` и его псевдоним — не носители) читает общий
+    `reading_name` (план 16-43): псевдоним `methodcaller`, прочитанный getattr-строкой
+    (`getattr(self, "mc")("info", …)(logger)`), — тот же `methodcaller`, что `self.mc(…)(…)`.
+    """
     not_carriers = _not_carriers(names)
     return {
         id(node.func)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Call)
-        and _callee_name(node.func.func) not in not_carriers
+        and reading_name(node.func.func) not in not_carriers
     }
 
 

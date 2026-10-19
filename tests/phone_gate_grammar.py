@@ -176,6 +176,13 @@ def reading_name(node: ast.AST | None) -> str | None:
     account, x)` с `getattr(self, "f")(MessengerAccount.phone)` уходил мимо (SQLite записал
     `+71`). Теперь имя обёртки, имя `methodcaller` и ссылку читает эта функция. Цель
     связывания читает `binding_name`, а не эта функция: цель не место чтения.
+
+    Зовут её оба гейта по имени: гейт писателя — с плана 16-42, гейт приватности — с плана
+    16-43 (`_methodcaller_calls`, псевдонимы обёртки ссылки, последнее имя вызываемого: до
+    плана 16-43 `getattr(self, "f")(logger)` при `self.f = operator.methodcaller("info",
+    "x %s", account.phone)` уходил мимо гейта приватности, и `logging` печатал номер).
+    Правило-паритет требует её у обоих гейтов тем же объектом (`REQUIRED_SHARED_NAMES`,
+    `CARRIER_SEMANTICS`).
     """
     if isinstance(node, ast.Name):
         return node.id
