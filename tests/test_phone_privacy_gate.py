@@ -1307,7 +1307,9 @@ def python_log_calls(source: str) -> list[ast.Call]:
         # `X(…)` в `X(…)(…)` носителем не судится — его судит применение.
         if id(node) in applied:
             continue
-        for item in wrapper_applications(node, wrappers_of, _not_carriers(names)):
+        # Поэлементному носителю обёртка подана — она получает и элементы, и итерируемые
+        # целиком (`keep_iterables`, самопроверка исполнителя 16-38, заход 1; ревью CR-02).
+        for item in wrapper_applications(node, wrappers_of, _not_carriers(names), keep_iterables=True):
             calls.extend(_carried_log_calls(item.application, names))
             calls.extend(_applied_log_methodcaller(item.application, names))
     return sorted(calls, key=lambda call: (call.lineno, call.col_offset))

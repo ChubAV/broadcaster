@@ -992,7 +992,11 @@ class WrapperApplication(NamedTuple):
 
 
 def wrapper_applications(
-    call: ast.Call, wrappers_of, not_carriers, every_reading: bool = False
+    call: ast.Call,
+    wrappers_of,
+    not_carriers,
+    every_reading: bool = False,
+    keep_iterables: bool = False,
 ) -> list[WrapperApplication]:
     """Применения обёрток носителя в вызове `call` — рекурсивно, с защитой от цикла.
 
@@ -1016,6 +1020,13 @@ def wrapper_applications(
        «ссылка(аргументы ссылки)» на месте call>, w)`.
     3. Рекурсивно — применения каждого полученного применения (обёртка, поданная обёртке);
        обёртка, уже стоящая на пути, второй раз не раскрывается (защита от цикла по `id`).
+    4. `keep_iterables=True` (гейт приватности; самопроверка исполнителя 16-38, заход 1) —
+       обёртка, поданная поэлементному носителю, получает и элементы (правило 5
+       `reference_arguments`), и итерируемые целиком (правило 8): у обёртки журнала,
+       поданной `map` / `pool.imap` над не-литералом или comprehension, имя итерируемой с
+       `phone` судится, как у `map(logger.info, account.phones)` (ревью CR-02); элементы
+       остаются — из них путь `methodcaller` берёт получателя. Равные применения не
+       повторяются.
     Вызывающий гейт судит каждое `application` как носитель, а `read` — как чтение имени
     обёртки, которое судится: одно место — одна находка.
     """
@@ -1023,6 +1034,17 @@ def wrapper_applications(
 
     def is_named(node: ast.expr) -> bool:
         return bool(wrappers_of(node))
+
+    def handed_readings(node: ast.Call) -> list[ReferenceArguments]:
+        readings = reference_arguments(node, is_named, not_carriers, every_reading)
+        if keep_iterables:
+            known = {_dump(carried) for carried in readings}
+            readings += [
+                carried
+                for carried in reference_arguments(node, is_named, not_carriers, every_reading, True)
+                if _dump(carried) not in known
+            ]
+        return readings
 
     def visit(node: ast.Call, path: frozenset[int]) -> None:
         own: list[WrapperApplication] = []
@@ -1032,7 +1054,7 @@ def wrapper_applications(
                 WrapperApplication(callee, wrapper, applied_wrapper(node, wrapper))
                 for wrapper in wrappers_of(callee)
             ]
-        for carried in reference_arguments(node, is_named, not_carriers, every_reading):
+        for carried in handed_readings(node):
             handed = ast.copy_location(
                 ast.Call(
                     func=carried.reference,
