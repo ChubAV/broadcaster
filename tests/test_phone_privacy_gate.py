@@ -1360,9 +1360,15 @@ def _is_presence_flag(value: ast.expr) -> bool:
     )
 
 
-def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[int, str, str]]:
-    """Находки (строка, вид, предмет) во всём поддереве аргументов вызова журнала."""
-    found: list[tuple[int, str, str]] = []
+def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[int, int, str, str]]:
+    """Находки (строка, столбец, вид, предмет) во всём поддереве аргументов вызова журнала.
+
+    Место находки — узел подачи номера, на котором она стоит: имя, атрибут, строковая
+    константа, ключ словаря, вызов `mask_phone(…)`, именованный аргумент (у синтетического
+    `ast.keyword` общего модуля — место его ключа, `ast.copy_location`). Строка и столбец —
+    `lineno` и `col_offset` этого узла (ревью WR-27, решение владельца О-18 (а), свойство 4).
+    """
+    found: list[tuple[int, int, str, str]] = []
     stack: list[ast.AST] = [*call.args, *call.keywords]
     while stack:
         node = stack.pop()
@@ -1370,7 +1376,7 @@ def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[i
             if node.arg in PRESENCE_FLAG_NAMES and _is_presence_flag(node.value):
                 continue
             if node.arg is not None and _mentions_phone(node.arg):
-                found.append((node.lineno, "имя", f"{node.arg}="))
+                found.append((node.lineno, node.col_offset, "имя", f"{node.arg}="))
             stack.append(node.value)
             continue
         if isinstance(node, ast.Dict):
@@ -1379,23 +1385,23 @@ def _judge_arguments(call: ast.Call, *, mask_for_a_reader: bool) -> list[tuple[i
                     if key.value in PRESENCE_FLAG_NAMES and _is_presence_flag(value):
                         continue
                     if _mentions_phone(key.value):
-                        found.append((key.lineno, "ключ", repr(key.value)))
+                        found.append((key.lineno, key.col_offset, "ключ", repr(key.value)))
                 if key is not None:
                     stack.append(key)
                 stack.append(value)
             continue
         if isinstance(node, ast.Call) and _callee_name(node.func) == MASK_FUNCTION:
             if not mask_for_a_reader:
-                found.append((node.lineno, "маска", f"{MASK_FUNCTION}(...)"))
+                found.append((node.lineno, node.col_offset, "маска", f"{MASK_FUNCTION}(...)"))
             continue
         if isinstance(node, ast.Name) and _mentions_phone(node.id):
-            found.append((node.lineno, "имя", node.id))
+            found.append((node.lineno, node.col_offset, "имя", node.id))
         elif isinstance(node, ast.Attribute) and _mentions_phone(node.attr):
-            found.append((node.lineno, "имя", node.attr))
+            found.append((node.lineno, node.col_offset, "имя", node.attr))
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             literal = phone_like(node.value)
             if literal is not None:
-                found.append((node.lineno, "литерал", literal))
+                found.append((node.lineno, node.col_offset, "литерал", literal))
         stack.extend(ast.iter_child_nodes(node))
     return found
 
@@ -1422,26 +1428,30 @@ def python_log_offences(source: str, path: str) -> list[str]:
     `path` — путь от корня проекта (`app/x.py`): по нему решается, читает ли вывод
     `print` человек (`scripts/`), и по нему же строится ключ реестра исключений.
 
-    Одно место — одна находка (ревью WR-24, решение владельца О-16 (а), свойство 1): находка
-    стоит на узле аргумента с номером, и обёртка носителя, судимая и на месте связывания, и
-    на месте применения, указывает на тот же узел — тройка (строка, вид, предмет) не
-    повторяется, остаётся первая по порядку. До плана 16-37 копия семантики обёртки давала
-    здесь две находки на одном месте (`w = partial(asyncio.to_thread, logger.info, "x %s",
-    account.phone); await w()`, коммит `5e57325d`).
+    Одно место — одна находка в обе стороны (ревью WR-24 и WR-27, решение владельца О-18 (а),
+    свойство 4): место — «строка, столбец, вид, предмет» узла подачи номера, на котором стоит
+    находка. Обёртка носителя, судимая и на месте связывания, и на месте применения,
+    указывает на тот же узел — одна находка, остаётся первая по порядку (до плана 16-37 здесь
+    было две на одном месте: `w = partial(asyncio.to_thread, logger.info, "x %s",
+    account.phone); await w()`, коммит `5e57325d`). Две разные подачи на одной строке — два
+    узла — две находки, как у гейта писателя: дедупликация по тексту тройки «строка, вид,
+    предмет» без столбца (коммит `51d0d766`, план 16-37) сливала их в одну (ревью WR-27). Текст
+    находки прежний — две находки одной строки печатаются одинаково.
     """
     tree = ast.parse(source)
     ranges = _function_ranges(tree)
     in_scripts = PurePosixPath(path).parts[:1] == ("scripts",)
     offences: list[str] = []
-    places: set[tuple[int, str, str]] = set()
+    places: set[tuple[int, int, str, str]] = set()
     for call in python_log_calls(source):
         if f"{path}::{_owner(ranges, call.lineno)}" in PHONE_LOG_EXCEPTIONS:
             continue
         mask_for_a_reader = in_scripts and _is_print(call)
-        for line, kind, subject in sorted(_judge_arguments(call, mask_for_a_reader=mask_for_a_reader)):
-            if (line, kind, subject) in places:
+        for place in sorted(_judge_arguments(call, mask_for_a_reader=mask_for_a_reader)):
+            if place in places:
                 continue
-            places.add((line, kind, subject))
+            places.add(place)
+            line, _column, kind, subject = place
             offences.append(f"{path}:{line} — {kind} — {subject} (владелец {_owner(ranges, call.lineno)})")
     return offences
 
