@@ -18,13 +18,15 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   `REQUIRED_SHARED_NAMES` (`module_bindings`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
   `reference_arguments`, `iterable_elements`, `getattr_literal` и семантику обёртки
   носителя `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper` — ревью WR-24, план 16-37) теми же объектами; на
+  `is_carrier_wrapper` — ревью WR-24, план 16-37; один читатель имени связанного
+  `reading_name` — ревью WR-28, решение владельца О-18 (а), свойство 2: гейт писателя с
+  плана 16-42, гейт приватности с плана 16-43) теми же объектами; на
   верхнем уровне модуля гейта нет функции с именем из `GRAMMAR_FUNCTIONS` — грамматика
   связывания (`binding_pairs`, `module_bindings`, `getattr_as_attribute`) И семантика
   носителя ссылки (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
   `forwarded_arguments`, `elementwise_arguments`, `literal_keyword_arguments`,
   `reference_arguments`, `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper`), каждое имя с подчёркиванием и без, — и присваивания таблицы
+  `is_carrier_wrapper`, `reading_name`), каждое имя с подчёркиванием и без, — и присваивания таблицы
   с именем из `GRAMMAR_TABLES` (`ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`,
   `BINDING_FORMS`, `LITERAL_CONTAINER_WRAPPERS`, `UNJUDGED_ELEMENT`, выведенная планом
   16-34 `REFERENCE_KEYWORDS`): названные точки не переопределены. Копию под другим
@@ -92,6 +94,11 @@ CARRIER_SEMANTICS = (
     "named_wrappers",
     "is_carrier_wrapper",
     "wrapper_applications",
+    # Один читатель имени связанного в месте чтения (ревью WR-28, верификация раунда 8; решение
+    # владельца О-18 (а), свойство 2): `f`, `self.f` и `getattr(self, "f")` читают одно имя `f`.
+    # Гейт писателя зовёт его с плана 16-42, гейт приватности — с плана 16-43; своего читателя
+    # имени (и копии с этим именем) модуль гейта не держит.
+    "reading_name",
 )
 
 # Функции грамматики связывания И семантики носителя, которые модуль гейта не определяет
@@ -127,6 +134,9 @@ REQUIRED_SHARED_NAMES = frozenset(
     | {"carrier_wrapper_bindings", "applied_wrapper", "named_wrappers", "is_carrier_wrapper"}
     # Применения обёртки — вызванной и поданной, рекурсивно (ревью WR-26, О-16 (а), свойство 3).
     | {"wrapper_applications"}
+    # Один читатель имени связанного у обоих гейтов (ревью WR-28, О-18 (а), свойство 2; планы
+    # 16-42 и 16-43).
+    | {"reading_name"}
 )
 
 # Имя на месте вызова, которое ничем не связано: база сверки форм вне грамматики.

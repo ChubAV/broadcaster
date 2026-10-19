@@ -2171,6 +2171,54 @@ def test_a_planted_log_reference_mapped_over_an_account_attribute_reddens_the_ga
     )
 
 
+def test_a_planted_audit_with_a_methodcaller_read_by_a_getattr_string_reddens_the_gate(tmp_path):
+    """WR-28 (D-11, D-17): `methodcaller` в атрибуте, прочитанный getattr-строкой и применённый к журналу.
+
+    `self.emit = operator.methodcaller("info", "audit %s", account.phone)` в `__init__` и
+    `getattr(self, "emit")(logger)` в методе `run` — служба аудита, какую напишут Фазы 17–20:
+    отложенный вызов журнала лежит в атрибуте, а имя его читается getattr-строкой. До плана
+    16-43 гейт приватности читал имя, связанное с `operator.methodcaller`, только у `Name` /
+    `Attribute` (`_methodcaller_calls`), и форма уходила мимо гейта, а `logging` печатал номер
+    (ревью WR-28, верификация раунда 8, 2026-10-19). Решение владельца О-18 (а), свойство 2:
+    имя, связанное с `methodcaller`, читается везде, где читается имя обёртки, в том числе
+    getattr-строкой, — одним общим читателем `reading_name` обоих гейтов. Место находки — узел
+    номера в связывании (строка 9), владелец — метод применения. Подложенный файл находится тем
+    же обходом `python_sources(root)`, что и живое дерево; находка в файле ровно одна.
+    """
+    planted = tmp_path / "app" / "services" / "phone_audit.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import logging\n"
+        "import operator\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "class PhoneAudit:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "audit %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        '        getattr(self, "emit")(logger)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_audit.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_audit.py:9 — имя — phone (владелец run)"
+    ], (
+        "имя, связанное с `operator.methodcaller` и прочитанное getattr-строкой, гейт приватности "
+        f"не читает: гейт обошёл синтетическое дерево ({_render(scans)}) и промолчал о "
+        f'`getattr(self, "emit")(logger)`: {offences}'
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -3116,6 +3164,34 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="two-log-calls-on-one-line",
     ),
+    # Ревью WR-28 (повторное ревью раунда 7; верификация раунда 8, 2026-10-19): имя, связанное с
+    # `operator.methodcaller` и прочитанное getattr-строкой, гейт не читал — `_methodcaller_calls`
+    # знал только литерал, `Name` и `Attribute`, а `logging` печатал номер. Давний пропуск, а не
+    # регрессия: формы проходили и на `1c243203`, и на `2f8c1656`. Формы WR-28-P-1 и WR-28-P-2
+    # таблицы «Формы ревью раунда 8» (`16-41-PLAN.md`). Решение владельца О-18 (а), свойства 1 и 2:
+    # имя читает общий `reading_name` обоих гейтов (план 16-43).
+    pytest.param(
+        "app/x.py",
+        "class P:\n"
+        "    def __init__(self, account):\n"
+        '        self.f = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(logger)\n',
+        "phone",
+        id="methodcaller-read-by-a-getattr-string-applied-to-a-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class P:\n"
+        "    def __init__(self, account):\n"
+        '        self.f = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    async def go(self):\n"
+        '        await asyncio.to_thread(getattr(self, "f"), logger)\n',
+        "phone",
+        id="methodcaller-read-by-a-getattr-string-handed-to-to-thread",
+    ),
 ]
 
 # Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
@@ -3895,6 +3971,20 @@ POSITIVE_CONTROLS = [
         "def f(account):\n    list(map(logger.info, account.names))\n",
         True,
         id="map-over-a-non-phone-attribute-is-a-log-without-a-finding",
+    ),
+    # Ревью WR-28 (план 16-43): тот же `methodcaller`, прочитанный getattr-строкой и применённый к
+    # журналу, но над `account.name`, — вызов журнала без находки: общий читатель имени делает
+    # применение вызовом журнала, а находку даёт только номер.
+    pytest.param(
+        "app/x.py",
+        "class P:\n"
+        "    def __init__(self, account):\n"
+        '        self.f = operator.methodcaller("info", "x %s", account.name)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(logger)\n',
+        True,
+        id="methodcaller-read-by-a-getattr-string-without-a-number",
     ),
 ]
 
