@@ -61,6 +61,9 @@
   (`self.f = …` в `__init__`, `getattr(self, "f")(…)` в другом методе) — строка `getattr-read`
   общего словаря `BINDING_FORMS`: её держат обе матрицы и правило-паритет для каждого значения
   опознания и каждого носителя (ревью WR-28, решение владельца О-18 (а), свойство 3; план 16-44).
+  Значения опознания матрицы — имя, атрибут, getattr-строка, `partial`, `methodcaller` и
+  `methodcaller-receiver` — `methodcaller` над журналом из вызова фабрики
+  (`structlog.get_logger()`): пара значения гейта писателя с тем же `id`.
 * ПО ССЫЛКЕ НА МЕТОД ОПОЗНАННОГО ЖУРНАЛА: имя или атрибут, связанные с любым методом
   опознанного журнала (`logger.info`, `logger._log`), `getattr(logger, "info")`, `print`, привязкой к контексту или `functools.partial(<то
   же>, …)` (`info = logger.info`, `out = print`, `self.out = logger.info`,
@@ -3494,6 +3497,17 @@ LOG_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
         "methodcaller",
         'operator.methodcaller("info", "x %s", account.phone)',
         "(logger)",
+        'operator.methodcaller("noop")',
+    ),
+    # Пара значения `methodcaller-receiver` гейта писателя по требованию правила-паритета (оно
+    # сверяет `id` значений по порядку; план 16-44, решение владельца О-18 (а), свойство 3).
+    # Прямого двойника «колонки в получателе» у журнала нет — номер всегда в аргументах
+    # `methodcaller`, — поэтому пара держит опознание журнала выражением-получателем: журнал из
+    # вызова фабрики `structlog.get_logger()`, а не имя.
+    IdentificationValue(
+        "methodcaller-receiver",
+        'operator.methodcaller("info", "x %s", account.phone)',
+        "(structlog.get_logger())",
         'operator.methodcaller("noop")',
     ),
 )

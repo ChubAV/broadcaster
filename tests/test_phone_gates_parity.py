@@ -174,13 +174,17 @@ def own_grammar_problems(tree: ast.Module) -> list[str]:
     return problems
 
 
-def _writer_finds(source: str) -> bool:
-    """Гейт писателя находит ровно одну запись `KIND_SETATTR`, называющую API и `phone`."""
+def _writer_finds(source: str, call: str) -> bool:
+    """Гейт писателя находит ровно одну запись `KIND_SETATTR`, называющую API `call` и `phone`.
+
+    API значения берётся из таблицы гейта писателя `API_IDENTIFICATION_CALLS` (план 16-44):
+    своей таблицы API это правило не держит.
+    """
     offences = writer.phone_write_offences(source, "scripts/x.py")
     if len(offences) != 1:
         return False
     _location, kind, subject = offences[0].split(" — ", 2)
-    return kind == writer.KIND_SETATTR and "set_committed_value" in subject and "phone" in subject
+    return kind == writer.KIND_SETATTR and call in subject and "phone" in subject
 
 
 def _privacy_finds(source: str) -> bool:
@@ -584,11 +588,12 @@ def test_both_gates_agree_on_every_binding_form_identification_and_carrier(form:
     """Поведение паритета: на каждой ячейке оба гейта находят — писатель запись, приватность номер.
 
     Ячейка — форма связывания × значение опознания (общий `id`: имя, атрибут,
-    `getattr`-строка, `partial`, `methodcaller`) × прямой вызов и каждый носитель
-    `REFERENCE_CARRIERS`. Гейт писателя судит ячейку со значением
-    `API_IDENTIFICATION_VALUES`, гейт приватности — с `LOG_IDENTIFICATION_VALUES` того же
-    `id`; обе собирает `binding_form_source`. Промахи делятся на расхождение гейтов (одна
-    сторона ловит, другая — нет) и общий пропуск.
+    `getattr`-строка, `partial`, `methodcaller`, `methodcaller-receiver`) × прямой вызов и
+    каждый носитель `REFERENCE_CARRIERS`. Гейт писателя судит ячейку со значением
+    `API_IDENTIFICATION_VALUES` и ждёт в находке API этого значения из
+    `API_IDENTIFICATION_CALLS` гейта писателя, гейт приватности — с `LOG_IDENTIFICATION_VALUES`
+    того же `id`; обе собирает `binding_form_source`. Промахи делятся на расхождение гейтов
+    (одна сторона ловит, другая — нет) и общий пропуск.
     """
     cells = [
         (writer_value, privacy_value, carrier)
@@ -602,7 +607,9 @@ def test_both_gates_agree_on_every_binding_form_identification_and_carrier(form:
     only_privacy: list[str] = []
     both_miss: list[str] = []
     for writer_value, privacy_value, carrier in cells:
-        writer_found = _writer_finds(grammar.binding_form_source(form, writer_value, carrier))
+        writer_found = _writer_finds(
+            grammar.binding_form_source(form, writer_value, carrier), writer.API_IDENTIFICATION_CALLS[writer_value.id]
+        )
         privacy_found = _privacy_finds(grammar.binding_form_source(form, privacy_value, carrier))
         cell = f"  {writer_value.id} / {carrier.name if carrier is not None else 'прямой вызов'}"
         if writer_found and not privacy_found:

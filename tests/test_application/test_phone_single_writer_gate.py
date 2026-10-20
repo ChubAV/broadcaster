@@ -41,7 +41,10 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 getattr-строкой (`self.f = …` в `__init__`, `getattr(self, "f")(…)` в другом методе) — строка
 `getattr-read` общего словаря `BINDING_FORMS`: её держат обе матрицы и правило-паритет для
 каждого значения опознания и каждого носителя (ревью WR-28, решение владельца О-18 (а),
-свойство 3; план 16-44); значение связывания — имя,
+свойство 3; план 16-44); значения опознания матрицы — имя, атрибут, getattr-строка,
+`partial`, `methodcaller` и `methodcaller-receiver` — `methodcaller`, чья колонка приходит
+получателем (`MessengerAccount.phone`, запись дескриптором `__set__`); API, который называет
+находка ячейки, — таблица `API_IDENTIFICATION_CALLS`; значение связывания — имя,
 атрибут, `getattr(<obj>, "<api>")` (читается как атрибут `<obj>.<api>`, с
 получателем), `functools.partial(<api>, …)` — псевдоним с привязанными аргументами
 (`_partial_aliases`: `w = partial(s.bulk_update_mappings, M); w(rows)` судится как
@@ -4372,7 +4375,30 @@ API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
         "(attributes)",
         'operator.methodcaller("noop")',
     ),
+    # `methodcaller`, чья колонка приходит ПОЛУЧАТЕЛЕМ (`MessengerAccount.phone`, пишет дескриптор
+    # `__set__`), — вид, которого матрица не видела: у значения `methodcaller` колонка — в его
+    # аргументах (ревью WR-28, верификация раунда 8; решение владельца О-18 (а), свойство 3; план 16-44).
+    IdentificationValue(
+        "methodcaller-receiver",
+        'operator.methodcaller("__set__", account, x)',
+        "(MessengerAccount.phone)",
+        'operator.methodcaller("noop")',
+    ),
 )
+
+# Пишущий API, который называет находка ячейки матрицы, — для КАЖДОГО значения опознания, без
+# умолчания (план 16-44): пять прежних значений пишут `set_committed_value`, `methodcaller-receiver`
+# — дескриптором колонки (`__set__`). Таблицу читают правило-матрица этого гейта и правило-паритет
+# `tests/test_phone_gates_parity.py` (своей копии он не держит); полноту держит правило словаря
+# восьмого круга `test_the_shared_dictionary_holds_the_round_eight_axes`.
+API_IDENTIFICATION_CALLS: dict[str, str] = {
+    "name": "set_committed_value",
+    "attribute": "set_committed_value",
+    "getattr-string": "set_committed_value",
+    "partial": "set_committed_value",
+    "methodcaller": "set_committed_value",
+    "methodcaller-receiver": "__set__",
+}
 
 
 @pytest.mark.parametrize("form", [pytest.param(f, id=f.id) for f in BINDING_FORMS])
@@ -4387,8 +4413,10 @@ def test_every_binding_form_of_a_writer_api_alias_is_judged(form: BindingForm):
     значением `API_IDENTIFICATION_VALUES` прямым вызовом и через каждый носитель
     `REFERENCE_CARRIERS` (у `map` аргументы — одноэлементными списками), и ячейка
     обязана дать ровно одну находку вида `KIND_SETATTR`, предмет которой называет
-    `set_committed_value` и `phone`. Новая форма связывания, значение или носитель дают
-    одну красную строку на форму со всеми промахами сразу. Решение владельца О-12 (а).
+    пишущий API значения — `API_IDENTIFICATION_CALLS[value.id]` (`set_committed_value`, у
+    `methodcaller-receiver` — `__set__`, план 16-44) — и `phone`. Новая форма связывания,
+    значение или носитель дают одну красную строку на форму со всеми промахами сразу.
+    Решение владельца О-12 (а).
     """
     cells = [
         (value, carrier)
@@ -4406,7 +4434,7 @@ def test_every_binding_form_of_a_writer_api_alias_is_judged(form: BindingForm):
             _location, found_kind, subject = offences[0].split(" — ", 2)
             if (
                 found_kind == KIND_SETATTR
-                and "set_committed_value" in subject
+                and API_IDENTIFICATION_CALLS[value.id] in subject
                 and "phone" in subject
             ):
                 continue
