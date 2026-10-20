@@ -730,7 +730,10 @@ class ModuleLogNames:
     имена и атрибуты, связанные со ссылкой на фабрику без вызова (`gl = logging.getLogger`);
     сверяются по последнему имени вызова, как и `LOGGER_FACTORIES`.
     `log_function_attributes` — атрибуты, связанные со ссылкой на вызываемое журнала
-    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`.
+    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`; и имена,
+    связанные так же любой формой общей грамматики (`out = logger.info`): их читают и последним
+    звеном члена — `getattr(sys.modules[__name__], "out")(…)` (плоская область, как у имени
+    `methodcaller` и обёртки; самопроверка исполнителя 16-43, цикл 1).
     `methodcaller_names` — имена, под которыми модуль зовёт `operator.methodcaller`
     (`from operator import methodcaller as mc`, `mc = operator.methodcaller`,
     `self.mc = operator.methodcaller`); `methodcallers` — пары «имя → вызов
@@ -842,12 +845,17 @@ def _is_print_reference(node: ast.expr) -> bool:
 
 
 def _log_function_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
-    """Имя или атрибут, связанные в модуле с вызываемым журнала (`log_functions`,
-    `log_function_attributes`)."""
+    """Имя или член, связанные в модуле с вызываемым журнала (`log_functions`,
+    `log_function_attributes`).
+
+    Имя члена (`X.f`, `getattr(X, "f")`, с умолчанием) читает общий `reading_name` (план
+    16-43). Имя, связанное с вызываемым журнала, лежит и в атрибутах — читается последним
+    звеном (`getattr(sys.modules[__name__], "f")`); ввезённое из `logging` имя (`from logging
+    import info`) — только голым именем.
+    """
     if isinstance(node, ast.Name):
         return node.id in names.log_functions
-    member = _member(node)
-    return member is not None and member[1] in names.log_function_attributes
+    return reading_name(node) in names.log_function_attributes
 
 
 def _is_log_partial(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -969,8 +977,12 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             # получатель, и `x.info(…)` — вызов журнала.
             if _is_log_receiver(value, known):
                 changed |= _bind(target, in_class_body, receiver_names, receiver_attributes)
+            # Имя, связанное со ссылкой на вызываемое журнала, читается и последним звеном члена
+            # (`getattr(sys.modules[__name__], "f")(…)`, `X.f(…)`) — плоская область, как имя
+            # `methodcaller` и обёртки носителя (самопроверка исполнителя 16-43, цикл 1): цель-имя
+            # идёт и в атрибуты.
             if _is_log_callable(value, known):
-                changed |= _bind(target, in_class_body, log_functions, log_function_attributes)
+                changed |= _bind(target, True, log_functions, log_function_attributes)
     # Имена, связанные с вызовом `methodcaller(…)` (и под псевдонимом), — той же общей
     # грамматикой, до неподвижной точки (`emit = mc("info", …)`, `g = emit`). Имя —
     # последнее звено цели (`binding_name`): `self.emit = …` зовут `self.emit(…)`.
