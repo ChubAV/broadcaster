@@ -18,13 +18,15 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   `REQUIRED_SHARED_NAMES` (`module_bindings`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
   `reference_arguments`, `iterable_elements`, `getattr_literal` и семантику обёртки
   носителя `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper` — ревью WR-24, план 16-37) теми же объектами; на
+  `is_carrier_wrapper` — ревью WR-24, план 16-37; один читатель имени связанного
+  `reading_name` — ревью WR-28, решение владельца О-18 (а), свойство 2: гейт писателя с
+  плана 16-42, гейт приватности с плана 16-43) теми же объектами; на
   верхнем уровне модуля гейта нет функции с именем из `GRAMMAR_FUNCTIONS` — грамматика
   связывания (`binding_pairs`, `module_bindings`, `getattr_as_attribute`) И семантика
   носителя ссылки (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
   `forwarded_arguments`, `elementwise_arguments`, `literal_keyword_arguments`,
   `reference_arguments`, `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper`), каждое имя с подчёркиванием и без, — и присваивания таблицы
+  `is_carrier_wrapper`, `reading_name`), каждое имя с подчёркиванием и без, — и присваивания таблицы
   с именем из `GRAMMAR_TABLES` (`ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`,
   `BINDING_FORMS`, `LITERAL_CONTAINER_WRAPPERS`, `UNJUDGED_ELEMENT`, выведенная планом
   16-34 `REFERENCE_KEYWORDS`): названные точки не переопределены. Копию под другим
@@ -47,6 +49,13 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   (вызов, передача, передача с аргументами, getattr-вариант), `starmap`, `apply_async` и место
   не-литеральной итерируемой у `map` (`ReferenceCarrier.last`), — так что регрессии
   `c6953017` и `147f5e46` краснят обе матрицы и это правило по построению.
+* Место значения `partial` (`test_the_partial_value_place_is_pinned_by_a_privacy_row`, ревью
+  IN-20, решение владельца О-19, план 16-43): у `partial` с одним позиционным аргументом (номером)
+  места `last` нет по выбору словаря — его ячейка `map-named-iterable` равна ячейке `map`, — и
+  форму `list(map(functools.partial(logger.info, "x %s"), account.phones))` держит строка
+  `NEGATIVE_CONTROLS` `partial-log-reference-mapped-over-a-phone-attribute` гейта приватности с
+  одной находкой; докстринг `ReferenceCarrier` называет эту строку, D-17 относит только к
+  получателю `methodcaller`, а у `partial` называет выбор словаря.
 * Формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`): ни один гейт не разрешает их
   связывание, и у каждой формы есть причина. Сравнивается связывание, а не сырое число
   находок: гейт писателя находит запись и там, где значение несёт её само
@@ -59,6 +68,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import re
 from collections import Counter
 from types import ModuleType
 
@@ -92,6 +102,11 @@ CARRIER_SEMANTICS = (
     "named_wrappers",
     "is_carrier_wrapper",
     "wrapper_applications",
+    # Один читатель имени связанного в месте чтения (ревью WR-28, верификация раунда 8; решение
+    # владельца О-18 (а), свойство 2): `f`, `self.f` и `getattr(self, "f")` читают одно имя `f`.
+    # Гейт писателя зовёт его с плана 16-42, гейт приватности — с плана 16-43; своего читателя
+    # имени (и копии с этим именем) модуль гейта не держит.
+    "reading_name",
 )
 
 # Функции грамматики связывания И семантики носителя, которые модуль гейта не определяет
@@ -127,6 +142,9 @@ REQUIRED_SHARED_NAMES = frozenset(
     | {"carrier_wrapper_bindings", "applied_wrapper", "named_wrappers", "is_carrier_wrapper"}
     # Применения обёртки — вызванной и поданной, рекурсивно (ревью WR-26, О-16 (а), свойство 3).
     | {"wrapper_applications"}
+    # Один читатель имени связанного у обоих гейтов (ревью WR-28, О-18 (а), свойство 2; планы
+    # 16-42 и 16-43).
+    | {"reading_name"}
 )
 
 # Имя на месте вызова, которое ничем не связано: база сверки форм вне грамматики.
@@ -317,6 +335,83 @@ def test_the_shared_dictionary_holds_the_round_seven_axes():
 
     assert not problems, "словарь матриц и паритета не держит ось седьмого круга:\n" + "\n".join(
         f"  {problem}" for problem in problems
+    )
+
+
+# Строка гейта приватности, которая держит место не-литеральной итерируемой у значения `partial`
+# (ревью IN-20, решение владельца О-19, план 16-43).
+PARTIAL_VALUE_PLACE_ROW = "partial-log-reference-mapped-over-a-phone-attribute"
+
+
+def _sentences(text: str) -> list[str]:
+    """Предложения текста с схлопнутыми пробелами: граница — точка перед заглавной буквой."""
+    return re.split(r"(?<=\.)\s+(?=[А-ЯЁA-Z])", " ".join(text.split()))
+
+
+def test_the_partial_value_place_is_pinned_by_a_privacy_row():
+    """Место не-литеральной итерируемой у значения `partial` держит строка гейта приватности, довод правдив.
+
+    У значения `partial` (`functools.partial(logger.info, "x %s")` с `(account.phone)`) один
+    позиционный аргумент — номер, и `binding_form_source` места `last` ему не даёт: ячейка
+    `map-named-iterable` у этого значения совпадает с ячейкой `map`. Форму
+    `list(map(functools.partial(logger.info, "x %s"), account.phones))` гейт ловит с плана 16-38
+    (на `1c243203` — `[]`), но до плана 16-43 её не держали ни строка таблицы, ни ячейка матрицы, а
+    докстринг `ReferenceCarrier` объяснял отсутствие места у `partial` правилом получателя D-17 —
+    ложно: у `partial` единственный аргумент — номер, а не получатель (ревью IN-20, верификация
+    раунда 8). Решение владельца О-19: довод исправлен, форма закреплена строкой. Правило держит
+    (а) строку `PARTIAL_VALUE_PLACE_ROW` в `NEGATIVE_CONTROLS` гейта приватности: её исходник
+    применяет `map` к `functools.partial(logger.info, …)` над не-литеральной итерируемой с
+    `phone`, и гейт даёт ровно одну находку; (б) докстринг `ReferenceCarrier` называет `id`
+    строки; (в) D-17 он называет в одном предложении с `methodcaller` и ни в одном — с `partial`,
+    а у `partial` называет выбор словаря («по выбору словаря»).
+    """
+    problems: list[str] = []
+    rows = {param.id: param.values for param in privacy.NEGATIVE_CONTROLS}
+    row = rows.get(PARTIAL_VALUE_PLACE_ROW)
+    if row is None:
+        problems.append(f"в `NEGATIVE_CONTROLS` гейта приватности нет строки `{PARTIAL_VALUE_PLACE_ROW}`")
+    else:
+        path, source, _subject = row
+        mapped = [
+            node
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "map"
+            and node.args
+            and isinstance(node.args[0], ast.Call)
+            and ast.unparse(node.args[0].func).split(".")[-1] == "partial"
+            and node.args[0].args
+            and ast.unparse(node.args[0].args[0]) == "logger.info"
+            and any(
+                not isinstance(iterable, (ast.List, ast.Tuple, ast.Set)) and "phone" in ast.unparse(iterable)
+                for iterable in node.args[1:]
+            )
+        ]
+        if not mapped:
+            problems.append(
+                f"строка `{PARTIAL_VALUE_PLACE_ROW}` не применяет `map` к `functools.partial(logger.info, …)` "
+                f"над не-литеральной итерируемой с `phone`: {source!r}"
+            )
+        offences = privacy.python_log_offences(source, path)
+        if len(offences) != 1 or "phone" not in offences[0]:
+            problems.append(f"строка `{PARTIAL_VALUE_PLACE_ROW}`: гейт дал не одну находку с `phone`: {offences}")
+    doc = grammar.ReferenceCarrier.__doc__ or ""
+    if PARTIAL_VALUE_PLACE_ROW not in " ".join(doc.split()):
+        problems.append(f"докстринг `ReferenceCarrier` не называет строку `{PARTIAL_VALUE_PLACE_ROW}`")
+    sentences = _sentences(doc)
+    with_rule = [sentence for sentence in sentences if "D-17" in sentence]
+    if not any("methodcaller" in sentence for sentence in with_rule):
+        problems.append("докстринг `ReferenceCarrier` не называет D-17 в одном предложении с `methodcaller`")
+    for sentence in with_rule:
+        if "partial" in sentence:
+            problems.append(f"докстринг `ReferenceCarrier` относит D-17 к `partial`: «{sentence}»")
+    if not any("partial" in sentence and "по выбору словаря" in sentence for sentence in sentences):
+        problems.append("докстринг `ReferenceCarrier` не называет у `partial` выбор словаря («по выбору словаря»)")
+
+    assert not problems, (
+        "место значения `partial` у `map` над не-литеральной итерируемой не закреплено строкой гейта "
+        "приватности, или довод `ReferenceCarrier.last` ложен:\n" + "\n".join(f"  {problem}" for problem in problems)
     )
 
 

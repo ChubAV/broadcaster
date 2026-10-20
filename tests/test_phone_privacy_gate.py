@@ -150,7 +150,10 @@
   (`app/worker/celery_app.py:196`) — ссылка не на журнал.
   `operator.methodcaller("<метод>", …)`, применённый к опознанному получателю — прямо
   (`methodcaller(…)(logger)`), через имя или атрибут, связанные с ним общей грамматикой
-  (`emit = methodcaller(…); emit(logger)`, `self.emit(logger)`), или поданный ЛЮБОМУ
+  (`emit = methodcaller(…); emit(logger)`, `self.emit(logger)`), — и через getattr-строку
+  (`getattr(self, "emit")(logger)`, с умолчанием тоже): имя читает один общий читатель
+  `reading_name`, тот же, что у гейта писателя и у имени обёртки (ревью WR-28, план 16-43), —
+  или поданный ЛЮБОМУ
   носителю, — применяется к первому аргументу, который носитель подаст ссылке
   (`to_thread(mc, logger)`, `to_thread(*[mc, logger])`, `Thread(target=mc, args=(logger,))`,
   `call(logger, fn=mc)`, `partial(asyncio.to_thread, mc)(logger)`,
@@ -327,6 +330,17 @@ IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20 → CR-02 / WR-24 / WR-25 / 
 решение владельца О-18 (а), 2026-10-19: заявление прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ в
 пятый раз.
 
+Летопись WR-28: до плана 16-43 гейт читал имя, связанное с `operator.methodcaller`, только у
+`Name` / `Attribute` (`_methodcaller_calls`), хотя имя обёртки getattr-строкой читал с плана
+16-37; `self.f = operator.methodcaller("info", "x %s", account.phone)` с
+`getattr(self, "f")(logger)` уходил мимо, журнал напечатал номер (ревью WR-28, верификация
+раунда 8, 2026-10-19: в матрице верификатора с этим чтением пропускали ровно ячейки значения
+`methodcaller`); давний пропуск, не регрессия; седьмой круг оси «как опознан журнал» (IN-06 →
+IN-09 → WR-13 → WR-17 → WR-18 / WR-19 / WR-20 → CR-02 / WR-25 / WR-26 → WR-28); план 16-43
+перевёл гейт на общий `reading_name` — имя `methodcaller`, псевдоним обёртки ссылки и последнее
+имя вызываемого читает он, — правило-паритет требует его у обоих гейтов; решение владельца
+О-18 (а), 2026-10-19: заявление прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ в пятый раз.
+
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
     разделителями и 7…15 цифрами; 11 цифр подряд с ведущей 7/8; русская разбивка
@@ -458,7 +472,11 @@ import pytest
 # поэлементного носителя (`ELEMENTWISE_CARRIERS`, кроме правила носителя гейта — там
 # `keep_iterables`) и в построчном прочтении `ROW_CARRIERS` (план 16-38). Ввоз держит и имена, которые гейт не зовёт, — для
 # правила-паритета: `ELEMENTWISE_CARRIERS`, `ROW_CARRIERS`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
-# `applied_wrapper` (применение строит `wrapper_applications`).
+# `applied_wrapper` (применение строит `wrapper_applications`). `reading_name` — один читатель
+# имени связанного в месте чтения обоих гейтов (ревью WR-28, решение владельца О-18 (а),
+# свойство 2; план 16-43): имя, связанное с `operator.methodcaller`, имя псевдонима обёртки
+# ссылки и последнее имя вызываемого гейт читает им — `f`, `self.f` и `getattr(self, "f")` (и с
+# умолчанием) читают одно имя `f`; своего читателя имени гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
     ELEMENTWISE_CARRIERS,
@@ -476,6 +494,7 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     iterable_elements,
     module_bindings,
     named_wrappers,
+    reading_name,
     reference_arguments,
     wrapper_applications,
 )
@@ -711,7 +730,10 @@ class ModuleLogNames:
     имена и атрибуты, связанные со ссылкой на фабрику без вызова (`gl = logging.getLogger`);
     сверяются по последнему имени вызова, как и `LOGGER_FACTORIES`.
     `log_function_attributes` — атрибуты, связанные со ссылкой на вызываемое журнала
-    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`.
+    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`; и имена,
+    связанные так же любой формой общей грамматики (`out = logger.info`): их читают и последним
+    звеном члена — `getattr(sys.modules[__name__], "out")(…)` (плоская область, как у имени
+    `methodcaller` и обёртки; самопроверка исполнителя 16-43, цикл 1).
     `methodcaller_names` — имена, под которыми модуль зовёт `operator.methodcaller`
     (`from operator import methodcaller as mc`, `mc = operator.methodcaller`,
     `self.mc = operator.methodcaller`); `methodcallers` — пары «имя → вызов
@@ -765,11 +787,12 @@ def _member(node: ast.expr) -> tuple[ast.expr, str] | None:
 
 
 def _last_name(node: ast.expr) -> str | None:
-    """Последнее имя выражения: голое имя или имя члена (`X.name`, `getattr(X, "name")`)."""
-    if isinstance(node, ast.Name):
-        return node.id
-    member = _member(node)
-    return member[1] if member is not None else None
+    """Последнее имя выражения: голое имя или имя члена (`X.name`, `getattr(X, "name")`).
+
+    Читает общий `reading_name` (план 16-43, ревью WR-28; О-18 (а), свойство 2): до плана здесь
+    жила своя копия того же чтения (имя, `_member` — атрибут и getattr-строка).
+    """
+    return reading_name(node)
 
 
 def _is_factory_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -822,12 +845,17 @@ def _is_print_reference(node: ast.expr) -> bool:
 
 
 def _log_function_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
-    """Имя или атрибут, связанные в модуле с вызываемым журнала (`log_functions`,
-    `log_function_attributes`)."""
+    """Имя или член, связанные в модуле с вызываемым журнала (`log_functions`,
+    `log_function_attributes`).
+
+    Имя члена (`X.f`, `getattr(X, "f")`, с умолчанием) читает общий `reading_name` (план
+    16-43). Имя, связанное с вызываемым журнала, лежит и в атрибутах — читается последним
+    звеном (`getattr(sys.modules[__name__], "f")`); ввезённое из `logging` имя (`from logging
+    import info`) — только голым именем.
+    """
     if isinstance(node, ast.Name):
         return node.id in names.log_functions
-    member = _member(node)
-    return member is not None and member[1] in names.log_function_attributes
+    return reading_name(node) in names.log_function_attributes
 
 
 def _is_log_partial(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -949,8 +977,12 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             # получатель, и `x.info(…)` — вызов журнала.
             if _is_log_receiver(value, known):
                 changed |= _bind(target, in_class_body, receiver_names, receiver_attributes)
+            # Имя, связанное со ссылкой на вызываемое журнала, читается и последним звеном члена
+            # (`getattr(sys.modules[__name__], "f")(…)`, `X.f(…)`) — плоская область, как имя
+            # `methodcaller` и обёртки носителя (самопроверка исполнителя 16-43, цикл 1): цель-имя
+            # идёт и в атрибуты.
             if _is_log_callable(value, known):
-                changed |= _bind(target, in_class_body, log_functions, log_function_attributes)
+                changed |= _bind(target, True, log_functions, log_function_attributes)
     # Имена, связанные с вызовом `methodcaller(…)` (и под псевдонимом), — той же общей
     # грамматикой, до неподвижной точки (`emit = mc("info", …)`, `g = emit`). Имя —
     # последнее звено цели (`binding_name`): `self.emit = …` зовут `self.emit(…)`.
@@ -1060,12 +1092,8 @@ def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozense
         changed = False
         for target, value, _in_class_body in bindings:
             name = binding_name(target)
-            if (
-                name is not None
-                and name not in names
-                and isinstance(value, (ast.Name, ast.Attribute))
-                and _last_name(value) in names
-            ):
+            # Имя значения читает общий `reading_name` (план 16-43): имя, атрибут, getattr-строка.
+            if name is not None and name not in names and reading_name(value) in names:
                 names.add(name)
                 changed = True
     return frozenset(names)
@@ -1074,14 +1102,19 @@ def _wrapper_aliases(tree: ast.AST, bindings: list[Binding], originals: frozense
 def _methodcaller_calls(
     node: ast.expr, methodcaller_names: frozenset[str], methodcallers: Mapping[str, list[ast.Call]]
 ) -> list[ast.Call]:
-    """Вызовы `methodcaller(…)`, которые называет выражение: сам вызов или имя, связанное с ним."""
+    """Вызовы `methodcaller(…)`, которые называет выражение: сам вызов или имя, связанное с ним.
+
+    Литеральный вызов `methodcaller(…)` (по последнему имени вызываемого, и под псевдонимом) —
+    он сам. Иначе имя, которым выражение ЧИТАЕТ связанное, даёт общий читатель `reading_name`
+    обоих гейтов: `emit`, `self.emit` и `getattr(self, "emit")` (и с умолчанием) читают одно
+    имя `emit` (ревью WR-28, верификация раунда 8; решение владельца О-18 (а), свойство 2; план
+    16-43). До плана здесь были свои ветки `Name` / `Attribute`, и `getattr(self, "f")(logger)`
+    при `self.f = operator.methodcaller("info", "x %s", account.phone)` уходил мимо гейта.
+    """
     if isinstance(node, ast.Call) and _last_name(node.func) in methodcaller_names:
         return [node]
-    if isinstance(node, ast.Name):
-        return list(methodcallers.get(node.id, ()))
-    if isinstance(node, ast.Attribute):
-        return list(methodcallers.get(node.attr, ()))
-    return []
+    name = reading_name(node)
+    return list(methodcallers.get(name, ())) if name is not None else []
 
 
 def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
@@ -1175,14 +1208,19 @@ def _not_carriers(names: ModuleLogNames) -> frozenset[str]:
 
 
 def _applied_carriers(tree: ast.AST, names: ModuleLogNames) -> set[int]:
-    """`id` вызовов `X(…)`, применённых как `X(…)(…)`: их ссылку и аргументы судит применение."""
+    """`id` вызовов `X(…)`, применённых как `X(…)(…)`: их ссылку и аргументы судит применение.
+
+    Имя вызываемого `X` (`getattr`, `methodcaller` и его псевдоним — не носители) читает общий
+    `reading_name` (план 16-43): псевдоним `methodcaller`, прочитанный getattr-строкой
+    (`getattr(self, "mc")("info", …)(logger)`), — тот же `methodcaller`, что `self.mc(…)(…)`.
+    """
     not_carriers = _not_carriers(names)
     return {
         id(node.func)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Call)
-        and _callee_name(node.func.func) not in not_carriers
+        and reading_name(node.func.func) not in not_carriers
     }
 
 
@@ -2171,6 +2209,54 @@ def test_a_planted_log_reference_mapped_over_an_account_attribute_reddens_the_ga
     )
 
 
+def test_a_planted_audit_with_a_methodcaller_read_by_a_getattr_string_reddens_the_gate(tmp_path):
+    """WR-28 (D-11, D-17): `methodcaller` в атрибуте, прочитанный getattr-строкой и применённый к журналу.
+
+    `self.emit = operator.methodcaller("info", "audit %s", account.phone)` в `__init__` и
+    `getattr(self, "emit")(logger)` в методе `run` — служба аудита, какую напишут Фазы 17–20:
+    отложенный вызов журнала лежит в атрибуте, а имя его читается getattr-строкой. До плана
+    16-43 гейт приватности читал имя, связанное с `operator.methodcaller`, только у `Name` /
+    `Attribute` (`_methodcaller_calls`), и форма уходила мимо гейта, а `logging` печатал номер
+    (ревью WR-28, верификация раунда 8, 2026-10-19). Решение владельца О-18 (а), свойство 2:
+    имя, связанное с `methodcaller`, читается везде, где читается имя обёртки, в том числе
+    getattr-строкой, — одним общим читателем `reading_name` обоих гейтов. Место находки — узел
+    номера в связывании (строка 9), владелец — метод применения. Подложенный файл находится тем
+    же обходом `python_sources(root)`, что и живое дерево; находка в файле ровно одна.
+    """
+    planted = tmp_path / "app" / "services" / "phone_audit.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import logging\n"
+        "import operator\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "class PhoneAudit:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "audit %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        '        getattr(self, "emit")(logger)\n',
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_audit.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_audit.py:9 — имя — phone (владелец run)"
+    ], (
+        "имя, связанное с `operator.methodcaller` и прочитанное getattr-строкой, гейт приватности "
+        f"не читает: гейт обошёл синтетическое дерево ({_render(scans)}) и промолчал о "
+        f'`getattr(self, "emit")(logger)`: {offences}'
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -3116,6 +3202,79 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="two-log-calls-on-one-line",
     ),
+    # Ревью WR-28 (повторное ревью раунда 7; верификация раунда 8, 2026-10-19): имя, связанное с
+    # `operator.methodcaller` и прочитанное getattr-строкой, гейт не читал — `_methodcaller_calls`
+    # знал только литерал, `Name` и `Attribute`, а `logging` печатал номер. Давний пропуск, а не
+    # регрессия: формы проходили и на `1c243203`, и на `2f8c1656`. Формы WR-28-P-1 и WR-28-P-2
+    # таблицы «Формы ревью раунда 8» (`16-41-PLAN.md`). Решение владельца О-18 (а), свойства 1 и 2:
+    # имя читает общий `reading_name` обоих гейтов (план 16-43).
+    pytest.param(
+        "app/x.py",
+        "class P:\n"
+        "    def __init__(self, account):\n"
+        '        self.f = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(logger)\n',
+        "phone",
+        id="methodcaller-read-by-a-getattr-string-applied-to-a-logger",
+    ),
+    pytest.param(
+        "app/x.py",
+        "class P:\n"
+        "    def __init__(self, account):\n"
+        '        self.f = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    async def go(self):\n"
+        '        await asyncio.to_thread(getattr(self, "f"), logger)\n',
+        "phone",
+        id="methodcaller-read-by-a-getattr-string-handed-to-to-thread",
+    ),
+    # Ревью IN-20 (верификация раунда 8, 2026-10-19): `partial` над журналом, поданный `map` над
+    # не-литеральной итерируемой с номером. Форма ловится с плана 16-38 (итерируемая поэлементного
+    # носителя судится целиком), на `1c243203` — `[]`; но ни строка таблицы, ни ячейка матрицы её не
+    # держали: у значения `partial` (один позиционный аргумент — номер) ячейка `map-named-iterable`
+    # совпадает с ячейкой `map`, и возврат класса CR-02 на этом значении прошёл бы суиту зелёным.
+    # Решение владельца О-19: довод `ReferenceCarrier.last` исправлен, форма закреплена этой строкой
+    # (план 16-43; правило-паритет `test_the_partial_value_place_is_pinned_by_a_privacy_row`).
+    pytest.param(
+        "app/x.py",
+        'def f(account):\n    list(map(functools.partial(logger.info, "x %s"), account.phones))\n',
+        "phone",
+        id="partial-log-reference-mapped-over-a-phone-attribute",
+    ),
+    # Самопроверка исполнителя 16-43 (ось «где прочитано имя», цикл 1): ссылка на вызываемое
+    # журнала, связанная с ИМЕНЕМ модуля (`f = logger.info`), прочитанная getattr-строкой
+    # (`getattr(sys.modules[__name__], "f")`, с умолчанием, цепочкой) — вызов журнала. Гейт читал
+    # имя последним звеном у `methodcaller` и у обёртки (плоская область), а у вызываемого журнала
+    # различал имя и атрибут: имя модуля, прочитанное членом объекта, уходило мимо — 1 512 форм
+    # под заявлением самопроверки (шесть форм связывания с целью-именем × три чтения getattr-строкой
+    # × 21 способ × четыре значения), давний пропуск и на базе партии. Гейт писателя ту же форму ловит.
+    pytest.param(
+        "app/x.py",
+        'f = logger.info\ngetattr(sys.modules[__name__], "f")("x %s", account.phone)\n',
+        "phone",
+        id="log-method-bound-to-a-module-name-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = print\ngetattr(sys.modules[__name__], "f", None)(account.phone)\n',
+        "phone",
+        id="print-bound-to-a-module-name-read-by-a-getattr-string-with-a-default",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = functools.partial(logger.info, "x %s")\ng = getattr(sys.modules[__name__], "f"); g(account.phone)\n',
+        "phone",
+        id="log-partial-bound-to-a-module-name-read-through-a-getattr-chain",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = getattr(logger, "info")\n'
+        'asyncio.to_thread(getattr(sys.modules[__name__], "f"), "x %s", account.phone)\n',
+        "phone",
+        id="getattr-log-method-bound-to-a-module-name-handed-to-to-thread",
+    ),
 ]
 
 # Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
@@ -3577,6 +3736,29 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
             missing.append(f"летопись WR-27 не называет «{needle}»")
     if "строка, столбец, вид, предмет" not in " ".join((python_log_offences.__doc__ or "").split()):
         missing.append("докстринг `python_log_offences` не называет место «строка, столбец, вид, предмет»")
+    # Ось «где прочитано имя» у `methodcaller` (ревью WR-28, верификация раунда 8, 2026-10-19;
+    # решение владельца О-18 (а), свойство 2; план 16-43): абзац о `methodcaller`, применённом к
+    # опознанному получателю, называет чтение имени getattr-строкой и общий читатель
+    # `reading_name`; летопись WR-28 называет седьмой круг оси «как опознан журнал»; граница
+    # такого чтения не называет — оно ловится, а пункт о вычисленном имени прежний.
+    for needle in ("`reading_name`", "WR-28"):
+        if needle not in flat:
+            missing.append(f"нет одного читателя имени у `methodcaller`: нет «{needle}»")
+    applied = flat.find("применённый к опознанному получателю")
+    applied_segment = flat[applied : applied + 700] if applied >= 0 else ""
+    for needle in ("getattr-строк", "`reading_name`"):
+        if needle not in applied_segment:
+            missing.append(f"абзац о `methodcaller`, применённом к опознанному получателю, не называет «{needle}»")
+    name_chronicle = _chronicle_segment(flat, "Летопись WR-28")
+    if not name_chronicle:
+        missing.append("нет «Летопись WR-28»")
+    for needle in ("седьм", "как опознан журнал", "16-43", "О-18 (а)"):
+        if name_chronicle and needle not in name_chronicle:
+            missing.append(f"летопись WR-28 не называет «{needle}»")
+    if '`getattr(self, "emit")' in boundary or '`getattr(self, "f")' in boundary:
+        missing.append("граница называет чтение имени `methodcaller` getattr-строкой, хотя оно ловится")
+    if "`getattr(logger, name)(…)`" not in boundary:
+        missing.append("граница стёрла пункт о вычисленном имени: нет «`getattr(logger, name)(…)`»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
@@ -3895,6 +4077,28 @@ POSITIVE_CONTROLS = [
         "def f(account):\n    list(map(logger.info, account.names))\n",
         True,
         id="map-over-a-non-phone-attribute-is-a-log-without-a-finding",
+    ),
+    # Ревью WR-28 (план 16-43): тот же `methodcaller`, прочитанный getattr-строкой и применённый к
+    # журналу, но над `account.name`, — вызов журнала без находки: общий читатель имени делает
+    # применение вызовом журнала, а находку даёт только номер.
+    pytest.param(
+        "app/x.py",
+        "class P:\n"
+        "    def __init__(self, account):\n"
+        '        self.f = operator.methodcaller("info", "x %s", account.name)\n'
+        "\n"
+        "    def go(self):\n"
+        '        getattr(self, "f")(logger)\n',
+        True,
+        id="methodcaller-read-by-a-getattr-string-without-a-number",
+    ),
+    # Самопроверка 16-43, цикл 1: ссылка на журнал, связанная с именем модуля и прочитанная
+    # getattr-строкой, — вызов журнала; без номера — без находки.
+    pytest.param(
+        "app/x.py",
+        'f = logger.info\ngetattr(sys.modules[__name__], "f")("x %s", account.name)\n',
+        True,
+        id="log-method-bound-to-a-module-name-read-by-a-getattr-string-without-a-number",
     ),
 ]
 
