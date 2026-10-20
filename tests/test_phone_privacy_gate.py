@@ -3784,6 +3784,14 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     # Значение словаря восьмого круга (план 16-44): `methodcaller` над журналом из вызова фабрики.
     if "`methodcaller-receiver`" not in flat:
         missing.append("нет значения словаря восьмого круга: нет «`methodcaller-receiver`»")
+    # Итог партии раунда 8 (решение владельца О-18 (а), свойства 3, 6; план 16-44): летопись словаря
+    # восьмого круга называет форму и значение словаря и меру «база ↔ HEAD» с осью счёта.
+    eighth = _chronicle_segment(flat, "Летопись словаря восьмого круга")
+    if not eighth:
+        missing.append("нет «Летопись словаря восьмого круга»")
+    for needle in ("16-44", "getattr-read", "methodcaller-receiver", "база ↔ HEAD", "число находок", "О-18 (а)"):
+        if eighth and needle not in eighth:
+            missing.append(f"летопись словаря восьмого круга не называет «{needle}»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "

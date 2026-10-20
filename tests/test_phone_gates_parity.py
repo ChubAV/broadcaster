@@ -70,6 +70,7 @@ import ast
 import inspect
 import re
 from collections import Counter
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -675,4 +676,149 @@ def test_both_gates_leave_the_same_forms_out_of_the_grammar():
     assert not resolved, (
         "оба гейта разрешают связывание формы, записанной вне грамматики: таблица "
         "`OUT_OF_GRAMMAR_BINDING_FORMS` и границы гейтов лгут:\n" + "\n".join(resolved)
+    )
+
+
+def _module_tree() -> ast.Module:
+    return ast.parse(Path(__file__).read_text(encoding="utf-8"))
+
+
+def test_the_parity_docstring_names_what_it_checks():
+    """Докстринг правила-паритета называет ровно то, что модуль проверяет (ревью IN-19, решение владельца О-19).
+
+    Закрытие IN-15 держалось на том, что раздел «ЧТО ПРОВЕРЯЕТСЯ» называет каждую проверяемую точку;
+    партия раунда 7 добавила `wrapper_applications`, `ROW_CARRIERS` и сторожа stdlib, а перечень не
+    дописала (верификация раунда 8). Перечни здесь выводятся из объектов самого модуля, а не из
+    констант правила: докстринг (пробелы схлопнуты) называет в обратных кавычках каждое имя
+    `REQUIRED_SHARED_NAMES`, каждое имя `CARRIER_SEMANTICS`, каждое имя `GRAMMAR_TABLES` без ведущего
+    подчёркивания, каждый объект `MAP_CARRIER_OWNERS` и каждое правило модуля — функцию `test_*`
+    верхнего уровня его исходника, и это правило тоже (план 16-44).
+    """
+    tree = _module_tree()
+    doc = " ".join((ast.get_docstring(tree) or "").split())
+    rules = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+    ]
+    assert len(rules) >= 10, f"правил модуля {len(rules)} — меньше 10: сверка проверяет почти ничто"
+    checked = {
+        "REQUIRED_SHARED_NAMES": sorted(REQUIRED_SHARED_NAMES),
+        "CARRIER_SEMANTICS": list(CARRIER_SEMANTICS),
+        "GRAMMAR_TABLES": sorted(name for name in GRAMMAR_TABLES if not name.startswith("_")),
+        "MAP_CARRIER_OWNERS": list(MAP_CARRIER_OWNERS),
+        "правила модуля": rules,
+    }
+    unnamed = [f"  {source}: `{name}`" for source, names in checked.items() for name in names if f"`{name}`" not in doc]
+
+    assert not unnamed, (
+        "докстринг правила-паритета называет меньше, чем модуль проверяет (ревью IN-19):\n" + "\n".join(unnamed)
+    )
+
+
+# Регрессии партии раунда 6 и матрица, которую каждая краснит (ревью IN-18, решение владельца О-19):
+# строка словаря седьмого круга, которая её держит, и матрица — по замеру верификатора раунда 8 и
+# режима `--rows` инструмента сверки плана 16-44.
+REGRESSION_MATRICES = (
+    ("147f5e46", "матрицу гейта писателя", "named-wrapper-bound-handed"),
+    ("c6953017", "матрицу гейта приватности", "map-named-iterable"),
+)
+
+
+def _row_comment(lines: list[str], row: str) -> str:
+    """Комментарий `#` прямо над строкой `REFERENCE_CARRIERS` с `id` `row` (пробелы схлопнуты)."""
+    index = next((i for i, line in enumerate(lines) if f'"{row}"' in line and "ReferenceCarrier" in "".join(
+        lines[max(0, i - 1) : i + 1])), None)
+    if index is None:
+        return ""
+    if "ReferenceCarrier(" not in lines[index]:
+        index -= 1
+    comment: list[str] = []
+    for line in reversed(lines[:index]):
+        if not line.strip().startswith("#"):
+            break
+        comment.append(line.strip().lstrip("#").strip())
+    return " ".join(" ".join(reversed(comment)).split())
+
+
+def _chronicle(flat: str, heading: str) -> str:
+    """Абзац летописи шапки гейта: от заголовка до следующей летописи или раздела шапки."""
+    start = flat.find(heading)
+    if start < 0:
+        return ""
+    ends = [
+        index
+        for marker in ("Летопись", "РЕЕСТР ИСКЛЮЧЕНИЙ", "ЧТО КРАСНИТ")
+        if (index := flat.find(marker, start + len(heading))) >= 0
+    ]
+    return flat[start : min(ends, default=len(flat))]
+
+
+def _pairs_regression_with_matrix(text: str, commit: str, matrix: str) -> bool:
+    """В тексте коммит регрессии стоит рядом со своей матрицей: матрица — не дальше 160 знаков после
+    коммита, и между ними нет коммита другой регрессии."""
+    others = [other for other, _matrix, _row in REGRESSION_MATRICES if other != commit]
+    for match in re.finditer(re.escape(commit), text):
+        window = text[match.end() : match.end() + 160]
+        position = window.find(matrix)
+        if position >= 0 and not any(other in window[:position] for other in others):
+            return True
+    return False
+
+
+def test_the_dictionary_chronicles_name_which_matrix_each_regression_reddens():
+    """Летописи словаря седьмого круга разводят, какая регрессия какую матрицу краснит (ревью IN-18, О-19).
+
+    Замер верификатора раунда 8 на 60 ячейках строки (12 форм × 5 значений): на предикатах
+    `147f5e46` строка `named-wrapper-bound-handed` красна у гейта писателя (48) и зелёная у гейта
+    приватности (0) — своего поглощения у гейта приватности не было; на `c6953017` строка
+    `map-named-iterable` красна у гейта приватности (36). Комментарий строки и летописи говорили
+    «краснят обе матрицы» — верно только в совокупности. Правило держит: комментарий над
+    `named-wrapper-bound-handed` в исходнике общего модуля называет «матрицу гейта писателя» и
+    `147f5e46`, не говорит «обе матрицы», а гейт приватности называет только зелёным; комментарий
+    над `map-named-iterable` называет «матрицу гейта приватности» и `c6953017`; абзац этого
+    докстринга о словаре седьмого круга и абзацы «Летопись словаря седьмого круга» шапок обоих
+    гейтов называют `147f5e46` рядом с «матрицу гейта писателя», `c6953017` — рядом с «матрицу
+    гейта приватности» и не говорят «краснят обе матрицы» (план 16-44).
+    """
+    problems: list[str] = []
+    lines = inspect.getsource(grammar).splitlines()
+    for commit, matrix, row in REGRESSION_MATRICES:
+        comment = _row_comment(lines, row)
+        if not comment:
+            problems.append(f"над строкой `{row}` общего модуля нет комментария")
+            continue
+        for needle in (matrix, commit):
+            if needle not in comment:
+                problems.append(f"комментарий строки `{row}` не называет «{needle}»")
+        if "обе матрицы" in comment:
+            problems.append(f"комментарий строки `{row}` говорит «обе матрицы»")
+    bound_comment = _row_comment(lines, REGRESSION_MATRICES[0][2])
+    for sentence in _sentences(bound_comment):
+        if "гейта приватности" in sentence and "зелён" not in sentence:
+            problems.append(f"комментарий строки `{REGRESSION_MATRICES[0][2]}` относит её к матрице гейта "
+                            f"приватности: «{sentence}»")
+    doc = " ".join((ast.get_docstring(_module_tree()) or "").split())
+    start = doc.find("Словарь седьмого круга")
+    parity_paragraph = doc[start : doc.find("* ", start)] if start >= 0 else ""
+    texts = {
+        "абзац докстринга паритета о словаре седьмого круга": parity_paragraph,
+        "летопись словаря седьмого круга шапки гейта писателя": _chronicle(
+            " ".join((writer.__doc__ or "").split()), "Летопись словаря седьмого круга"),
+        "летопись словаря седьмого круга шапки гейта приватности": _chronicle(
+            " ".join((privacy.__doc__ or "").split()), "Летопись словаря седьмого круга"),
+    }
+    for title, text in texts.items():
+        if not text:
+            problems.append(f"нет текста: {title}")
+            continue
+        for commit, matrix, _row in REGRESSION_MATRICES:
+            if not _pairs_regression_with_matrix(text, commit, matrix):
+                problems.append(f"{title}: `{commit}` не стоит рядом с «{matrix}»")
+        if "краснят обе матрицы" in text:
+            problems.append(f"{title}: говорит «краснят обе матрицы»")
+
+    assert not problems, (
+        "летописи словаря не разводят, какая регрессия какую матрицу краснит (ревью IN-18):\n"
+        + "\n".join(f"  {problem}" for problem in problems)
     )
