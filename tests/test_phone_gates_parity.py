@@ -338,6 +338,76 @@ def test_the_shared_dictionary_holds_the_round_seven_axes():
     )
 
 
+# Форма словаря восьмого круга (ревью WR-28, верификация раунда 8; решение владельца О-18 (а),
+# свойство 3; план 16-44): чтение имени getattr-строкой.
+ROUND_EIGHT_FORM = "getattr-read"
+ROUND_EIGHT_REF = 'getattr(self, "f")'
+
+
+def _method_of(tree: ast.Module, predicate) -> str | None:
+    """Имя метода класса, в теле которого есть узел, удовлетворяющий `predicate`."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(predicate(inner) for inner in ast.walk(node)):
+                return node.name
+    return None
+
+
+def _round_eight_form_problems() -> list[str]:
+    """Чем словарь не держит форму `getattr-read`: строка, ссылка, места связывания и чтения."""
+    problems: list[str] = []
+    form = next((form for form in grammar.BINDING_FORMS if form.id == ROUND_EIGHT_FORM), None)
+    if form is None:
+        return [f"в `BINDING_FORMS` нет формы `{ROUND_EIGHT_FORM}`"]
+    if form.ref != ROUND_EIGHT_REF:
+        problems.append(f"ссылка формы `{ROUND_EIGHT_FORM}` — `{form.ref}`, ожидалось `{ROUND_EIGHT_REF}`")
+    template = form.template.replace("{value}", "VALUE_PROBE").replace("{use}", "USE_PROBE()")
+    template = template.replace("{decoy}", "DECOY_PROBE")
+    tree = ast.parse(template)
+
+    def binds(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Assign)
+            and any(ast.unparse(target) == "self.f" for target in node.targets)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "VALUE_PROBE"
+        )
+
+    def uses(node: ast.AST) -> bool:
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "USE_PROBE"
+
+    bound_in, used_in = _method_of(tree, binds), _method_of(tree, uses)
+    if bound_in != "__init__":
+        problems.append(f"форма `{ROUND_EIGHT_FORM}` связывает `self.f = {{value}}` не в `__init__`: {bound_in}")
+    if used_in is None or used_in == bound_in:
+        problems.append(f"место `{{use}}` формы `{ROUND_EIGHT_FORM}` не в другом методе: {used_in}")
+    probe = grammar.IdentificationValue("probe", "probe_fn", "(first)")
+    source = grammar.binding_form_source(form, probe, None)
+    if f"{ROUND_EIGHT_REF}(" not in source:
+        problems.append(f"ячейка формы `{ROUND_EIGHT_FORM}` не читает имя getattr-строкой: {source!r}")
+    return problems
+
+
+def test_the_shared_dictionary_holds_the_round_eight_axes():
+    """Словарь матриц и паритета держит ось восьмого круга: чтение имени getattr-строкой.
+
+    Ни одна форма `BINDING_FORMS` не читала связанное имя getattr-строкой, поэтому ни обе
+    матрицы, ни это правило, ни корпуса самопроверок исполнителей раунда 7 (≈142 000 форм) такого
+    чтения не собирали: `self.f = operator.methodcaller("__set__", account, x)` с
+    `getattr(self, "f")(MessengerAccount.phone)` проходил оба гейта (ревью WR-28, верификация
+    раунда 8). Правило держит форму `getattr-read`: ссылка `getattr(self, "f")`, связывание
+    `self.f = {value}` в `__init__`, место `{use}` — в другом методе, ячейка читает имя
+    getattr-строкой. Возврат чтения имени только у `Name` / `Attribute` (класс WR-28) краснит
+    обе матрицы и правило-паритет на этой строке для каждого значения и носителя (решение
+    владельца О-18 (а), свойство 3; план 16-44).
+    """
+    problems = _round_eight_form_problems()
+
+    assert not problems, "словарь матриц и паритета не держит ось восьмого круга:\n" + "\n".join(
+        f"  {problem}" for problem in problems
+    )
+
+
 # Строка гейта приватности, которая держит место не-литеральной итерируемой у значения `partial`
 # (ревью IN-20, решение владельца О-19, план 16-43).
 PARTIAL_VALUE_PLACE_ROW = "partial-log-reference-mapped-over-a-phone-attribute"

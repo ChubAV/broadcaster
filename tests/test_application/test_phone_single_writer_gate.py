@@ -4630,6 +4630,11 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
         )
     if 0 <= out_of_scope < boundary_end and "methodcaller" in flat[out_of_scope:boundary_end]:
         missing.append("пункты «ГРАНИЦЫ ПРЕДИКАТА» называют `methodcaller` границей, а он ловится")
+    # Словарь восьмого круга (ревью WR-28, верификация раунда 8; решение владельца О-18 (а),
+    # свойство 3; план 16-44): шапка называет форму общего словаря `getattr-read` — чтение имени
+    # getattr-строкой, которое держат обе матрицы и правило-паритет.
+    if "`getattr-read`" not in flat:
+        missing.append("нет формы словаря восьмого круга: нет «`getattr-read`»")
 
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "
