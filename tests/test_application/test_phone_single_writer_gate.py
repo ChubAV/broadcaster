@@ -37,7 +37,14 @@ UPDATE «записать, если номера нет и он не ручно�
 flag_modified`; и со звёздной целью — `w, *rest = setattr, None`: позиции до и после
 звезды), оператором `:=` (`if (w := setattr): …`), целью-атрибутом `self.<x>`
 / `cls.<x>` в любом методе (`self.bum = s.bulk_update_mappings` в `__init__` и
-`self.bum(…)` в другом методе) и именем в теле класса; значение связывания — имя,
+`self.bum(…)` в другом методе) и именем в теле класса; связанное имя читается и
+getattr-строкой (`self.f = …` в `__init__`, `getattr(self, "f")(…)` в другом методе) — строка
+`getattr-read` общего словаря `BINDING_FORMS`: её держат обе матрицы и правило-паритет для
+каждого значения опознания и каждого носителя (ревью WR-28, решение владельца О-18 (а),
+свойство 3; план 16-44); значения опознания матрицы — имя, атрибут, getattr-строка,
+`partial`, `methodcaller` и `methodcaller-receiver` — `methodcaller`, чья колонка приходит
+получателем (`MessengerAccount.phone`, запись дескриптором `__set__`); API, который называет
+находка ячейки, — таблица `API_IDENTIFICATION_CALLS`; значение связывания — имя,
 атрибут, `getattr(<obj>, "<api>")` (читается как атрибут `<obj>.<api>`, с
 получателем), `functools.partial(<api>, …)` — псевдоним с привязанными аргументами
 (`_partial_aliases`: `w = partial(s.bulk_update_mappings, M); w(rows)` судится как
@@ -518,9 +525,13 @@ WR-10 → WR-12 → WR-14 / WR-15 / WR-16 → WR-18 / WR-20…WR-23 → CR-03 / 
 Летопись словаря седьмого круга: план 16-39 вписал в общий словарь девять носителей седьмого
 круга — обёртку, поданную носителю, обёртку в обёртке, именованную обёртку (вызов, передача,
 передача с аргументами, getattr-вариант), `starmap`, `apply_async` и не-литеральную
-итерируемую у `map` — так, что регрессии `c6953017` и `147f5e46` краснят обе матрицы и
-правило-паритет; партия раунда 7 сверила каждый GREEN с родителем и итог — с базой партии и с
-`2f8c1656` (мера «база ↔ HEAD», решение владельца О-16 (а), 2026-10-18).
+итерируемую у `map` — так, что регрессия `147f5e46` краснит матрицу гейта писателя и
+правило-паритет, а регрессия `c6953017` — матрицу гейта приватности и правило-паритет; матрица
+другого гейта на каждом из этих коммитов зелёная (ревью IN-18, решение владельца О-19: замер
+верификатора раунда 8 — 48 и 36 из 60 ячеек строки на 12 формах × 5 значениях, замер плана 16-44
+режимом `run.sh --rows` на таблицах HEAD — 52 и 39 из 78); партия раунда 7 сверила каждый GREEN с
+родителем и итог — с базой партии и с `2f8c1656` (мера «база ↔ HEAD», решение владельца О-16 (а),
+2026-10-18).
 
 Летопись WR-28: до плана 16-42 имя, связанное с `operator.methodcaller`, гейт читал только у
 `Name` / `Attribute` — в получателях `methodcaller` и в предикате ссылки обёртки, — хотя имя
@@ -539,6 +550,15 @@ phone=x)`) и цепочку псевдонима дескриптора кол�
 читатель; все давние, так же на базе. Решение владельца О-18 (а), 2026-10-19: заявление
 прежнее, вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ в пятый раз. Ни одна форма WR-28 в «ГРАНИЦЕ
 ПРЕДИКАТА» не названа: они ловятся.
+
+Летопись словаря восьмого круга: план 16-44 вписал в общий словарь чтение имени getattr-строкой
+(`getattr-read`) и значение `methodcaller-receiver` — `methodcaller`, чья колонка приходит
+получателем, с API значения из таблицы `API_IDENTIFICATION_CALLS`, — так, что возврат чтения
+имени только у `Name` / `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет; партия
+раунда 8 сверила каждый GREEN с родителем и итог — с базой партии, с `1c243203` и с `2f8c1656` и
+по наличию находки, и по числу находок (мера «база ↔ HEAD» с осью счёта: число находок у обоих
+гейтов не меньше, чем у родителя и у базы, кроме исправленного пересчёта одного места — класс
+WR-24; решение владельца О-18 (а), 2026-10-19).
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -4368,7 +4388,30 @@ API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
         "(attributes)",
         'operator.methodcaller("noop")',
     ),
+    # `methodcaller`, чья колонка приходит ПОЛУЧАТЕЛЕМ (`MessengerAccount.phone`, пишет дескриптор
+    # `__set__`), — вид, которого матрица не видела: у значения `methodcaller` колонка — в его
+    # аргументах (ревью WR-28, верификация раунда 8; решение владельца О-18 (а), свойство 3; план 16-44).
+    IdentificationValue(
+        "methodcaller-receiver",
+        'operator.methodcaller("__set__", account, x)',
+        "(MessengerAccount.phone)",
+        'operator.methodcaller("noop")',
+    ),
 )
+
+# Пишущий API, который называет находка ячейки матрицы, — для КАЖДОГО значения опознания, без
+# умолчания (план 16-44): пять прежних значений пишут `set_committed_value`, `methodcaller-receiver`
+# — дескриптором колонки (`__set__`). Таблицу читают правило-матрица этого гейта и правило-паритет
+# `tests/test_phone_gates_parity.py` (своей копии он не держит); полноту держит правило словаря
+# восьмого круга `test_the_shared_dictionary_holds_the_round_eight_axes`.
+API_IDENTIFICATION_CALLS: dict[str, str] = {
+    "name": "set_committed_value",
+    "attribute": "set_committed_value",
+    "getattr-string": "set_committed_value",
+    "partial": "set_committed_value",
+    "methodcaller": "set_committed_value",
+    "methodcaller-receiver": "__set__",
+}
 
 
 @pytest.mark.parametrize("form", [pytest.param(f, id=f.id) for f in BINDING_FORMS])
@@ -4383,8 +4426,10 @@ def test_every_binding_form_of_a_writer_api_alias_is_judged(form: BindingForm):
     значением `API_IDENTIFICATION_VALUES` прямым вызовом и через каждый носитель
     `REFERENCE_CARRIERS` (у `map` аргументы — одноэлементными списками), и ячейка
     обязана дать ровно одну находку вида `KIND_SETATTR`, предмет которой называет
-    `set_committed_value` и `phone`. Новая форма связывания, значение или носитель дают
-    одну красную строку на форму со всеми промахами сразу. Решение владельца О-12 (а).
+    пишущий API значения — `API_IDENTIFICATION_CALLS[value.id]` (`set_committed_value`, у
+    `methodcaller-receiver` — `__set__`, план 16-44) — и `phone`. Новая форма связывания,
+    значение или носитель дают одну красную строку на форму со всеми промахами сразу.
+    Решение владельца О-12 (а).
     """
     cells = [
         (value, carrier)
@@ -4402,7 +4447,7 @@ def test_every_binding_form_of_a_writer_api_alias_is_judged(form: BindingForm):
             _location, found_kind, subject = offences[0].split(" — ", 2)
             if (
                 found_kind == KIND_SETATTR
-                and "set_committed_value" in subject
+                and API_IDENTIFICATION_CALLS[value.id] in subject
                 and "phone" in subject
             ):
                 continue
@@ -4447,7 +4492,10 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     и `2f8c1656`. С плана 16-42 (ревью WR-28, верификация раунда 8; О-18 (а), свойство 2) — и
     ось «где прочитано имя» целиком: шапка называет один общий читатель имени `reading_name`,
     перечень пойманного «ГРАНИЦЫ ПРЕДИКАТА» — его рядом со значением `methodcaller`, пункты
-    границы `methodcaller` не называют, летопись WR-28 — восьмой круг и getattr-строку.
+    границы `methodcaller` не называют, летопись WR-28 — восьмой круг и getattr-строку. С плана
+    16-44 (итог партии раунда 8; О-18 (а), свойства 3, 6) — и словарь восьмого круга: шапка
+    называет форму `getattr-read` и значение `methodcaller-receiver`, а летопись словаря восьмого
+    круга — их, меру «база ↔ HEAD» и число находок.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4630,6 +4678,22 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
         )
     if 0 <= out_of_scope < boundary_end and "methodcaller" in flat[out_of_scope:boundary_end]:
         missing.append("пункты «ГРАНИЦЫ ПРЕДИКАТА» называют `methodcaller` границей, а он ловится")
+    # Словарь восьмого круга (ревью WR-28, верификация раунда 8; решение владельца О-18 (а),
+    # свойство 3; план 16-44): шапка называет форму общего словаря `getattr-read` — чтение имени
+    # getattr-строкой, которое держат обе матрицы и правило-паритет.
+    if "`getattr-read`" not in flat:
+        missing.append("нет формы словаря восьмого круга: нет «`getattr-read`»")
+    # Значение словаря восьмого круга (план 16-44): `methodcaller`, чья колонка приходит получателем.
+    if "`methodcaller-receiver`" not in flat:
+        missing.append("нет значения словаря восьмого круга: нет «`methodcaller-receiver`»")
+    # Итог партии раунда 8 (решение владельца О-18 (а), свойства 3, 6; план 16-44): летопись словаря
+    # восьмого круга называет форму и значение словаря и меру «база ↔ HEAD» с осью счёта.
+    eighth = _chronicle_segment(flat, "Летопись словаря восьмого круга")
+    if not eighth:
+        missing.append("нет «Летопись словаря восьмого круга»")
+    for needle in ("16-44", "getattr-read", "methodcaller-receiver", "база ↔ HEAD", "число находок", "О-18 (а)"):
+        if eighth and needle not in eighth:
+            missing.append(f"летопись словаря восьмого круга не называет «{needle}»")
 
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "

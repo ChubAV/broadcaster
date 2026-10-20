@@ -13,23 +13,30 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
 прежние, оба гейта делят ОДНУ грамматику связывания и ОДИН перечень носителей ссылки —
 модуль `tests/phone_gate_grammar.py`, — и расхождение гейтов краснит это правило.
 
-ЧТО ПРОВЕРЯЕТСЯ.
-* Построение: оба модуля гейтов ввозят `tests.phone_gate_grammar` и держат его имена
+ЧТО ПРОВЕРЯЕТСЯ (каждое правило модуля названо ниже; перечни сверяет правило
+`test_the_parity_docstring_names_what_it_checks`).
+* Построение (`test_both_gates_take_the_binding_grammar_and_carriers_from_one_module`): оба
+  модуля гейтов ввозят `tests.phone_gate_grammar` и держат его имена
   `REQUIRED_SHARED_NAMES` (`module_bindings`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
   `reference_arguments`, `iterable_elements`, `getattr_literal` и семантику обёртки
   носителя `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper` — ревью WR-24, план 16-37; один читатель имени связанного
+  `is_carrier_wrapper` — ревью WR-24, план 16-37; применения обёртки, вызванной и поданной,
+  рекурсивно, `wrapper_applications` — ревью WR-26, решение владельца О-16 (а), свойство 3;
+  один читатель имени связанного
   `reading_name` — ревью WR-28, решение владельца О-18 (а), свойство 2: гейт писателя с
   плана 16-42, гейт приватности с плана 16-43) теми же объектами; на
   верхнем уровне модуля гейта нет функции с именем из `GRAMMAR_FUNCTIONS` — грамматика
   связывания (`binding_pairs`, `module_bindings`, `getattr_as_attribute`) И семантика
-  носителя ссылки (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
+  носителя ссылки `CARRIER_SEMANTICS` (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
   `forwarded_arguments`, `elementwise_arguments`, `literal_keyword_arguments`,
   `reference_arguments`, `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper`, `reading_name`), каждое имя с подчёркиванием и без, — и присваивания таблицы
+  `is_carrier_wrapper`, `wrapper_applications`, `reading_name`), каждое имя с подчёркиванием и
+  без, — и присваивания таблицы
   с именем из `GRAMMAR_TABLES` (`ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`,
   `BINDING_FORMS`, `LITERAL_CONTAINER_WRAPPERS`, `UNJUDGED_ELEMENT`, выведенная планом
-  16-34 `REFERENCE_KEYWORDS`): названные точки не переопределены. Копию под другим
+  16-34 `REFERENCE_KEYWORDS`, построчные носители `ROW_CARRIERS` — ревью CR-02 / WR-25, план
+  16-38; `UNJUDGED_ELEMENT` и `ROW_CARRIERS` — и с подчёркиванием): названные точки не
+  переопределены. Копию под другим
   именем (`def _my_pairs(…)`, `MY_CARRIERS = …`) эта половина не видит по построению:
   её видит только поведенческая половина — и только на ячейках общего словаря.
   Правило-контроль `test_the_structural_half_reddens_a_redefined_grammar_point`
@@ -40,15 +47,31 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   функций и четыре таблицы, и копии `_iterable_elements` / `_getattr_literal` жили в
   обоих гейтах; план 16-32 снял их у гейта приватности, план 16-34 — у гейта писателя,
   и имена семантики носителя вошли в `GRAMMAR_FUNCTIONS` (решение владельца О-15).
-* Поведение: на каждой ячейке «форма `BINDING_FORMS` × значение опознания × прямой вызов
-  и каждый носитель `REFERENCE_CARRIERS`» оба гейта находят — писатель запись номера,
-  приватность номер в журнале. Ячейку обоих гейтов собирает одна функция
+* Сторож таблиц носителей (`test_the_elementwise_and_row_carriers_name_the_installed_apis`, ревью
+  CR-02 / WR-25, план 16-38): `ELEMENTWISE_CARRIERS | ROW_CARRIERS` общего модуля — ровно
+  публичные методы с `map` в имени у объектов установленного stdlib `MAP_CARRIER_OWNERS`
+  (`multiprocessing.pool.Pool`, `concurrent.futures.Executor`, `itertools`), и таблицы не
+  пересекаются: подъём Python с новым таким методом краснит суиту.
+* Поведение (`test_both_gates_agree_on_every_binding_form_identification_and_carrier`): на каждой
+  ячейке «форма `BINDING_FORMS` × значение опознания × прямой вызов и каждый носитель
+  `REFERENCE_CARRIERS`» оба гейта находят — писатель запись номера с API значения из таблицы
+  гейта писателя `API_IDENTIFICATION_CALLS` (своей таблицы API здесь нет, план 16-44), приватность
+  номер в журнале. Ячейку обоих гейтов собирает одна функция
   `binding_form_source` общего модуля; своей сборки исходников здесь нет.
 * Словарь седьмого круга (`test_the_shared_dictionary_holds_the_round_seven_axes`, план 16-39):
   девять строк `REFERENCE_CARRIERS` — поданная обёртка, обёртка в обёртке, именованная обёртка
   (вызов, передача, передача с аргументами, getattr-вариант), `starmap`, `apply_async` и место
-  не-литеральной итерируемой у `map` (`ReferenceCarrier.last`), — так что регрессии
-  `c6953017` и `147f5e46` краснят обе матрицы и это правило по построению.
+  не-литеральной итерируемой у `map` (`ReferenceCarrier.last`), — так что по построению
+  регрессия `147f5e46` краснит матрицу гейта писателя и это правило, регрессия `c6953017` —
+  матрицу гейта приватности и это правило; матрица другого гейта на каждом из этих коммитов
+  зелёная (ревью IN-18, решение владельца О-19: замер верификатора раунда 8 — 48 и 36 из 60
+  ячеек строки на 12 формах × 5 значениях; замер плана 16-44 режимом `run.sh --rows` на
+  таблицах HEAD — 52 и 39 из 78 на 13 формах × 6 значениях).
+* Словарь восьмого круга (`test_the_shared_dictionary_holds_the_round_eight_axes`, ревью WR-28,
+  решение владельца О-18 (а), свойство 3; план 16-44): форма `getattr-read` — чтение имени
+  getattr-строкой, значение опознания `methodcaller-receiver` у обоих гейтов на одной позиции и
+  полнота таблицы `API_IDENTIFICATION_CALLS` гейта писателя, — так что возврат чтения имени только
+  у `Name` / `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет.
 * Место значения `partial` (`test_the_partial_value_place_is_pinned_by_a_privacy_row`, ревью
   IN-20, решение владельца О-19, план 16-43): у `partial` с одним позиционным аргументом (номером)
   места `last` нет по выбору словаря — его ячейка `map-named-iterable` равна ячейке `map`, — и
@@ -56,12 +79,21 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   `NEGATIVE_CONTROLS` `partial-log-reference-mapped-over-a-phone-attribute` гейта приватности с
   одной находкой; докстринг `ReferenceCarrier` называет эту строку, D-17 относит только к
   получателю `methodcaller`, а у `partial` называет выбор словаря.
-* Формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`): ни один гейт не разрешает их
+* Формы вне грамматики (`test_both_gates_leave_the_same_forms_out_of_the_grammar`,
+  `OUT_OF_GRAMMAR_BINDING_FORMS`): ни один гейт не разрешает их
   связывание, и у каждой формы есть причина. Сравнивается связывание, а не сырое число
   находок: гейт писателя находит запись и там, где значение несёт её само
   (`methodcaller` со всеми аргументами записи), поэтому ячейка сверяется с базой — той
   же ячейкой, где имя на месте вызова ничем не связано; находка сверх базы значила бы,
   что гейт связывание разрешил (план 16-27, заметки волне 2).
+* Тексты, на которых держатся закрытия ревью (ревью IN-19 и IN-18, решение владельца О-19, план
+  16-44): `test_the_parity_docstring_names_what_it_checks` — этот докстринг называет каждое имя
+  `REQUIRED_SHARED_NAMES`, `CARRIER_SEMANTICS`, `GRAMMAR_TABLES` (без вариантов с подчёркиванием),
+  каждый объект `MAP_CARRIER_OWNERS` и каждое правило модуля, перечни выведены из объектов модуля;
+  `test_the_dictionary_chronicles_name_which_matrix_each_regression_reddens` — комментарии строк
+  `named-wrapper-bound-handed` и `map-named-iterable` общего модуля, абзац этого докстринга о
+  словаре седьмого круга и летописи словаря седьмого круга шапок обоих гейтов разводят, какая
+  регрессия какую матрицу краснит.
 """
 
 from __future__ import annotations
@@ -70,6 +102,7 @@ import ast
 import inspect
 import re
 from collections import Counter
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -174,13 +207,17 @@ def own_grammar_problems(tree: ast.Module) -> list[str]:
     return problems
 
 
-def _writer_finds(source: str) -> bool:
-    """Гейт писателя находит ровно одну запись `KIND_SETATTR`, называющую API и `phone`."""
+def _writer_finds(source: str, call: str) -> bool:
+    """Гейт писателя находит ровно одну запись `KIND_SETATTR`, называющую API `call` и `phone`.
+
+    API значения берётся из таблицы гейта писателя `API_IDENTIFICATION_CALLS` (план 16-44):
+    своей таблицы API это правило не держит.
+    """
     offences = writer.phone_write_offences(source, "scripts/x.py")
     if len(offences) != 1:
         return False
     _location, kind, subject = offences[0].split(" — ", 2)
-    return kind == writer.KIND_SETATTR and "set_committed_value" in subject and "phone" in subject
+    return kind == writer.KIND_SETATTR and call in subject and "phone" in subject
 
 
 def _privacy_finds(source: str) -> bool:
@@ -338,6 +375,139 @@ def test_the_shared_dictionary_holds_the_round_seven_axes():
     )
 
 
+# Форма словаря восьмого круга (ревью WR-28, верификация раунда 8; решение владельца О-18 (а),
+# свойство 3; план 16-44): чтение имени getattr-строкой.
+ROUND_EIGHT_FORM = "getattr-read"
+ROUND_EIGHT_REF = 'getattr(self, "f")'
+
+
+def _method_of(tree: ast.Module, predicate) -> str | None:
+    """Имя метода класса, в теле которого есть узел, удовлетворяющий `predicate`."""
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(predicate(inner) for inner in ast.walk(node)):
+                return node.name
+    return None
+
+
+def _round_eight_form_problems() -> list[str]:
+    """Чем словарь не держит форму `getattr-read`: строка, ссылка, места связывания и чтения."""
+    problems: list[str] = []
+    form = next((form for form in grammar.BINDING_FORMS if form.id == ROUND_EIGHT_FORM), None)
+    if form is None:
+        return [f"в `BINDING_FORMS` нет формы `{ROUND_EIGHT_FORM}`"]
+    if form.ref != ROUND_EIGHT_REF:
+        problems.append(f"ссылка формы `{ROUND_EIGHT_FORM}` — `{form.ref}`, ожидалось `{ROUND_EIGHT_REF}`")
+    template = form.template.replace("{value}", "VALUE_PROBE").replace("{use}", "USE_PROBE()")
+    template = template.replace("{decoy}", "DECOY_PROBE")
+    tree = ast.parse(template)
+
+    def binds(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Assign)
+            and any(ast.unparse(target) == "self.f" for target in node.targets)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "VALUE_PROBE"
+        )
+
+    def uses(node: ast.AST) -> bool:
+        return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "USE_PROBE"
+
+    bound_in, used_in = _method_of(tree, binds), _method_of(tree, uses)
+    if bound_in != "__init__":
+        problems.append(f"форма `{ROUND_EIGHT_FORM}` связывает `self.f = {{value}}` не в `__init__`: {bound_in}")
+    if used_in is None or used_in == bound_in:
+        problems.append(f"место `{{use}}` формы `{ROUND_EIGHT_FORM}` не в другом методе: {used_in}")
+    probe = grammar.IdentificationValue("probe", "probe_fn", "(first)")
+    source = grammar.binding_form_source(form, probe, None)
+    if f"{ROUND_EIGHT_REF}(" not in source:
+        problems.append(f"ячейка формы `{ROUND_EIGHT_FORM}` не читает имя getattr-строкой: {source!r}")
+    return problems
+
+
+# Значение опознания словаря восьмого круга (ревью WR-28; решение владельца О-18 (а), свойство 3;
+# план 16-44): `methodcaller`, чья колонка приходит получателем, у гейта писателя и пара с тем же
+# `id` у гейта приватности — `methodcaller` над журналом из вызова фабрики.
+ROUND_EIGHT_VALUE = "methodcaller-receiver"
+
+
+def _methodcaller_call(text: str) -> ast.Call | None:
+    """Литеральный вызов `operator.methodcaller(…)` значения опознания, иначе `None`."""
+    node = ast.parse(text, mode="eval").body
+    if isinstance(node, ast.Call) and ast.unparse(node.func).split(".")[-1] == "methodcaller" and node.args:
+        return node
+    return None
+
+
+def _round_eight_value_problems() -> list[str]:
+    """Чем словарь не держит значение `methodcaller-receiver` и таблицу API значений писателя."""
+    problems: list[str] = []
+    writer_ids = [value.id for value in writer.API_IDENTIFICATION_VALUES]
+    privacy_ids = [value.id for value in privacy.LOG_IDENTIFICATION_VALUES]
+    for side, ids in (("писателя", writer_ids), ("приватности", privacy_ids)):
+        if ROUND_EIGHT_VALUE not in ids:
+            problems.append(f"у гейта {side} нет значения опознания `{ROUND_EIGHT_VALUE}`")
+    if ROUND_EIGHT_VALUE in writer_ids and ROUND_EIGHT_VALUE in privacy_ids:
+        if writer_ids.index(ROUND_EIGHT_VALUE) != privacy_ids.index(ROUND_EIGHT_VALUE):
+            problems.append(f"значение `{ROUND_EIGHT_VALUE}` у гейтов на разных позициях: {writer_ids}, {privacy_ids}")
+        writer_value = writer.API_IDENTIFICATION_VALUES[writer_ids.index(ROUND_EIGHT_VALUE)]
+        call = _methodcaller_call(writer_value.value)
+        if call is None or not (isinstance(call.args[0], ast.Constant) and call.args[0].value == "__set__"):
+            problems.append(f"значение писателя `{ROUND_EIGHT_VALUE}` — не `methodcaller(\"__set__\", …)`: "
+                            f"`{writer_value.value}`")
+        if "MessengerAccount.phone" not in writer_value.call:
+            problems.append(f"получатель значения писателя `{ROUND_EIGHT_VALUE}` не называет колонку "
+                            f"`MessengerAccount.phone`: `{writer_value.call}`")
+        privacy_value = privacy.LOG_IDENTIFICATION_VALUES[privacy_ids.index(ROUND_EIGHT_VALUE)]
+        call = _methodcaller_call(privacy_value.value)
+        if call is None or not any("phone" in ast.unparse(argument) for argument in call.args[1:]):
+            problems.append(f"значение приватности `{ROUND_EIGHT_VALUE}` — не `methodcaller` над журналом с номером "
+                            f"в своих аргументах: `{privacy_value.value}`")
+        if "phone" in privacy_value.call:
+            problems.append(f"получатель значения приватности `{ROUND_EIGHT_VALUE}` несёт номер: `{privacy_value.call}`")
+    calls = getattr(writer, "API_IDENTIFICATION_CALLS", None)
+    if not isinstance(calls, dict):
+        problems.append("у гейта писателя нет таблицы `API_IDENTIFICATION_CALLS` (API каждого значения опознания)")
+    else:
+        unnamed = [value_id for value_id in writer_ids if not calls.get(value_id)]
+        if unnamed:
+            problems.append(f"`API_IDENTIFICATION_CALLS` не называет API значений {unnamed}")
+        stray = sorted(set(calls) - set(writer_ids))
+        if stray:
+            problems.append(f"`API_IDENTIFICATION_CALLS` называет значения, которых нет в таблице: {stray}")
+        if calls.get(ROUND_EIGHT_VALUE) != "__set__":
+            problems.append(f"`API_IDENTIFICATION_CALLS` у `{ROUND_EIGHT_VALUE}` — {calls.get(ROUND_EIGHT_VALUE)!r}, "
+                            "ожидалось `__set__`")
+    return problems
+
+
+def test_the_shared_dictionary_holds_the_round_eight_axes():
+    """Словарь матриц и паритета держит оси восьмого круга: чтение имени getattr-строкой и
+    `methodcaller` с получателем-колонкой.
+
+    Ни одна форма `BINDING_FORMS` не читала связанное имя getattr-строкой, поэтому ни обе
+    матрицы, ни это правило, ни корпуса самопроверок исполнителей раунда 7 (≈142 000 форм) такого
+    чтения не собирали: `self.f = operator.methodcaller("__set__", account, x)` с
+    `getattr(self, "f")(MessengerAccount.phone)` проходил оба гейта (ревью WR-28, верификация
+    раунда 8). Правило держит (а) форму `getattr-read`: ссылка `getattr(self, "f")`, связывание
+    `self.f = {value}` в `__init__`, место `{use}` — в другом методе, ячейка читает имя
+    getattr-строкой; (б) значение опознания `methodcaller-receiver` у обоих гейтов на одной
+    позиции: у писателя `methodcaller("__set__", …)`, применённый к получателю, называющему
+    `MessengerAccount.phone` (иначе матрица этот вид не видит), у приватности — `methodcaller` над
+    журналом, номер — в его аргументах; (в) таблицу `API_IDENTIFICATION_CALLS` гейта писателя —
+    API, который называет находка ячейки, для КАЖДОГО значения опознания писателя (у
+    `methodcaller-receiver` — `__set__`), без умолчания; её читают правило-матрица гейта писателя
+    и это правило-паритет, своей копии здесь нет. Возврат чтения имени только у `Name` /
+    `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет на этой строке для каждого
+    значения и носителя (решение владельца О-18 (а), свойство 3; план 16-44).
+    """
+    problems = _round_eight_form_problems() + _round_eight_value_problems()
+
+    assert not problems, "словарь матриц и паритета не держит ось восьмого круга:\n" + "\n".join(
+        f"  {problem}" for problem in problems
+    )
+
+
 # Строка гейта приватности, которая держит место не-литеральной итерируемой у значения `partial`
 # (ревью IN-20, решение владельца О-19, план 16-43).
 PARTIAL_VALUE_PLACE_ROW = "partial-log-reference-mapped-over-a-phone-attribute"
@@ -451,11 +621,12 @@ def test_both_gates_agree_on_every_binding_form_identification_and_carrier(form:
     """Поведение паритета: на каждой ячейке оба гейта находят — писатель запись, приватность номер.
 
     Ячейка — форма связывания × значение опознания (общий `id`: имя, атрибут,
-    `getattr`-строка, `partial`, `methodcaller`) × прямой вызов и каждый носитель
-    `REFERENCE_CARRIERS`. Гейт писателя судит ячейку со значением
-    `API_IDENTIFICATION_VALUES`, гейт приватности — с `LOG_IDENTIFICATION_VALUES` того же
-    `id`; обе собирает `binding_form_source`. Промахи делятся на расхождение гейтов (одна
-    сторона ловит, другая — нет) и общий пропуск.
+    `getattr`-строка, `partial`, `methodcaller`, `methodcaller-receiver`) × прямой вызов и
+    каждый носитель `REFERENCE_CARRIERS`. Гейт писателя судит ячейку со значением
+    `API_IDENTIFICATION_VALUES` и ждёт в находке API этого значения из
+    `API_IDENTIFICATION_CALLS` гейта писателя, гейт приватности — с `LOG_IDENTIFICATION_VALUES`
+    того же `id`; обе собирает `binding_form_source`. Промахи делятся на расхождение гейтов
+    (одна сторона ловит, другая — нет) и общий пропуск.
     """
     cells = [
         (writer_value, privacy_value, carrier)
@@ -469,7 +640,9 @@ def test_both_gates_agree_on_every_binding_form_identification_and_carrier(form:
     only_privacy: list[str] = []
     both_miss: list[str] = []
     for writer_value, privacy_value, carrier in cells:
-        writer_found = _writer_finds(grammar.binding_form_source(form, writer_value, carrier))
+        writer_found = _writer_finds(
+            grammar.binding_form_source(form, writer_value, carrier), writer.API_IDENTIFICATION_CALLS[writer_value.id]
+        )
         privacy_found = _privacy_finds(grammar.binding_form_source(form, privacy_value, carrier))
         cell = f"  {writer_value.id} / {carrier.name if carrier is not None else 'прямой вызов'}"
         if writer_found and not privacy_found:
@@ -535,4 +708,149 @@ def test_both_gates_leave_the_same_forms_out_of_the_grammar():
     assert not resolved, (
         "оба гейта разрешают связывание формы, записанной вне грамматики: таблица "
         "`OUT_OF_GRAMMAR_BINDING_FORMS` и границы гейтов лгут:\n" + "\n".join(resolved)
+    )
+
+
+def _module_tree() -> ast.Module:
+    return ast.parse(Path(__file__).read_text(encoding="utf-8"))
+
+
+def test_the_parity_docstring_names_what_it_checks():
+    """Докстринг правила-паритета называет ровно то, что модуль проверяет (ревью IN-19, решение владельца О-19).
+
+    Закрытие IN-15 держалось на том, что раздел «ЧТО ПРОВЕРЯЕТСЯ» называет каждую проверяемую точку;
+    партия раунда 7 добавила `wrapper_applications`, `ROW_CARRIERS` и сторожа stdlib, а перечень не
+    дописала (верификация раунда 8). Перечни здесь выводятся из объектов самого модуля, а не из
+    констант правила: докстринг (пробелы схлопнуты) называет в обратных кавычках каждое имя
+    `REQUIRED_SHARED_NAMES`, каждое имя `CARRIER_SEMANTICS`, каждое имя `GRAMMAR_TABLES` без ведущего
+    подчёркивания, каждый объект `MAP_CARRIER_OWNERS` и каждое правило модуля — функцию `test_*`
+    верхнего уровня его исходника, и это правило тоже (план 16-44).
+    """
+    tree = _module_tree()
+    doc = " ".join((ast.get_docstring(tree) or "").split())
+    rules = [
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+    ]
+    assert len(rules) >= 10, f"правил модуля {len(rules)} — меньше 10: сверка проверяет почти ничто"
+    checked = {
+        "REQUIRED_SHARED_NAMES": sorted(REQUIRED_SHARED_NAMES),
+        "CARRIER_SEMANTICS": list(CARRIER_SEMANTICS),
+        "GRAMMAR_TABLES": sorted(name for name in GRAMMAR_TABLES if not name.startswith("_")),
+        "MAP_CARRIER_OWNERS": list(MAP_CARRIER_OWNERS),
+        "правила модуля": rules,
+    }
+    unnamed = [f"  {source}: `{name}`" for source, names in checked.items() for name in names if f"`{name}`" not in doc]
+
+    assert not unnamed, (
+        "докстринг правила-паритета называет меньше, чем модуль проверяет (ревью IN-19):\n" + "\n".join(unnamed)
+    )
+
+
+# Регрессии партии раунда 6 и матрица, которую каждая краснит (ревью IN-18, решение владельца О-19):
+# строка словаря седьмого круга, которая её держит, и матрица — по замеру верификатора раунда 8 и
+# режима `--rows` инструмента сверки плана 16-44.
+REGRESSION_MATRICES = (
+    ("147f5e46", "матрицу гейта писателя", "named-wrapper-bound-handed"),
+    ("c6953017", "матрицу гейта приватности", "map-named-iterable"),
+)
+
+
+def _row_comment(lines: list[str], row: str) -> str:
+    """Комментарий `#` прямо над строкой `REFERENCE_CARRIERS` с `id` `row` (пробелы схлопнуты)."""
+    index = next((i for i, line in enumerate(lines) if f'"{row}"' in line and "ReferenceCarrier" in "".join(
+        lines[max(0, i - 1) : i + 1])), None)
+    if index is None:
+        return ""
+    if "ReferenceCarrier(" not in lines[index]:
+        index -= 1
+    comment: list[str] = []
+    for line in reversed(lines[:index]):
+        if not line.strip().startswith("#"):
+            break
+        comment.append(line.strip().lstrip("#").strip())
+    return " ".join(" ".join(reversed(comment)).split())
+
+
+def _chronicle(flat: str, heading: str) -> str:
+    """Абзац летописи шапки гейта: от заголовка до следующей летописи или раздела шапки."""
+    start = flat.find(heading)
+    if start < 0:
+        return ""
+    ends = [
+        index
+        for marker in ("Летопись", "РЕЕСТР ИСКЛЮЧЕНИЙ", "ЧТО КРАСНИТ")
+        if (index := flat.find(marker, start + len(heading))) >= 0
+    ]
+    return flat[start : min(ends, default=len(flat))]
+
+
+def _pairs_regression_with_matrix(text: str, commit: str, matrix: str) -> bool:
+    """В тексте коммит регрессии стоит рядом со своей матрицей: матрица — не дальше 160 знаков после
+    коммита, и между ними нет коммита другой регрессии."""
+    others = [other for other, _matrix, _row in REGRESSION_MATRICES if other != commit]
+    for match in re.finditer(re.escape(commit), text):
+        window = text[match.end() : match.end() + 160]
+        position = window.find(matrix)
+        if position >= 0 and not any(other in window[:position] for other in others):
+            return True
+    return False
+
+
+def test_the_dictionary_chronicles_name_which_matrix_each_regression_reddens():
+    """Летописи словаря седьмого круга разводят, какая регрессия какую матрицу краснит (ревью IN-18, О-19).
+
+    Замер верификатора раунда 8 на 60 ячейках строки (12 форм × 5 значений): на предикатах
+    `147f5e46` строка `named-wrapper-bound-handed` красна у гейта писателя (48) и зелёная у гейта
+    приватности (0) — своего поглощения у гейта приватности не было; на `c6953017` строка
+    `map-named-iterable` красна у гейта приватности (36). Комментарий строки и летописи говорили
+    «краснят обе матрицы» — верно только в совокупности. Правило держит: комментарий над
+    `named-wrapper-bound-handed` в исходнике общего модуля называет «матрицу гейта писателя» и
+    `147f5e46`, не говорит «обе матрицы», а гейт приватности называет только зелёным; комментарий
+    над `map-named-iterable` называет «матрицу гейта приватности» и `c6953017`; абзац этого
+    докстринга о словаре седьмого круга и абзацы «Летопись словаря седьмого круга» шапок обоих
+    гейтов называют `147f5e46` рядом с «матрицу гейта писателя», `c6953017` — рядом с «матрицу
+    гейта приватности» и не говорят «краснят обе матрицы» (план 16-44).
+    """
+    problems: list[str] = []
+    lines = inspect.getsource(grammar).splitlines()
+    for commit, matrix, row in REGRESSION_MATRICES:
+        comment = _row_comment(lines, row)
+        if not comment:
+            problems.append(f"над строкой `{row}` общего модуля нет комментария")
+            continue
+        for needle in (matrix, commit):
+            if needle not in comment:
+                problems.append(f"комментарий строки `{row}` не называет «{needle}»")
+        if "обе матрицы" in comment:
+            problems.append(f"комментарий строки `{row}` говорит «обе матрицы»")
+    bound_comment = _row_comment(lines, REGRESSION_MATRICES[0][2])
+    for sentence in _sentences(bound_comment):
+        if "гейта приватности" in sentence and "зелён" not in sentence:
+            problems.append(f"комментарий строки `{REGRESSION_MATRICES[0][2]}` относит её к матрице гейта "
+                            f"приватности: «{sentence}»")
+    doc = " ".join((ast.get_docstring(_module_tree()) or "").split())
+    start = doc.find("Словарь седьмого круга")
+    parity_paragraph = doc[start : doc.find("* ", start)] if start >= 0 else ""
+    texts = {
+        "абзац докстринга паритета о словаре седьмого круга": parity_paragraph,
+        "летопись словаря седьмого круга шапки гейта писателя": _chronicle(
+            " ".join((writer.__doc__ or "").split()), "Летопись словаря седьмого круга"),
+        "летопись словаря седьмого круга шапки гейта приватности": _chronicle(
+            " ".join((privacy.__doc__ or "").split()), "Летопись словаря седьмого круга"),
+    }
+    for title, text in texts.items():
+        if not text:
+            problems.append(f"нет текста: {title}")
+            continue
+        for commit, matrix, _row in REGRESSION_MATRICES:
+            if not _pairs_regression_with_matrix(text, commit, matrix):
+                problems.append(f"{title}: `{commit}` не стоит рядом с «{matrix}»")
+        if "краснят обе матрицы" in text:
+            problems.append(f"{title}: говорит «краснят обе матрицы»")
+
+    assert not problems, (
+        "летописи словаря не разводят, какая регрессия какую матрицу краснит (ревью IN-18):\n"
+        + "\n".join(f"  {problem}" for problem in problems)
     )
