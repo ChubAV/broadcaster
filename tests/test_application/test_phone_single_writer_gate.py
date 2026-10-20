@@ -4639,6 +4639,9 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     # getattr-строкой, которое держат обе матрицы и правило-паритет.
     if "`getattr-read`" not in flat:
         missing.append("нет формы словаря восьмого круга: нет «`getattr-read`»")
+    # Значение словаря восьмого круга (план 16-44): `methodcaller`, чья колонка приходит получателем.
+    if "`methodcaller-receiver`" not in flat:
+        missing.append("нет значения словаря восьмого круга: нет «`methodcaller-receiver`»")
 
     assert not missing, (
         "шапка гейта писателя не называет общую грамматику связывания, носителей или "

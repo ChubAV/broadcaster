@@ -3767,6 +3767,9 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     # getattr-строкой, которое держат обе матрицы и правило-паритет.
     if "`getattr-read`" not in flat:
         missing.append("нет формы словаря восьмого круга: нет «`getattr-read`»")
+    # Значение словаря восьмого круга (план 16-44): `methodcaller` над журналом из вызова фабрики.
+    if "`methodcaller-receiver`" not in flat:
+        missing.append("нет значения словаря восьмого круга: нет «`methodcaller-receiver`»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "

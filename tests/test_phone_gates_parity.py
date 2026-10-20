@@ -388,20 +388,83 @@ def _round_eight_form_problems() -> list[str]:
     return problems
 
 
+# Значение опознания словаря восьмого круга (ревью WR-28; решение владельца О-18 (а), свойство 3;
+# план 16-44): `methodcaller`, чья колонка приходит получателем, у гейта писателя и пара с тем же
+# `id` у гейта приватности — `methodcaller` над журналом из вызова фабрики.
+ROUND_EIGHT_VALUE = "methodcaller-receiver"
+
+
+def _methodcaller_call(text: str) -> ast.Call | None:
+    """Литеральный вызов `operator.methodcaller(…)` значения опознания, иначе `None`."""
+    node = ast.parse(text, mode="eval").body
+    if isinstance(node, ast.Call) and ast.unparse(node.func).split(".")[-1] == "methodcaller" and node.args:
+        return node
+    return None
+
+
+def _round_eight_value_problems() -> list[str]:
+    """Чем словарь не держит значение `methodcaller-receiver` и таблицу API значений писателя."""
+    problems: list[str] = []
+    writer_ids = [value.id for value in writer.API_IDENTIFICATION_VALUES]
+    privacy_ids = [value.id for value in privacy.LOG_IDENTIFICATION_VALUES]
+    for side, ids in (("писателя", writer_ids), ("приватности", privacy_ids)):
+        if ROUND_EIGHT_VALUE not in ids:
+            problems.append(f"у гейта {side} нет значения опознания `{ROUND_EIGHT_VALUE}`")
+    if ROUND_EIGHT_VALUE in writer_ids and ROUND_EIGHT_VALUE in privacy_ids:
+        if writer_ids.index(ROUND_EIGHT_VALUE) != privacy_ids.index(ROUND_EIGHT_VALUE):
+            problems.append(f"значение `{ROUND_EIGHT_VALUE}` у гейтов на разных позициях: {writer_ids}, {privacy_ids}")
+        writer_value = writer.API_IDENTIFICATION_VALUES[writer_ids.index(ROUND_EIGHT_VALUE)]
+        call = _methodcaller_call(writer_value.value)
+        if call is None or not (isinstance(call.args[0], ast.Constant) and call.args[0].value == "__set__"):
+            problems.append(f"значение писателя `{ROUND_EIGHT_VALUE}` — не `methodcaller(\"__set__\", …)`: "
+                            f"`{writer_value.value}`")
+        if "MessengerAccount.phone" not in writer_value.call:
+            problems.append(f"получатель значения писателя `{ROUND_EIGHT_VALUE}` не называет колонку "
+                            f"`MessengerAccount.phone`: `{writer_value.call}`")
+        privacy_value = privacy.LOG_IDENTIFICATION_VALUES[privacy_ids.index(ROUND_EIGHT_VALUE)]
+        call = _methodcaller_call(privacy_value.value)
+        if call is None or not any("phone" in ast.unparse(argument) for argument in call.args[1:]):
+            problems.append(f"значение приватности `{ROUND_EIGHT_VALUE}` — не `methodcaller` над журналом с номером "
+                            f"в своих аргументах: `{privacy_value.value}`")
+        if "phone" in privacy_value.call:
+            problems.append(f"получатель значения приватности `{ROUND_EIGHT_VALUE}` несёт номер: `{privacy_value.call}`")
+    calls = getattr(writer, "API_IDENTIFICATION_CALLS", None)
+    if not isinstance(calls, dict):
+        problems.append("у гейта писателя нет таблицы `API_IDENTIFICATION_CALLS` (API каждого значения опознания)")
+    else:
+        unnamed = [value_id for value_id in writer_ids if not calls.get(value_id)]
+        if unnamed:
+            problems.append(f"`API_IDENTIFICATION_CALLS` не называет API значений {unnamed}")
+        stray = sorted(set(calls) - set(writer_ids))
+        if stray:
+            problems.append(f"`API_IDENTIFICATION_CALLS` называет значения, которых нет в таблице: {stray}")
+        if calls.get(ROUND_EIGHT_VALUE) != "__set__":
+            problems.append(f"`API_IDENTIFICATION_CALLS` у `{ROUND_EIGHT_VALUE}` — {calls.get(ROUND_EIGHT_VALUE)!r}, "
+                            "ожидалось `__set__`")
+    return problems
+
+
 def test_the_shared_dictionary_holds_the_round_eight_axes():
-    """Словарь матриц и паритета держит ось восьмого круга: чтение имени getattr-строкой.
+    """Словарь матриц и паритета держит оси восьмого круга: чтение имени getattr-строкой и
+    `methodcaller` с получателем-колонкой.
 
     Ни одна форма `BINDING_FORMS` не читала связанное имя getattr-строкой, поэтому ни обе
     матрицы, ни это правило, ни корпуса самопроверок исполнителей раунда 7 (≈142 000 форм) такого
     чтения не собирали: `self.f = operator.methodcaller("__set__", account, x)` с
     `getattr(self, "f")(MessengerAccount.phone)` проходил оба гейта (ревью WR-28, верификация
-    раунда 8). Правило держит форму `getattr-read`: ссылка `getattr(self, "f")`, связывание
+    раунда 8). Правило держит (а) форму `getattr-read`: ссылка `getattr(self, "f")`, связывание
     `self.f = {value}` в `__init__`, место `{use}` — в другом методе, ячейка читает имя
-    getattr-строкой. Возврат чтения имени только у `Name` / `Attribute` (класс WR-28) краснит
-    обе матрицы и правило-паритет на этой строке для каждого значения и носителя (решение
-    владельца О-18 (а), свойство 3; план 16-44).
+    getattr-строкой; (б) значение опознания `methodcaller-receiver` у обоих гейтов на одной
+    позиции: у писателя `methodcaller("__set__", …)`, применённый к получателю, называющему
+    `MessengerAccount.phone` (иначе матрица этот вид не видит), у приватности — `methodcaller` над
+    журналом, номер — в его аргументах; (в) таблицу `API_IDENTIFICATION_CALLS` гейта писателя —
+    API, который называет находка ячейки, для КАЖДОГО значения опознания писателя (у
+    `methodcaller-receiver` — `__set__`), без умолчания; её читают правило-матрица гейта писателя
+    и это правило-паритет, своей копии здесь нет. Возврат чтения имени только у `Name` /
+    `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет на этой строке для каждого
+    значения и носителя (решение владельца О-18 (а), свойство 3; план 16-44).
     """
-    problems = _round_eight_form_problems()
+    problems = _round_eight_form_problems() + _round_eight_value_problems()
 
     assert not problems, "словарь матриц и паритета не держит ось восьмого круга:\n" + "\n".join(
         f"  {problem}" for problem in problems
