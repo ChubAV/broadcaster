@@ -3231,6 +3231,38 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="partial-log-reference-mapped-over-a-phone-attribute",
     ),
+    # Самопроверка исполнителя 16-43 (ось «где прочитано имя», цикл 1): ссылка на вызываемое
+    # журнала, связанная с ИМЕНЕМ модуля (`f = logger.info`), прочитанная getattr-строкой
+    # (`getattr(sys.modules[__name__], "f")`, с умолчанием, цепочкой) — вызов журнала. Гейт читал
+    # имя последним звеном у `methodcaller` и у обёртки (плоская область), а у вызываемого журнала
+    # различал имя и атрибут: имя модуля, прочитанное членом объекта, уходило мимо — 1 512 форм
+    # под заявлением самопроверки (шесть форм связывания с целью-именем × три чтения getattr-строкой
+    # × 21 способ × четыре значения), давний пропуск и на базе партии. Гейт писателя ту же форму ловит.
+    pytest.param(
+        "app/x.py",
+        'f = logger.info\ngetattr(sys.modules[__name__], "f")("x %s", account.phone)\n',
+        "phone",
+        id="log-method-bound-to-a-module-name-read-by-a-getattr-string",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = print\ngetattr(sys.modules[__name__], "f", None)(account.phone)\n',
+        "phone",
+        id="print-bound-to-a-module-name-read-by-a-getattr-string-with-a-default",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = functools.partial(logger.info, "x %s")\ng = getattr(sys.modules[__name__], "f"); g(account.phone)\n',
+        "phone",
+        id="log-partial-bound-to-a-module-name-read-through-a-getattr-chain",
+    ),
+    pytest.param(
+        "app/x.py",
+        'f = getattr(logger, "info")\n'
+        'asyncio.to_thread(getattr(sys.modules[__name__], "f"), "x %s", account.phone)\n',
+        "phone",
+        id="getattr-log-method-bound-to-a-module-name-handed-to-to-thread",
+    ),
 ]
 
 # Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
@@ -4047,6 +4079,14 @@ POSITIVE_CONTROLS = [
         '        getattr(self, "f")(logger)\n',
         True,
         id="methodcaller-read-by-a-getattr-string-without-a-number",
+    ),
+    # Самопроверка 16-43, цикл 1: ссылка на журнал, связанная с именем модуля и прочитанная
+    # getattr-строкой, — вызов журнала; без номера — без находки.
+    pytest.param(
+        "app/x.py",
+        'f = logger.info\ngetattr(sys.modules[__name__], "f")("x %s", account.name)\n',
+        True,
+        id="log-method-bound-to-a-module-name-read-by-a-getattr-string-without-a-number",
     ),
 ]
 
