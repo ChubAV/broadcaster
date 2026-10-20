@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: WR-27
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "Гейт приватности сливает две разные подачи номера на одной строке в одну находку — регрессия счёта `51d0d766` против базы `1c243203`, и правило «одно место — одна находка» этого направления не видит по построению"
   - id: WR-28
     severity: warning
@@ -207,7 +207,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 5
+open: 4
 total: 51
 recorded: 2026-10-19T15:15:47.219Z
 ---
@@ -216,7 +216,7 @@ recorded: 2026-10-19T15:15:47.219Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-27 | warning | open | - |
+| WR-27 | warning | fixed | `16-41` задачи 1–2, GREEN `41f07251`, `3d7dfd86` (циклов самопроверки и сверки не понадобилось) — решение владельца О-18 (а), свойства 1, 4, 5, 6: регрессия счёта партии раунда 7 («51d0d766», 16-37 задача 1: дедупликация по тексту тройки «строка, вид, предмет» сливала две разные подачи номера на одной строке в одну находку; на «1c243203» их было две); место находки гейта приватности — узел подачи, четвёрка «строка, столбец, вид, предмет» (`_judge_arguments`, `python_log_offences`): две подачи на одной строке — две находки, одна подача, судимая по двум путям, — одна (двойной счёт WR-24 не вернулся); четыре строки `NEGATIVE_CONTROLS` WR-27 (`two-numbers-in-one-log-call`, `log-call-and-print-on-one-line`, `print-of-two-numbers`, `two-log-calls-on-one-line`) — по две находки; правило строк считает места по `NEGATIVE_CONTROL_PLACES` («14» строк, помощник `place_count_mismatch`), правило-контроль `test_the_place_count_rule_reddens_a_text_triple_dedupe` краснеет на дедупликации по тексту места; матрица приватности — ровно одна находка на ячейку; трасер `test_a_planted_report_with_two_numbers_on_one_line_reddens_the_gate_twice`; шапка гейта приватности называет место «строка, столбец, вид, предмет» и летопись WR-27; сверка «база ↔ HEAD» с осью счёта на обоих гейтах (инструмент r8diff плана 16-41) видит регрессию — «SELFTEST-COUNT a6c87597 -> 51d0d766: … count_regressions=1237», итог плана — «BASE fb8fef72 -> HEAD 3d7dfd86: … regressions=0 count_regressions=0», «OPEN_REGRESSIONS=0»; итог сверки партии раунда 8 (16-44) — «SELFTEST-COUNT … count_regressions=885» (меньше «1237»: 16-44 дал ячейкам D2 точное число, ось счёта по-прежнему видит регрессию), «AGAINST fb8fef72 -> HEAD dbc73537: … regressions=0 count_regressions=0», «AGAINST 1c243203 -> HEAD dbc73537: … regressions=0 count_regressions=0», «HEAD_WRONG=0»; коммиты RED — «597f1220», «87d2c5d1» |
 | WR-28 | warning | open | - |
 | IN-18 | info | open | - |
 | IN-19 | info | open | - |
