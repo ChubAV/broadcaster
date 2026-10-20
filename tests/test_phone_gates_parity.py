@@ -13,23 +13,30 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
 прежние, оба гейта делят ОДНУ грамматику связывания и ОДИН перечень носителей ссылки —
 модуль `tests/phone_gate_grammar.py`, — и расхождение гейтов краснит это правило.
 
-ЧТО ПРОВЕРЯЕТСЯ.
-* Построение: оба модуля гейтов ввозят `tests.phone_gate_grammar` и держат его имена
+ЧТО ПРОВЕРЯЕТСЯ (каждое правило модуля названо ниже; перечни сверяет правило
+`test_the_parity_docstring_names_what_it_checks`).
+* Построение (`test_both_gates_take_the_binding_grammar_and_carriers_from_one_module`): оба
+  модуля гейтов ввозят `tests.phone_gate_grammar` и держат его имена
   `REQUIRED_SHARED_NAMES` (`module_bindings`, `REFERENCE_CARRIERS`, `BINDING_FORMS`,
   `reference_arguments`, `iterable_elements`, `getattr_literal` и семантику обёртки
   носителя `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper` — ревью WR-24, план 16-37; один читатель имени связанного
+  `is_carrier_wrapper` — ревью WR-24, план 16-37; применения обёртки, вызванной и поданной,
+  рекурсивно, `wrapper_applications` — ревью WR-26, решение владельца О-16 (а), свойство 3;
+  один читатель имени связанного
   `reading_name` — ревью WR-28, решение владельца О-18 (а), свойство 2: гейт писателя с
   плана 16-42, гейт приватности с плана 16-43) теми же объектами; на
   верхнем уровне модуля гейта нет функции с именем из `GRAMMAR_FUNCTIONS` — грамматика
   связывания (`binding_pairs`, `module_bindings`, `getattr_as_attribute`) И семантика
-  носителя ссылки (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
+  носителя ссылки `CARRIER_SEMANTICS` (`getattr_literal`, `iterable_elements`, `expanded_arguments`,
   `forwarded_arguments`, `elementwise_arguments`, `literal_keyword_arguments`,
   `reference_arguments`, `carrier_wrapper_bindings`, `applied_wrapper`, `named_wrappers`,
-  `is_carrier_wrapper`, `reading_name`), каждое имя с подчёркиванием и без, — и присваивания таблицы
+  `is_carrier_wrapper`, `wrapper_applications`, `reading_name`), каждое имя с подчёркиванием и
+  без, — и присваивания таблицы
   с именем из `GRAMMAR_TABLES` (`ELEMENTWISE_CARRIERS`, `REFERENCE_CARRIERS`,
   `BINDING_FORMS`, `LITERAL_CONTAINER_WRAPPERS`, `UNJUDGED_ELEMENT`, выведенная планом
-  16-34 `REFERENCE_KEYWORDS`): названные точки не переопределены. Копию под другим
+  16-34 `REFERENCE_KEYWORDS`, построчные носители `ROW_CARRIERS` — ревью CR-02 / WR-25, план
+  16-38; `UNJUDGED_ELEMENT` и `ROW_CARRIERS` — и с подчёркиванием): названные точки не
+  переопределены. Копию под другим
   именем (`def _my_pairs(…)`, `MY_CARRIERS = …`) эта половина не видит по построению:
   её видит только поведенческая половина — и только на ячейках общего словаря.
   Правило-контроль `test_the_structural_half_reddens_a_redefined_grammar_point`
@@ -40,15 +47,31 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   функций и четыре таблицы, и копии `_iterable_elements` / `_getattr_literal` жили в
   обоих гейтах; план 16-32 снял их у гейта приватности, план 16-34 — у гейта писателя,
   и имена семантики носителя вошли в `GRAMMAR_FUNCTIONS` (решение владельца О-15).
-* Поведение: на каждой ячейке «форма `BINDING_FORMS` × значение опознания × прямой вызов
-  и каждый носитель `REFERENCE_CARRIERS`» оба гейта находят — писатель запись номера,
-  приватность номер в журнале. Ячейку обоих гейтов собирает одна функция
+* Сторож таблиц носителей (`test_the_elementwise_and_row_carriers_name_the_installed_apis`, ревью
+  CR-02 / WR-25, план 16-38): `ELEMENTWISE_CARRIERS | ROW_CARRIERS` общего модуля — ровно
+  публичные методы с `map` в имени у объектов установленного stdlib `MAP_CARRIER_OWNERS`
+  (`multiprocessing.pool.Pool`, `concurrent.futures.Executor`, `itertools`), и таблицы не
+  пересекаются: подъём Python с новым таким методом краснит суиту.
+* Поведение (`test_both_gates_agree_on_every_binding_form_identification_and_carrier`): на каждой
+  ячейке «форма `BINDING_FORMS` × значение опознания × прямой вызов и каждый носитель
+  `REFERENCE_CARRIERS`» оба гейта находят — писатель запись номера с API значения из таблицы
+  гейта писателя `API_IDENTIFICATION_CALLS` (своей таблицы API здесь нет, план 16-44), приватность
+  номер в журнале. Ячейку обоих гейтов собирает одна функция
   `binding_form_source` общего модуля; своей сборки исходников здесь нет.
 * Словарь седьмого круга (`test_the_shared_dictionary_holds_the_round_seven_axes`, план 16-39):
   девять строк `REFERENCE_CARRIERS` — поданная обёртка, обёртка в обёртке, именованная обёртка
   (вызов, передача, передача с аргументами, getattr-вариант), `starmap`, `apply_async` и место
-  не-литеральной итерируемой у `map` (`ReferenceCarrier.last`), — так что регрессии
-  `c6953017` и `147f5e46` краснят обе матрицы и это правило по построению.
+  не-литеральной итерируемой у `map` (`ReferenceCarrier.last`), — так что по построению
+  регрессия `147f5e46` краснит матрицу гейта писателя и это правило, регрессия `c6953017` —
+  матрицу гейта приватности и это правило; матрица другого гейта на каждом из этих коммитов
+  зелёная (ревью IN-18, решение владельца О-19: замер верификатора раунда 8 — 48 и 36 из 60
+  ячеек строки на 12 формах × 5 значениях; замер плана 16-44 режимом `run.sh --rows` на
+  таблицах HEAD — 52 и 39 из 78 на 13 формах × 6 значениях).
+* Словарь восьмого круга (`test_the_shared_dictionary_holds_the_round_eight_axes`, ревью WR-28,
+  решение владельца О-18 (а), свойство 3; план 16-44): форма `getattr-read` — чтение имени
+  getattr-строкой, значение опознания `methodcaller-receiver` у обоих гейтов на одной позиции и
+  полнота таблицы `API_IDENTIFICATION_CALLS` гейта писателя, — так что возврат чтения имени только
+  у `Name` / `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет.
 * Место значения `partial` (`test_the_partial_value_place_is_pinned_by_a_privacy_row`, ревью
   IN-20, решение владельца О-19, план 16-43): у `partial` с одним позиционным аргументом (номером)
   места `last` нет по выбору словаря — его ячейка `map-named-iterable` равна ячейке `map`, — и
@@ -56,12 +79,21 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   `NEGATIVE_CONTROLS` `partial-log-reference-mapped-over-a-phone-attribute` гейта приватности с
   одной находкой; докстринг `ReferenceCarrier` называет эту строку, D-17 относит только к
   получателю `methodcaller`, а у `partial` называет выбор словаря.
-* Формы вне грамматики (`OUT_OF_GRAMMAR_BINDING_FORMS`): ни один гейт не разрешает их
+* Формы вне грамматики (`test_both_gates_leave_the_same_forms_out_of_the_grammar`,
+  `OUT_OF_GRAMMAR_BINDING_FORMS`): ни один гейт не разрешает их
   связывание, и у каждой формы есть причина. Сравнивается связывание, а не сырое число
   находок: гейт писателя находит запись и там, где значение несёт её само
   (`methodcaller` со всеми аргументами записи), поэтому ячейка сверяется с базой — той
   же ячейкой, где имя на месте вызова ничем не связано; находка сверх базы значила бы,
   что гейт связывание разрешил (план 16-27, заметки волне 2).
+* Тексты, на которых держатся закрытия ревью (ревью IN-19 и IN-18, решение владельца О-19, план
+  16-44): `test_the_parity_docstring_names_what_it_checks` — этот докстринг называет каждое имя
+  `REQUIRED_SHARED_NAMES`, `CARRIER_SEMANTICS`, `GRAMMAR_TABLES` (без вариантов с подчёркиванием),
+  каждый объект `MAP_CARRIER_OWNERS` и каждое правило модуля, перечни выведены из объектов модуля;
+  `test_the_dictionary_chronicles_name_which_matrix_each_regression_reddens` — комментарии строк
+  `named-wrapper-bound-handed` и `map-named-iterable` общего модуля, абзац этого докстринга о
+  словаре седьмого круга и летописи словаря седьмого круга шапок обоих гейтов разводят, какая
+  регрессия какую матрицу краснит.
 """
 
 from __future__ import annotations
