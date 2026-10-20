@@ -3678,6 +3678,29 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
             missing.append(f"летопись WR-27 не называет «{needle}»")
     if "строка, столбец, вид, предмет" not in " ".join((python_log_offences.__doc__ or "").split()):
         missing.append("докстринг `python_log_offences` не называет место «строка, столбец, вид, предмет»")
+    # Ось «где прочитано имя» у `methodcaller` (ревью WR-28, верификация раунда 8, 2026-10-19;
+    # решение владельца О-18 (а), свойство 2; план 16-43): абзац о `methodcaller`, применённом к
+    # опознанному получателю, называет чтение имени getattr-строкой и общий читатель
+    # `reading_name`; летопись WR-28 называет седьмой круг оси «как опознан журнал»; граница
+    # такого чтения не называет — оно ловится, а пункт о вычисленном имени прежний.
+    for needle in ("`reading_name`", "WR-28"):
+        if needle not in flat:
+            missing.append(f"нет одного читателя имени у `methodcaller`: нет «{needle}»")
+    applied = flat.find("применённый к опознанному получателю")
+    applied_segment = flat[applied : applied + 700] if applied >= 0 else ""
+    for needle in ("getattr-строк", "`reading_name`"):
+        if needle not in applied_segment:
+            missing.append(f"абзац о `methodcaller`, применённом к опознанному получателю, не называет «{needle}»")
+    name_chronicle = _chronicle_segment(flat, "Летопись WR-28")
+    if not name_chronicle:
+        missing.append("нет «Летопись WR-28»")
+    for needle in ("седьм", "как опознан журнал", "16-43", "О-18 (а)"):
+        if name_chronicle and needle not in name_chronicle:
+            missing.append(f"летопись WR-28 не называет «{needle}»")
+    if '`getattr(self, "emit")' in boundary or '`getattr(self, "f")' in boundary:
+        missing.append("граница называет чтение имени `methodcaller` getattr-строкой, хотя оно ловится")
+    if "`getattr(logger, name)(…)`" not in boundary:
+        missing.append("граница стёрла пункт о вычисленном имени: нет «`getattr(logger, name)(…)`»")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
