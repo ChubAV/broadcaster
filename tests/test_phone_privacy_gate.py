@@ -3807,7 +3807,9 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     против базы партии и `2f8c1656`. С плана 16-44 (итог партии раунда 8; О-18 (а), свойства 3,
     6) — и словарь восьмого круга: шапка называет форму `getattr-read` и значение
     `methodcaller-receiver`, а летопись словаря восьмого круга — их, меру «база ↔ HEAD» и число
-    находок.
+    находок. С плана 16-46 (ревью CR-04; О-20 (а), свойство 2) — и ось толкований: пункт «ПО
+    СВЯЗЫВАНИЮ» называет суд каждого толкования узла, летопись CR-04 — регрессию `a77263ad`,
+    давний класс C5–C7 и решения владельца О-20 (а), О-21 (а).
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4023,6 +4025,20 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("16-44", "getattr-read", "methodcaller-receiver", "база ↔ HEAD", "число находок", "О-18 (а)"):
         if eighth and needle not in eighth:
             missing.append(f"летопись словаря восьмого круга не называет «{needle}»")
+    # Ось толкований (ревью CR-04, верификация раунда 9, 2026-10-20; решение владельца О-20 (а),
+    # свойство 2; план 16-46): пункт «ПО СВЯЗЫВАНИЮ» называет суд каждого толкования узла, летопись
+    # CR-04 — регрессию `a77263ad` против родителя `e1d6587e` и базы партии `fb8fef72`, давний класс
+    # C5–C7, план и решения владельца; докстринг `python_log_calls` — суд каждого толкования.
+    if "каждое толкование узла" not in flat:
+        missing.append("пункт «ПО СВЯЗЫВАНИЮ» не называет суд каждого толкования: нет «каждое толкование узла»")
+    interpretations = _chronicle_segment(flat, "Летопись CR-04")
+    if not interpretations:
+        missing.append("нет «Летопись CR-04»")
+    for needle in ("a77263ad", "e1d6587e", "fb8fef72", "C5–C7", "16-46", "О-20 (а)", "О-21 (а)"):
+        if interpretations and needle not in interpretations:
+            missing.append(f"летопись CR-04 не называет «{needle}»")
+    if "каждое толкование" not in " ".join((python_log_calls.__doc__ or "").split()):
+        missing.append("докстринг `python_log_calls` не называет суд каждого толкования")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
