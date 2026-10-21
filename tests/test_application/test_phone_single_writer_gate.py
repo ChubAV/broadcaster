@@ -7221,6 +7221,73 @@ LITERAL_FORM_CASES = [
         "phone",
         id="methodcaller-literal-column-applied-twice",
     ),
+    # Замер планирования девятого прогона (2026-10-21) и семейство (к6) сверки 16-46: вызов, чьё
+    # последнее имя связано в модуле с пишущим API (`to_thread = setattr`, `run_in_executor =
+    # update`) или с `functools.partial(<API>, …)` (`run = functools.partial(setattr, other)`),
+    # судился только как псевдоним API — толкование псевдонима закрывало путь носителя (ранние
+    # возвраты `_referenced_calls`), и поданная ссылка на пишущий API проходила гейт: ноль находок
+    # на HEAD, `fb8fef72`, `1c243203`, `2f8c1656` — давний пропуск, не регрессия. Свойство 2 О-20
+    # («гейт писателя судит каждое толкование») на этой оси не выполнялось. Та же коллизия у имени
+    # `partial`, связанного с пишущим API, при применённой обёртке носителя
+    # `functools.partial(<носитель>, ref)` (семейство (к6), шаблоны носителей-обёрток; план 16-48).
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "to_thread = setattr\n"
+        'asyncio.to_thread(set_committed_value, account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="carrier-name-bound-to-setattr-carries-a-writer-reference",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "f = set_committed_value\n"
+        "to_thread = setattr\n"
+        'asyncio.to_thread(f, account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="carrier-name-bound-to-setattr-carries-a-writer-alias",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "run_in_executor = update\n"
+        'loop.run_in_executor(None, set_committed_value, account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="executor-name-bound-to-update-carries-a-writer-reference",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "run = functools.partial(setattr, other)\n"
+        'contextvars.copy_context().run(set_committed_value, account, "phone", x)\n',
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="context-run-name-bound-to-a-partial-carries-a-writer-reference",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "partial = setattr\n"
+        "loop.run_in_executor(\n"
+        '    None, functools.partial(contextvars.copy_context().run, set_committed_value), account, "phone", x\n'
+        ")\n",
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="partial-name-bound-to-setattr-wraps-a-writer-reference",
+    ),
 ]
 
 # Число мест строк `LITERAL_FORM_CASES`, у которых мест не одно или одно названо явно (ревью
@@ -7878,6 +7945,26 @@ LEGITIMATE_CASES = [
         "        s2 = self.sp\n"
         "        s2(account, x)\n",
         id="other-column-descriptor-alias-chained-through-an-attribute",
+    ),
+    # Законные двойники коллизии имени носителя с пишущим API (план 16-48): то же связывание
+    # `to_thread = setattr` / `partial = setattr`, но поданная запись — колонка `status`.
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "to_thread = setattr\n"
+        'asyncio.to_thread(set_committed_value, account, "status", x)\n',
+        id="carrier-name-bound-to-setattr-carries-a-status-write",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "partial = setattr\n"
+        "loop.run_in_executor(\n"
+        '    None, functools.partial(contextvars.copy_context().run, set_committed_value), account, "status", x\n'
+        ")\n",
+        id="partial-name-bound-to-setattr-wraps-a-status-write",
     ),
 ]
 
