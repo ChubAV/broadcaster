@@ -67,6 +67,13 @@
   Значения опознания матрицы — имя, атрибут, getattr-строка, `partial`, `methodcaller` и
   `methodcaller-receiver` — `methodcaller` над журналом из вызова фабрики
   (`structlog.get_logger()`): пара значения гейта писателя с тем же `id`.
+  Связанное имя читается и через объект модуля: имя, связанное в модуле с получателем
+  журнала, с вызываемым журнала, `methodcaller` или обёрткой, — член `sys.modules[__name__]`
+  и имени, связанного с ним (`getattr(sys.modules[__name__], "lg")`, с умолчанием,
+  `sys.modules[__name__].lg`, `me = sys.modules[__name__]; me.lg`, поданный носителю или
+  `methodcaller`); имя вызываемого журнала, связанное в модуле, членом другого объекта не
+  читается — `fh.write(…)` при `write = print` не журнал (ревью WR-29, WR-30; решение
+  владельца О-20 (а), свойства 3, 4; помощник `_is_module_object`, план 16-47).
 * ПО ССЫЛКЕ НА МЕТОД ОПОЗНАННОГО ЖУРНАЛА: имя или атрибут, связанные с любым методом
   опознанного журнала (`logger.info`, `logger._log`), `getattr(logger, "info")`, `print`, привязкой к контексту или `functools.partial(<то
   же>, …)` (`info = logger.info`, `out = print`, `self.out = logger.info`,
@@ -196,7 +203,16 @@
 строгости названа: метод любого объекта с именем журнала (`log.mark_failed(…)` у записи
 `SendLog`, связанной с именем `log`) судится тоже; на живом дереве таких вызовов ноль —
 сверка планом 16-23 по строке и столбцу: новые вызовы — ровно настройка журнала
-`app/logging_config.py` и `max_worker/main.py`. Та же цена у носителя ссылки (план
+`app/logging_config.py` и `max_worker/main.py`. Решение владельца О-22 (а), 2026-10-21: та
+же цена, что `other.bum(…)` у гейта писателя и цена kw (свойство 8 О-20), — у атрибута,
+связанного в модуле с вызываемым журнала (тело класса `class Z: write = print`,
+`self.write = print` в чьём-то `__init__`): метод любого объекта с этим именем судится как
+вызов журнала — `fh.write(account.phone)` даёт находку, хотя номер уходит в файл (исполнение
+плана 16-47: номер в файле, журнал пуст); цена в сторону лишней находки, а не пропуска — без
+неё не поймать атрибут, вызванный у параметра или экземпляра (`a.out(…)`), а синтаксически
+эти формы неотличимы; на живом дереве совпадений ноль — сверка множеств распознанных вызовов
+всех 106 файлов против базы плана 16-47 (`35106de1`) по строке и столбцу: новых мест 0,
+удалённых 0 (386 вызовов). Та же цена у носителя ссылки (план
 16-29): член получателя, опознанного по имени, поданный вызову с аргументом за ним,
 судится как ссылка на метод журнала — на живом дереве ровно `app/pages/history.py:288`,
 `:289`, `:293` (`format_datetime_for_user(log.sent_at, user)`,
@@ -376,6 +392,20 @@ CR-04, верификация раунда 9, 2026-10-20: корпус вери�
 (а′) и (б) ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ; О-21 (а): чужие корпуса ревьюера и верификатора —
 обязательный вход меры.
 
+Летопись WR-29: цикл самопроверки 1 плана 16-43 (коммит `a77263ad`) положил имя, связанное в
+модуле с вызываемым журнала, в атрибуты, и метод любого чужого объекта с этим именем стал
+вызовом журнала — `write = print; fh.write(account.phone)` давал находку, номер уходил в файл
+(ревью WR-29, верификация раунда 9, 2026-10-20: 120 ячеек корпуса верификатора и 300
+ревьюера, 0 → 1); план 16-47 читает такое имя членом только у объекта модуля; решение
+владельца О-20 (а), 2026-10-20.
+
+Летопись WR-30: получатель журнала, связанный с именем модуля и прочитанный через объект
+модуля, не ловился ни на одном дереве — журнал печатал номер (ревью WR-30, верификация раунда
+9); восьмой круг оси «как опознан журнал» (IN-06 → IN-09 → WR-13 → WR-17 → WR-18 / WR-19 /
+WR-20 → CR-02 / WR-25 / WR-26 → WR-28 → CR-04 / WR-29 / WR-30); план 16-47 сделал член
+объекта модуля получателем тем же помощником `_is_module_object`, что у WR-29; решение
+владельца О-20 (а): заявление прежнее, варианты (а′) и (б) ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ.
+
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
     разделителями и 7…15 цифрами; 11 цифр подряд с ведущей 7/8; русская разбивка
@@ -443,7 +473,9 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
   - получатель, пришедший параметром функции (`def f(lg): lg.info(…)`; и умолчание
     параметра — значение приходит с места вызова);
   - журнал, взятый из контейнера (`loggers["x"].info(…)`, `for lg in loggers:`), из
-    атрибута чужого объекта, не связанного в этом модуле, из результата вызова
+    атрибута чужого объекта, не связанного в этом модуле (объект самого модуля —
+    `sys.modules[__name__]` и имя, связанное с ним, — чужим объектом не считается: его
+    члены, связанные в модуле, ловятся, см. «ПО СВЯЗЫВАНИЮ», план 16-47), из результата вызова
     не-фабрики (`lg = make_logger()`), из `with … as lg` (связывается результат
     `__enter__`, а не выражение) или ввезённый из другого модуля под именем, не похожим
     на журнал (`from app.x import lg`): гейт разбирает модуль за модулем;
@@ -765,10 +797,17 @@ class ModuleLogNames:
     имена и атрибуты, связанные со ссылкой на фабрику без вызова (`gl = logging.getLogger`);
     сверяются по последнему имени вызова, как и `LOGGER_FACTORIES`.
     `log_function_attributes` — атрибуты, связанные со ссылкой на вызываемое журнала
-    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`; и имена,
-    связанные так же любой формой общей грамматики (`out = logger.info`): их читают и последним
-    звеном члена — `getattr(sys.modules[__name__], "out")(…)` (плоская область, как у имени
-    `methodcaller` и обёртки; самопроверка исполнителя 16-43, цикл 1).
+    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`, `a.out(…)`
+    у любого объекта (плоская область по владельцу, как у имени `methodcaller` и обёртки; цена
+    «в сторону лишней находки» названа в шапке — решение владельца О-22 (а)). Имя, связанное с
+    вызываемым журнала на уровне модуля или в функции (`out = logger.info`), сюда НЕ идёт: оно
+    лежит в `log_functions` и читается членом только у объекта модуля —
+    `getattr(sys.modules[__name__], "out")(…)`, `me.out(…)` (ревью WR-29: до плана 16-47 цикл
+    самопроверки 1 плана 16-43, коммит `a77263ad`, клал его и сюда, и `fh.write(account.phone)`
+    при `write = print` стал вызовом журнала; решение владельца О-20 (а), свойство 3).
+    `module_objects` — имена, связанные в модуле с объектом модуля `sys.modules[__name__]` любой
+    формой общей грамматики, цепочкой тоже (`me = sys.modules[__name__]`, `me2 = me`): член такого
+    имени — член модуля (ревью WR-29, WR-30; помощник `_is_module_object`, план 16-47).
     `methodcaller_names` — имена, под которыми модуль зовёт `operator.methodcaller`
     (`from operator import methodcaller as mc`, `mc = operator.methodcaller`,
     `self.mc = operator.methodcaller`); `methodcallers` — пары «имя → вызов
@@ -799,9 +838,44 @@ class ModuleLogNames:
     methodcallers: tuple[tuple[str, ast.Call], ...] = ()
     partial_names: frozenset[str] = PARTIAL_NAMES
     carrier_wrappers: tuple[tuple[str, ast.Call], ...] = ()
+    module_objects: frozenset[str] = frozenset()
 
 
 NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
+
+MODULE_OBJECT_EXPRESSION = "sys.modules[__name__]"
+
+
+def _is_module_object(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
+    """Объект самого модуля: `sys.modules[__name__]` или имя, связанное в модуле с ним.
+
+    Член объекта модуля — имя, связанное в этом модуле: `getattr(sys.modules[__name__], "lg")`,
+    `sys.modules[__name__].lg`, `me.lg` при `me = sys.modules[__name__]` (цепочкой тоже —
+    `names.module_objects`). Им читается и имя вызываемого журнала, связанное в модуле (ревью
+    WR-29), и получатель журнала (ревью WR-30); член любого другого объекта с тем же именем —
+    не член модуля. Решение владельца О-20 (а), свойства 3 и 4; план 16-47.
+    """
+    if isinstance(node, ast.Name):
+        return node.id in names.module_objects
+    return ast.unparse(node) == MODULE_OBJECT_EXPRESSION
+
+
+def _module_object_names(bindings: list[Binding]) -> frozenset[str]:
+    """Имена-цели общей грамматики, связанные с объектом модуля, — до неподвижной точки.
+
+    `me = sys.modules[__name__]` и цепочка `me2 = me`: значение — `sys.modules[__name__]` или
+    имя, уже признанное объектом модуля (`_is_module_object`).
+    """
+    found: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        known = replace(NO_MODULE_LOG_NAMES, module_objects=frozenset(found))
+        for target, value, _in_class_body in bindings:
+            if isinstance(target, ast.Name) and target.id not in found and _is_module_object(value, known):
+                found.add(target.id)
+                changed = True
+    return frozenset(found)
 
 
 def _is_logger_name(name: str) -> bool:
@@ -883,13 +957,20 @@ def _log_function_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LO
     """Имя или член, связанные в модуле с вызываемым журнала (`log_functions`,
     `log_function_attributes`).
 
-    Имя члена (`X.f`, `getattr(X, "f")`, с умолчанием) читает общий `reading_name` (план
-    16-43). Имя, связанное с вызываемым журнала, лежит и в атрибутах — читается последним
-    звеном (`getattr(sys.modules[__name__], "f")`); ввезённое из `logging` имя (`from logging
-    import info`) — только голым именем.
+    Голое имя — из `log_functions`. Член (`X.f`, `getattr(X, "f")`, с умолчанием; имя читают
+    `_member` и общий `reading_name`, план 16-43) — вызов журнала в двух случаях: (а) имя из
+    `log_functions` и владелец — объект модуля (`getattr(sys.modules[__name__], "f")(…)`,
+    `sys.modules[__name__].f(…)`, `me.f(…)` — `_is_module_object`); член другого объекта с тем же
+    именем — не журнал: `fh.write(account.phone)` при `write = print` пишет номер в файл (ревью
+    WR-29; решение владельца О-20 (а), свойство 3; план 16-47); (б) имя из
+    `log_function_attributes` — у любого владельца, плоская область: `a.out(…)` при
+    `self.out = logger.info` в чужом `__init__` (решение владельца О-22 (а), цена названа в шапке).
     """
     if isinstance(node, ast.Name):
         return node.id in names.log_functions
+    member = _member(node)
+    if member is not None and member[1] in names.log_functions and _is_module_object(member[0], names):
+        return True
     return reading_name(node) in names.log_function_attributes
 
 
@@ -962,6 +1043,8 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     log_function_attributes: set[str] = set()
     factories: set[str] = set()
     bindings = module_bindings(tree)
+    # Имена объекта модуля — до неподвижной точки журнала (ревью WR-29, WR-30, план 16-47).
+    module_objects = _module_object_names(bindings)
     # Обёртки ссылки под другим именем — до опознания журнала: `bind_(logger.info, …)`
     # судится, как `functools.partial(logger.info, …)`.
     partial_names = _wrapper_aliases(tree, bindings, PARTIAL_NAMES)
@@ -1001,6 +1084,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             factories=frozenset(factories),
             log_function_attributes=frozenset(log_function_attributes),
             partial_names=partial_names,
+            module_objects=module_objects,
         )
         for target, value, in_class_body in bindings:
             if _is_factory_reference(value, known):
@@ -1012,12 +1096,14 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             # получатель, и `x.info(…)` — вызов журнала.
             if _is_log_receiver(value, known):
                 changed |= _bind(target, in_class_body, receiver_names, receiver_attributes)
-            # Имя, связанное со ссылкой на вызываемое журнала, читается и последним звеном члена
-            # (`getattr(sys.modules[__name__], "f")(…)`, `X.f(…)`) — плоская область, как имя
-            # `methodcaller` и обёртки носителя (самопроверка исполнителя 16-43, цикл 1): цель-имя
-            # идёт и в атрибуты.
+            # Цель-имя, связанное со ссылкой на вызываемое журнала, идёт в атрибуты только в теле
+            # класса (как до `a77263ad`): имя уровня модуля и функции читается членом только у
+            # объекта модуля (`getattr(sys.modules[__name__], "f")(…)` — ветка члена
+            # `_log_function_reference`), а метод чужого объекта с тем же именем — не журнал:
+            # `fh.write(account.phone)` при `write = print` (ревью WR-29; решение владельца О-20 (а),
+            # свойство 3; план 16-47). Цикл самопроверки 1 плана 16-43 клал сюда `True`.
             if _is_log_callable(value, known):
-                changed |= _bind(target, True, log_functions, log_function_attributes)
+                changed |= _bind(target, in_class_body, log_functions, log_function_attributes)
     # Имена, связанные с вызовом `methodcaller(…)` (и под псевдонимом), — той же общей
     # грамматикой, до неподвижной точки (`emit = mc("info", …)`, `g = emit`). Имя —
     # последнее звено цели (`binding_name`): `self.emit = …` зовут `self.emit(…)`.
@@ -1049,6 +1135,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             (name, call) for name, calls in sorted(methodcallers.items()) for call in calls
         ),
         partial_names=partial_names,
+        module_objects=module_objects,
     )
     return replace(names, carrier_wrappers=_carrier_wrappers(bindings, names))
 
@@ -1153,6 +1240,19 @@ def _methodcaller_calls(
 
 
 def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
+    """Получатель журнала: имя, член или результат вызова, которые гейт признаёт журналом.
+
+    Член (`X.lg`, `getattr(X, "lg")`, с умолчанием) — получатель, если имя подходит под шаблон
+    журнала, связано атрибутом с получателем (`receiver_attributes`), это журнал-атрибут
+    опознанного получателя (`logging.root`, `logger.parent`) — или имя связано В МОДУЛЕ с
+    получателем (`receiver_names`), а владелец — объект модуля (`_is_module_object`):
+    `getattr(sys.modules[__name__], "lg").info(…)`, `sys.modules[__name__].lg`, `me.lg` при
+    `me = sys.modules[__name__]`, поданный носителю или `methodcaller`. До плана 16-47 имя модуля
+    сверялось с `receiver_names` только голым, и номер уходил в журнал мимо гейта на всех деревьях
+    (ревью WR-30; решение владельца О-20 (а), свойство 4). Довод 16-43 «ломает
+    `_log_method_reference` у `logger.log`» относится к плоскому варианту (имя модуля в
+    `receiver_attributes`), а не к сверке по владельцу-модулю.
+    """
     if isinstance(node, ast.Name):
         return _is_logger_name(node.id) or node.id in names.receiver_names
     member = _member(node)
@@ -1161,6 +1261,7 @@ def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES
         return (
             bool(_LOGGER_NAME.search(attribute))
             or attribute in names.receiver_attributes
+            or (attribute in names.receiver_names and _is_module_object(owner, names))
             or (attribute in LOGGER_ATTRIBUTE_LOGGERS and _is_log_receiver(owner, names))
         )
     if isinstance(node, ast.Call):
@@ -2353,6 +2454,63 @@ def test_a_planted_notice_with_a_methodcaller_sharing_a_print_name_reddens_the_g
     )
 
 
+def test_a_planted_trace_through_the_module_object_reddens_the_gate_and_a_file_export_does_not(tmp_path):
+    """WR-29, WR-30 (D-11, D-17): журнал модуля через объект модуля — находка; запись в файл — нет.
+
+    `lg = logging.getLogger(__name__)` на уровне модуля и `getattr(sys.modules[__name__],
+    "lg").info("trace %s", account.phone)` в функции `trace` — форма Фаз 17–20, где журнал модуля
+    читают через объект модуля. До плана 16-47 гейт приватности сверял имя члена с получателями
+    модуля только у голого имени, и форма уходила мимо гейта на всех деревьях, а `logging` печатал
+    номер (ревью WR-30, верификация раунда 9, 2026-10-20). Соседний модуль `phone_export.py`:
+    `write = print` на уровне модуля и `fh.write(account.phone)` — запись номера в файл методом
+    файла; после цикла самопроверки 1 плана 16-43 (коммит `a77263ad`) гейт читал имя модуля,
+    связанное с вызываемым журнала, членом ЛЮБОГО объекта и принимал эту запись за журнал (ревью
+    WR-29; исполнение: номер ушёл в файл, в журнал — ничего). Решение владельца О-20 (а), свойства
+    3 и 4: имя модуля читается членом только у объекта модуля (`sys.modules[__name__]` и имени,
+    связанного с ним), и член объекта модуля, связанный с получателем журнала, — получатель. Место
+    находки — узел номера (строка 8), владелец — функция `trace`. Оба файла находятся тем же обходом
+    `python_sources(root)`, что и живое дерево.
+    """
+    services = tmp_path / "app" / "services"
+    services.mkdir(parents=True)
+    traced = services / "phone_trace.py"
+    traced.write_text(
+        "import logging\n"
+        "import sys\n"
+        "\n"
+        "lg = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "def trace(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("trace %s", account.phone)\n',
+        encoding="utf-8",
+    )
+    exported = services / "phone_export.py"
+    exported.write_text(
+        "write = print\n"
+        "\n"
+        "\n"
+        "def export(fh, account):\n"
+        "    fh.write(account.phone)\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [exported, traced], (
+        "обход синтетического дерева `app` не нашёл ровно два подложенных файла"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert offences == ["app/services/phone_trace.py:8 — имя — phone (владелец trace)"], (
+        "журнал модуля, прочитанный через объект модуля, и запись номера в файл гейт приватности "
+        f"судит не так: гейт обошёл синтетическое дерево ({_render(scans)}) и выдал {offences} — "
+        "ждали одну находку `getattr(sys.modules[__name__], \"lg\").info(…)` и ни одной у "
+        "`fh.write(account.phone)` при `write = print`"
+    )
+    assert python_log_calls(exported.read_text(encoding="utf-8")) == [], (
+        "запись номера в файл методом `fh.write` при `write = print` гейт принял за вызов журнала"
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -3525,6 +3683,115 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-attribute-shares-a-print-name-in-another-class-body",
     ),
+    # Ревью WR-30 (повторное ревью раунда 8, верификация раунда 9, 2026-10-20): получатель журнала,
+    # связанный с именем модуля (`lg = logging.getLogger("x")`) и прочитанный через объект модуля, —
+    # getattr-строкой, с умолчанием, атрибутом, цепочкой, через имя, связанное с объектом модуля,
+    # поданный `methodcaller` и носителю. До плана 16-47 `_is_log_receiver` сверял имя члена с
+    # получателями модуля только у голого имени: `[]` на HEAD, `fb8fef72`, `1c243203`, `2f8c1656`,
+    # `e1d6587e` и `a77263ad`, а `logging` печатал номер («LOG w30 +79991234567»). Решение владельца
+    # О-20 (а), свойство 4: член объекта модуля, чьё имя связано в модуле с получателем журнала, —
+    # получатель при любом чтении (помощник `_is_module_object`, план 16-47).
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-the-module-object-by-a-getattr-string",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg", None).info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-the-module-object-by-a-getattr-string-with-a-default",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    sys.modules[__name__].lg.info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-as-an-attribute-of-the-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    r = getattr(sys.modules[__name__], "lg")\n'
+        '    r.info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-a-getattr-chain-on-the-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        "    me = sys.modules[__name__]\n"
+        '    me.lg.info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-a-bound-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    emit = operator.methodcaller("info", "y %s", account.phone)\n'
+        '    emit(getattr(sys.modules[__name__], "lg"))\n',
+        "phone",
+        id="methodcaller-applied-to-the-module-logger-read-through-the-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import asyncio, logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    asyncio.to_thread(getattr(sys.modules[__name__], "lg").info, "x %s", account.phone)\n',
+        "phone",
+        id="module-logger-method-read-through-the-module-object-handed-to-to-thread",
+    ),
+    # Решение владельца О-22 (а), 2026-10-21: атрибут, связанный в модуле с вызываемым журнала
+    # (`self.out = logger.info` в `__init__`), судится у любого объекта — атрибут, вызванный у
+    # параметра (`a.out(…)`, `a` — экземпляр `A`), гейт ловит и сегодня. Вариант (б) «свой
+    # владелец, параметр без аннотации — в границу» терял эту форму и ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ; строка —
+    # закрепка решения (цена «в сторону лишней находки» названа в шапке, план 16-47).
+    pytest.param(
+        "app/x.py",
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "class A:\n"
+        "    def __init__(self):\n"
+        "        self.out = logger.info\n"
+        "\n"
+        "\n"
+        "def f(a, account):\n"
+        '    a.out("x %s", account.phone)\n',
+        "phone",
+        id="log-callable-attribute-called-on-a-parameter",
+    ),
 ]
 
 # Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
@@ -3825,7 +4092,11 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     `methodcaller-receiver`, а летопись словаря восьмого круга — их, меру «база ↔ HEAD» и число
     находок. С плана 16-46 (ревью CR-04; О-20 (а), свойство 2) — и ось толкований: пункт «ПО
     СВЯЗЫВАНИЮ» называет суд каждого толкования узла, летопись CR-04 — регрессию `a77263ad`,
-    давний класс C5–C7 и решения владельца О-20 (а), О-21 (а).
+    давний класс C5–C7 и решения владельца О-20 (а), О-21 (а). С плана 16-47 (ревью WR-29, WR-30;
+    О-20 (а), свойства 3, 4; О-22 (а)) — и ось объекта модуля: пункт «ПО СВЯЗЫВАНИЮ» называет чтение
+    через `sys.modules[__name__]`, абзац цены строгости — цену атрибута, связанного с вызываемым
+    журнала (решение О-22 (а), рядом с `other.bum(…)` гейта писателя), летописи WR-29 и WR-30 — коммит
+    `a77263ad` и восьмой круг оси «как опознан журнал».
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4055,6 +4326,34 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
             missing.append(f"летопись CR-04 не называет «{needle}»")
     if "каждое толкование" not in " ".join((python_log_calls.__doc__ or "").split()):
         missing.append("докстринг `python_log_calls` не называет суд каждого толкования")
+    # Ось объекта модуля (ревью WR-29, WR-30, верификация раунда 9, 2026-10-20; решения владельца О-20 (а),
+    # свойства 3 и 4, и О-22 (а), 2026-10-21; план 16-47): шапка называет `sys.modules[__name__]`, летописи
+    # WR-29 и WR-30 и решение О-22 (а); пункт «ПО СВЯЗЫВАНИЮ» — чтение через объект модуля; абзац цены
+    # строгости рядом с `log.mark_failed(…)` — решение О-22 (а) и цену `other.bum(…)` гейта писателя; летопись
+    # WR-29 — коммит `a77263ad` и решение О-20 (а), летопись WR-30 — восьмой круг оси «как опознан журнал»;
+    # граница не называет форму WR-30 — она ловится.
+    for needle in ("`sys.modules[__name__]`", "Летопись WR-29", "Летопись WR-30", "О-22 (а)"):
+        if needle not in flat:
+            missing.append(f"нет оси объекта модуля: нет «{needle}»")
+    binding_start = flat.find("ПО СВЯЗЫВАНИЮ")
+    binding_end = flat.find("* ", binding_start + 1)
+    if binding_start < 0 or "объект модуля" not in flat[binding_start:binding_end]:
+        missing.append("пункт «ПО СВЯЗЫВАНИЮ» не называет чтение через объект модуля")
+    cost_start = flat.find("`log.mark_failed(…)`")
+    cost_segment = flat[cost_start : cost_start + 600] if cost_start >= 0 else ""
+    for needle in ("О-22 (а)", "`other.bum(…)`"):
+        if needle not in cost_segment:
+            missing.append(f"абзац цены строгости рядом с `log.mark_failed(…)` не называет «{needle}»")
+    module_name_chronicle = _chronicle_segment(flat, "Летопись WR-29")
+    for needle in ("a77263ad", "WR-29", "О-20 (а)"):
+        if module_name_chronicle and needle not in module_name_chronicle:
+            missing.append(f"летопись WR-29 не называет «{needle}»")
+    module_object_chronicle = _chronicle_segment(flat, "Летопись WR-30")
+    for needle in ("WR-30", "восьм", "как опознан журнал"):
+        if module_object_chronicle and needle not in module_object_chronicle:
+            missing.append(f"летопись WR-30 не называет «{needle}»")
+    if 'getattr(sys.modules[__name__], "lg")' in boundary:
+        missing.append("граница называет чтение получателя через объект модуля, хотя оно ловится")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
@@ -4426,6 +4725,74 @@ POSITIVE_CONTROLS = [
         "    asyncio.to_thread(mc, logger)\n",
         True,
         id="methodcaller-handed-to-a-carrier-whose-name-is-print-without-a-number",
+    ),
+    # Ревью WR-29 (повторное ревью раунда 8, верификация раунда 9, 2026-10-20): имя, связанное в
+    # модуле с вызываемым журнала (`write = print`, `info = logger.info`), — не имя метода чужого
+    # объекта: `fh.write(account.phone)` пишет номер в файл, а не в журнал (исполнение: `FILE-ONLY
+    # '+79991234567'`). Цикл самопроверки 1 плана 16-43 (коммит `a77263ad`) положил такое имя в
+    # атрибуты, и метод любого объекта с этим именем стал вызовом журнала — 0 находок на базах, 1 на
+    # HEAD. Решение владельца О-20 (а), свойство 3: имя модуля читается членом только у объекта модуля
+    # (план 16-47).
+    pytest.param(
+        "app/x.py",
+        "write = print\n\n\ndef export(fh, account):\n    fh.write(account.phone)\n",
+        False,
+        id="print-name-is-not-a-method-of-a-file-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "info = logger.info\n"
+        "\n"
+        "\n"
+        "def keep(messages, account):\n"
+        "    messages.info(account.phone)\n",
+        False,
+        id="log-method-name-is-not-a-method-of-a-message-store",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "emit = logger.info\n"
+        "\n"
+        "\n"
+        "def notify(signal, account):\n"
+        "    signal.emit(account.phone)\n",
+        False,
+        id="log-method-name-is-not-a-method-of-a-signal",
+    ),
+    pytest.param(
+        "app/x.py",
+        "send = print\n\n\ndef deliver(bot, account):\n    bot.send(account.phone)\n",
+        False,
+        id="print-name-is-not-a-method-of-a-bot",
+    ),
+    # Ревью WR-30 (план 16-47): журнал модуля через объект модуля над `account.name` — вызов журнала
+    # без находки; имя модуля, связанное не с журналом (`lg = make_thing()`), прочитанное через
+    # объект модуля, — не вызов журнала.
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("x %s", account.name)\n',
+        True,
+        id="module-logger-read-through-the-module-object-without-a-number",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import sys\n"
+        "lg = make_thing()\n"
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("x %s", account.phone)\n',
+        False,
+        id="non-logger-module-name-read-through-the-module-object",
     ),
 ]
 
