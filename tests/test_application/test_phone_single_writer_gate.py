@@ -2001,7 +2001,19 @@ def _referenced_calls(
     носителю литералом или именем, обёрнутую ещё одним `partial` — здесь не раскрывают:
     её применения находит функция общего модуля `wrapper_applications`, и `_phone_writes`
     судит каждое применение этой же функцией как носитель (ревью CR-03, WR-26; план 16-36).
-    Вызов, имя которого само судимо, судится напрямую и ссылкой не разбирается.
+    Судится КАЖДОЕ толкование вызова (свойство 2 О-20 на оси носителя; план 16-48): вызов,
+    имя которого само судимо — пишущий API или его псевдоним в модуле (`to_thread =
+    setattr`), — судится напрямую (`_canonical_call`) И как носитель поданной ссылки
+    (`asyncio.to_thread(set_committed_value, account, "phone", x)`); у вызова псевдонима
+    `partial` к применениям псевдонима добавляется путь носителя (`run =
+    functools.partial(setattr, other)` и `contextvars.copy_context().run(set_committed_value,
+    …)`); применённая обёртка, чьё имя `partial` связано в модуле с пишущим API (`partial =
+    setattr`), — тоже обёртка носителя, а не только применение судимого вызова. Ранний
+    возврат остаётся у `getattr` (его судит применение) и у `methodcaller` (судится у
+    себя). Толкования одного вызова — одно место: повтор снимает прежняя дедупликация
+    `_phone_writes` по (строка, столбец). До плана 16-48 толкование псевдонима закрывало путь
+    носителя, и поданная ссылка проходила гейт на всех деревьях (замер планирования
+    девятого прогона; семейство (к6) сверки 16-46).
     Ссылка, за которой стоит несколько связываний (`partial_aliases` многозначна — ревью
     WR-18, план 16-31), даёт синтетический вызов на КАЖДОЕ; находки одного места
     дедуплицирует `_phone_writes`.
@@ -2040,10 +2052,12 @@ def _referenced_calls(
             )
             if referenced in judged_names
         ]
-        if applications:
-            return applications
-    if name in judged_names or name == "getattr":
-        return []
+    else:
+        applications = []
+    # Ранний возврат — только у `getattr`; судимое имя и псевдоним `partial` судятся ещё и
+    # как носитель поданной ссылки (план 16-48).
+    if name == "getattr":
+        return applications
 
     def bounds_of(node: ast.expr) -> list[BoundReference]:
         # Предикат ссылки — гейта: узел через `_bound_reference` называет судимый API.
@@ -2054,8 +2068,14 @@ def _referenced_calls(
         ]
 
     def carried_writes(carrier: ast.Call) -> list[tuple[ast.Call, str, ast.expr | None]]:
-        # Применение судимого вызова (`values(…)(…)`) — не подача ссылки.
-        if isinstance(carrier.func, ast.Call) and _call_name(carrier.func) in judged_names:
+        # Применение судимого вызова (`values(…)(…)`) — не подача ссылки. Применённый
+        # `partial(…)(…)` — обёртка носителя и тогда, когда имя `partial` связано в модуле с
+        # пишущим API (`partial = setattr`): каждое толкование вызова судится (план 16-48).
+        if (
+            isinstance(carrier.func, ast.Call)
+            and _call_name(carrier.func) in judged_names
+            and _call_name(carrier.func) not in partial_names
+        ):
             return []
         return [
             (
@@ -2074,7 +2094,7 @@ def _referenced_calls(
             for referenced, func, bound_args, bound_keywords in bounds_of(carried.reference)
         ]
 
-    return carried_writes(call)
+    return applications + carried_writes(call)
 
 
 def _is_concatenation(node: ast.AST) -> bool:
