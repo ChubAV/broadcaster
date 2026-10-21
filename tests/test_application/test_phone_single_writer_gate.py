@@ -4649,7 +4649,9 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     суд каждого толкования вызова, летопись WR-31 — закрепку дефекта мерой 16-44 и переклассификацию
     `REPAIRED`, абзац цены — коллизию имени носителя. С плана 16-49 (ревью CR-04, WR-30; О-20 (а), свойство 6) — и
     словарь девятого круга: шапка называет формы коллизии видов (`collision-module`) и чтения через объект модуля
-    (`module-object-getattr`).
+    (`module-object-getattr`), значение `receiver`, носитель `carrier-name-bound-to-a-rival` и летопись словаря
+    девятого круга (ревью IN-21, О-20 (а), свойство 7), а абзац цены строгости — названную цену `kw_ext` с решением
+    владельца 2026-10-21 и строками `NAMED_COST_CASES`.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4858,6 +4860,21 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("`receiver`", "`carrier-name-bound-to-a-rival`"):
         if needle not in flat:
             missing.append(f"нет значения или носителя словаря девятого круга: нет «{needle}»")
+    # Итог партии раунда 9 (ревью IN-21; решения владельца О-20 (а), свойство 7, О-21 (а); план 16-49): летопись словаря
+    # девятого круга есть; её места держит правило-паритет `test_the_dictionary_chronicles_name_what_the_measure_compared`.
+    if not _chronicle_segment(flat, "Летопись словаря девятого круга"):
+        missing.append("нет «Летопись словаря девятого круга»")
+    # Названная цена `kw_ext` (решение владельца 2026-10-21, «Принять как цену»): абзац цены строгости называет пару kw
+    # (`functools.partial(setattr, other)` и `methodcaller("__set__", …)`), её расширение на ось носителя, решение
+    # владельца с датой и строки `NAMED_COST_CASES`, которые закрепляют число; «вынесено владельцу» в шапке больше нет.
+    price_at = flat.find("Цена — в сторону лишней находки")
+    price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_at)
+    price_text = flat[price_at:price_end] if 0 <= price_at < price_end else ""
+    for needle in ("`kw_ext`", "`functools.partial(setattr, other)`", "2026-10-21", "Принять как цену", "`NAMED_COST_CASES`"):
+        if needle not in price_text:
+            missing.append(f"абзац цены строгости не называет решение владельца о `kw_ext`: нет «{needle}»")
+    if "вынесено владельцу" in flat:
+        missing.append("шапка всё ещё называет расширение цены kw вынесенным владельцу («вынесено владельцу»)")
     # Место записи через получатель и суд каждого толкования вызова (ревью WR-31, верификация раунда 9;
     # решение владельца О-20 (а), свойства 2 и 5; план 16-48): шапка называет узел получателя и суд каждого
     # толкования вызова; летопись WR-31 — меру 16-44, её ожидание `exact 1` и `REPAIRED` против `2f8c1656`,
@@ -7513,6 +7530,54 @@ def test_the_writer_place_count_rule_reddens_a_receiver_write_merged_by_subject(
         + ", ".join(unseen)
     )
     assert not wrong, "число находок строк WR-31 не равно числу мест: " + "; ".join(wrong)
+
+
+# Названная цена `kw_ext` (решение владельца 2026-10-21, «Принять как цену»; расширение на ось носителя цены kw —
+# свойство 8 О-20): пишущий API соперника, связанный с последним именем носителя (`to_thread = setattr`), и ссылка
+# `operator.methodcaller("__set__", account, x)`, поданная носителю с получателем-колонкой, — две находки на одном узле
+# колонки при ОДНОЙ записи (`setattr(…, MessengerAccount.phone, …)` и `MessengerAccount.phone.__set__(…)`; улика
+# исполнения 16-48 и 16-49: одно событие `set` колонки). Строка на каждый API соперника, дающий пару (`setattr`,
+# `set_committed_value`, `flag_modified`; `update` и `functools.partial(setattr, other)` пары не дают). Число находок —
+# `NAMED_COST_FINDINGS`, а не число мест (`LITERAL_FORM_PLACES` — узлы колонки, здесь он один): правка гейта, меняющая
+# число этих строк, — видимое решение, а не тихая смена. Это закрепка цены, а не заявление: в корпусе сверки строки
+# судятся ожиданием «одно место» с допустимым числом цены 2 (`cost` `kw_ext`).
+NAMED_COST_FINDINGS = 2
+NAMED_COST_CASES = [
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import flag_modified, set_committed_value\n"
+        f"to_thread = {rival}\n"
+        'f = operator.methodcaller("__set__", account, x)\n'
+        "asyncio.to_thread(f, MessengerAccount.phone)\n",
+        rival,
+        id=f"kw-ext-{rival.replace('_', '-')}-under-a-carrier-name-and-a-receiver-methodcaller",
+    )
+    for rival in ("setattr", "set_committed_value", "flag_modified")
+]
+
+
+@pytest.mark.parametrize(("source", "rival"), NAMED_COST_CASES)
+def test_a_named_cost_form_gives_its_named_count(source, rival):
+    """Строка названной цены `kw_ext` даёт ровно `NAMED_COST_FINDINGS` находок на одном узле колонки (решение владельца).
+
+    Обе находки — на строке подачи (один узел колонки `MessengerAccount.phone` в исходнике — одна запись): одна
+    называет соперника под именем носителя (`<соперник>(…, MessengerAccount.phone, …)`), другая — дескриптор колонки
+    (`MessengerAccount.phone.__set__(…)`). Починка, сводящая пару к одной находке, и рост числа — оба видимы: строка
+    краснеет, и решение владельца 2026-10-21 пересматривается явно.
+    """
+    offences = phone_write_offences(source, "scripts/x.py")
+    assert source.count("MessengerAccount.phone") == 1, "строка цены несёт не один узел колонки"
+    assert len(offences) == NAMED_COST_FINDINGS, (
+        f"строка названной цены `kw_ext` (соперник `{rival}`): находок {len(offences)}, названная цена — "
+        f"{NAMED_COST_FINDINGS}: {offences}"
+    )
+    places = {offence.split(" — ", 1)[0] for offence in offences}
+    subjects = sorted(offence.split(" — ", 2)[2] for offence in offences)
+    assert len(places) == 1, f"находки названной цены не на одном месте: {offences}"
+    assert subjects == sorted([f"{rival}(…, MessengerAccount.phone, …)", "MessengerAccount.phone.__set__(…)"]), (
+        f"находки названной цены `kw_ext` называют не соперника и дескриптор колонки: {offences}"
+    )
 
 
 LEGITIMATE_CASES = [

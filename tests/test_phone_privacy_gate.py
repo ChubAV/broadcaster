@@ -4124,7 +4124,8 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     журнала (решение О-22 (а), рядом с `other.bum(…)` гейта писателя), летописи WR-29 и WR-30 — коммит
     `a77263ad` и восьмой круг оси «как опознан журнал». С плана 16-49 (ревью CR-04, WR-30; О-20 (а), свойство 6) — и
     словарь девятого круга: шапка называет формы коллизии видов (`collision-module`) и чтения через объект модуля
-    (`module-object-getattr`).
+    (`module-object-getattr`), значение `receiver`, носитель `carrier-name-bound-to-a-rival` и летопись словаря
+    девятого круга (ревью IN-21, О-20 (а), свойство 7).
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4350,6 +4351,10 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("`receiver`", "`carrier-name-bound-to-a-rival`"):
         if needle not in flat:
             missing.append(f"нет значения или носителя словаря девятого круга: нет «{needle}»")
+    # Итог партии раунда 9 (ревью IN-21; решения владельца О-20 (а), свойство 7, О-21 (а); план 16-49): летопись словаря
+    # девятого круга есть; её места держит правило-паритет `test_the_dictionary_chronicles_name_what_the_measure_compared`.
+    if not _chronicle_segment(flat, "Летопись словаря девятого круга"):
+        missing.append("нет «Летопись словаря девятого круга»")
     # Ось толкований (ревью CR-04, верификация раунда 9, 2026-10-20; решение владельца О-20 (а),
     # свойство 2; план 16-46): пункт «ПО СВЯЗЫВАНИЮ» называет суд каждого толкования узла, летопись
     # CR-04 — регрессию `a77263ad` против родителя `e1d6587e` и базы партии `fb8fef72`, давний класс
