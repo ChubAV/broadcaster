@@ -4060,7 +4060,11 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     `methodcaller-receiver`, а летопись словаря восьмого круга — их, меру «база ↔ HEAD» и число
     находок. С плана 16-46 (ревью CR-04; О-20 (а), свойство 2) — и ось толкований: пункт «ПО
     СВЯЗЫВАНИЮ» называет суд каждого толкования узла, летопись CR-04 — регрессию `a77263ad`,
-    давний класс C5–C7 и решения владельца О-20 (а), О-21 (а).
+    давний класс C5–C7 и решения владельца О-20 (а), О-21 (а). С плана 16-47 (ревью WR-29, WR-30;
+    О-20 (а), свойства 3, 4; О-22 (а)) — и ось объекта модуля: пункт «ПО СВЯЗЫВАНИЮ» называет чтение
+    через `sys.modules[__name__]`, абзац цены строгости — цену атрибута, связанного с вызываемым
+    журнала (решение О-22 (а), рядом с `other.bum(…)` гейта писателя), летописи WR-29 и WR-30 — коммит
+    `a77263ad` и восьмой круг оси «как опознан журнал».
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4290,6 +4294,34 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
             missing.append(f"летопись CR-04 не называет «{needle}»")
     if "каждое толкование" not in " ".join((python_log_calls.__doc__ or "").split()):
         missing.append("докстринг `python_log_calls` не называет суд каждого толкования")
+    # Ось объекта модуля (ревью WR-29, WR-30, верификация раунда 9, 2026-10-20; решения владельца О-20 (а),
+    # свойства 3 и 4, и О-22 (а), 2026-10-21; план 16-47): шапка называет `sys.modules[__name__]`, летописи
+    # WR-29 и WR-30 и решение О-22 (а); пункт «ПО СВЯЗЫВАНИЮ» — чтение через объект модуля; абзац цены
+    # строгости рядом с `log.mark_failed(…)` — решение О-22 (а) и цену `other.bum(…)` гейта писателя; летопись
+    # WR-29 — коммит `a77263ad` и решение О-20 (а), летопись WR-30 — восьмой круг оси «как опознан журнал»;
+    # граница не называет форму WR-30 — она ловится.
+    for needle in ("`sys.modules[__name__]`", "Летопись WR-29", "Летопись WR-30", "О-22 (а)"):
+        if needle not in flat:
+            missing.append(f"нет оси объекта модуля: нет «{needle}»")
+    binding_start = flat.find("ПО СВЯЗЫВАНИЮ")
+    binding_end = flat.find("* ", binding_start + 1)
+    if binding_start < 0 or "объект модуля" not in flat[binding_start:binding_end]:
+        missing.append("пункт «ПО СВЯЗЫВАНИЮ» не называет чтение через объект модуля")
+    cost_start = flat.find("`log.mark_failed(…)`")
+    cost_segment = flat[cost_start : cost_start + 600] if cost_start >= 0 else ""
+    for needle in ("О-22 (а)", "`other.bum(…)`"):
+        if needle not in cost_segment:
+            missing.append(f"абзац цены строгости рядом с `log.mark_failed(…)` не называет «{needle}»")
+    module_name_chronicle = _chronicle_segment(flat, "Летопись WR-29")
+    for needle in ("a77263ad", "WR-29", "О-20 (а)"):
+        if module_name_chronicle and needle not in module_name_chronicle:
+            missing.append(f"летопись WR-29 не называет «{needle}»")
+    module_object_chronicle = _chronicle_segment(flat, "Летопись WR-30")
+    for needle in ("WR-30", "восьм", "как опознан журнал"):
+        if module_object_chronicle and needle not in module_object_chronicle:
+            missing.append(f"летопись WR-30 не называет «{needle}»")
+    if 'getattr(sys.modules[__name__], "lg")' in boundary:
+        missing.append("граница называет чтение получателя через объект модуля, хотя оно ловится")
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
