@@ -4834,6 +4834,11 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("`collision-module`", "`module-object-getattr`"):
         if needle not in flat:
             missing.append(f"нет форм словаря девятого круга: нет «{needle}»")
+    # Значение и носители словаря девятого круга (план 16-49): значение-получатель `receiver` и носитель, чьё последнее
+    # имя связано с соперником.
+    for needle in ("`receiver`", "`carrier-name-bound-to-a-rival`"):
+        if needle not in flat:
+            missing.append(f"нет значения или носителя словаря девятого круга: нет «{needle}»")
     # Место записи через получатель и суд каждого толкования вызова (ревью WR-31, верификация раунда 9;
     # решение владельца О-20 (а), свойства 2 и 5; план 16-48): шапка называет узел получателя и суд каждого
     # толкования вызова; летопись WR-31 — меру 16-44, её ожидание `exact 1` и `REPAIRED` против `2f8c1656`,

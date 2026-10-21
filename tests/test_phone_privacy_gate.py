@@ -4332,6 +4332,11 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("`collision-module`", "`module-object-getattr`"):
         if needle not in flat:
             missing.append(f"нет форм словаря девятого круга: нет «{needle}»")
+    # Значение и носители словаря девятого круга (план 16-49): значение-получатель `receiver` и носитель, чьё последнее
+    # имя связано с соперником.
+    for needle in ("`receiver`", "`carrier-name-bound-to-a-rival`"):
+        if needle not in flat:
+            missing.append(f"нет значения или носителя словаря девятого круга: нет «{needle}»")
     # Ось толкований (ревью CR-04, верификация раунда 9, 2026-10-20; решение владельца О-20 (а),
     # свойство 2; план 16-46): пункт «ПО СВЯЗЫВАНИЮ» называет суд каждого толкования узла, летопись
     # CR-04 — регрессию `a77263ad` против родителя `e1d6587e` и базы партии `fb8fef72`, давний класс

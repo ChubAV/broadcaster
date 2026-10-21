@@ -76,9 +76,13 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   раунда 9; решение владельца О-20 (а), свойство 6; план 16-49): пять форм коллизии видов (`collision-module` и
   соседи: одно последнее имя связано с соперником другого вида — поле `IdentificationValue.rival`, у приватности
   вызываемое журнала, у писателя пишущий API, — и со значением опознания) и три формы чтения через объект модуля
-  (`module-object-getattr` и соседи), соперник у каждого значения обоих гейтов, — так что возврат закрытия
-  толкований после опознанного вызова (класс CR-04) и потеря получателя, прочитанного через объект модуля (класс
-  WR-30), краснят матрицы и правило-паритет.
+  (`module-object-getattr` и соседи), соперник у каждого значения обоих гейтов, значение `receiver` (связанное имя
+  — получатель, применение — его метод, поле `IdentificationValue.method`) на одной позиции у обоих гейтов с API
+  `__setattr__` в таблице `API_IDENTIFICATION_CALLS` и носители `carrier-name-bound-to-a-rival` /
+  `executor-name-bound-to-a-rival` (последнее имя вызова носителя связано с соперником), — так что возврат закрытия
+  толкований после опознанного вызова (класс CR-04), потеря получателя, прочитанного через объект модуля (класс
+  WR-30), и толкование псевдонима, закрывающее путь носителя (коллизия имени носителя), краснят матрицы и
+  правило-паритет.
 * Место значения `partial` (`test_the_partial_value_place_is_pinned_by_a_privacy_row`, ревью
   IN-20, решение владельца О-19, план 16-43): у `partial` с одним позиционным аргументом (номером)
   места `last` нет по выбору словаря — его ячейка `map-named-iterable` равна ячейке `map`, — и
@@ -610,6 +614,69 @@ def _round_nine_rival_problems() -> list[str]:
     return problems
 
 
+# Значение и носители словаря девятого круга (ревью WR-30, CR-04 / KC; решение владельца О-20 (а), свойство 6;
+# план 16-49): значение, у которого связанное имя — получатель, а применение — его метод, и носители, чьё последнее
+# имя вызова связано в модуле с соперником.
+ROUND_NINE_VALUE = "receiver"
+ROUND_NINE_METHODS = {"writer": "__setattr__", "privacy": "info"}
+ROUND_NINE_CARRIERS = {"carrier-name-bound-to-a-rival": "to_thread", "executor-name-bound-to-a-rival": "run_in_executor"}
+
+
+def _round_nine_value_problems() -> list[str]:
+    """Чем словарь не держит значение `receiver`, поле `method` и носители с соперником под своим именем."""
+    problems: list[str] = []
+    writer_ids = [value.id for value in writer.API_IDENTIFICATION_VALUES]
+    privacy_ids = [value.id for value in privacy.LOG_IDENTIFICATION_VALUES]
+    for side, ids in (("писателя", writer_ids), ("приватности", privacy_ids)):
+        if not ids or ids[-1] != ROUND_NINE_VALUE:
+            problems.append(f"у гейта {side} значение `{ROUND_NINE_VALUE}` — не последнее значение опознания: {ids}")
+    direct = next(form for form in grammar.BINDING_FORMS if form.id == "direct")
+    for side, gate, values in (
+        ("writer", "писателя", writer.API_IDENTIFICATION_VALUES),
+        ("privacy", "приватности", privacy.LOG_IDENTIFICATION_VALUES),
+    ):
+        value = next((value for value in values if value.id == ROUND_NINE_VALUE), None)
+        if value is None:
+            continue
+        method = getattr(value, "method", "")
+        if method != ROUND_NINE_METHODS[side]:
+            problems.append(f"метод значения `{ROUND_NINE_VALUE}` гейта {gate} — `{method}`, ожидался "
+                            f"`{ROUND_NINE_METHODS[side]}` (`IdentificationValue.method`)")
+        applied = ast.parse(f"f{value.call}", mode="eval").body
+        arguments = [ast.unparse(argument) for argument in applied.args]
+        if side == "privacy":
+            if not privacy._is_factory_call(ast.parse(value.value, mode="eval").body):
+                problems.append(f"значение `{ROUND_NINE_VALUE}` гейта приватности — не вызов фабрики журнала: `{value.value}`")
+            if not any("phone" in argument for argument in arguments):
+                problems.append(f"номер значения `{ROUND_NINE_VALUE}` гейта приватности не в аргументах применения: {value.call}")
+        elif "'phone'" not in arguments and '"phone"' not in arguments:
+            problems.append(f"колонка `\"phone\"` значения `{ROUND_NINE_VALUE}` гейта писателя не в аргументах применения: "
+                            f"{value.call}")
+        source = grammar.binding_form_source(direct, value, None)
+        if f".{ROUND_NINE_METHODS[side]}(" not in source:
+            problems.append(f"ячейка прямого вызова значения `{ROUND_NINE_VALUE}` гейта {gate} не зовёт метод: {source!r}")
+    calls = getattr(writer, "API_IDENTIFICATION_CALLS", {})
+    if calls.get(ROUND_NINE_VALUE) != ROUND_NINE_METHODS["writer"]:
+        problems.append(f"`API_IDENTIFICATION_CALLS` у `{ROUND_NINE_VALUE}` — {calls.get(ROUND_NINE_VALUE)!r}, ожидалось "
+                        f"`{ROUND_NINE_METHODS['writer']}`")
+    carriers = {carrier.id: carrier for carrier in grammar.REFERENCE_CARRIERS}
+    for carrier_id, name in ROUND_NINE_CARRIERS.items():
+        carrier = carriers.get(carrier_id)
+        if carrier is None:
+            problems.append(f"в `REFERENCE_CARRIERS` нет строки `{carrier_id}`")
+            continue
+        template = carrier.template.replace("{rival}", "RIVAL_PROBE")
+        tree = ast.parse(template.format(ref="REF", args="A", positional="A", keywords="{}"))
+        bound = _bound_names(tree, "RIVAL_PROBE")
+        called = {
+            grammar.reading_name(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)
+        }
+        if name not in bound or name not in called:
+            problems.append(f"шаблон `{carrier_id}` не связывает последнее имя вызова носителя `{name}` с `{{rival}}`: "
+                            f"`{carrier.template}`")
+    return problems
+
+
 def test_the_shared_dictionary_holds_the_round_nine_axes():
     """Словарь матриц и паритета держит оси девятого круга: коллизию видов и чтение через объект модуля.
 
@@ -624,9 +691,15 @@ def test_the_shared_dictionary_holds_the_round_nine_axes():
     модуля (`module-object-getattr`, `module-object-attribute`, `module-object-bound`) — ссылка читает имя значения
     через `sys.modules[__name__]` или имя, связанное с ним; (в) соперника у КАЖДОГО значения обоих гейтов
     (`IdentificationValue.rival`): у приватности — вызываемое журнала, у писателя — пишущий API
-    (`WRITE_CALL_NAMES` или `JUDGED_PARAMETERS`). Решение владельца О-20 (а), свойство 6; план 16-49.
+    (`WRITE_CALL_NAMES` или `JUDGED_PARAMETERS`); (г) значение `receiver` у обоих гейтов на последней позиции —
+    связанное имя получатель, применение — его метод (`IdentificationValue.method`): у приватности вызов фабрики
+    журнала с методом `info` и номером в аргументах применения, у писателя `__setattr__` с колонкой `"phone"` в
+    аргументах; ячейка прямого вызова зовёт метод; `API_IDENTIFICATION_CALLS["receiver"]` — `__setattr__`; (д) строки
+    `REFERENCE_CARRIERS` `carrier-name-bound-to-a-rival` и `executor-name-bound-to-a-rival`: шаблон связывает
+    последнее имя вызова носителя (`to_thread`, `run_in_executor`) с `{rival}`. Решение владельца О-20 (а), свойство
+    6; план 16-49.
     """
-    problems = _round_nine_form_problems() + _round_nine_rival_problems()
+    problems = _round_nine_form_problems() + _round_nine_rival_problems() + _round_nine_value_problems()
 
     assert not problems, "словарь матриц и паритета не держит ось девятого круга:\n" + "\n".join(
         f"  {problem}" for problem in problems
