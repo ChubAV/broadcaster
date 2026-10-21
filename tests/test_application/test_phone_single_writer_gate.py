@@ -3268,8 +3268,15 @@ def test_a_planted_backfill_with_a_methodcaller_read_by_a_getattr_string_reddens
     WR-28, верификация раунда 8, 2026-10-19: SQLite записал `+71`). Решение владельца
     О-18 (а), свойство 2: имя читает один общий читатель `reading_name` везде, где
     читается имя связанного. Подложенный файл находится тем же обходом, что и живое
-    дерево; место находки — строка связывания `self.apply = …`: находка вида 4 у
-    `methodcaller` стоит на самом `methodcaller`, как у чтения атрибутом.
+    дерево; место находки — узел получателя в применении
+    `getattr(self, "apply")(MessengerAccount.phone)`, строка 11: там колонка и названа.
+
+    Летопись места: до плана 16-48 трасер закреплял строку связывания `self.apply = …`
+    (строка 8) — находку вида 4 гейт ставил на сам литерал `methodcaller`, и две подачи
+    колонки через получатель сливались в одну находку (ревью WR-31, верификация раунда 9);
+    решение владельца О-20 (а), свойство 5: запись через получатель стоит на узле
+    получателя в применении. Смена закрепки запланирована планом 16-48, а не подогнана
+    под выход гейта.
     """
     _plant(
         tmp_path,
@@ -3302,11 +3309,61 @@ def test_a_planted_backfill_with_a_methodcaller_read_by_a_getattr_string_reddens
     assert len(in_file) == 1, (
         f"у подложенного скрипта не ровно одна находка — одно место, одна запись: {in_file}"
     )
-    assert in_file[0].startswith(f"scripts/backfill_descriptor.py:8 — {KIND_SETATTR} — "), (
-        f"находка не на строке связывания `self.apply = …` или не вида «{KIND_SETATTR}»: {in_file}"
+    assert in_file[0].startswith(f"scripts/backfill_descriptor.py:11 — {KIND_SETATTR} — "), (
+        "находка не на узле получателя в применении `getattr(self, 'apply')(MessengerAccount.phone)` "
+        f"(строка 11) или не вида «{KIND_SETATTR}»: {in_file}"
     )
     assert "__set__" in in_file[0] and "phone" in in_file[0], (
         f"предмет находки не называет `__set__` и колонку `phone`: {in_file}"
+    )
+
+
+def test_a_planted_backfill_with_two_receiver_writes_reddens_the_gate_twice(tmp_path):
+    """ТРАСЕР WR-31: один применитель номера в атрибуте, вызванный в двух методах, — две находки.
+
+    Скрипт дозаполнения Фазы 20 держит применитель номера атрибутом объекта —
+    `self.apply = operator.methodcaller("__set__", account, number)` в `__init__` — и
+    применяет его к колонке в двух методах: `self.apply(MessengerAccount.phone)` в `first` и
+    `getattr(self, "apply")(MessengerAccount.phone)` в `second`. Это две записи колонки на
+    двух местах. До плана 16-48 гейт ставил запись через получатель `methodcaller` на сам
+    литерал `methodcaller`, а место — (строка, столбец, вид), и обе подачи сливались в одну
+    находку на строке связывания: автор, поправивший `first`, не узнал бы о `second` (ревью
+    WR-31, верификация раунда 9, 2026-10-20). Решение владельца О-20 (а), свойство 5: запись
+    через получатель стоит на узле получателя в применении — там колонка и названа. Подложенный
+    файл находится тем же обходом, что и живое дерево.
+    """
+    _plant(
+        tmp_path,
+        "scripts/backfill_receiver_twice.py",
+        "import operator\n"
+        "\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "\n"
+        "\n"
+        "class ReceiverBackfill:\n"
+        "    def __init__(self, account, number):\n"
+        '        self.apply = operator.methodcaller("__set__", account, number)\n'
+        "\n"
+        "    def first(self):\n"
+        "        self.apply(MessengerAccount.phone)\n"
+        "\n"
+        "    def second(self):\n"
+        '        getattr(self, "apply")(MessengerAccount.phone)\n',
+    )
+
+    sources, offences = tree_offences(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in sources] == [
+        "scripts/backfill_receiver_twice.py"
+    ], "обход синтетического дерева не нашёл подложенный файл в `scripts/`"
+    in_file = [offence for offence in offences if offence.startswith("scripts/backfill_receiver_twice.py:")]
+    expected = [
+        f"scripts/backfill_receiver_twice.py:{line} — {KIND_SETATTR} — MessengerAccount.phone.__set__(…)"
+        for line in (11, 14)
+    ]
+    assert in_file == expected, (
+        "две подачи колонки через получатель `methodcaller` в двух методах — не две находки на "
+        f"строках применений: {in_file}"
     )
 
 
@@ -7096,22 +7153,172 @@ LITERAL_FORM_CASES = [
         "phone",
         id="descriptor-alias-chained-through-a-getattr-string",
     ),
+    # Ревью WR-31 (верификация раунда 9, 2026-10-20; решение владельца О-20 (а), свойства 1 и 5):
+    # запись через получатель `methodcaller` — `f(MessengerAccount.phone)` — называет колонку в
+    # применении, и две подачи колонки — два места. Гейт ставил запись на сам литерал
+    # `methodcaller`, и обе подачи сливались в одну находку на строке связывания; мера плана
+    # 16-44 закрепила слияние ожиданием `exact 1` у ячеек D2 `methodcaller-receiver` и записала
+    # потерю второй подачи против `2f8c1656` в `REPAIRED`. Число мест строк — `LITERAL_FORM_PLACES`.
+    # Контроль: колонка литералом в аргументах `methodcaller` — один узел колонки, одна находка
+    # при любом числе применений.
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        'f = operator.methodcaller("__set__", account, x)\n'
+        "f(MessengerAccount.phone)\n"
+        "f(MessengerAccount.phone)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-receiver-applied-twice-on-two-lines",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        'f = operator.methodcaller("__set__", account, x)\n'
+        "f(MessengerAccount.phone); f(MessengerAccount.phone)\n",
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-receiver-applied-twice-on-one-line",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        "class K:\n"
+        "    def __init__(self):\n"
+        '        self.f = operator.methodcaller("__set__", account, x)\n'
+        "    def go(self):\n"
+        '        getattr(self, "f")(MessengerAccount.phone)\n'
+        "    async def go2(self):\n"
+        '        await asyncio.to_thread(getattr(self, "f"), MessengerAccount.phone)\n',
+        KIND_SETATTR,
+        "__set__",
+        "phone",
+        id="methodcaller-receiver-read-by-a-getattr-string-in-two-methods",
+    ),
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import set_committed_value\n"
+        'f = operator.methodcaller("set_committed_value", account, "phone", x)\n'
+        "f(attributes)\n"
+        "f(attributes)\n",
+        KIND_SETATTR,
+        "set_committed_value",
+        "phone",
+        id="methodcaller-literal-column-applied-twice",
+    ),
 ]
+
+# Число мест строк `LITERAL_FORM_CASES`, у которых мест не одно или одно названо явно (ревью
+# WR-31, решение владельца О-20 (а), свойство 1: «таблице писателя нужно явное число мест, как у
+# `NEGATIVE_CONTROL_PLACES` приватности»). Место — узел колонки в исходнике строки: колонка,
+# названная в применении получателем `methodcaller` (`f(MessengerAccount.phone)`), или литерал
+# колонки в аргументах самого `methodcaller`. Число выведено ЧТЕНИЕМ исходника, а не прогоном
+# гейта: правило строк сверяет с ним число находок, и слияние находок строки по «вид, предмет»
+# (класс WR-31) его краснит. Строка, не названная здесь, — одно место.
+LITERAL_FORM_PLACES: dict[str, int] = {
+    # Две подачи колонки через получатель — два узла колонки (ревью WR-31).
+    "methodcaller-receiver-applied-twice-on-two-lines": 2,
+    "methodcaller-receiver-applied-twice-on-one-line": 2,
+    "methodcaller-receiver-read-by-a-getattr-string-in-two-methods": 2,
+    # Колонка литералом в аргументах `methodcaller` — один узел при двух применениях: явная
+    # строка, а не умолчание.
+    "methodcaller-literal-column-applied-twice": 1,
+}
+
+WR31_ROWS = (
+    "methodcaller-receiver-applied-twice-on-two-lines",
+    "methodcaller-receiver-applied-twice-on-one-line",
+    "methodcaller-receiver-read-by-a-getattr-string-in-two-methods",
+)
+
+
+def literal_place_count_mismatch(row_id: str, offences: list[str]) -> str | None:
+    """Расхождение числа находок строки `LITERAL_FORM_CASES` с числом её мест или `None`.
+
+    Ожидаемое число мест — `LITERAL_FORM_PLACES` (у строки, не названной там, — одно). Правило
+    счёта сверяет число находок с числом мест — узлов колонки, — а не «ровно одну находку»,
+    которая закрепляла слияние двух подач (ревью WR-31, решение владельца О-20 (а), свойство 1).
+    """
+    expected = LITERAL_FORM_PLACES.get(row_id, 1)
+    if len(offences) == expected:
+        return None
+    return f"строка `{row_id}`: мест {expected}, находок {len(offences)}"
 
 
 @pytest.mark.parametrize(("source", "kind", "call", "column"), LITERAL_FORM_CASES)
-def test_a_literal_write_form_is_a_write(source, kind, call, column):
+def test_a_literal_write_form_is_a_write(source, kind, call, column, request):
     offences = phone_write_offences(source, "app/x.py")
 
-    assert len(offences) == 1, (
-        f"литеральная форма записи `{call}(… {column} …)` дала {len(offences)} "
-        f"находок вместо одной: {offences}"
+    # Одно место — одна находка в обе стороны (ревью WR-31, решение владельца О-20 (а), свойства
+    # 1 и 5): число находок строки равно числу её мест — узлов колонки (`LITERAL_FORM_PLACES`).
+    mismatch = literal_place_count_mismatch(request.node.callspec.id, offences)
+    assert mismatch is None, (
+        f"литеральная форма записи `{call}(… {column} …)`: число находок не равно числу мест: "
+        f"{mismatch}: {offences}"
     )
-    _location, found_kind, subject = offences[0].split(" — ", 2)
-    assert found_kind == kind, f"вид находки «{found_kind}», ожидался «{kind}»: {offences}"
-    assert call in subject and column in subject, (
-        f"предмет находки не называет вызов `{call}` и колонку `{column}`: {offences}"
+    for offence in offences:
+        _location, found_kind, subject = offence.split(" — ", 2)
+        assert found_kind == kind, f"вид находки «{found_kind}», ожидался «{kind}»: {offences}"
+        assert call in subject and column in subject, (
+            f"предмет находки не называет вызов `{call}` и колонку `{column}`: {offences}"
+        )
+
+
+def _merged_by_kind_and_subject(offences: list[str]) -> list[str]:
+    """Находки, слитые по «вид, предмет» без места, — класс WR-31 (две подачи — одна находка)."""
+    seen: set[str] = set()
+    merged: list[str] = []
+    for offence in offences:
+        _location, kind_and_subject = offence.split(" — ", 1)
+        if kind_and_subject in seen:
+            continue
+        seen.add(kind_and_subject)
+        merged.append(offence)
+    return merged
+
+
+def test_the_writer_place_count_rule_reddens_a_receiver_write_merged_by_subject():
+    """Правило счёта писателя видит класс WR-31: слияние находок строки по «вид, предмет» его краснит.
+
+    Ревью WR-31 (верификация раунда 9, 2026-10-20): правило строк требовало «ровно одну
+    находку» и закрепляло слияние двух подач колонки через получатель `methodcaller` в одну
+    находку на строке связывания. Контроль: (а) таблица мест называет только строки
+    `LITERAL_FORM_CASES`, числа не меньше 1, у трёх строк WR-31 — 2, у контроля литерала — 1;
+    (б) выход гейта на строках WR-31, слитый по «вид, предмет», даёт расхождение на каждой —
+    правило видит класс WR-31; (в) настоящий выход тех же строк расхождения не даёт. Решение
+    владельца О-20 (а), свойства 1 и 5; образец — правило счёта гейта приватности
+    `test_the_place_count_rule_reddens_a_text_triple_dedupe` (ревью WR-27, план 16-41).
+    """
+    rows = {param.id: param.values for param in LITERAL_FORM_CASES}
+    places = LITERAL_FORM_PLACES
+    assert set(places) <= set(rows), f"таблица мест называет не строки: {sorted(set(places) - set(rows))}"
+    assert all(count >= 1 for count in places.values()), f"число мест меньше 1: {places}"
+    assert all(places.get(row_id) == 2 for row_id in WR31_ROWS), f"строки WR-31 — не по два места: {places}"
+    assert places.get("methodcaller-literal-column-applied-twice") == 1, (
+        f"контроль литерала колонки — не одно место: {places}"
     )
+
+    unseen: list[str] = []
+    wrong: list[str] = []
+    for row_id in WR31_ROWS:
+        source = rows[row_id][0]
+        offences = phone_write_offences(source, "app/x.py")
+        if literal_place_count_mismatch(row_id, _merged_by_kind_and_subject(offences)) is None:
+            unseen.append(row_id)
+        if (mismatch := literal_place_count_mismatch(row_id, offences)) is not None:
+            wrong.append(mismatch)
+
+    assert not unseen, (
+        "правило счёта писателя не видит слияние находок по «вид, предмет» (класс WR-31): "
+        + ", ".join(unseen)
+    )
+    assert not wrong, "число находок строк WR-31 не равно числу мест: " + "; ".join(wrong)
 
 
 LEGITIMATE_CASES = [
