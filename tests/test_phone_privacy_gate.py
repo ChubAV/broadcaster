@@ -72,7 +72,9 @@
   (ревью CR-04, WR-30, решение владельца О-20 (а), свойство 6; план 16-49).
   Значения опознания матрицы — имя, атрибут, getattr-строка, `partial`, `methodcaller` и
   `methodcaller-receiver` — `methodcaller` над журналом из вызова фабрики
-  (`structlog.get_logger()`): пара значения гейта писателя с тем же `id`.
+  (`structlog.get_logger()`): пара значения гейта писателя с тем же `id`; `receiver` — значение-получатель:
+  связанное имя — журнал из вызова фабрики (`logging.getLogger()`), применение — его метод `info` с номером
+  (поле `IdentificationValue.method`; с формами чтения через объект модуля это ровно форма WR-30; план 16-49).
   Связанное имя читается и через объект модуля: имя, связанное в модуле с получателем
   журнала, с вызываемым журнала, `methodcaller` или обёрткой, — член `sys.modules[__name__]`
   и имени, связанного с ним (`getattr(sys.modules[__name__], "lg")`, с умолчанием,
@@ -120,8 +122,12 @@
   (`w = partial(Context.run, …, args); run_in_executor(None, w)`), вызванная getattr-строкой
   (`getattr(holder, "w")(…)`), — `starmap`, `apply_async` и `map` с не-литеральной
   итерируемой на месте последнего позиционного аргумента (`account.phones` — место
-  `ReferenceCarrier.last`: такая итерируемая судится целиком, план 16-38); словарь, общий с
-  гейтом писателя, а не закрытый список:
+  `ReferenceCarrier.last`: такая итерируемая судится целиком, план 16-38); две строки девятого
+  круга, вписанные планом 16-49 (ревью CR-04, форма KC; их держат обе матрицы и правило-паритет), —
+  носитель, чьё последнее имя вызова связано в модуле с соперником другого вида
+  (`carrier-name-bound-to-a-rival`: `to_thread = print; asyncio.to_thread(…)`;
+  `executor-name-bound-to-a-rival`: `run_in_executor = print; loop.run_in_executor(None, …)`); словарь,
+  общий с гейтом писателя, а не закрытый список:
   `await asyncio.to_thread(logger.info, "x %s", account.phone)`,
   `await loop.run_in_executor(None, logger.info, …)`,
   `list(map(logger.info, [a.phone for a in accounts]))`,
@@ -4033,6 +4039,13 @@ LOG_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
         "(structlog.get_logger())",
         'operator.methodcaller("noop")',
         rival="print",
+    ),
+    # Значение-получатель (ревью WR-30, верификация раунда 9; решение владельца О-20 (а), свойство 6; план 16-49):
+    # связанное имя — получатель журнала из вызова фабрики, применение — его метод `info` с номером
+    # (`IdentificationValue.method`); формы чтения через объект модуля с этим значением — ровно форма WR-30
+    # (`getattr(sys.modules[__name__], "f").info("x %s", account.phone)`). Подмена того же вида — `dict()`, не журнал.
+    IdentificationValue(
+        "receiver", "logging.getLogger()", '("x %s", account.phone)', "dict()", rival="print", method="info"
     ),
 )
 
