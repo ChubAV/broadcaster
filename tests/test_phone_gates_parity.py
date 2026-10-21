@@ -72,6 +72,13 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   getattr-строкой, значение опознания `methodcaller-receiver` у обоих гейтов на одной позиции и
   полнота таблицы `API_IDENTIFICATION_CALLS` гейта писателя, — так что возврат чтения имени только
   у `Name` / `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет.
+* Словарь девятого круга (`test_the_shared_dictionary_holds_the_round_nine_axes`, ревью CR-04, WR-30, верификация
+  раунда 9; решение владельца О-20 (а), свойство 6; план 16-49): пять форм коллизии видов (`collision-module` и
+  соседи: одно последнее имя связано с соперником другого вида — поле `IdentificationValue.rival`, у приватности
+  вызываемое журнала, у писателя пишущий API, — и со значением опознания) и три формы чтения через объект модуля
+  (`module-object-getattr` и соседи), соперник у каждого значения обоих гейтов, — так что возврат закрытия
+  толкований после опознанного вызова (класс CR-04) и потеря получателя, прочитанного через объект модуля (класс
+  WR-30), краснят матрицы и правило-паритет.
 * Место значения `partial` (`test_the_partial_value_place_is_pinned_by_a_privacy_row`, ревью
   IN-20, решение владельца О-19, план 16-43): у `partial` с одним позиционным аргументом (номером)
   места `last` нет по выбору словаря — его ячейка `map-named-iterable` равна ячейке `map`, — и
@@ -504,6 +511,124 @@ def test_the_shared_dictionary_holds_the_round_eight_axes():
     problems = _round_eight_form_problems() + _round_eight_value_problems()
 
     assert not problems, "словарь матриц и паритета не держит ось восьмого круга:\n" + "\n".join(
+        f"  {problem}" for problem in problems
+    )
+
+
+# Формы словаря девятого круга (ревью CR-04, WR-30, верификация раунда 9, 2026-10-20; решение владельца О-20 (а),
+# свойство 6; план 16-49): коллизия видов — одно последнее имя связано с соперником другого вида (`{rival}`) и со
+# значением опознания (`{value}`) — и чтение имени через объект модуля.
+ROUND_NINE_COLLISION_FORMS = (
+    "collision-module",
+    "collision-in-function",
+    "collision-rebound",
+    "collision-other-init",
+    "collision-class-body",
+)
+ROUND_NINE_MODULE_OBJECT_FORMS = ("module-object-getattr", "module-object-attribute", "module-object-bound")
+MODULE_OBJECT = "sys.modules[__name__]"
+
+
+def _probe_tree(template: str) -> ast.Module:
+    """Шаблон формы с заместителями мест: значение, соперник, подмена — имена, место `{use}` — вызов."""
+    for place, probe in (("{value}", "VALUE_PROBE"), ("{rival}", "RIVAL_PROBE"), ("{decoy}", "DECOY_PROBE")):
+        template = template.replace(place, probe)
+    return ast.parse(template.replace("{use}", "USE_PROBE()"))
+
+
+def _bound_names(tree: ast.Module, probe: str) -> set[str]:
+    """Последние имена целей присваиваний, чьё значение — заместитель `probe` (`f`, `self.f` → `f`)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name) and node.value.id == probe:
+            names |= {name for target in node.targets if (name := grammar.reading_name(target)) is not None}
+    return names
+
+
+def _round_nine_form_problems() -> list[str]:
+    """Чем словарь не держит формы девятого круга: строки, место соперника, общее имя, чтение через объект модуля."""
+    problems: list[str] = []
+    forms = {form.id: form for form in grammar.BINDING_FORMS}
+    for form_id in (*ROUND_NINE_COLLISION_FORMS, *ROUND_NINE_MODULE_OBJECT_FORMS):
+        if form_id not in forms:
+            problems.append(f"в `BINDING_FORMS` нет формы `{form_id}`")
+    for form_id in ROUND_NINE_COLLISION_FORMS:
+        form = forms.get(form_id)
+        if form is None:
+            continue
+        if "{rival}" not in form.template:
+            problems.append(f"у формы `{form_id}` нет места соперника `{{rival}}`")
+            continue
+        tree = _probe_tree(form.template)
+        rival_names, value_names = _bound_names(tree, "RIVAL_PROBE"), _bound_names(tree, "VALUE_PROBE")
+        read = grammar.reading_name(ast.parse(form.ref, mode="eval").body)
+        if not rival_names & value_names or read not in rival_names & value_names:
+            problems.append(f"форма `{form_id}` связывает соперника ({sorted(rival_names)}) и значение "
+                            f"({sorted(value_names)}) не под тем последним именем, что читает ссылка `{form.ref}`")
+        probe = grammar.IdentificationValue("probe", "probe_fn", "(first)")
+        try:
+            grammar.binding_form_source(form, probe, None)
+        except AssertionError:
+            pass
+        else:
+            problems.append(f"`binding_form_source` собрал форму `{form_id}` у значения без соперника — вакуум")
+    for form_id in ROUND_NINE_MODULE_OBJECT_FORMS:
+        form = forms.get(form_id)
+        if form is None:
+            continue
+        tree = _probe_tree(form.template)
+        owners = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign) and ast.unparse(node.value) == MODULE_OBJECT
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        ref = ast.parse(form.ref, mode="eval").body
+        owner = ref.args[0] if isinstance(ref, ast.Call) and ref.args else getattr(ref, "value", None)
+        via_module = owner is not None and (ast.unparse(owner) == MODULE_OBJECT or ast.unparse(owner) in owners)
+        if not via_module or grammar.reading_name(ref) not in _bound_names(tree, "VALUE_PROBE"):
+            problems.append(f"ссылка формы `{form_id}` — `{form.ref}` — не читает имя значения через `{MODULE_OBJECT}`")
+    return problems
+
+
+def _round_nine_rival_problems() -> list[str]:
+    """Чем значения опознания обоих гейтов не держат соперника: пусто или соперник не другого вида."""
+    problems: list[str] = []
+    writer_names = set(writer.WRITE_CALL_NAMES) | {parameter.call for parameter in writer.JUDGED_PARAMETERS}
+    for side, values in (("писателя", writer.API_IDENTIFICATION_VALUES), ("приватности", privacy.LOG_IDENTIFICATION_VALUES)):
+        for value in values:
+            rival = getattr(value, "rival", "")
+            if not rival:
+                problems.append(f"у значения `{value.id}` гейта {side} нет соперника (`IdentificationValue.rival`)")
+                continue
+            node = ast.parse(rival, mode="eval").body
+            if side == "приватности" and not privacy._is_log_callable(node):
+                problems.append(f"соперник `{rival}` значения `{value.id}` гейта приватности — не вызываемое журнала")
+            if side == "писателя" and grammar.reading_name(node) not in writer_names:
+                problems.append(f"соперник `{rival}` значения `{value.id}` гейта писателя — не пишущий API")
+    return problems
+
+
+def test_the_shared_dictionary_holds_the_round_nine_axes():
+    """Словарь матриц и паритета держит оси девятого круга: коллизию видов и чтение через объект модуля.
+
+    Словарь подменял имя только значением того же вида (`decoy`), поэтому ни обе матрицы, ни это правило, ни корпус
+    меры «база ↔ HEAD» партии раунда 8 не собирали ячейку, где одно последнее имя связано с вызываемым журнала и с
+    `methodcaller`: регрессия `a77263ad` (CR-04) прошла суиту и меру зелёными, а получатель журнала, прочитанный
+    через объект модуля (WR-30), был вне словаря (ревью CR-04, WR-30, верификация раунда 9, 2026-10-20). Правило
+    держит (а) пять форм коллизии видов (`collision-module`, `collision-in-function`, `collision-rebound`,
+    `collision-other-init`, `collision-class-body`): у каждой — место соперника `{rival}`, связанное под тем же
+    последним именем, что `{value}`, и то же имя читает ссылка формы; у значения без соперника
+    `binding_form_source` поднимает `AssertionError` (вакуум, как у `{decoy}`); (б) три формы чтения через объект
+    модуля (`module-object-getattr`, `module-object-attribute`, `module-object-bound`) — ссылка читает имя значения
+    через `sys.modules[__name__]` или имя, связанное с ним; (в) соперника у КАЖДОГО значения обоих гейтов
+    (`IdentificationValue.rival`): у приватности — вызываемое журнала, у писателя — пишущий API
+    (`WRITE_CALL_NAMES` или `JUDGED_PARAMETERS`). Решение владельца О-20 (а), свойство 6; план 16-49.
+    """
+    problems = _round_nine_form_problems() + _round_nine_rival_problems()
+
+    assert not problems, "словарь матриц и паритета не держит ось девятого круга:\n" + "\n".join(
         f"  {problem}" for problem in problems
     )
 
