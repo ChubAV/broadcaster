@@ -64,6 +64,12 @@
   (`self.f = …` в `__init__`, `getattr(self, "f")(…)` в другом методе) — строка `getattr-read`
   общего словаря `BINDING_FORMS`: её держат обе матрицы и правило-паритет для каждого значения
   опознания и каждого носителя (ревью WR-28, решение владельца О-18 (а), свойство 3; план 16-44).
+  Формы коллизии видов (`collision-module` и соседи: одно последнее имя связано с соперником
+  другого вида — у этого гейта с вызываемым журнала `print`, поле `IdentificationValue.rival`, — и
+  со значением опознания: на уровне модуля, в функции, повторным связыванием, в `__init__` и в теле
+  другого класса) и чтения через объект модуля (`module-object-getattr` и соседи) — строки общего
+  словаря девятого круга; их держат обе матрицы и правило-паритет для каждого значения и носителя
+  (ревью CR-04, WR-30, решение владельца О-20 (а), свойство 6; план 16-49).
   Значения опознания матрицы — имя, атрибут, getattr-строка, `partial`, `methodcaller` и
   `methodcaller-receiver` — `methodcaller` над журналом из вызова фабрики
   (`structlog.get_logger()`): пара значения гейта писателя с тем же `id`.
@@ -3988,27 +3994,33 @@ def test_any_method_of_an_identified_logger_is_a_log_call():
 # журнала и с какими аргументами его применяет; `methodcaller` применяется к получателю —
 # опознанному журналу `logger`. Подменное значение (`decoy`, план 16-31, ревью WR-18) —
 # безобидное того же вида: имя, атрибут, `getattr`-строка, `partial` и `methodcaller`
-# над `noop`, который журналом не опознан.
+# над `noop`, который журналом не опознан. Соперник (`rival`, план 16-49, ревью CR-04) — значение ДРУГОГО вида
+# под тем же последним именем в формах коллизии видов (`collision-*` общего словаря): вызываемое журнала `print`.
+# Довод: класс CR-04 — ровно `print` (или иное вызываемое журнала) рядом с `methodcaller` / обёрткой под тем же
+# именем; опознанный вызов журнала закрывал путь `methodcaller` (решение владельца О-20 (а), свойство 6).
 LOG_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
-    IdentificationValue("name", "print", '("x %s", account.phone)', "noop"),
-    IdentificationValue("attribute", "logger.info", '("x %s", account.phone)', "helper.noop"),
+    IdentificationValue("name", "print", '("x %s", account.phone)', "noop", rival="print"),
+    IdentificationValue("attribute", "logger.info", '("x %s", account.phone)', "helper.noop", rival="print"),
     IdentificationValue(
         "getattr-string",
         'getattr(logger, "info")',
         '("x %s", account.phone)',
         'getattr(helper, "noop")',
+        rival="print",
     ),
     IdentificationValue(
         "partial",
         'functools.partial(logger.info, "x %s")',
         "(account.phone)",
         'functools.partial(helper.noop, "x %s")',
+        rival="print",
     ),
     IdentificationValue(
         "methodcaller",
         'operator.methodcaller("info", "x %s", account.phone)',
         "(logger)",
         'operator.methodcaller("noop")',
+        rival="print",
     ),
     # Пара значения `methodcaller-receiver` гейта писателя по требованию правила-паритета (оно
     # сверяет `id` значений по порядку; план 16-44, решение владельца О-18 (а), свойство 3).
@@ -4020,6 +4032,7 @@ LOG_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
         'operator.methodcaller("info", "x %s", account.phone)',
         "(structlog.get_logger())",
         'operator.methodcaller("noop")',
+        rival="print",
     ),
 )
 

@@ -197,7 +197,8 @@ class BindingForm(NamedTuple):
 
     `template` — исходник с местами `{value}` (значение опознания) и `{use}`
     (выражение на месте вызова), у формы повторного связывания — ещё `{decoy}`
-    (подменное значение того же вида, `IdentificationValue.decoy`); `ref` — как
+    (подменное значение того же вида, `IdentificationValue.decoy`), у формы коллизии видов —
+    `{rival}` (соперник другого вида, `IdentificationValue.rival`; план 16-49); `ref` — как
     связанное имя названо на месте вызова (`f`, `self.f`, `cls.f`; у формы без
     связывания — `{value}`, само значение).
     """
@@ -306,6 +307,79 @@ BINDING_FORMS: tuple[BindingForm, ...] = (
         "        {use}\n",
         'getattr(self, "f")',
     ),
+    # Ось «одно имя — два вида» (ревью CR-04, верификация раунда 9, 2026-10-20): словарь подменял имя только значением
+    # ТОГО ЖЕ вида (`decoy`), и ни обе матрицы, ни правило-паритет, ни корпус меры «база ↔ HEAD» партии раунда 8 не
+    # собирали ячейку, где одно последнее имя связано с вызываемым журнала / пишущим API и с `methodcaller` или
+    # обёрткой: регрессия `a77263ad` (закрытие толкований после опознанного вызова журнала) прошла суиту и меру
+    # зелёными. Пять форм ниже связывают то же последнее имя с соперником ДРУГОГО вида (`IdentificationValue.rival`,
+    # место `{rival}`) и со значением опознания: на уровне модуля до класса, в функции, повторным связыванием в одной
+    # области (C5), в `__init__` другого класса (C7) и в теле другого класса; `{use}` — в методе или в той же
+    # области. Решение владельца О-20 (а), свойство 6; план 16-49.
+    BindingForm(
+        "collision-module",
+        "f = {rival}\n"
+        "\n"
+        "\n"
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.f = {value}\n"
+        "\n"
+        "    def run(self):\n"
+        "        {use}\n",
+        "self.f",
+    ),
+    BindingForm(
+        "collision-in-function",
+        "def setup():\n"
+        "    f = {rival}\n"
+        "    return f\n"
+        "\n"
+        "\n"
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.f = {value}\n"
+        "\n"
+        "    def run(self):\n"
+        "        {use}\n",
+        "self.f",
+    ),
+    BindingForm("collision-rebound", "f = {rival}\nf = {value}\n{use}\n", "f"),
+    BindingForm(
+        "collision-other-init",
+        "class A:\n"
+        "    def __init__(self):\n"
+        "        self.f = {rival}\n"
+        "\n"
+        "\n"
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.f = {value}\n"
+        "\n"
+        "    def run(self):\n"
+        "        {use}\n",
+        "self.f",
+    ),
+    BindingForm(
+        "collision-class-body",
+        "class A:\n"
+        "    f = {rival}\n"
+        "\n"
+        "\n"
+        "class W:\n"
+        "    def __init__(self):\n"
+        "        self.f = {value}\n"
+        "\n"
+        "    def run(self):\n"
+        "        {use}\n",
+        "self.f",
+    ),
+    # Ось «где прочитано имя — объект модуля» (ревью WR-30, верификация раунда 9, 2026-10-20): получатель журнала,
+    # связанный с именем модуля и прочитанный через `sys.modules[__name__]`, ни один гейт не ловил, и словарь этого
+    # чтения не держал. Три формы читают связанное имя через объект модуля — getattr-строкой, атрибутом и через имя,
+    # связанное с объектом модуля. Решение владельца О-20 (а), свойство 6; план 16-49.
+    BindingForm("module-object-getattr", "f = {value}\n{use}\n", 'getattr(sys.modules[__name__], "f")'),
+    BindingForm("module-object-attribute", "f = {value}\n{use}\n", "sys.modules[__name__].f"),
+    BindingForm("module-object-bound", "me = sys.modules[__name__]\nf = {value}\n{use}\n", "me.f"),
 )
 
 
@@ -1216,12 +1290,20 @@ class IdentificationValue(NamedTuple):
     `getattr`-строки; `partial` над другим API; `methodcaller("noop")`. Умолчание —
     пустая строка: позиционное создание прежних строк не ломается, а форма с `{decoy}`
     при пустой подмене — вакуум, и `binding_form_source` его отвергает.
+
+    `rival` — соперник: значение ДРУГОГО вида под тем же последним именем (ревью CR-04, план
+    16-49): у гейта приватности — вызываемое журнала, у гейта писателя — пишущий API. Формы
+    коллизии видов (`collision-*` в `BINDING_FORMS`) связывают с ним то же имя, что со значением
+    опознания: ошибка «опознанное толкование закрывает другое» видна, только когда имя связано с
+    двумя видами. Умолчание — пустая строка; форма с `{rival}` при пустом сопернике — вакуум, и
+    `binding_form_source` её отвергает, как `{decoy}`.
     """
 
     id: str
     value: str
     call: str
     decoy: str = ""
+    rival: str = ""
 
 
 def binding_form_source(
@@ -1246,11 +1328,18 @@ def binding_form_source(
 
     Место `{decoy}` формы повторного связывания получает `value.decoy` (план 16-31); у
     значения без подмены такая ячейка — вакуум, и функция поднимает `AssertionError`.
+    Место `{rival}` формы коллизии видов получает `value.rival` (план 16-49) — так же: у значения
+    без соперника ячейка — вакуум, `AssertionError`.
     """
     if "{decoy}" in form.template and not value.decoy:
         raise AssertionError(
             f"форма `{form.id}` связывает имя повторно, а у значения `{value.id}` нет "
             "подменного значения `decoy`: ячейка проверяла бы ничто"
+        )
+    if "{rival}" in form.template and not value.rival:
+        raise AssertionError(
+            f"форма `{form.id}` связывает имя с соперником другого вида, а у значения `{value.id}` нет "
+            "соперника `rival`: ячейка проверяла бы ничто"
         )
     ref = form.ref.format(value=value.value)
     if carrier is None:
@@ -1281,4 +1370,4 @@ def binding_form_source(
             positional=", ".join(positional),
             keywords="{" + keywords + "}",
         )
-    return form.template.format(value=value.value, use=use, decoy=value.decoy)
+    return form.template.format(value=value.value, use=use, decoy=value.decoy, rival=value.rival)

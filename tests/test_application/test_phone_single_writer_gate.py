@@ -41,7 +41,14 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 getattr-строкой (`self.f = …` в `__init__`, `getattr(self, "f")(…)` в другом методе) — строка
 `getattr-read` общего словаря `BINDING_FORMS`: её держат обе матрицы и правило-паритет для
 каждого значения опознания и каждого носителя (ревью WR-28, решение владельца О-18 (а),
-свойство 3; план 16-44); значения опознания матрицы — имя, атрибут, getattr-строка,
+свойство 3; план 16-44); формы коллизии видов (`collision-module` и соседи: одно последнее имя
+связано с соперником другого вида — у этого гейта с пишущим API `update`, поле
+`IdentificationValue.rival`, — и со значением опознания: на уровне модуля, в функции, повторным
+связыванием, в `__init__` и в теле другого класса) и чтения через объект модуля
+(`module-object-getattr` и соседи: `getattr(sys.modules[__name__], "f")`,
+`sys.modules[__name__].f`, `me.f` при `me = sys.modules[__name__]`) — строки общего словаря
+девятого круга; их держат обе матрицы и правило-паритет для каждого значения и носителя (ревью
+CR-04, WR-30, решение владельца О-20 (а), свойство 6; план 16-49); значения опознания матрицы — имя, атрибут, getattr-строка,
 `partial`, `methodcaller` и `methodcaller-receiver` — `methodcaller`, чья колонка приходит
 получателем (`MessengerAccount.phone`, запись дескриптором `__set__`; место записи — узел получателя
 в применении, там колонка и названа: две подачи колонки — две находки; ревью WR-31, план 16-48;
@@ -4472,34 +4479,43 @@ def test_every_column_naming_nested_in_every_name_position_is_a_write(position: 
 # применяет. `methodcaller` применяется к получателю — модулю `attributes`. Подменное
 # значение (`decoy`, план 16-31, ревью WR-18) — того же вида: пишущий API, первый по
 # алфавиту (`bulk_update_mappings` < `set_committed_value`), у имени, атрибута и
-# `getattr`-строки; `partial` над другим API; `methodcaller("noop")`.
+# `getattr`-строки; `partial` над другим API; `methodcaller("noop")`. Соперник (`rival`, план 16-49, ревью CR-04) —
+# значение ДРУГОГО вида под тем же последним именем в формах коллизии видов (`collision-*` общего словаря): пишущий
+# API `update`. Довод выбора: с соперником `setattr` или `set_committed_value` у значения `methodcaller-receiver` на
+# носителе с соперником гейт даёт две находки на одном узле колонки — названная цена `kw_ext` (решение владельца
+# 2026-10-21), а матрица требует ровно одну; `update` и `functools.partial(setattr, other)` этой пары не дают (замер
+# планирования 16-49 — 156 из 156 по одной); решение владельца О-20 (а), свойство 6.
 API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
     IdentificationValue(
-        "name", "set_committed_value", '(account, "phone", x)', "bulk_update_mappings"
+        "name", "set_committed_value", '(account, "phone", x)', "bulk_update_mappings", rival="update"
     ),
     IdentificationValue(
         "attribute",
         "attributes.set_committed_value",
         '(account, "phone", x)',
         "session.bulk_update_mappings",
+        rival="update",
     ),
     IdentificationValue(
         "getattr-string",
         'getattr(attributes, "set_committed_value")',
         '(account, "phone", x)',
         'getattr(session, "bulk_update_mappings")',
+        rival="update",
     ),
     IdentificationValue(
         "partial",
         "functools.partial(set_committed_value, account)",
         '("phone", x)',
         "functools.partial(session.bulk_update_mappings, MessengerAccount)",
+        rival="update",
     ),
     IdentificationValue(
         "methodcaller",
         'operator.methodcaller("set_committed_value", account, "phone", x)',
         "(attributes)",
         'operator.methodcaller("noop")',
+        rival="update",
     ),
     # `methodcaller`, чья колонка приходит ПОЛУЧАТЕЛЕМ (`MessengerAccount.phone`, пишет дескриптор
     # `__set__`), — вид, которого матрица не видела: у значения `methodcaller` колонка — в его
@@ -4509,6 +4525,7 @@ API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
         'operator.methodcaller("__set__", account, x)',
         "(MessengerAccount.phone)",
         'operator.methodcaller("noop")',
+        rival="update",
     ),
 )
 
