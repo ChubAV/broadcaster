@@ -1380,6 +1380,16 @@ def python_log_calls(source: str) -> list[ast.Call]:
     (`_applied_log_methodcaller`), — ревью WR-17; те же две функции судят каждое применение
     обёртки носителя, которое находит функция общего модуля `wrapper_applications` (ревью
     WR-24, WR-26, план 16-37).
+
+    Судится каждое толкование узла (ревью CR-04, решение владельца О-20 (а), свойство 2, план
+    16-46): вызов, опознанный вызовом журнала, судится и как применение `methodcaller` и обёртки
+    носителя, связанных с тем же последним именем. До плана ветка закрытия после опознанного
+    вызова не пускала эти пути: при `emit = print` и `self.emit = operator.methodcaller("info",
+    "x %s", account.phone)` вызов `self.emit(logger)` судился только как `print(logger)`, и номер
+    уходил в журнал мимо гейта (регрессия `a77263ad` против `e1d6587e` и `fb8fef72`; давний класс
+    C5–C7). Одно место печатается один раз — дедупликация по узлу (строка, столбец, вид,
+    предмет) в `python_log_offences`; путь носителя `_carried_log_calls` для опознанного вызова
+    пуст сам.
     """
     tree = ast.parse(source)
     names = module_log_names(tree)
@@ -1389,12 +1399,13 @@ def python_log_calls(source: str) -> list[ast.Call]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        # Опознанный вызов журнала — свой вызов, но не последнее толкование узла: путь
+        # `methodcaller` и применения обёрток судятся и на нём (ревью CR-04, план 16-46).
         if _is_identified_log_call(node, names):
             calls.append(node)
-            continue
         # `X(…)` в `X(…)(…)` носителем не судится: его ссылку и аргументы судит применение
         # (`partial(*[logger.info, …])()` — один вызов на месте, а не два).
-        if id(node) not in applied:
+        elif id(node) not in applied:
             calls.extend(_carried_log_calls(node, names))
         # Каждое связывание `methodcaller` с опознанным получателем — свой вызов (WR-18).
         calls.extend(_applied_log_methodcaller(node, names, as_carrier=id(node) not in applied))
