@@ -1279,18 +1279,27 @@ def _phone_writes(source: str, path: str) -> list[tuple[int, int, str, str]]:
                 for synthetic, referenced, _carrier in references.get(id(node), []):
                     holders = methodcaller_receivers.get(id(node), [])
                     # Без известного применения `methodcaller` судится без получателя;
-                    # каждое применение — свой вызов `obj.<имя>(…)`.
+                    # каждое применение — свой вызов `obj.<имя>(…)`. Место варианта — узел, где
+                    # названа колонка (ревью WR-31, верификация раунда 9; решение владельца О-20
+                    # (а), свойство 5; план 16-48): получатель-колонка (`f(MessengerAccount.phone)`)
+                    # называет её в применении, и запись стоит на узле получателя — две подачи
+                    # колонки — два места, две находки; иначе колонка названа литералом в
+                    # аргументах `methodcaller`, и запись остаётся на самом `methodcaller` — одна
+                    # находка при любом числе применений. До плана 16-48 вариант стоял на
+                    # литерале `methodcaller` всегда, и две подачи сливались в одну находку на
+                    # строке связывания.
                     variants = [synthetic] if not holders else [
                         _synthetic_call(
-                            synthetic,
+                            place,
                             ast.copy_location(
                                 ast.Attribute(value=holder, attr=referenced, ctx=ast.Load()),
-                                synthetic,
+                                place,
                             ),
                             list(synthetic.args),
                             list(synthetic.keywords),
                         )
                         for holder in holders
+                        for place in [holder if _phone_column(holder) is not None else synthetic]
                     ]
                     for variant in variants:
                         for canonical, original in _canonical_call(
