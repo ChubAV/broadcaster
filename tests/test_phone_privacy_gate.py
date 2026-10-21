@@ -765,10 +765,17 @@ class ModuleLogNames:
     имена и атрибуты, связанные со ссылкой на фабрику без вызова (`gl = logging.getLogger`);
     сверяются по последнему имени вызова, как и `LOGGER_FACTORIES`.
     `log_function_attributes` — атрибуты, связанные со ссылкой на вызываемое журнала
-    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`; и имена,
-    связанные так же любой формой общей грамматики (`out = logger.info`): их читают и последним
-    звеном члена — `getattr(sys.modules[__name__], "out")(…)` (плоская область, как у имени
-    `methodcaller` и обёртки; самопроверка исполнителя 16-43, цикл 1).
+    (`self.out = logger.info`, `out = print` в теле класса), — вызов `self.out(…)`, `a.out(…)`
+    у любого объекта (плоская область по владельцу, как у имени `methodcaller` и обёртки; цена
+    «в сторону лишней находки» названа в шапке — решение владельца О-22 (а)). Имя, связанное с
+    вызываемым журнала на уровне модуля или в функции (`out = logger.info`), сюда НЕ идёт: оно
+    лежит в `log_functions` и читается членом только у объекта модуля —
+    `getattr(sys.modules[__name__], "out")(…)`, `me.out(…)` (ревью WR-29: до плана 16-47 цикл
+    самопроверки 1 плана 16-43, коммит `a77263ad`, клал его и сюда, и `fh.write(account.phone)`
+    при `write = print` стал вызовом журнала; решение владельца О-20 (а), свойство 3).
+    `module_objects` — имена, связанные в модуле с объектом модуля `sys.modules[__name__]` любой
+    формой общей грамматики, цепочкой тоже (`me = sys.modules[__name__]`, `me2 = me`): член такого
+    имени — член модуля (ревью WR-29, WR-30; помощник `_is_module_object`, план 16-47).
     `methodcaller_names` — имена, под которыми модуль зовёт `operator.methodcaller`
     (`from operator import methodcaller as mc`, `mc = operator.methodcaller`,
     `self.mc = operator.methodcaller`); `methodcallers` — пары «имя → вызов
@@ -799,9 +806,44 @@ class ModuleLogNames:
     methodcallers: tuple[tuple[str, ast.Call], ...] = ()
     partial_names: frozenset[str] = PARTIAL_NAMES
     carrier_wrappers: tuple[tuple[str, ast.Call], ...] = ()
+    module_objects: frozenset[str] = frozenset()
 
 
 NO_MODULE_LOG_NAMES = ModuleLogNames(frozenset(), frozenset(), frozenset())
+
+MODULE_OBJECT_EXPRESSION = "sys.modules[__name__]"
+
+
+def _is_module_object(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
+    """Объект самого модуля: `sys.modules[__name__]` или имя, связанное в модуле с ним.
+
+    Член объекта модуля — имя, связанное в этом модуле: `getattr(sys.modules[__name__], "lg")`,
+    `sys.modules[__name__].lg`, `me.lg` при `me = sys.modules[__name__]` (цепочкой тоже —
+    `names.module_objects`). Им читается и имя вызываемого журнала, связанное в модуле (ревью
+    WR-29), и получатель журнала (ревью WR-30); член любого другого объекта с тем же именем —
+    не член модуля. Решение владельца О-20 (а), свойства 3 и 4; план 16-47.
+    """
+    if isinstance(node, ast.Name):
+        return node.id in names.module_objects
+    return ast.unparse(node) == MODULE_OBJECT_EXPRESSION
+
+
+def _module_object_names(bindings: list[Binding]) -> frozenset[str]:
+    """Имена-цели общей грамматики, связанные с объектом модуля, — до неподвижной точки.
+
+    `me = sys.modules[__name__]` и цепочка `me2 = me`: значение — `sys.modules[__name__]` или
+    имя, уже признанное объектом модуля (`_is_module_object`).
+    """
+    found: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        known = replace(NO_MODULE_LOG_NAMES, module_objects=frozenset(found))
+        for target, value, _in_class_body in bindings:
+            if isinstance(target, ast.Name) and target.id not in found and _is_module_object(value, known):
+                found.add(target.id)
+                changed = True
+    return frozenset(found)
 
 
 def _is_logger_name(name: str) -> bool:
@@ -883,13 +925,20 @@ def _log_function_reference(node: ast.expr, names: ModuleLogNames = NO_MODULE_LO
     """Имя или член, связанные в модуле с вызываемым журнала (`log_functions`,
     `log_function_attributes`).
 
-    Имя члена (`X.f`, `getattr(X, "f")`, с умолчанием) читает общий `reading_name` (план
-    16-43). Имя, связанное с вызываемым журнала, лежит и в атрибутах — читается последним
-    звеном (`getattr(sys.modules[__name__], "f")`); ввезённое из `logging` имя (`from logging
-    import info`) — только голым именем.
+    Голое имя — из `log_functions`. Член (`X.f`, `getattr(X, "f")`, с умолчанием; имя читают
+    `_member` и общий `reading_name`, план 16-43) — вызов журнала в двух случаях: (а) имя из
+    `log_functions` и владелец — объект модуля (`getattr(sys.modules[__name__], "f")(…)`,
+    `sys.modules[__name__].f(…)`, `me.f(…)` — `_is_module_object`); член другого объекта с тем же
+    именем — не журнал: `fh.write(account.phone)` при `write = print` пишет номер в файл (ревью
+    WR-29; решение владельца О-20 (а), свойство 3; план 16-47); (б) имя из
+    `log_function_attributes` — у любого владельца, плоская область: `a.out(…)` при
+    `self.out = logger.info` в чужом `__init__` (решение владельца О-22 (а), цена названа в шапке).
     """
     if isinstance(node, ast.Name):
         return node.id in names.log_functions
+    member = _member(node)
+    if member is not None and member[1] in names.log_functions and _is_module_object(member[0], names):
+        return True
     return reading_name(node) in names.log_function_attributes
 
 
@@ -962,6 +1011,8 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
     log_function_attributes: set[str] = set()
     factories: set[str] = set()
     bindings = module_bindings(tree)
+    # Имена объекта модуля — до неподвижной точки журнала (ревью WR-29, WR-30, план 16-47).
+    module_objects = _module_object_names(bindings)
     # Обёртки ссылки под другим именем — до опознания журнала: `bind_(logger.info, …)`
     # судится, как `functools.partial(logger.info, …)`.
     partial_names = _wrapper_aliases(tree, bindings, PARTIAL_NAMES)
@@ -1001,6 +1052,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             factories=frozenset(factories),
             log_function_attributes=frozenset(log_function_attributes),
             partial_names=partial_names,
+            module_objects=module_objects,
         )
         for target, value, in_class_body in bindings:
             if _is_factory_reference(value, known):
@@ -1012,12 +1064,14 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             # получатель, и `x.info(…)` — вызов журнала.
             if _is_log_receiver(value, known):
                 changed |= _bind(target, in_class_body, receiver_names, receiver_attributes)
-            # Имя, связанное со ссылкой на вызываемое журнала, читается и последним звеном члена
-            # (`getattr(sys.modules[__name__], "f")(…)`, `X.f(…)`) — плоская область, как имя
-            # `methodcaller` и обёртки носителя (самопроверка исполнителя 16-43, цикл 1): цель-имя
-            # идёт и в атрибуты.
+            # Цель-имя, связанное со ссылкой на вызываемое журнала, идёт в атрибуты только в теле
+            # класса (как до `a77263ad`): имя уровня модуля и функции читается членом только у
+            # объекта модуля (`getattr(sys.modules[__name__], "f")(…)` — ветка члена
+            # `_log_function_reference`), а метод чужого объекта с тем же именем — не журнал:
+            # `fh.write(account.phone)` при `write = print` (ревью WR-29; решение владельца О-20 (а),
+            # свойство 3; план 16-47). Цикл самопроверки 1 плана 16-43 клал сюда `True`.
             if _is_log_callable(value, known):
-                changed |= _bind(target, True, log_functions, log_function_attributes)
+                changed |= _bind(target, in_class_body, log_functions, log_function_attributes)
     # Имена, связанные с вызовом `methodcaller(…)` (и под псевдонимом), — той же общей
     # грамматикой, до неподвижной точки (`emit = mc("info", …)`, `g = emit`). Имя —
     # последнее звено цели (`binding_name`): `self.emit = …` зовут `self.emit(…)`.
@@ -1049,6 +1103,7 @@ def module_log_names(tree: ast.AST) -> ModuleLogNames:
             (name, call) for name, calls in sorted(methodcallers.items()) for call in calls
         ),
         partial_names=partial_names,
+        module_objects=module_objects,
     )
     return replace(names, carrier_wrappers=_carrier_wrappers(bindings, names))
 
@@ -1153,6 +1208,19 @@ def _methodcaller_calls(
 
 
 def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES) -> bool:
+    """Получатель журнала: имя, член или результат вызова, которые гейт признаёт журналом.
+
+    Член (`X.lg`, `getattr(X, "lg")`, с умолчанием) — получатель, если имя подходит под шаблон
+    журнала, связано атрибутом с получателем (`receiver_attributes`), это журнал-атрибут
+    опознанного получателя (`logging.root`, `logger.parent`) — или имя связано В МОДУЛЕ с
+    получателем (`receiver_names`), а владелец — объект модуля (`_is_module_object`):
+    `getattr(sys.modules[__name__], "lg").info(…)`, `sys.modules[__name__].lg`, `me.lg` при
+    `me = sys.modules[__name__]`, поданный носителю или `methodcaller`. До плана 16-47 имя модуля
+    сверялось с `receiver_names` только голым, и номер уходил в журнал мимо гейта на всех деревьях
+    (ревью WR-30; решение владельца О-20 (а), свойство 4). Довод 16-43 «ломает
+    `_log_method_reference` у `logger.log`» относится к плоскому варианту (имя модуля в
+    `receiver_attributes`), а не к сверке по владельцу-модулю.
+    """
     if isinstance(node, ast.Name):
         return _is_logger_name(node.id) or node.id in names.receiver_names
     member = _member(node)
@@ -1161,6 +1229,7 @@ def _is_log_receiver(node: ast.expr, names: ModuleLogNames = NO_MODULE_LOG_NAMES
         return (
             bool(_LOGGER_NAME.search(attribute))
             or attribute in names.receiver_attributes
+            or (attribute in names.receiver_names and _is_module_object(owner, names))
             or (attribute in LOGGER_ATTRIBUTE_LOGGERS and _is_log_receiver(owner, names))
         )
     if isinstance(node, ast.Call):
