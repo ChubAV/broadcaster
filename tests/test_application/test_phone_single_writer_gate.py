@@ -41,11 +41,21 @@ flag_modified`; и со звёздной целью — `w, *rest = setattr, Non
 getattr-строкой (`self.f = …` в `__init__`, `getattr(self, "f")(…)` в другом методе) — строка
 `getattr-read` общего словаря `BINDING_FORMS`: её держат обе матрицы и правило-паритет для
 каждого значения опознания и каждого носителя (ревью WR-28, решение владельца О-18 (а),
-свойство 3; план 16-44); значения опознания матрицы — имя, атрибут, getattr-строка,
+свойство 3; план 16-44); формы коллизии видов (`collision-module` и соседи: одно последнее имя
+связано с соперником другого вида — у этого гейта с пишущим API `update`, поле
+`IdentificationValue.rival`, — и со значением опознания: на уровне модуля, в функции, повторным
+связыванием, в `__init__` и в теле другого класса) и чтения через объект модуля
+(`module-object-getattr` и соседи: `getattr(sys.modules[__name__], "f")`,
+`sys.modules[__name__].f`, `me.f` при `me = sys.modules[__name__]`) — строки общего словаря
+девятого круга; их держат обе матрицы и правило-паритет для каждого значения и носителя (ревью
+CR-04, WR-30, решение владельца О-20 (а), свойство 6; план 16-49); значения опознания матрицы — имя, атрибут, getattr-строка,
 `partial`, `methodcaller` и `methodcaller-receiver` — `methodcaller`, чья колонка приходит
 получателем (`MessengerAccount.phone`, запись дескриптором `__set__`; место записи — узел получателя
 в применении, там колонка и названа: две подачи колонки — две находки; ревью WR-31, план 16-48;
-решение владельца О-20 (а), свойство 5); API, который называет
+решение владельца О-20 (а), свойство 5) и `receiver` — значение-получатель: связанное имя — объект
+аккаунта, применение — его метод `__setattr__` с колонкой `"phone"` (поле
+`IdentificationValue.method`; пара значения гейта приватности по требованию паритета, колонка названа в
+применении; ревью WR-30, план 16-49); API, который называет
 находка ячейки, — таблица `API_IDENTIFICATION_CALLS`; значение связывания — имя,
 атрибут, `getattr(<obj>, "<api>")` (читается как атрибут `<obj>.<api>`, с
 получателем), `functools.partial(<api>, …)` — псевдоним с привязанными аргументами
@@ -93,6 +103,10 @@ args=(…))` (`Timer(…, args=…)`) и очереди с выдуманной 
 (`getattr(holder, "w")(…)`), — `starmap`, `apply_async` и `map` с не-литеральной
 итерируемой на месте последнего позиционного аргумента (`account.phones` — место
 `ReferenceCarrier.last`; значение не-литералом колонку не прячет: она остаётся литералом), —
+двум строкам девятого круга (план 16-49, ревью CR-04, форма KC; их держат обе матрицы и
+правило-паритет) — носителю, чьё последнее имя вызова связано в модуле с соперником другого вида
+(`carrier-name-bound-to-a-rival`: `to_thread = <соперник>; asyncio.to_thread(…)`;
+`executor-name-bound-to-a-rival`: `run_in_executor = <соперник>; loop.run_in_executor(None, …)`), —
 и по-прежнему любому другому вызову (цена строгости ниже). Ссылка подана носителю
 позицией (в том числе литеральной распаковкой `*[…]` / `*(…)`), любым именованным
 аргументом (`fn=`, `target=`, `function=`, `initializer=`, выдуманный `job=` — ключи не
@@ -314,11 +328,23 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 и носитель поданной ссылки (план 16-48; до плана толкование псевдонима закрывало путь
 носителя, и `asyncio.to_thread(set_committed_value, account, "phone", x)` рядом с
 `to_thread = setattr` проходил гейт на всех деревьях; то же у имени `partial`, связанного с
-пишущим API, при применённой обёртке носителя `functools.partial(<носитель>, ref)`); у той же
-оси — две находки на одном узле колонки, когда подача через получатель-колонку сама читается
-как вызов соперника (`to_thread = setattr` и `asyncio.to_thread(f, MessengerAccount.phone)`):
-та же механика, что у цены kw (свойство 8 О-20), расширение на ось носителя вынесено
-владельцу сводкой плана 16-48; в сторону лишней находки, а не пропуска. Цель-атрибут
+пишущим API, при применённой обёртке носителя `functools.partial(<носитель>, ref)`). Цена kw
+(свойство 8 О-20, заметка верификатора раунда 9): имя, связанное с
+`functools.partial(setattr, other)` и с `operator.methodcaller("__set__", account, x)` и
+применённое к `MessengerAccount.phone`, судится по каждому связыванию — две находки на одном узле
+колонки при одной записи (`setattr(…, MessengerAccount.phone, …)` и
+`MessengerAccount.phone.__set__(…)`). Её расширение на ось носителя — названная цена `kw_ext`: пишущий
+API соперника (`setattr`, `set_committed_value`, `flag_modified`), связанный с последним именем
+носителя (`to_thread`, `run_sync`, `Context.run`, `to_thread(*[…])`), и ссылка
+`operator.methodcaller("__set__", …)`, поданная этому носителю с получателем-колонкой
+(`to_thread = setattr` и `asyncio.to_thread(f, MessengerAccount.phone)`): подача через
+получатель-колонку сама читается как вызов соперника — две находки на одном узле колонки при одной
+записи; соперники `update` и `functools.partial(setattr, other)` и носители, у которых ссылка не первым
+аргументом (`run_in_executor`, `Thread`, `Timer`, `enqueue`, `starmap`, `apply_async`, `map`, обёртки),
+пары не дают (замер плана 16-48: 156 форм самопроверки; улика исполнения — одно событие записи
+колонки при двух находках). Решение владельца 2026-10-21 — «Принять как цену»: `kw_ext` — названная
+цена, а не дефект и не починка; строки `NAMED_COST_CASES` закрепляют число две находки, и правка,
+меняющая его, видна; в сторону лишней находки, а не пропуска. Цель-атрибут
 `self.bum = …` связывает имя последнего звена `bum`, и
 `other.bum(…)` любого объекта того же файла судится так же (план 16-27). Та же
 цена у ссылки: имя пишущего API, поданное другому вызову (`handler(update,
@@ -569,11 +595,14 @@ phone=x)`) и цепочку псевдонима дескриптора кол�
 Летопись словаря восьмого круга: план 16-44 вписал в общий словарь чтение имени getattr-строкой
 (`getattr-read`) и значение `methodcaller-receiver` — `methodcaller`, чья колонка приходит
 получателем, с API значения из таблицы `API_IDENTIFICATION_CALLS`, — так, что возврат чтения
-имени только у `Name` / `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет; партия
-раунда 8 сверила каждый GREEN с родителем и итог — с базой партии, с `1c243203` и с `2f8c1656` и
-по наличию находки, и по числу находок (мера «база ↔ HEAD» с осью счёта: число находок у обоих
-гейтов не меньше, чем у родителя и у базы, кроме исправленного пересчёта одного места — класс
-WR-24; решение владельца О-18 (а), 2026-10-19).
+имени только у `Name` / `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет; мера
+«база ↔ HEAD» партии раунда 8 сверила каждый GREEN с родителем и итог — с базой партии, с
+`1c243203` и с `2f8c1656` по наличию находки и по их числу (число находок — ось счёта; решение
+владельца О-18 (а), 2026-10-19) на корпусе из словаря и самопроверок исполнителей (источники
+(а)–(з), 64 483 ячейки, sha256 `fd55d467…`); семейств коллизии имени (k, kc), метода чужого
+объекта (fp) и двух подач через получатель (dw) в нём не было, и на этих осях замер раунда 9 нашёл
+регрессию `a77263ad` (CR-04), ложную находку того же коммита (WR-29) и давнее слияние двух подач
+(WR-31) (ревью IN-21; решение владельца О-20 (а), свойство 7).
 
 Летопись WR-31: гейт ставил запись через получатель `methodcaller` на сам литерал `methodcaller`, а
 место — (строка, столбец, вид), поэтому две подачи колонки через получатель давали одну находку на
@@ -586,6 +615,24 @@ WR-24; решение владельца О-18 (а), 2026-10-19).
 на оси носителя не выполнялось (`to_thread = setattr` рядом с поданной ссылкой на пишущий API, и имя
 `partial`, связанное с пишущим API, у применённой обёртки носителя); решение владельца О-20 (а),
 2026-10-20: заявление прежнее, варианты (а′) и (б) ОТВЕРГНУТЫ ВЛАДЕЛЬЦЕМ.
+
+Летопись словаря девятого круга: план 16-49 вписал в общий словарь формы коллизии видов
+(`collision-*`: `collision-module`, `collision-in-function`, `collision-rebound`,
+`collision-other-init`, `collision-class-body`), формы чтения через объект модуля
+(`module-object-*`: `module-object-getattr`, `module-object-attribute`, `module-object-bound`),
+значение `receiver` (поле `IdentificationValue.method`) и два носителя с соперником под своим
+именем (`carrier-name-bound-to-a-rival`, `executor-name-bound-to-a-rival`) — 21 форма × 7 значений
+× 23 способа, 3 381 ячейка на гейт; какая матрица что видит — режим `run.sh --dictionary --at
+1163ae39,HEAD` инструмента сверки: на дереве `1163ae39` из 1 743 ячеек строк девятого круга у гейта
+писателя 210 промахов — все на двух носителях с соперником (по 105), у гейта приватности 153 — 80 на
+носителях с соперником и 73 на формах коллизии и объекта модуля; на HEAD — ноль у обоих (замер
+планирования того же дерева — те же 210 и 153); мера «база ↔ HEAD» партии раунда 9 сверила каждый
+GREEN с родителем и итог — с базой партии `d31d86db`, с `fb8fef72`, с `1c243203` и с `2f8c1656` по
+наличию находки и по их числу на корпусе из своих источников (sha256 итогового `corpus.json` — в
+сводке плана 16-49) и чужих корпусов ревьюера и верификатора (29 941 ячейка; verify-r9 sha256
+`5c6c4527…`, review-r8 `2ee9e5f2…` и `5ae59c54…`), где каждая чужая ячейка совпала с ожиданием либо
+стоит в названной цене (`COST-KW` 281 — свойство 8 О-20; `COST-ATTR` 122 — О-22 (а)); свойства гейтов
+шире этого корпуса летопись не утверждает; решения владельца О-20 (а), О-21 (а), О-22 (а).
 
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
@@ -4472,34 +4519,43 @@ def test_every_column_naming_nested_in_every_name_position_is_a_write(position: 
 # применяет. `methodcaller` применяется к получателю — модулю `attributes`. Подменное
 # значение (`decoy`, план 16-31, ревью WR-18) — того же вида: пишущий API, первый по
 # алфавиту (`bulk_update_mappings` < `set_committed_value`), у имени, атрибута и
-# `getattr`-строки; `partial` над другим API; `methodcaller("noop")`.
+# `getattr`-строки; `partial` над другим API; `methodcaller("noop")`. Соперник (`rival`, план 16-49, ревью CR-04) —
+# значение ДРУГОГО вида под тем же последним именем в формах коллизии видов (`collision-*` общего словаря): пишущий
+# API `update`. Довод выбора: с соперником `setattr` или `set_committed_value` у значения `methodcaller-receiver` на
+# носителе с соперником гейт даёт две находки на одном узле колонки — названная цена `kw_ext` (решение владельца
+# 2026-10-21), а матрица требует ровно одну; `update` и `functools.partial(setattr, other)` этой пары не дают (замер
+# планирования 16-49 — 156 из 156 по одной); решение владельца О-20 (а), свойство 6.
 API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
     IdentificationValue(
-        "name", "set_committed_value", '(account, "phone", x)', "bulk_update_mappings"
+        "name", "set_committed_value", '(account, "phone", x)', "bulk_update_mappings", rival="update"
     ),
     IdentificationValue(
         "attribute",
         "attributes.set_committed_value",
         '(account, "phone", x)',
         "session.bulk_update_mappings",
+        rival="update",
     ),
     IdentificationValue(
         "getattr-string",
         'getattr(attributes, "set_committed_value")',
         '(account, "phone", x)',
         'getattr(session, "bulk_update_mappings")',
+        rival="update",
     ),
     IdentificationValue(
         "partial",
         "functools.partial(set_committed_value, account)",
         '("phone", x)',
         "functools.partial(session.bulk_update_mappings, MessengerAccount)",
+        rival="update",
     ),
     IdentificationValue(
         "methodcaller",
         'operator.methodcaller("set_committed_value", account, "phone", x)',
         "(attributes)",
         'operator.methodcaller("noop")',
+        rival="update",
     ),
     # `methodcaller`, чья колонка приходит ПОЛУЧАТЕЛЕМ (`MessengerAccount.phone`, пишет дескриптор
     # `__set__`), — вид, которого матрица не видела: у значения `methodcaller` колонка — в его
@@ -4509,14 +4565,26 @@ API_IDENTIFICATION_VALUES: tuple[IdentificationValue, ...] = (
         'operator.methodcaller("__set__", account, x)',
         "(MessengerAccount.phone)",
         'operator.methodcaller("noop")',
+        rival="update",
+    ),
+    # Значение-получатель (ревью WR-30, верификация раунда 9; решение владельца О-20 (а), свойство 6; план 16-49) —
+    # пара значения `receiver` гейта приватности по требованию правила-паритета (оно сверяет `id` значений по
+    # порядку): связанное имя — объект аккаунта, применение — его метод `__setattr__` с колонкой `"phone"`
+    # (`IdentificationValue.method`). Колонка названа в ПРИМЕНЕНИИ, поэтому ячейка этого гейта от связывания не
+    # зависит: запись `obj.__setattr__("phone", x)` гейт судит у любого объекта (вид 4). Пары с колонкой в получателе
+    # не годятся (замер планирования 16-49): `f = MessengerAccount.phone; f.__set__(account, x)` — колонка пришла
+    # переменной, пункт (1) границы (252 из 273 ячеек без находки); `MessengerAccount.__init__(account, phone=x)` теряет
+    # колонку у `starmap` (носитель не подаёт именованные). Подмена того же вида — `other`.
+    IdentificationValue(
+        "receiver", "account", '("phone", x)', "other", rival="update", method="__setattr__"
     ),
 )
 
 # Пишущий API, который называет находка ячейки матрицы, — для КАЖДОГО значения опознания, без
 # умолчания (план 16-44): пять прежних значений пишут `set_committed_value`, `methodcaller-receiver`
-# — дескриптором колонки (`__set__`). Таблицу читают правило-матрица этого гейта и правило-паритет
-# `tests/test_phone_gates_parity.py` (своей копии он не держит); полноту держит правило словаря
-# восьмого круга `test_the_shared_dictionary_holds_the_round_eight_axes`.
+# — дескриптором колонки (`__set__`), `receiver` — методом `__setattr__` объекта (план 16-49). Таблицу
+# читают правило-матрица этого гейта и правило-паритет `tests/test_phone_gates_parity.py` (своей копии
+# он не держит); полноту держат правила словаря восьмого и девятого круга.
 API_IDENTIFICATION_CALLS: dict[str, str] = {
     "name": "set_committed_value",
     "attribute": "set_committed_value",
@@ -4524,6 +4592,7 @@ API_IDENTIFICATION_CALLS: dict[str, str] = {
     "partial": "set_committed_value",
     "methodcaller": "set_committed_value",
     "methodcaller-receiver": "__set__",
+    "receiver": "__setattr__",
 }
 
 
@@ -4611,7 +4680,11 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     круга — их, меру «база ↔ HEAD» и число находок. С плана 16-48 (ревью WR-31, верификация раунда
     9; О-20 (а), свойства 2 и 5) — и место записи через получатель: шапка называет узел получателя и
     суд каждого толкования вызова, летопись WR-31 — закрепку дефекта мерой 16-44 и переклассификацию
-    `REPAIRED`, абзац цены — коллизию имени носителя.
+    `REPAIRED`, абзац цены — коллизию имени носителя. С плана 16-49 (ревью CR-04, WR-30; О-20 (а), свойство 6) — и
+    словарь девятого круга: шапка называет формы коллизии видов (`collision-module`) и чтения через объект модуля
+    (`module-object-getattr`), значение `receiver`, носитель `carrier-name-bound-to-a-rival` и летопись словаря
+    девятого круга (ревью IN-21, О-20 (а), свойство 7), а абзац цены строгости — названную цену `kw_ext` с решением
+    владельца 2026-10-21 и строками `NAMED_COST_CASES`.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4810,6 +4883,31 @@ def test_the_writer_gate_header_names_the_shared_grammar_and_every_carrier():
     for needle in ("16-44", "getattr-read", "methodcaller-receiver", "база ↔ HEAD", "число находок", "О-18 (а)"):
         if eighth and needle not in eighth:
             missing.append(f"летопись словаря восьмого круга не называет «{needle}»")
+    # Словарь девятого круга (ревью CR-04, WR-30, верификация раунда 9; решение владельца О-20 (а), свойство 6; план
+    # 16-49): шапка называет формы коллизии видов и чтения через объект модуля общего словаря.
+    for needle in ("`collision-module`", "`module-object-getattr`"):
+        if needle not in flat:
+            missing.append(f"нет форм словаря девятого круга: нет «{needle}»")
+    # Значение и носители словаря девятого круга (план 16-49): значение-получатель `receiver` и носитель, чьё последнее
+    # имя связано с соперником.
+    for needle in ("`receiver`", "`carrier-name-bound-to-a-rival`"):
+        if needle not in flat:
+            missing.append(f"нет значения или носителя словаря девятого круга: нет «{needle}»")
+    # Итог партии раунда 9 (ревью IN-21; решения владельца О-20 (а), свойство 7, О-21 (а); план 16-49): летопись словаря
+    # девятого круга есть; её места держит правило-паритет `test_the_dictionary_chronicles_name_what_the_measure_compared`.
+    if not _chronicle_segment(flat, "Летопись словаря девятого круга"):
+        missing.append("нет «Летопись словаря девятого круга»")
+    # Названная цена `kw_ext` (решение владельца 2026-10-21, «Принять как цену»): абзац цены строгости называет пару kw
+    # (`functools.partial(setattr, other)` и `methodcaller("__set__", …)`), её расширение на ось носителя, решение
+    # владельца с датой и строки `NAMED_COST_CASES`, которые закрепляют число; «вынесено владельцу» в шапке больше нет.
+    price_at = flat.find("Цена — в сторону лишней находки")
+    price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_at)
+    price_text = flat[price_at:price_end] if 0 <= price_at < price_end else ""
+    for needle in ("`kw_ext`", "`functools.partial(setattr, other)`", "2026-10-21", "Принять как цену", "`NAMED_COST_CASES`"):
+        if needle not in price_text:
+            missing.append(f"абзац цены строгости не называет решение владельца о `kw_ext`: нет «{needle}»")
+    if "вынесено владельцу" in flat:
+        missing.append("шапка всё ещё называет расширение цены kw вынесенным владельцу («вынесено владельцу»)")
     # Место записи через получатель и суд каждого толкования вызова (ревью WR-31, верификация раунда 9;
     # решение владельца О-20 (а), свойства 2 и 5; план 16-48): шапка называет узел получателя и суд каждого
     # толкования вызова; летопись WR-31 — меру 16-44, её ожидание `exact 1` и `REPAIRED` против `2f8c1656`,
@@ -7465,6 +7563,54 @@ def test_the_writer_place_count_rule_reddens_a_receiver_write_merged_by_subject(
         + ", ".join(unseen)
     )
     assert not wrong, "число находок строк WR-31 не равно числу мест: " + "; ".join(wrong)
+
+
+# Названная цена `kw_ext` (решение владельца 2026-10-21, «Принять как цену»; расширение на ось носителя цены kw —
+# свойство 8 О-20): пишущий API соперника, связанный с последним именем носителя (`to_thread = setattr`), и ссылка
+# `operator.methodcaller("__set__", account, x)`, поданная носителю с получателем-колонкой, — две находки на одном узле
+# колонки при ОДНОЙ записи (`setattr(…, MessengerAccount.phone, …)` и `MessengerAccount.phone.__set__(…)`; улика
+# исполнения 16-48 и 16-49: одно событие `set` колонки). Строка на каждый API соперника, дающий пару (`setattr`,
+# `set_committed_value`, `flag_modified`; `update` и `functools.partial(setattr, other)` пары не дают). Число находок —
+# `NAMED_COST_FINDINGS`, а не число мест (`LITERAL_FORM_PLACES` — узлы колонки, здесь он один): правка гейта, меняющая
+# число этих строк, — видимое решение, а не тихая смена. Это закрепка цены, а не заявление: в корпусе сверки строки
+# судятся ожиданием «одно место» с допустимым числом цены 2 (`cost` `kw_ext`).
+NAMED_COST_FINDINGS = 2
+NAMED_COST_CASES = [
+    pytest.param(
+        "import asyncio, contextvars, functools, operator\n"
+        "from app.models.messenger_account import MessengerAccount\n"
+        "from sqlalchemy.orm.attributes import flag_modified, set_committed_value\n"
+        f"to_thread = {rival}\n"
+        'f = operator.methodcaller("__set__", account, x)\n'
+        "asyncio.to_thread(f, MessengerAccount.phone)\n",
+        rival,
+        id=f"kw-ext-{rival.replace('_', '-')}-under-a-carrier-name-and-a-receiver-methodcaller",
+    )
+    for rival in ("setattr", "set_committed_value", "flag_modified")
+]
+
+
+@pytest.mark.parametrize(("source", "rival"), NAMED_COST_CASES)
+def test_a_named_cost_form_gives_its_named_count(source, rival):
+    """Строка названной цены `kw_ext` даёт ровно `NAMED_COST_FINDINGS` находок на одном узле колонки (решение владельца).
+
+    Обе находки — на строке подачи (один узел колонки `MessengerAccount.phone` в исходнике — одна запись): одна
+    называет соперника под именем носителя (`<соперник>(…, MessengerAccount.phone, …)`), другая — дескриптор колонки
+    (`MessengerAccount.phone.__set__(…)`). Починка, сводящая пару к одной находке, и рост числа — оба видимы: строка
+    краснеет, и решение владельца 2026-10-21 пересматривается явно.
+    """
+    offences = phone_write_offences(source, "scripts/x.py")
+    assert source.count("MessengerAccount.phone") == 1, "строка цены несёт не один узел колонки"
+    assert len(offences) == NAMED_COST_FINDINGS, (
+        f"строка названной цены `kw_ext` (соперник `{rival}`): находок {len(offences)}, названная цена — "
+        f"{NAMED_COST_FINDINGS}: {offences}"
+    )
+    places = {offence.split(" — ", 1)[0] for offence in offences}
+    subjects = sorted(offence.split(" — ", 2)[2] for offence in offences)
+    assert len(places) == 1, f"находки названной цены не на одном месте: {offences}"
+    assert subjects == sorted([f"{rival}(…, MessengerAccount.phone, …)", "MessengerAccount.phone.__set__(…)"]), (
+        f"находки названной цены `kw_ext` называют не соперника и дескриптор колонки: {offences}"
+    )
 
 
 LEGITIMATE_CASES = [

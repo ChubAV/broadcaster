@@ -72,6 +72,20 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   getattr-строкой, значение опознания `methodcaller-receiver` у обоих гейтов на одной позиции и
   полнота таблицы `API_IDENTIFICATION_CALLS` гейта писателя, — так что возврат чтения имени только
   у `Name` / `Attribute` (класс WR-28) краснит обе матрицы и правило-паритет.
+* Словарь девятого круга (`test_the_shared_dictionary_holds_the_round_nine_axes`, ревью CR-04, WR-30, верификация
+  раунда 9; решение владельца О-20 (а), свойство 6; план 16-49): пять форм коллизии видов (`collision-module` и
+  соседи: одно последнее имя связано с соперником другого вида — поле `IdentificationValue.rival`, у приватности
+  вызываемое журнала, у писателя пишущий API, — и со значением опознания) и три формы чтения через объект модуля
+  (`module-object-getattr` и соседи), соперник у каждого значения обоих гейтов, значение `receiver` (связанное имя
+  — получатель, применение — его метод, поле `IdentificationValue.method`) на одной позиции у обоих гейтов с API
+  `__setattr__` в таблице `API_IDENTIFICATION_CALLS` и носители `carrier-name-bound-to-a-rival` /
+  `executor-name-bound-to-a-rival` (последнее имя вызова носителя связано с соперником), — так что возврат закрытия
+  толкований после опознанного вызова (класс CR-04), потеря получателя, прочитанного через объект модуля (класс
+  WR-30), и толкование псевдонима, закрывающее путь носителя (коллизия имени носителя), краснят матрицы и
+  правило-паритет. Мера «база ↔ HEAD» партии раунда 9 сверила каждый GREEN с родителем и итог — с базой партии
+  `d31d86db`, с `fb8fef72`, `1c243203` и `2f8c1656` по наличию находки и по их числу на корпусе из своих источников и
+  чужих корпусов ревьюера и верификатора (29 941 ячейка, verify-r9 sha256 `5c6c4527…`); свойства гейтов шире этого
+  корпуса этот абзац не утверждает (ревью IN-21).
 * Место значения `partial` (`test_the_partial_value_place_is_pinned_by_a_privacy_row`, ревью
   IN-20, решение владельца О-19, план 16-43): у `partial` с одним позиционным аргументом (номером)
   места `last` нет по выбору словаря — его ячейка `map-named-iterable` равна ячейке `map`, — и
@@ -93,7 +107,10 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   `test_the_dictionary_chronicles_name_which_matrix_each_regression_reddens` — комментарии строк
   `named-wrapper-bound-handed` и `map-named-iterable` общего модуля, абзац этого докстринга о
   словаре седьмого круга и летописи словаря седьмого круга шапок обоих гейтов разводят, какая
-  регрессия какую матрицу краснит.
+  регрессия какую матрицу краснит; `test_the_dictionary_chronicles_name_what_the_measure_compared` (ревью IN-21,
+  решение владельца О-20 (а), свойство 7, план 16-49) — летописи словаря восьмого и девятого круга шапок обоих гейтов
+  называют, что мера «база ↔ HEAD» сверяла (корпус, его оси, размеры, sha256), и не записывают итог меры свойством
+  гейтов шире корпуса.
 """
 
 from __future__ import annotations
@@ -508,6 +525,193 @@ def test_the_shared_dictionary_holds_the_round_eight_axes():
     )
 
 
+# Формы словаря девятого круга (ревью CR-04, WR-30, верификация раунда 9, 2026-10-20; решение владельца О-20 (а),
+# свойство 6; план 16-49): коллизия видов — одно последнее имя связано с соперником другого вида (`{rival}`) и со
+# значением опознания (`{value}`) — и чтение имени через объект модуля.
+ROUND_NINE_COLLISION_FORMS = (
+    "collision-module",
+    "collision-in-function",
+    "collision-rebound",
+    "collision-other-init",
+    "collision-class-body",
+)
+ROUND_NINE_MODULE_OBJECT_FORMS = ("module-object-getattr", "module-object-attribute", "module-object-bound")
+MODULE_OBJECT = "sys.modules[__name__]"
+
+
+def _probe_tree(template: str) -> ast.Module:
+    """Шаблон формы с заместителями мест: значение, соперник, подмена — имена, место `{use}` — вызов."""
+    for place, probe in (("{value}", "VALUE_PROBE"), ("{rival}", "RIVAL_PROBE"), ("{decoy}", "DECOY_PROBE")):
+        template = template.replace(place, probe)
+    return ast.parse(template.replace("{use}", "USE_PROBE()"))
+
+
+def _bound_names(tree: ast.Module, probe: str) -> set[str]:
+    """Последние имена целей присваиваний, чьё значение — заместитель `probe` (`f`, `self.f` → `f`)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name) and node.value.id == probe:
+            names |= {name for target in node.targets if (name := grammar.reading_name(target)) is not None}
+    return names
+
+
+def _round_nine_form_problems() -> list[str]:
+    """Чем словарь не держит формы девятого круга: строки, место соперника, общее имя, чтение через объект модуля."""
+    problems: list[str] = []
+    forms = {form.id: form for form in grammar.BINDING_FORMS}
+    for form_id in (*ROUND_NINE_COLLISION_FORMS, *ROUND_NINE_MODULE_OBJECT_FORMS):
+        if form_id not in forms:
+            problems.append(f"в `BINDING_FORMS` нет формы `{form_id}`")
+    for form_id in ROUND_NINE_COLLISION_FORMS:
+        form = forms.get(form_id)
+        if form is None:
+            continue
+        if "{rival}" not in form.template:
+            problems.append(f"у формы `{form_id}` нет места соперника `{{rival}}`")
+            continue
+        tree = _probe_tree(form.template)
+        rival_names, value_names = _bound_names(tree, "RIVAL_PROBE"), _bound_names(tree, "VALUE_PROBE")
+        read = grammar.reading_name(ast.parse(form.ref, mode="eval").body)
+        if not rival_names & value_names or read not in rival_names & value_names:
+            problems.append(f"форма `{form_id}` связывает соперника ({sorted(rival_names)}) и значение "
+                            f"({sorted(value_names)}) не под тем последним именем, что читает ссылка `{form.ref}`")
+        probe = grammar.IdentificationValue("probe", "probe_fn", "(first)")
+        try:
+            grammar.binding_form_source(form, probe, None)
+        except AssertionError:
+            pass
+        else:
+            problems.append(f"`binding_form_source` собрал форму `{form_id}` у значения без соперника — вакуум")
+    for form_id in ROUND_NINE_MODULE_OBJECT_FORMS:
+        form = forms.get(form_id)
+        if form is None:
+            continue
+        tree = _probe_tree(form.template)
+        owners = {
+            target.id
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign) and ast.unparse(node.value) == MODULE_OBJECT
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        ref = ast.parse(form.ref, mode="eval").body
+        owner = ref.args[0] if isinstance(ref, ast.Call) and ref.args else getattr(ref, "value", None)
+        via_module = owner is not None and (ast.unparse(owner) == MODULE_OBJECT or ast.unparse(owner) in owners)
+        if not via_module or grammar.reading_name(ref) not in _bound_names(tree, "VALUE_PROBE"):
+            problems.append(f"ссылка формы `{form_id}` — `{form.ref}` — не читает имя значения через `{MODULE_OBJECT}`")
+    return problems
+
+
+def _round_nine_rival_problems() -> list[str]:
+    """Чем значения опознания обоих гейтов не держат соперника: пусто или соперник не другого вида."""
+    problems: list[str] = []
+    writer_names = set(writer.WRITE_CALL_NAMES) | {parameter.call for parameter in writer.JUDGED_PARAMETERS}
+    for side, values in (("писателя", writer.API_IDENTIFICATION_VALUES), ("приватности", privacy.LOG_IDENTIFICATION_VALUES)):
+        for value in values:
+            rival = getattr(value, "rival", "")
+            if not rival:
+                problems.append(f"у значения `{value.id}` гейта {side} нет соперника (`IdentificationValue.rival`)")
+                continue
+            node = ast.parse(rival, mode="eval").body
+            if side == "приватности" and not privacy._is_log_callable(node):
+                problems.append(f"соперник `{rival}` значения `{value.id}` гейта приватности — не вызываемое журнала")
+            if side == "писателя" and grammar.reading_name(node) not in writer_names:
+                problems.append(f"соперник `{rival}` значения `{value.id}` гейта писателя — не пишущий API")
+    return problems
+
+
+# Значение и носители словаря девятого круга (ревью WR-30, CR-04 / KC; решение владельца О-20 (а), свойство 6;
+# план 16-49): значение, у которого связанное имя — получатель, а применение — его метод, и носители, чьё последнее
+# имя вызова связано в модуле с соперником.
+ROUND_NINE_VALUE = "receiver"
+ROUND_NINE_METHODS = {"writer": "__setattr__", "privacy": "info"}
+ROUND_NINE_CARRIERS = {"carrier-name-bound-to-a-rival": "to_thread", "executor-name-bound-to-a-rival": "run_in_executor"}
+
+
+def _round_nine_value_problems() -> list[str]:
+    """Чем словарь не держит значение `receiver`, поле `method` и носители с соперником под своим именем."""
+    problems: list[str] = []
+    writer_ids = [value.id for value in writer.API_IDENTIFICATION_VALUES]
+    privacy_ids = [value.id for value in privacy.LOG_IDENTIFICATION_VALUES]
+    for side, ids in (("писателя", writer_ids), ("приватности", privacy_ids)):
+        if not ids or ids[-1] != ROUND_NINE_VALUE:
+            problems.append(f"у гейта {side} значение `{ROUND_NINE_VALUE}` — не последнее значение опознания: {ids}")
+    direct = next(form for form in grammar.BINDING_FORMS if form.id == "direct")
+    for side, gate, values in (
+        ("writer", "писателя", writer.API_IDENTIFICATION_VALUES),
+        ("privacy", "приватности", privacy.LOG_IDENTIFICATION_VALUES),
+    ):
+        value = next((value for value in values if value.id == ROUND_NINE_VALUE), None)
+        if value is None:
+            continue
+        method = getattr(value, "method", "")
+        if method != ROUND_NINE_METHODS[side]:
+            problems.append(f"метод значения `{ROUND_NINE_VALUE}` гейта {gate} — `{method}`, ожидался "
+                            f"`{ROUND_NINE_METHODS[side]}` (`IdentificationValue.method`)")
+        applied = ast.parse(f"f{value.call}", mode="eval").body
+        arguments = [ast.unparse(argument) for argument in applied.args]
+        if side == "privacy":
+            if not privacy._is_factory_call(ast.parse(value.value, mode="eval").body):
+                problems.append(f"значение `{ROUND_NINE_VALUE}` гейта приватности — не вызов фабрики журнала: `{value.value}`")
+            if not any("phone" in argument for argument in arguments):
+                problems.append(f"номер значения `{ROUND_NINE_VALUE}` гейта приватности не в аргументах применения: {value.call}")
+        elif "'phone'" not in arguments and '"phone"' not in arguments:
+            problems.append(f"колонка `\"phone\"` значения `{ROUND_NINE_VALUE}` гейта писателя не в аргументах применения: "
+                            f"{value.call}")
+        source = grammar.binding_form_source(direct, value, None)
+        if f".{ROUND_NINE_METHODS[side]}(" not in source:
+            problems.append(f"ячейка прямого вызова значения `{ROUND_NINE_VALUE}` гейта {gate} не зовёт метод: {source!r}")
+    calls = getattr(writer, "API_IDENTIFICATION_CALLS", {})
+    if calls.get(ROUND_NINE_VALUE) != ROUND_NINE_METHODS["writer"]:
+        problems.append(f"`API_IDENTIFICATION_CALLS` у `{ROUND_NINE_VALUE}` — {calls.get(ROUND_NINE_VALUE)!r}, ожидалось "
+                        f"`{ROUND_NINE_METHODS['writer']}`")
+    carriers = {carrier.id: carrier for carrier in grammar.REFERENCE_CARRIERS}
+    for carrier_id, name in ROUND_NINE_CARRIERS.items():
+        carrier = carriers.get(carrier_id)
+        if carrier is None:
+            problems.append(f"в `REFERENCE_CARRIERS` нет строки `{carrier_id}`")
+            continue
+        template = carrier.template.replace("{rival}", "RIVAL_PROBE")
+        tree = ast.parse(template.format(ref="REF", args="A", positional="A", keywords="{}"))
+        bound = _bound_names(tree, "RIVAL_PROBE")
+        called = {
+            grammar.reading_name(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)
+        }
+        if name not in bound or name not in called:
+            problems.append(f"шаблон `{carrier_id}` не связывает последнее имя вызова носителя `{name}` с `{{rival}}`: "
+                            f"`{carrier.template}`")
+    return problems
+
+
+def test_the_shared_dictionary_holds_the_round_nine_axes():
+    """Словарь матриц и паритета держит оси девятого круга: коллизию видов и чтение через объект модуля.
+
+    Словарь подменял имя только значением того же вида (`decoy`), поэтому ни обе матрицы, ни это правило, ни корпус
+    меры «база ↔ HEAD» партии раунда 8 не собирали ячейку, где одно последнее имя связано с вызываемым журнала и с
+    `methodcaller`: регрессия `a77263ad` (CR-04) прошла суиту и меру зелёными, а получатель журнала, прочитанный
+    через объект модуля (WR-30), был вне словаря (ревью CR-04, WR-30, верификация раунда 9, 2026-10-20). Правило
+    держит (а) пять форм коллизии видов (`collision-module`, `collision-in-function`, `collision-rebound`,
+    `collision-other-init`, `collision-class-body`): у каждой — место соперника `{rival}`, связанное под тем же
+    последним именем, что `{value}`, и то же имя читает ссылка формы; у значения без соперника
+    `binding_form_source` поднимает `AssertionError` (вакуум, как у `{decoy}`); (б) три формы чтения через объект
+    модуля (`module-object-getattr`, `module-object-attribute`, `module-object-bound`) — ссылка читает имя значения
+    через `sys.modules[__name__]` или имя, связанное с ним; (в) соперника у КАЖДОГО значения обоих гейтов
+    (`IdentificationValue.rival`): у приватности — вызываемое журнала, у писателя — пишущий API
+    (`WRITE_CALL_NAMES` или `JUDGED_PARAMETERS`); (г) значение `receiver` у обоих гейтов на последней позиции —
+    связанное имя получатель, применение — его метод (`IdentificationValue.method`): у приватности вызов фабрики
+    журнала с методом `info` и номером в аргументах применения, у писателя `__setattr__` с колонкой `"phone"` в
+    аргументах; ячейка прямого вызова зовёт метод; `API_IDENTIFICATION_CALLS["receiver"]` — `__setattr__`; (д) строки
+    `REFERENCE_CARRIERS` `carrier-name-bound-to-a-rival` и `executor-name-bound-to-a-rival`: шаблон связывает
+    последнее имя вызова носителя (`to_thread`, `run_in_executor`) с `{rival}`. Решение владельца О-20 (а), свойство
+    6; план 16-49.
+    """
+    problems = _round_nine_form_problems() + _round_nine_rival_problems() + _round_nine_value_problems()
+
+    assert not problems, "словарь матриц и паритета не держит ось девятого круга:\n" + "\n".join(
+        f"  {problem}" for problem in problems
+    )
+
+
 # Строка гейта приватности, которая держит место не-литеральной итерируемой у значения `partial`
 # (ревью IN-20, решение владельца О-19, план 16-43).
 PARTIAL_VALUE_PLACE_ROW = "partial-log-reference-mapped-over-a-phone-attribute"
@@ -853,4 +1057,55 @@ def test_the_dictionary_chronicles_name_which_matrix_each_regression_reddens():
     assert not problems, (
         "летописи словаря не разводят, какая регрессия какую матрицу краснит (ревью IN-18):\n"
         + "\n".join(f"  {problem}" for problem in problems)
+    )
+
+
+# Фраза-итог летописей словаря восьмого круга обеих шапок на `1163ae39` (ревью IN-21, верификация раунда 9): итог меры
+# записан свойством гейтов, и замер раунда 9 его опроверг — у приватности `a77263ad` против родителя и базы (CR-04),
+# у писателя две подачи через получатель против `2f8c1656` (WR-31, не класс WR-24).
+REFUTED_MEASURE_CLAIM = "число находок у обоих гейтов не меньше, чем у родителя и у базы"
+# Что летопись словаря восьмого круга называет вместо итога: корпус меры партии раунда 8.
+EIGHTH_MEASURE_NEEDLES = ("64 483", "fd55d467", "корпус")
+# Что называет летопись словаря девятого круга: план, строки словаря, корпус меры партии раунда 9 и решения владельца.
+NINTH_MEASURE_NEEDLES = ("16-49", "collision", "module-object", "receiver", "29 941", "5c6c4527", "О-20 (а)", "О-21 (а)")
+
+
+def test_the_dictionary_chronicles_name_what_the_measure_compared():
+    """Летописи словаря называют, что мера сверяла, а не свойство гейтов шире корпуса (ревью IN-21; О-20 (а), свойство 7).
+
+    Летописи словаря восьмого круга обеих шапок записывали итог меры «база ↔ HEAD» партии раунда 8 свойством гейтов —
+    «число находок у обоих гейтов не меньше, чем у родителя и у базы», — а мера сверяла корпус из словаря и
+    самопроверок исполнителей, где не было ни коллизии имени, ни метода чужого объекта, ни двух подач через получатель;
+    замер раунда 9 нашёл на этих осях регрессию `a77263ad` (CR-04) и давнее слияние двух подач (WR-31). Правило
+    держит: в шапке КАЖДОГО гейта абзац «Летопись словаря восьмого круга» (через `_chronicle_segment` модуля гейта)
+    называет корпус меры — «64 483», «fd55d467», «корпус» — и не содержит опровергнутой фразы-итога (её текст —
+    константа `REFUTED_MEASURE_CLAIM`, строки шапок на `1163ae39`); абзац «Летопись словаря девятого круга» называет
+    план 16-49, строки словаря девятого круга (`collision`, `module-object`, `receiver`), корпус меры партии раунда 9
+    (29 941 чужая ячейка, sha256 корпуса верификатора `5c6c4527…`), решения владельца О-20 (а), О-21 (а) и той же
+    фразы-итога не содержит. Решение владельца О-20 (а), свойство 7; план 16-49.
+    """
+    problems: list[str] = []
+    for title, module in (("писателя", writer), ("приватности", privacy)):
+        flat = " ".join((module.__doc__ or "").split())
+        eighth = module._chronicle_segment(flat, "Летопись словаря восьмого круга")
+        ninth = module._chronicle_segment(flat, "Летопись словаря девятого круга")
+        if not eighth:
+            problems.append(f"в шапке гейта {title} нет «Летопись словаря восьмого круга»")
+        if not ninth:
+            problems.append(f"в шапке гейта {title} нет «Летопись словаря девятого круга»")
+        for heading, text, needles in (
+            ("восьмого", eighth, EIGHTH_MEASURE_NEEDLES),
+            ("девятого", ninth, NINTH_MEASURE_NEEDLES),
+        ):
+            if not text:
+                continue
+            for needle in needles:
+                if needle not in text:
+                    problems.append(f"летопись словаря {heading} круга шапки гейта {title} не называет «{needle}»")
+            if REFUTED_MEASURE_CLAIM in text:
+                problems.append(f"летопись словаря {heading} круга шапки гейта {title} утверждает итог меры свойством "
+                                f"гейтов: «{REFUTED_MEASURE_CLAIM}»")
+
+    assert not problems, (
+        "летописи словаря не называют, что мера сверяла (ревью IN-21):\n" + "\n".join(f"  {problem}" for problem in problems)
     )
