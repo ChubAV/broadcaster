@@ -2353,6 +2353,63 @@ def test_a_planted_notice_with_a_methodcaller_sharing_a_print_name_reddens_the_g
     )
 
 
+def test_a_planted_trace_through_the_module_object_reddens_the_gate_and_a_file_export_does_not(tmp_path):
+    """WR-29, WR-30 (D-11, D-17): журнал модуля через объект модуля — находка; запись в файл — нет.
+
+    `lg = logging.getLogger(__name__)` на уровне модуля и `getattr(sys.modules[__name__],
+    "lg").info("trace %s", account.phone)` в функции `trace` — форма Фаз 17–20, где журнал модуля
+    читают через объект модуля. До плана 16-47 гейт приватности сверял имя члена с получателями
+    модуля только у голого имени, и форма уходила мимо гейта на всех деревьях, а `logging` печатал
+    номер (ревью WR-30, верификация раунда 9, 2026-10-20). Соседний модуль `phone_export.py`:
+    `write = print` на уровне модуля и `fh.write(account.phone)` — запись номера в файл методом
+    файла; после цикла самопроверки 1 плана 16-43 (коммит `a77263ad`) гейт читал имя модуля,
+    связанное с вызываемым журнала, членом ЛЮБОГО объекта и принимал эту запись за журнал (ревью
+    WR-29; исполнение: номер ушёл в файл, в журнал — ничего). Решение владельца О-20 (а), свойства
+    3 и 4: имя модуля читается членом только у объекта модуля (`sys.modules[__name__]` и имени,
+    связанного с ним), и член объекта модуля, связанный с получателем журнала, — получатель. Место
+    находки — узел номера (строка 8), владелец — функция `trace`. Оба файла находятся тем же обходом
+    `python_sources(root)`, что и живое дерево.
+    """
+    services = tmp_path / "app" / "services"
+    services.mkdir(parents=True)
+    traced = services / "phone_trace.py"
+    traced.write_text(
+        "import logging\n"
+        "import sys\n"
+        "\n"
+        "lg = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "def trace(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("trace %s", account.phone)\n',
+        encoding="utf-8",
+    )
+    exported = services / "phone_export.py"
+    exported.write_text(
+        "write = print\n"
+        "\n"
+        "\n"
+        "def export(fh, account):\n"
+        "    fh.write(account.phone)\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [exported, traced], (
+        "обход синтетического дерева `app` не нашёл ровно два подложенных файла"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+
+    assert offences == ["app/services/phone_trace.py:8 — имя — phone (владелец trace)"], (
+        "журнал модуля, прочитанный через объект модуля, и запись номера в файл гейт приватности "
+        f"судит не так: гейт обошёл синтетическое дерево ({_render(scans)}) и выдал {offences} — "
+        "ждали одну находку `getattr(sys.modules[__name__], \"lg\").info(…)` и ни одной у "
+        "`fh.write(account.phone)` при `write = print`"
+    )
+    assert python_log_calls(exported.read_text(encoding="utf-8")) == [], (
+        "запись номера в файл методом `fh.write` при `write = print` гейт принял за вызов журнала"
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -3525,6 +3582,115 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="methodcaller-attribute-shares-a-print-name-in-another-class-body",
     ),
+    # Ревью WR-30 (повторное ревью раунда 8, верификация раунда 9, 2026-10-20): получатель журнала,
+    # связанный с именем модуля (`lg = logging.getLogger("x")`) и прочитанный через объект модуля, —
+    # getattr-строкой, с умолчанием, атрибутом, цепочкой, через имя, связанное с объектом модуля,
+    # поданный `methodcaller` и носителю. До плана 16-47 `_is_log_receiver` сверял имя члена с
+    # получателями модуля только у голого имени: `[]` на HEAD, `fb8fef72`, `1c243203`, `2f8c1656`,
+    # `e1d6587e` и `a77263ad`, а `logging` печатал номер («LOG w30 +79991234567»). Решение владельца
+    # О-20 (а), свойство 4: член объекта модуля, чьё имя связано в модуле с получателем журнала, —
+    # получатель при любом чтении (помощник `_is_module_object`, план 16-47).
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-the-module-object-by-a-getattr-string",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg", None).info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-the-module-object-by-a-getattr-string-with-a-default",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    sys.modules[__name__].lg.info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-as-an-attribute-of-the-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    r = getattr(sys.modules[__name__], "lg")\n'
+        '    r.info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-a-getattr-chain-on-the-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        "    me = sys.modules[__name__]\n"
+        '    me.lg.info("x %s", account.phone)\n',
+        "phone",
+        id="module-logger-read-through-a-bound-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    emit = operator.methodcaller("info", "y %s", account.phone)\n'
+        '    emit(getattr(sys.modules[__name__], "lg"))\n',
+        "phone",
+        id="methodcaller-applied-to-the-module-logger-read-through-the-module-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import asyncio, logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    asyncio.to_thread(getattr(sys.modules[__name__], "lg").info, "x %s", account.phone)\n',
+        "phone",
+        id="module-logger-method-read-through-the-module-object-handed-to-to-thread",
+    ),
+    # Решение владельца О-22 (а), 2026-10-21: атрибут, связанный в модуле с вызываемым журнала
+    # (`self.out = logger.info` в `__init__`), судится у любого объекта — атрибут, вызванный у
+    # параметра (`a.out(…)`, `a` — экземпляр `A`), гейт ловит и сегодня. Вариант (б) «свой
+    # владелец, параметр без аннотации — в границу» терял эту форму и ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ; строка —
+    # закрепка решения (цена «в сторону лишней находки» названа в шапке, план 16-47).
+    pytest.param(
+        "app/x.py",
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "\n"
+        "class A:\n"
+        "    def __init__(self):\n"
+        "        self.out = logger.info\n"
+        "\n"
+        "\n"
+        "def f(a, account):\n"
+        '    a.out("x %s", account.phone)\n',
+        "phone",
+        id="log-callable-attribute-called-on-a-parameter",
+    ),
 ]
 
 # Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
@@ -4426,6 +4592,74 @@ POSITIVE_CONTROLS = [
         "    asyncio.to_thread(mc, logger)\n",
         True,
         id="methodcaller-handed-to-a-carrier-whose-name-is-print-without-a-number",
+    ),
+    # Ревью WR-29 (повторное ревью раунда 8, верификация раунда 9, 2026-10-20): имя, связанное в
+    # модуле с вызываемым журнала (`write = print`, `info = logger.info`), — не имя метода чужого
+    # объекта: `fh.write(account.phone)` пишет номер в файл, а не в журнал (исполнение: `FILE-ONLY
+    # '+79991234567'`). Цикл самопроверки 1 плана 16-43 (коммит `a77263ad`) положил такое имя в
+    # атрибуты, и метод любого объекта с этим именем стал вызовом журнала — 0 находок на базах, 1 на
+    # HEAD. Решение владельца О-20 (а), свойство 3: имя модуля читается членом только у объекта модуля
+    # (план 16-47).
+    pytest.param(
+        "app/x.py",
+        "write = print\n\n\ndef export(fh, account):\n    fh.write(account.phone)\n",
+        False,
+        id="print-name-is-not-a-method-of-a-file-object",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "info = logger.info\n"
+        "\n"
+        "\n"
+        "def keep(messages, account):\n"
+        "    messages.info(account.phone)\n",
+        False,
+        id="log-method-name-is-not-a-method-of-a-message-store",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "emit = logger.info\n"
+        "\n"
+        "\n"
+        "def notify(signal, account):\n"
+        "    signal.emit(account.phone)\n",
+        False,
+        id="log-method-name-is-not-a-method-of-a-signal",
+    ),
+    pytest.param(
+        "app/x.py",
+        "send = print\n\n\ndef deliver(bot, account):\n    bot.send(account.phone)\n",
+        False,
+        id="print-name-is-not-a-method-of-a-bot",
+    ),
+    # Ревью WR-30 (план 16-47): журнал модуля через объект модуля над `account.name` — вызов журнала
+    # без находки; имя модуля, связанное не с журналом (`lg = make_thing()`), прочитанное через
+    # объект модуля, — не вызов журнала.
+    pytest.param(
+        "app/x.py",
+        "import logging, sys\n"
+        'lg = logging.getLogger("x")\n'
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("x %s", account.name)\n',
+        True,
+        id="module-logger-read-through-the-module-object-without-a-number",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import sys\n"
+        "lg = make_thing()\n"
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    getattr(sys.modules[__name__], "lg").info("x %s", account.phone)\n',
+        False,
+        id="non-logger-module-name-read-through-the-module-object",
     ),
 ]
 
