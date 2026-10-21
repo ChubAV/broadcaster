@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: CR-04
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "Гейт приватности после цикла 1 16-43 (`a77263ad`) пропускает `methodcaller` над журналом, если его последнее имя где-либо в модуле связано с вызываемым журнала, — регрессия наличия против `fb8fef72` и `1c243203`, номер печатается"
   - id: WR-29
     severity: warning
@@ -227,7 +227,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 5
+open: 4
 total: 56
 recorded: 2026-10-20T06:01:55.382Z
 ---
@@ -236,7 +236,7 @@ recorded: 2026-10-20T06:01:55.382Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-04 | critical | open | - |
+| CR-04 | critical | fixed | `16-46` задачи 1–2, GREEN `cbcf07e1`, `472e30f6` (циклов самопроверки и сверки не понадобилось); форма коллизии видов в словаре — `16-49` задача 1, GREEN `f7948e5b` — решение владельца О-20 (а), свойства 1, 2: регрессия наличия партии раунда 8 («a77263ad», цикл самопроверки 1 плана 16-43: имя модуля, связанное с вызываемым журнала, легло и в атрибуты, вызов `self.emit(logger)` при `emit = print` опознавался вызовом журнала, и ветка закрытия после опознанного вызова в `python_log_calls` не пускала путь `methodcaller` и применения обёрток; на «e1d6587e», «fb8fef72» и «1c243203» эти формы ловились, на «a77263ad» и «e9449db5» — ноль находок, номер печатался); GREEN снял ветку закрытия: каждое толкование узла судится, повтор места снимает дедупликация по узлу 16-41, новой дедупликации нет; давний класс C5–C7 (имя, перевязанное с `print` на `methodcaller`, и `print` в другом классе — пропускали все деревья) закрыт тем же GREEN; девять строк `NEGATIVE_CONTROLS` (C1–C4, KC, C5–C7) — по одной находке, два двойника `POSITIVE_CONTROLS` — вызов журнала без находки; трасер `test_a_planted_notice_with_a_methodcaller_sharing_a_print_name_reddens_the_gate`; шапка гейта приватности называет «каждое толкование узла» и «Летопись CR-04»; словарь — пять форм `collision-*` с соперником `print` у каждого значения приватности (поле `IdentificationValue.rival`), обе матрицы и паритет держат ось; мера — чужие корпуса ревьюера и верификатора обязательным входом (О-21 (а), «29 941» ячейка, инструмент r9diff): «SELFTEST-CR04 e1d6587e -> a77263ad: cells=18221 regressions=1510» — мера видит «a77263ad», которую мера раунда 8 пропустила, «REPRODUCE … mismatch=0» на деревьях ревьюера; итог плана — «BASE d31d86db -> HEAD 472e30f6: cells=116675 regressions=0 count_regressions=0», чужие дефекты вне названных цен «2 351» → «569»; итог партии раунда 9 (16-49) — «AGAINST fb8fef72 -> HEAD e5090ac8: cells=156352 regressions=0 count_regressions=0», «AGAINST 1c243203 -> HEAD e5090ac8: cells=156352 regressions=0 count_regressions=0», «HEAD_WRONG=0», «OPEN_REGRESSIONS=0»; коммиты RED — «2a1ac33d», «d5223cb7», «6b4c0d52» |
 | WR-29 | warning | open | - |
 | WR-30 | warning | open | - |
 | WR-31 | warning | open | - |
