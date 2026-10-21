@@ -2276,6 +2276,56 @@ def test_a_planted_audit_with_a_methodcaller_read_by_a_getattr_string_reddens_th
     )
 
 
+def test_a_planted_notice_with_a_methodcaller_sharing_a_print_name_reddens_the_gate(tmp_path):
+    """CR-04 (D-11, D-17): одно имя модуля связано и с `print`, и с отложенным вызовом журнала.
+
+    `emit = print` на уровне модуля, `self.emit = operator.methodcaller("info", "notice %s",
+    account.phone)` в `__init__` и `self.emit(logger)` в методе `run` — служба Фаз 17–20, где
+    последнее имя `emit` связано с двумя видами: с вызываемым журнала и с `methodcaller` над
+    номером. До плана 16-46 опознанный вызов `self.emit(logger)` (имя, связанное в модуле с
+    `print`) закрывал на том же узле путь `methodcaller`, и номер уходил в журнал мимо гейта —
+    регрессия наличия `a77263ad` (цикл самопроверки 1 плана 16-43) против родителя `e1d6587e` и
+    базы партии `fb8fef72` (ревью CR-04, верификация раунда 9, 2026-10-20; `logging` напечатал
+    номер). Решение владельца О-20 (а), свойство 2: каждое толкование узла судится, повтор места
+    снимает дедупликация по узлу. Место находки — узел номера в литерале `methodcaller` (строка
+    10), владелец — метод применения. Подложенный файл находится тем же обходом
+    `python_sources(root)`, что и живое дерево; находка в файле ровно одна.
+    """
+    planted = tmp_path / "app" / "services" / "phone_notify.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(
+        "import logging\n"
+        "import operator\n"
+        "\n"
+        "logger = logging.getLogger(__name__)\n"
+        "emit = print\n"
+        "\n"
+        "\n"
+        "class PhoneNotice:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "notice %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        "        self.emit(logger)\n",
+        encoding="utf-8",
+    )
+
+    assert python_sources(tmp_path)["app"] == [planted], (
+        "обход синтетического дерева `app` не нашёл ровно подложенный файл"
+    )
+    scans, offences = scan_python_trees(tmp_path)
+    app_scan = next(scan for scan in scans if scan.tree == "app")
+    in_file = [offence for offence in offences if offence.startswith("app/services/phone_notify.py:")]
+
+    assert app_scan.calls > 0 and in_file == [
+        "app/services/phone_notify.py:10 — имя — phone (владелец run)"
+    ], (
+        "опознанный вызов журнала закрыл путь `methodcaller` на том же узле: имя `emit` связано "
+        f"и с `print`, и с `methodcaller` над номером, гейт обошёл синтетическое дерево "
+        f"({_render(scans)}) и промолчал о `self.emit(logger)`: {offences}"
+    )
+
+
 def test_the_async_level_methods_match_the_installed_structlog():
     """Сторож WR-13: `ASYNC_LOG_METHODS` — ровно асинхронные уровни установленного structlog.
 
@@ -3294,6 +3344,160 @@ NEGATIVE_CONTROLS = [
         "phone",
         id="getattr-log-method-bound-to-a-module-name-handed-to-to-thread",
     ),
+    # Ревью CR-04 (повторное ревью раунда 8, верификация раунда 9, 2026-10-20): одно последнее имя
+    # связано и с вызываемым журнала, и с `operator.methodcaller` над номером. Цикл самопроверки 1
+    # плана 16-43 (коммит `a77263ad`) положил имя, связанное в модуле с вызываемым журнала, ещё и в
+    # атрибуты, и `self.emit(logger)` при `emit = print` стал опознанным вызовом журнала, а ветка
+    # закрытия после опознанного вызова не пускала на том же узле путь `methodcaller` и применения
+    # обёрток — регрессия наличия против родителя `e1d6587e` и базы партии `fb8fef72` (одна находка
+    # там, `[]` на `a77263ad`; `logging` напечатал номер). Формы C1–C4 и KC ревьюера. Решение
+    # владельца О-20 (а), свойства 1 и 2: каждое толкование узла судится, повтор места снимает
+    # дедупликация по узлу (план 16-46).
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "emit = print\n"
+        "\n"
+        "\n"
+        "class K:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        "        self.emit(logger)\n",
+        "phone",
+        id="methodcaller-attribute-shares-a-module-print-name",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "out = logger.info\n"
+        "\n"
+        "\n"
+        "class K:\n"
+        "    def __init__(self, account):\n"
+        '        self.out = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        "        self.out(logger)\n",
+        "phone",
+        id="methodcaller-attribute-shares-a-module-log-method-name",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def setup():\n"
+        "    emit = print\n"
+        "    return emit\n"
+        "\n"
+        "\n"
+        "class K:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        "        self.emit(logger)\n",
+        "phone",
+        id="methodcaller-attribute-shares-a-print-name-bound-in-a-function",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "emit = print\n"
+        "\n"
+        "\n"
+        "class K:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        '        getattr(self, "emit")(logger)\n',
+        "phone",
+        id="methodcaller-attribute-read-by-a-getattr-string-shares-a-print-name",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import asyncio, logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "to_thread = print\n"
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    mc = operator.methodcaller("info", "z %s", account.phone)\n'
+        "    asyncio.to_thread(mc, logger)\n",
+        "phone",
+        id="methodcaller-handed-to-a-carrier-whose-name-is-print",
+    ),
+    # Давний класс той же оси (формы C5–C7 ревьюера; верификация раунда 9, гэп 2 — 420 ячеек её
+    # корпуса): имя, перевязанное с `print` на `methodcaller`, то же имя в двух функциях и `print`
+    # под тем же последним именем в другом классе. Пропускали все пять деревьев с кодом гейтов
+    # (`1c243203`, `2f8c1656`, `fb8fef72`, `e1d6587e`, HEAD); корень тот же — ветка закрытия после
+    # опознанного вызова. Шапка заявляет суд «по каждому своему связыванию» (план 16-46).
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def f(account):\n"
+        "    emit = print\n"
+        '    emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "    emit(logger)\n",
+        "phone",
+        id="methodcaller-rebinds-a-print-name",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def a():\n"
+        "    emit = print\n"
+        "    return emit\n"
+        "\n"
+        "\n"
+        "def b(account):\n"
+        '    emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "    emit(logger)\n",
+        "phone",
+        id="methodcaller-and-print-share-a-name-in-two-functions",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "class A:\n"
+        "    def __init__(self):\n"
+        "        self.emit = print\n"
+        "\n"
+        "\n"
+        "class B:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        "        self.emit(logger)\n",
+        "phone",
+        id="methodcaller-attribute-shares-a-print-attribute-of-another-class",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "class Z:\n"
+        "    emit = print\n"
+        "\n"
+        "\n"
+        "class B:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "x %s", account.phone)\n'
+        "\n"
+        "    def run(self):\n"
+        "        self.emit(logger)\n",
+        "phone",
+        id="methodcaller-attribute-shares-a-print-name-in-another-class-body",
+    ),
 ]
 
 # Число мест строк `NEGATIVE_CONTROLS`, у которых мест не одно (ревью WR-27, решение владельца
@@ -4148,6 +4352,37 @@ POSITIVE_CONTROLS = [
         'f = logger.info\ngetattr(sys.modules[__name__], "f")("x %s", account.name)\n',
         True,
         id="log-method-bound-to-a-module-name-read-by-a-getattr-string-without-a-number",
+    ),
+    # Ревью CR-04 (план 16-46): те же формы коллизии имени над `account.name` — вызов журнала без
+    # находки: суд каждого толкования узла даёт находку только номеру.
+    pytest.param(
+        "app/x.py",
+        "import logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "emit = print\n"
+        "\n"
+        "\n"
+        "class K:\n"
+        "    def __init__(self, account):\n"
+        '        self.emit = operator.methodcaller("info", "x %s", account.name)\n'
+        "\n"
+        "    def run(self):\n"
+        "        self.emit(logger)\n",
+        True,
+        id="methodcaller-attribute-shares-a-module-print-name-without-a-number",
+    ),
+    pytest.param(
+        "app/x.py",
+        "import asyncio, logging, operator\n"
+        "logger = logging.getLogger(__name__)\n"
+        "to_thread = print\n"
+        "\n"
+        "\n"
+        "def f(account):\n"
+        '    mc = operator.methodcaller("info", "z %s", account.name)\n'
+        "    asyncio.to_thread(mc, logger)\n",
+        True,
+        id="methodcaller-handed-to-a-carrier-whose-name-is-print-without-a-number",
     ),
 ]
 
