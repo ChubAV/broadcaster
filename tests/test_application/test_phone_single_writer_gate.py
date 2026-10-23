@@ -661,6 +661,8 @@ import pytest
 # модуля (планы 16-27, 16-32, 16-34; О-12 (а), О-14 (а), О-15): своих копий гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
+    DYNAMIC_CONSTRUCT_EXCEPTIONS,
+    DYNAMIC_CONSTRUCT_KINDS,
     DYNAMIC_KIND_DEFERRED_CALL,
     DYNAMIC_KIND_MODULE_OBJECT,
     DYNAMIC_KIND_REFLECTION_VALUE,
@@ -5286,6 +5288,93 @@ def test_the_writer_gate_header_names_four_quote_kinds_and_every_column_construc
     assert not missing, (
         "шапка гейта писателя не называет четыре вида кавычек SQLite и каждый конструктор "
         "колонки:\n" + "\n".join(f"  {entry}" for entry in missing)
+    )
+
+
+# Прежняя фраза абзаца цены (до плана 16-55): позиционный `enqueue` пару даёт (ревью WR-34, верификация раунда 10), и
+# фраза ложна; летопись пересказывает её словами, дословного текста в шапке нет.
+REFUTED_CARRIER_COST_CLAIM = (
+    "носители, у которых ссылка не первым аргументом (`run_in_executor`, `Thread`, `Timer`, `enqueue`"
+)
+
+
+def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
+    """Шапка правдива об обещании после решения владельца О-23 (а) (свойства 1, 3, 4, 5, 6; план 16-55).
+
+    Раздел «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» перед «ГРАНИЦЕЙ ПРЕДИКАТА» называет обещание («в коде нет
+    конструкции, которую гейт не умеет судить»), каждый вид канала `DYNAMIC_CONSTRUCT_KINDS`, ключ каждого исключения
+    `DYNAMIC_CONSTRUCT_EXCEPTIONS` деревьев гейта, защиту на исполнении `app/models/phone_guard.py` с разрешением
+    `writer_scope` и правилом `RUNTIME_GUARD_MODULE`, её границу (`set_committed_value`, `bulk_update_mappings`,
+    `session.connection()`) и то, что за ней статический гейт остаётся первым рубежом; согласование прежних запретов
+    (таблица плана 16-56) и живое дерево (106 файлов). Абзац цены называет механизм WR-34 и таблицу
+    `NAMED_COST_MECHANISM_CASES` и не содержит прежней фразы о носителях без пары; летописи WR-33, V10-1, V10-2 называют
+    регрессию `cc7fbce7` против `e61ab80d`, канал (план 16-53), защиту (план 16-51) и решение О-23 (а).
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    missing: list[str] = []
+
+    section_start = flat.find("ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ")
+    section_end = flat.find("ГРАНИЦА ПРЕДИКАТА", section_start) if section_start >= 0 else -1
+    section = flat[section_start:section_end] if 0 <= section_start < section_end else ""
+    if not section:
+        missing.append("нет раздела «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» перед «ГРАНИЦА ПРЕДИКАТА»")
+    tree_exceptions = sorted(
+        {key.rsplit("::", 1)[0] for key in DYNAMIC_CONSTRUCT_EXCEPTIONS if key.split("/", 1)[0] in WRITER_TREES}
+    )
+    for needle in (
+        "О-23 (а)",
+        "в коде нет конструкции, которую гейт не умеет судить",
+        *DYNAMIC_CONSTRUCT_KINDS,
+        *tree_exceptions,
+        "app/models/phone_guard.py",
+        "writer_scope",
+        "set_committed_value",
+        "bulk_update_mappings",
+        "session.connection()",
+        "первым рубежом",
+        "RUNTIME_GUARD_MODULE",
+        "16-09 №2",
+        "16-12 №2",
+        "16-17 №2",
+        "16-48 №2",
+        "16-48 №4",
+        "16-56",
+        "106",
+    ):
+        if section and needle not in section:
+            missing.append(f"раздел запрета не называет «{needle}»")
+
+    price_start = flat.find("ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ")
+    price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_start)
+    price = flat[price_start:price_end] if 0 <= price_start < price_end else ""
+    if not price:
+        missing.append("нет абзаца «ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ»")
+    for needle in (
+        "NAMED_ATTRIBUTE_WRITERS",
+        "первым позиционным аргументом",
+        "run_in_executor",
+        "enqueue(job=",
+        "WR-34",
+        "NAMED_COST_MECHANISM_CASES",
+    ):
+        if price and needle not in price:
+            missing.append(f"абзац цены не называет механизм WR-34: нет «{needle}»")
+    if REFUTED_CARRIER_COST_CLAIM in flat:
+        missing.append(f"шапка всё ещё утверждает прежнюю фразу о носителях без пары: «{REFUTED_CARRIER_COST_CLAIM}»")
+
+    for heading in ("Летопись WR-33", "Летопись V10-1", "Летопись V10-2"):
+        chronicle = _chronicle_segment(flat, heading)
+        if not chronicle:
+            missing.append(f"нет «{heading}»")
+        for needle in ("cc7fbce7", "e61ab80d", "16-53", "16-51", "О-23 (а)"):
+            if chronicle and needle not in chronicle:
+                missing.append(f"«{heading}» не называет «{needle}»")
+
+    assert not missing, (
+        "шапка гейта писателя не называет запрет динамики и защиту на исполнении:\n"
+        + "\n".join(f"  {entry}" for entry in missing)
     )
 
 
