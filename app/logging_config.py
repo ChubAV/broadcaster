@@ -3,9 +3,17 @@ import sys
 
 import structlog
 
+from app.services.log_masking import attach_number_masking, mask_numbers_in_event
+
 
 def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     """Configure structlog + stdlib logging.
+
+    Номер, дошедший до вывода журнала, маскируется на исполнении: процессор
+    `mask_numbers_in_event` стоит в цепочке корневого обработчика, фильтр
+    `NumberMaskingFilter` — на нём и на обработчиках журналов, существующих к вызову
+    (uvicorn). Что маскируется, что остаётся видным и где граница — шапка
+    `app/services/log_masking.py` (решение владельца О-23 (а), свойство 2; О-24 (а)).
 
     Args:
         log_level: Root log level (DEBUG, INFO, WARNING, ERROR).
@@ -39,17 +47,26 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     formatter = structlog.stdlib.ProcessorFormatter(
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.format_exc_info,
+            mask_numbers_in_event,
             renderer,
         ],
     )
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
+    attach_number_masking(handler)
 
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)
-    root.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+    root.setLevel(logging.getLevelNamesMapping().get(log_level.upper(), logging.INFO))
+
+    # Обработчики, поставленные до вызова (uvicorn: `propagate=False`, корня не достигают).
+    for existing in list(logging.root.manager.loggerDict.values()):
+        if isinstance(existing, logging.Logger):
+            for other in existing.handlers:
+                attach_number_masking(other)
 
     # Quiet noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
