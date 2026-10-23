@@ -579,6 +579,8 @@ import pytest
 # умолчанием) читают одно имя `f`; своего читателя имени гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
+    DYNAMIC_KIND_BANNED_ROLE_STRING,
+    DYNAMIC_KIND_DEFERRED_CALL,
     DYNAMIC_KIND_MODULE_OBJECT,
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
@@ -4951,6 +4953,242 @@ def test_a_planted_dynamic_construct_is_found_in_each_python_tree(tmp_path, tree
         f"подложенный `import importlib` в дереве `{tree}` канал не нашёл: {offences}"
     )
     assert DYNAMIC_KIND_MODULE_OBJECT in offences[0], f"находка не того вида: {offences}"
+
+
+# --- Формы раунда 10: красны запретом конструкции (план 16-54; О-23 (а), свойства 1, 4) ---------------------------
+#
+# CR-05, WR-32, WR-33 ревью и верификации раунда 10 закрыты не поимённой починкой предиката распознавания, а запретом
+# конструкции (канал плана 16-53) и маской на исполнении (план 16-52; исполнение тех же форм — `ROUND_TEN_PRIVACY_FORMS`
+# в `tests/test_logging_config.py`). Строка формы судится тем путём, каким судится живое дерево, — `dynamic_construct_scan`
+# над синтетическим `app/`: так строка проверяет обещание «в коде нет конструкции, которую гейт не умеет судить», а не
+# помощника. Ответ прежнего `python_log_offences` на строке не утверждается (свойство 5 О-23: полнота распознавания
+# написаний — больше не мера); он записан в сводке плана 16-54 справочно.
+
+
+@dataclass(frozen=True)
+class RoundTenBannedForm:
+    """Форма раунда 10: тело модуля под общей шапкой, маркер строки конструкции и ожидаемый вид канала."""
+
+    id: str
+    body: str
+    marker: str
+    kind: str
+
+
+# Общая шапка тел форм: ввозы и журнал модуля. Ввоз `sys`, `operator`, `functools` находкой канала не является —
+# находка встаёт на узел самой конструкции (`sys.modules`, `operator.methodcaller`, ввоз `importlib` …).
+ROUND_TEN_FORM_HEADER = (
+    "import asyncio, contextvars, functools, logging, operator, sys\n"
+    "logger = logging.getLogger(__name__)\n"
+)
+
+_CR05_METHOD = "\n\nclass K:\n    def __init__(self):\n        self.me = sys.modules[__name__]\n\n    def go(self, account):\n"
+_CR05_CLASS_BODY = "\n\nclass K:\n    me = sys.modules[__name__]\n\n    def go(self, account):\n"
+_WR_METHODCALLER = '    f = operator.methodcaller("info", "x %s", account.phone)\n'
+
+ROUND_TEN_BANNED_FORMS: tuple[RoundTenBannedForm, ...] = (
+    # CR-05 (ревью раунда 10; верификация раунда 10, гэп 1): 13 написаний объекта модуля, которые `16573223` (16-47,
+    # цикл WR-29) перестал читать против базы партии `d31d86db`; номер печатался. Запрет конструкции, а не починка
+    # предиката.
+    RoundTenBannedForm(
+        "cr05-self-attribute",
+        "out = logger.info\n" + _CR05_METHOD + '        self.me.out("x %s", account.phone)\n',
+        "self.me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-getattr-self",
+        "out = logger.info\n" + _CR05_METHOD + '        getattr(self, "me").out("x %s", account.phone)\n',
+        "self.me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-class-body-self",
+        "out = logger.info\n" + _CR05_CLASS_BODY + '        self.me.out("x %s", account.phone)\n',
+        "me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-class-body-class-name",
+        "out = logger.info\n" + _CR05_CLASS_BODY + '        K.me.out("x %s", account.phone)\n',
+        "me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-sys-alias",
+        'import sys as _s\n\nout = logger.info\n\n\ndef go(account):\n    _s.modules[__name__].out("x %s", account.phone)\n',
+        "_s.modules[__name__].out(",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-sys-alias-bound",
+        "import sys as _s\n\nout = logger.info\nme = _s.modules[__name__]\n\n\n"
+        'def go(account):\n    me.out("x %s", account.phone)\n',
+        "me = _s.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-from-sys-import-modules",
+        'from sys import modules\n\nout = logger.info\n\n\ndef go(account):\n    modules[__name__].out("x %s", account.phone)\n',
+        "from sys import modules",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-from-sys-import-modules-as",
+        "from sys import modules as mods\n\nout = logger.info\n\n\n"
+        'def go(account):\n    mods[__name__].out("x %s", account.phone)\n',
+        "from sys import modules as mods",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-sys-modules-get",
+        'out = logger.info\n\n\ndef go(account):\n    sys.modules.get(__name__).out("x %s", account.phone)\n',
+        "sys.modules.get(__name__)",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # `getattr` со строкой из `BANNED_ATTRIBUTE_NAMES` канал судит видом «имя запрещённой роли строкой» (план 16-53,
+    # истина 1), а не «объект модуля»: вид — по замеру канала.
+    RoundTenBannedForm(
+        "cr05-getattr-sys-modules",
+        'out = logger.info\n\n\ndef go(account):\n    getattr(sys, "modules")[__name__].out("x %s", account.phone)\n',
+        'getattr(sys, "modules")[__name__]',
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+    ),
+    RoundTenBannedForm(
+        "cr05-importlib",
+        "import importlib\n\nout = logger.info\n\n\n"
+        'def go(account):\n    importlib.import_module(__name__).out("x %s", account.phone)\n',
+        "importlib.import_module(__name__).out(",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-from-importlib",
+        "from importlib import import_module\n\nout = logger.info\n\n\n"
+        'def go(account):\n    import_module(__name__).out("x %s", account.phone)\n',
+        "import_module(__name__).out(",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-importlib-bound",
+        "import importlib\n\nout = logger.info\nme = importlib.import_module(__name__)\n\n\n"
+        'def go(account):\n    me.out("x %s", account.phone)\n',
+        "me = importlib.import_module(__name__)",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # CR-05, получатель (верификация раунда 10, гэп 2; продолжение WR-30): журнал модуля — член объекта модуля,
+    # прочитанного через атрибут; запрет конструкции, а не починка `_is_log_receiver`.
+    RoundTenBannedForm(
+        "cr05-receiver-through-self-module-object",
+        'lg = logging.getLogger("x")\n' + _CR05_METHOD + '        self.me.lg.info("x %s", account.phone)\n',
+        "self.me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # WR-32 (ревью раунда 10; верификация раунда 10, гэп 2): `methodcaller(…)`, связанный под последним именем
+    # носителя, закрывал путь носителя для поданного `methodcaller` над журналом; давний пропуск. Запрет конструкции.
+    RoundTenBannedForm(
+        "wr32-methodcaller-under-a-carrier-name",
+        'to_thread = operator.methodcaller("noop")\n\n\nasync def go(account):\n'
+        + _WR_METHODCALLER
+        + "    await asyncio.to_thread(f, logger)\n",
+        'to_thread = operator.methodcaller("noop")',
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    RoundTenBannedForm(
+        "wr32-methodcaller-under-run",
+        'run = operator.methodcaller("run")\n\n\ndef go(account):\n'
+        + _WR_METHODCALLER
+        + "    contextvars.copy_context().run(f, logger)\n",
+        'run = operator.methodcaller("run")',
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    # WR-33, сторона приватности (ревью раунда 10; верификация раунда 10, гэп 2): псевдоним `operator.methodcaller`
+    # под именем носителя или обёртки гасил путь носителя; давний пропуск. Запрет конструкции.
+    RoundTenBannedForm(
+        "wr33-operator-methodcaller-under-a-carrier-name",
+        "to_thread = operator.methodcaller\n\n\nasync def go(account):\n"
+        + _WR_METHODCALLER
+        + "    await asyncio.to_thread(f, logger)\n",
+        "to_thread = operator.methodcaller",
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    RoundTenBannedForm(
+        "wr33-partial-alias-of-methodcaller",
+        "partial = operator.methodcaller\n\n\nasync def go(account):\n"
+        '    await functools.partial(asyncio.to_thread, logger.info, "x %s", account.phone)()\n',
+        "partial = operator.methodcaller",
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+)
+
+
+@pytest.mark.parametrize("form", [pytest.param(form, id=form.id) for form in ROUND_TEN_BANNED_FORMS])
+def test_a_round_ten_form_is_red_as_a_banned_construct(tmp_path, form):
+    """Свойства 1, 4 О-23 (а): форма CR-05 / WR-32 / WR-33, подложенная в `app/`, краснит канал гейта на своей строке.
+
+    Находка ожидаемого вида — на строке конструкции (маркер строки встречается в теле ровно один раз). Прочие находки
+    той же формы (ввоз `importlib` рядом с `importlib.import_module`, второй `methodcaller`) правило не запрещает:
+    форма красна, если красна её конструкция.
+    """
+    source = ROUND_TEN_FORM_HEADER + form.body
+    marked = [number for number, text in enumerate(source.splitlines(), 1) if form.marker in text]
+    assert len(marked) == 1, f"маркер {form.marker!r} строки формы `{form.id}` не однозначен: строки {marked}"
+    planted = tmp_path / "app" / "x.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(source, encoding="utf-8")
+
+    paths, offences = dynamic_construct_scan(tmp_path)
+    expected = f"app/x.py:{marked[0]} — запрещённая конструкция — {form.kind} — "
+
+    assert planted in paths and any(offence.startswith(expected) for offence in offences), (
+        f"форма раунда 10 `{form.id}` не красна запретом конструкции: ждали «{expected}…», канал дал {offences}"
+    )
+
+
+@dataclass(frozen=True)
+class PlantedBannedService:
+    """Подложенная служба Фаз 17–20: исходник, строка конструкции и вид единственной находки канала."""
+
+    source: str
+    line: int
+    kind: str
+
+
+# Подложенные службы трасеров канала: путь в синтетическом дереве → служба.
+PLANTED_BANNED_SERVICES: dict[str, PlantedBannedService] = {}
+
+
+def test_a_planted_notice_through_the_module_object_is_red_as_a_banned_construct(tmp_path):
+    """CR-05 (D-11, D-17): служба читает журнал модуля через атрибут-объект модуля — красна запретом конструкции.
+
+    Служба Фаз 17–20 `app/services/phone_notice_via_module.py`: `out = logger.info` на уровне модуля,
+    `self.me = sys.modules[__name__]` в `__init__` и `self.me.out("notice %s", self.account.phone)` в методе `run`.
+    Это ровно написание, которое `16573223` (16-47, цикл WR-29) перестал читать против базы партии `d31d86db`
+    (регрессия наличия CR-05; ревью и верификация раунда 10; номер печатался). Решение владельца О-23 (а), свойство 1:
+    форма закрыта не поимённой починкой предиката распознавания, а запретом конструкции — канал
+    (`dynamic_construct_scan`, план 16-53) краснит правило живых деревьев ровно одной находкой вида «объект модуля» на
+    строке `self.me = sys.modules[__name__]`. Подложенный файл находится тем же обходом `python_sources(root)`, что и
+    живое дерево.
+    """
+    path = "app/services/phone_notice_via_module.py"
+    service = PLANTED_BANNED_SERVICES.get(path)
+    planted = tmp_path / path
+    if service is not None:
+        planted.parent.mkdir(parents=True)
+        planted.write_text(service.source, encoding="utf-8")
+
+    paths, offences = dynamic_construct_scan(tmp_path)
+    in_file = [offence for offence in offences if offence.startswith(f"{path}:")]
+
+    assert (
+        service is not None
+        and service.line == 11
+        and service.kind == DYNAMIC_KIND_MODULE_OBJECT
+        and planted in paths
+        and in_file == [f"{path}:11 — запрещённая конструкция — {DYNAMIC_KIND_MODULE_OBJECT} — sys.modules"]
+    ), (
+        "подложенная служба, читающая журнал модуля через атрибут-объект модуля, не красна запретом конструкции: "
+        f"служба {service!r}, находки файла {in_file}"
+    )
 
 
 # --- JS-половина: `wa_worker/` -----------------------------------------------------
