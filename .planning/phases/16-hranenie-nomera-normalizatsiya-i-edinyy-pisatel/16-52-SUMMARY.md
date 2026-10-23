@@ -196,7 +196,7 @@ REFACTOR-коммитов нет.
 | `compileall -q app main.py tests` | exit 0 | exit 0 |
 | `scripts/prohibitions_census.py --check` | exit 0, «реестр: 913 строк, биекция с переписью — согласие» | exit 0 |
 | `tests/test_planning/test_plan_prohibitions_census.py` | 110 passed | 110 |
-| `tests/test_planning` | гоняется ПОСЛЕ коммита этой сводки (оркестратор, п. 5); итог — в финальном сообщении исполнителя | 218 passed, 2 skipped |
+| `tests/test_planning` (после коммита сводки `docs(16-52)`, оркестратор п. 5) | **218 passed, 2 skipped** | 218 passed, 2 skipped |
 
 Выборка, читающая журнал, — 344 / 344, как на базе, новых падений нет. Прогон модулей плана вместе с ней (434) доказывает изоляцию: `restored_logging` не оставляет конвейер правила соседям.
 
@@ -277,6 +277,12 @@ None — внешних сервисов нет.
 - Защита на исполнении (свойство 2 О-23 (а)) стоит в процессах, вызывающих `setup_logging`: веб, воркеры и beat Celery.
 - Граница названа в шапке модуля: `print` и потоки мимо журнала, обработчики после вызова, скрипты без `setup_logging`, `max_worker`, `wa_worker`, край грамматики (`+7.999.123.45.67`, номер вплотную к букве), отчёт `--- Logging error ---` о сбое конвейера события structlog.
 - Требование PHONE-21 этим планом в REQUIREMENTS.md не отмечается: вердикт фазы — `gaps_found`, отметки ведёт оркестратор.
+
+## Self-Check: PASSED
+
+- Файлы на месте: `app/services/log_masking.py`, `tests/test_services/test_log_masking.py`, `app/logging_config.py`, `app/services/phone.py`, `tests/test_logging_config.py`, эта сводка.
+- Коммиты на ветке worktree: `982f53ce`, `535c4f20`, `b30772be`, `0e74bf6c`, `7469df55`, `e3ab5e03`; затем сводка (`docs(16-52)`).
+- Шлюз TDD: на каждую задачу есть `test(16-52)` перед `feat(16-52)`; RED-улики — `RED_EVIDENCE_OK`.
 
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
