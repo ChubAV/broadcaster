@@ -1402,3 +1402,69 @@ def binding_form_source(
             rival=value.rival,
         )
     return form.template.format(value=value.value, use=use, decoy=value.decoy, rival=value.rival)
+
+
+# --- Канал запрета динамических конструкций (план 16-53; решение владельца О-23 (а), свойство 1) -----------------
+
+
+class DynamicConstruct(NamedTuple):
+    """Одна запрещённая конструкция исходника: где стоит, какого вида, у какого владельца и чем написана.
+
+    `owner` — квалифицированное имя ближайших `def` / `class` через точку (`BaseRepository.update`), на уровне
+    модуля — `<module>`; `text` — фрагмент `ast.unparse` узла, не длиннее 80 знаков.
+    """
+
+    path: str
+    line: int
+    column: int
+    kind: str
+    owner: str
+    text: str
+
+
+DYNAMIC_KIND_MODULE_OBJECT = "объект модуля"
+DYNAMIC_KIND_NAMESPACE = "пространство имён"
+DYNAMIC_KIND_TEXT_EXECUTION = "исполнение текста"
+DYNAMIC_KIND_DEFERRED_CALL = "отложенный вызов по имени"
+DYNAMIC_KIND_REFLECTION_VALUE = "отражение как значение"
+DYNAMIC_KIND_COMPUTED_ATTRIBUTE = "вычисленное имя атрибута"
+DYNAMIC_KIND_BANNED_ROLE_STRING = "имя запрещённой роли строкой"
+DYNAMIC_KIND_ATTRIBUTE_PROTOCOL = "служебный протокол атрибутов"
+DYNAMIC_KIND_COMPUTED_SQL = "вычисленный текст SQL"
+
+DYNAMIC_CONSTRUCT_KINDS: tuple[str, ...] = (
+    DYNAMIC_KIND_MODULE_OBJECT,
+    DYNAMIC_KIND_NAMESPACE,
+    DYNAMIC_KIND_TEXT_EXECUTION,
+    DYNAMIC_KIND_DEFERRED_CALL,
+    DYNAMIC_KIND_REFLECTION_VALUE,
+    DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    DYNAMIC_KIND_BANNED_ROLE_STRING,
+    DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    DYNAMIC_KIND_COMPUTED_SQL,
+)
+
+# Реестр исключений канала: `<путь>::<квалифицированный владелец>::<вид>` → причина.
+DYNAMIC_CONSTRUCT_EXCEPTIONS: dict[str, str] = {}
+
+
+def dynamic_construct_findings(
+    source: str, path: str, *, judged_names: frozenset[str]
+) -> list[DynamicConstruct]:
+    """Запрещённые конструкции исходника `source` (RED-заглушка плана 16-53: канал ещё ничего не судит)."""
+    return []
+
+
+def dynamic_construct_key(found: DynamicConstruct) -> str:
+    """Ключ находки в реестре `DYNAMIC_CONSTRUCT_EXCEPTIONS`: `<путь>::<владелец>::<вид>`."""
+    return f"{found.path}::{found.owner}::{found.kind}"
+
+
+def exempt_dynamic_constructs(found: list[DynamicConstruct]) -> list[DynamicConstruct]:
+    """Находки без тех, чей ключ `<путь>::<владелец>::<вид>` назван в `DYNAMIC_CONSTRUCT_EXCEPTIONS`."""
+    return [construct for construct in found if dynamic_construct_key(construct) not in DYNAMIC_CONSTRUCT_EXCEPTIONS]
+
+
+def format_dynamic_construct(found: DynamicConstruct) -> str:
+    """Находка строкой: «`путь:строка` — запрещённая конструкция — <вид> — <фрагмент>»."""
+    return f"{found.path}:{found.line} — запрещённая конструкция — {found.kind} — {found.text}"

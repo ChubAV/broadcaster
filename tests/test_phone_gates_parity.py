@@ -100,6 +100,10 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   (`methodcaller` со всеми аргументами записи), поэтому ячейка сверяется с базой — той
   же ячейкой, где имя на месте вызова ничем не связано; находка сверх базы значила бы,
   что гейт связывание разрешил (план 16-27, заметки волне 2).
+* Канал запрета динамических конструкций (план 16-53; решение владельца О-23 (а), свойство 1): трасер
+  `test_a_planted_module_object_read_reddens_both_gates` — скрипт с чтением журнала через объект модуля, подложенный в
+  синтетическое дерево, краснит правило живых деревьев обоих гейтов одной функцией общего модуля
+  `dynamic_construct_findings`.
 * Тексты, на которых держатся закрытия ревью (ревью IN-19 и IN-18, решение владельца О-19, план
   16-44): `test_the_parity_docstring_names_what_it_checks` — этот докстринг называет каждое имя
   `REQUIRED_SHARED_NAMES`, `CARRIER_SEMANTICS`, `GRAMMAR_TABLES` (без вариантов с подчёркиванием),
@@ -1108,4 +1112,56 @@ def test_the_dictionary_chronicles_name_what_the_measure_compared():
 
     assert not problems, (
         "летописи словаря не называют, что мера сверяла (ревью IN-21):\n" + "\n".join(f"  {problem}" for problem in problems)
+    )
+
+
+# --- Канал запрета динамических конструкций (план 16-53; решение владельца О-23 (а), свойство 1) -----------------
+
+# Сквозной срез: скрипт дозаполнения Фазы 20, читающий журнал через объект модуля (класс CR-05). Восемь строк;
+# вызов — восьмая.
+PLANTED_DYNAMIC_SCRIPT = "scripts/phone_backfill_dynamic.py"
+PLANTED_DYNAMIC_SOURCE = (
+    "import logging\n"
+    "import sys\n"
+    "\n"
+    "lg = logging.getLogger(__name__)\n"
+    "\n"
+    "\n"
+    "def backfill(account):\n"
+    '    getattr(sys.modules[__name__], "lg").info("x %s", account.phone)\n'
+)
+PLANTED_DYNAMIC_LINE = 8
+
+
+def test_a_planted_module_object_read_reddens_both_gates(tmp_path):
+    """ТРАСЕР канала запрета: подложенное чтение журнала через объект модуля краснит оба гейта одной функцией.
+
+    В синтетическом дереве — `scripts/phone_backfill_dynamic.py` с `getattr(sys.modules[__name__], "lg").info(…)`;
+    `dynamic_construct_scan` каждого гейта (`privacy` — над `app/`, `scripts/`, `max_worker/`, `writer` — над
+    `app/`, `scripts/`) даёт ровно одну находку на строке вызова вида «объект модуля» (узел атрибута `modules`).
+    Функция канала у обоих гейтов — один объект общего модуля `dynamic_construct_findings`.
+    """
+    assert len(PLANTED_DYNAMIC_SOURCE.splitlines()) == PLANTED_DYNAMIC_LINE, "подложенный скрипт не восьмистрочный"
+    planted = tmp_path / PLANTED_DYNAMIC_SCRIPT
+    planted.parent.mkdir(parents=True)
+    planted.write_text(PLANTED_DYNAMIC_SOURCE, encoding="utf-8")
+
+    assert privacy.dynamic_construct_findings is writer.dynamic_construct_findings is grammar.dynamic_construct_findings, (
+        "функция канала запрета у гейтов — не один объект общего модуля"
+    )
+    found: dict[str, list[str]] = {}
+    for title, module in (("приватности", privacy), ("писателя", writer)):
+        paths, offences = module.dynamic_construct_scan(tmp_path)
+        assert planted in paths, f"обход гейта {title} не видит подложенный скрипт: {paths}"
+        found[title] = offences
+    location = f"{PLANTED_DYNAMIC_SCRIPT}:{PLANTED_DYNAMIC_LINE} — "
+    reddened = [
+        title
+        for title, offences in found.items()
+        if len(offences) == 1 and offences[0].startswith(location) and grammar.DYNAMIC_KIND_MODULE_OBJECT in offences[0]
+    ]
+
+    assert reddened == ["приватности", "писателя"], (
+        "подложенное чтение журнала через объект модуля не краснит правило живых деревьев обоих гейтов: "
+        f"{found}"
     )
