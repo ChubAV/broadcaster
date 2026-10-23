@@ -661,6 +661,7 @@ import pytest
 # модуля (планы 16-27, 16-32, 16-34; О-12 (а), О-14 (а), О-15): своих копий гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
+    DYNAMIC_KIND_MODULE_OBJECT,
     ELEMENTWISE_CARRIERS,
     LITERAL_CONTAINER_WRAPPERS,
     OUT_OF_GRAMMAR_BINDING_FORMS,
@@ -671,7 +672,10 @@ from tests.phone_gate_grammar import (  # noqa: F401 — имена общего
     IdentificationValue,
     binding_form_source,
     binding_name,
+    dynamic_construct_findings,
     elementwise_arguments,
+    exempt_dynamic_constructs,
+    format_dynamic_construct,
     expanded_arguments,
     forwarded_arguments,
     getattr_literal,
@@ -2966,6 +2970,39 @@ def tree_offences(root: Path) -> tuple[list[Path], list[str]]:
     return sources, offences
 
 
+# Имена запрещённой роли канала запрета (план 16-53; О-23 (а), свойство 1): `getattr` со строкой — пишущим API гейта
+# (вызовы с колонкой именованным аргументом, позицией, строками, upsert, копированием строк, писатели атрибута по
+# имени и судимые API таблицы `JUDGED_PARAMETERS`) — вид «имя запрещённой роли строкой». Набор выведен из наборов
+# гейта, копии значений нет; `BANNED_ATTRIBUTE_NAMES` общий канал добавляет сам.
+BANNED_GETATTR_NAMES = (
+    WRITE_CALL_NAMES
+    | NAMED_ATTRIBUTE_WRITERS
+    | POSITIONAL_COLUMN_CALL_NAMES
+    | ROW_MAPPING_CALL_NAMES
+    | UPSERT_CALL_NAMES
+    | ROW_COPY_CALL_NAMES
+    | frozenset(parameter.call for parameter in JUDGED_PARAMETERS)
+)
+
+
+def dynamic_construct_scan(root: Path) -> tuple[list[Path], list[str]]:
+    """Канал запрета над деревьями гейта под `root`: обойдённые файлы и находки после исключений.
+
+    Функция канала — `dynamic_construct_findings` общего модуля (своей копии гейт не держит); исключения —
+    реестр `DYNAMIC_CONSTRUCT_EXCEPTIONS` общего модуля через `exempt_dynamic_constructs`. Модуль-писатель судится
+    наравне с прочими файлами: реестр `PHONE_WRITER_EXCEPTIONS` канала не снимает.
+    """
+    paths = writer_sources(root)
+    found = []
+    for path in paths:
+        found += dynamic_construct_findings(
+            path.read_text(encoding="utf-8"),
+            path.relative_to(root).as_posix(),
+            judged_names=BANNED_GETATTR_NAMES,
+        )
+    return paths, [format_dynamic_construct(construct) for construct in exempt_dynamic_constructs(found)]
+
+
 def _plant(root: Path, relative: str, source: str) -> Path:
     target = root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -3650,6 +3687,37 @@ def test_no_phone_write_outside_the_writer_in_the_live_tree():
         "писатель обходит условную запись, и ручной номер снова затирается (D-13):\n"
         + "\n".join(f"  {offence}" for offence in offences)
     )
+
+
+def test_no_dynamic_construct_in_the_writer_trees():
+    """Канал запрета (план 16-53; О-23 (а), свойство 1): ноль запрещённых конструкций вне реестра исключений.
+
+    Деревья — `app/` и `scripts/` (`WRITER_TREES`), модуль-писатель включительно. Антивакуум — обход видит больше
+    пятидесяти файлов; подложенная конструкция находится тем же обходом в каждом дереве
+    (`test_a_planted_dynamic_construct_is_found_in_each_writer_tree`).
+    """
+    paths, offences = dynamic_construct_scan(PROJECT_ROOT)
+    print(f"Канал запрета гейта писателя: файлов {len(paths)}; находок {len(offences)}")
+
+    assert len(paths) > 50, f"обход `app/` и `scripts/` дал {len(paths)} файлов — канал проверяет почти ничто"
+    assert offences == [], (
+        f"запрещённая конструкция вне реестра исключений (обойдено {len(paths)} файлов):\n"
+        + "\n".join(f"  {offence}" for offence in offences)
+    )
+
+
+@pytest.mark.parametrize("tree", WRITER_TREES)
+def test_a_planted_dynamic_construct_is_found_in_each_writer_tree(tmp_path, tree):
+    """Антивакуум канала: `import importlib`, подложенный в дерево гейта, находит тот же обход."""
+    planted = _plant(tmp_path, f"{tree}/planted_dynamic.py", "import importlib\n")
+
+    paths, offences = dynamic_construct_scan(tmp_path)
+
+    assert planted in paths, f"обход канала не видит подложенный файл дерева `{tree}`: {paths}"
+    assert len(offences) == 1 and offences[0].startswith(f"{tree}/planted_dynamic.py:1 — "), (
+        f"подложенный `import importlib` в дереве `{tree}` канал не нашёл: {offences}"
+    )
+    assert DYNAMIC_KIND_MODULE_OBJECT in offences[0], f"находка не того вида: {offences}"
 
 
 def test_a_raw_sql_phone_write_reddens_the_gate(tmp_path):

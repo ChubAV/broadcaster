@@ -80,9 +80,13 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   — получатель, применение — его метод, поле `IdentificationValue.method`) на одной позиции у обоих гейтов с API
   `__setattr__` в таблице `API_IDENTIFICATION_CALLS` и носители `carrier-name-bound-to-a-rival` /
   `executor-name-bound-to-a-rival` (последнее имя вызова носителя связано с соперником), — так что возврат закрытия
-  толкований после опознанного вызова (класс CR-04), потеря получателя, прочитанного через объект модуля (класс
-  WR-30), и толкование псевдонима, закрывающее путь носителя (коллизия имени носителя), краснят матрицы и
-  правило-паритет. Мера «база ↔ HEAD» партии раунда 9 сверила каждый GREEN с родителем и итог — с базой партии
+  толкований после опознанного вызова (класс CR-04) и потеря получателя, прочитанного через объект модуля (класс
+  WR-30), краснят матрицы и правило-паритет. Класс коллизии имени носителя матрицы и правило-паритет держат для
+  соперников словаря — `print` у приватности, `update` у писателя — и для написаний объекта модуля
+  `sys.modules[__name__]` и `me = sys.modules[__name__]`; соперников других видов (`getattr`, `operator.methodcaller`,
+  `methodcaller(…)` под именем носителя) и прочие написания объекта модуля словарь не собирает — эти конструкции
+  запрещены каналом (О-23 (а), свойство 1; правило `test_every_dynamic_construct_case_is_banned_by_both_gates`).
+  Летопись: до плана 16-53 абзац относил к матрицам весь класс коллизии имени носителя (ревью IN-22). Мера «база ↔ HEAD» партии раунда 9 сверила каждый GREEN с родителем и итог — с базой партии
   `d31d86db`, с `fb8fef72`, `1c243203` и `2f8c1656` по наличию находки и по их числу на корпусе из своих источников и
   чужих корпусов ревьюера и верификатора (29 941 ячейка, verify-r9 sha256 `5c6c4527…`); свойства гейтов шире этого
   корпуса этот абзац не утверждает (ревью IN-21).
@@ -100,6 +104,26 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   (`methodcaller` со всеми аргументами записи), поэтому ячейка сверяется с базой — той
   же ячейкой, где имя на месте вызова ничем не связано; находка сверх базы значила бы,
   что гейт связывание разрешил (план 16-27, заметки волне 2).
+* Канал запрета динамических конструкций (план 16-53; решение владельца О-23 (а), свойство 1). Обещание гейтов
+  сужено до «в коде нет конструкции, которую гейт не умеет судить»: конструкции динамического чтения или вызова —
+  объект модуля, пространство имён, исполнение текста, отложенный вызов по имени, отражение атрибутов, служебный
+  протокол, вычисленный SQL — запрещённые конструкции закрытого перечня девяти видов `DYNAMIC_CONSTRUCT_KINDS`, и
+  гейт краснеет на самой конструкции, а не на опознанном написании. Канал один — функция общего модуля `dynamic_construct_findings` (она в
+  `REQUIRED_SHARED_NAMES`: оба гейта держат её тем же объектом); оба гейта судят ею свои живые деревья — правила
+  `test_no_dynamic_construct_in_the_python_trees` гейта приватности (`app/`, `scripts/`, `max_worker/`) и
+  `test_no_dynamic_construct_in_the_writer_trees` гейта писателя (`app/`, `scripts/`); законные исключения — реестр
+  `DYNAMIC_CONSTRUCT_EXCEPTIONS` общего модуля (шесть записей замера с причиной, потолок
+  `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING`, подъём — решение владельца). Правила этого модуля: трасер
+  `test_a_planted_module_object_read_reddens_both_gates` — скрипт с чтением журнала через объект модуля, подложенный в
+  синтетическое дерево, краснит правило живых деревьев обоих гейтов одной функцией общего модуля;
+  `test_every_dynamic_construct_case_is_banned_by_both_gates` — каждая строка таблицы видов `DYNAMIC_CONSTRUCT_CASES`
+  (формы CR-05, WR-32, WR-33, V10-1, V10-2 и прочие написания) краснит гейты своего поля `gates` ожидаемым видом;
+  `test_a_judgeable_twin_is_not_banned` — судимый двойник `JUDGEABLE_TWINS` не краснит ни один гейт;
+  `test_the_dynamic_construct_tables_cover_every_kind` — у каждого из девяти видов не одно написание;
+  `test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling` и его контроль
+  `test_a_seventh_dynamic_construct_exception_reddens_the_ceiling` — реестр правдив (файл дерева гейта, владелец,
+  конструкция вида, причина) и под потолком; `test_the_parity_docstring_names_the_ban_channel_truthfully` — этот
+  пункт, пункт о словаре девятого круга и комментарий-шапка канала общего модуля правдивы.
 * Тексты, на которых держатся закрытия ревью (ревью IN-19 и IN-18, решение владельца О-19, план
   16-44): `test_the_parity_docstring_names_what_it_checks` — этот докстринг называет каждое имя
   `REQUIRED_SHARED_NAMES`, `CARRIER_SEMANTICS`, `GRAMMAR_TABLES` (без вариантов с подчёркиванием),
@@ -195,6 +219,8 @@ REQUIRED_SHARED_NAMES = frozenset(
     # Один читатель имени связанного у обоих гейтов (ревью WR-28, О-18 (а), свойство 2; планы
     # 16-42 и 16-43).
     | {"reading_name"}
+    # Один канал запрета динамических конструкций у обоих гейтов (план 16-53; О-23 (а), свойство 1).
+    | {"dynamic_construct_findings"}
 )
 
 # Имя на месте вызова, которое ничем не связано: база сверки форм вне грамматики.
@@ -1108,4 +1134,278 @@ def test_the_dictionary_chronicles_name_what_the_measure_compared():
 
     assert not problems, (
         "летописи словаря не называют, что мера сверяла (ревью IN-21):\n" + "\n".join(f"  {problem}" for problem in problems)
+    )
+
+
+# --- Канал запрета динамических конструкций (план 16-53; решение владельца О-23 (а), свойство 1) -----------------
+
+# Сквозной срез: скрипт дозаполнения Фазы 20, читающий журнал через объект модуля (класс CR-05). Восемь строк;
+# вызов — восьмая.
+PLANTED_DYNAMIC_SCRIPT = "scripts/phone_backfill_dynamic.py"
+PLANTED_DYNAMIC_SOURCE = (
+    "import logging\n"
+    "import sys\n"
+    "\n"
+    "lg = logging.getLogger(__name__)\n"
+    "\n"
+    "\n"
+    "def backfill(account):\n"
+    '    getattr(sys.modules[__name__], "lg").info("x %s", account.phone)\n'
+)
+PLANTED_DYNAMIC_LINE = 8
+
+
+def test_a_planted_module_object_read_reddens_both_gates(tmp_path):
+    """ТРАСЕР канала запрета: подложенное чтение журнала через объект модуля краснит оба гейта одной функцией.
+
+    В синтетическом дереве — `scripts/phone_backfill_dynamic.py` с `getattr(sys.modules[__name__], "lg").info(…)`;
+    `dynamic_construct_scan` каждого гейта (`privacy` — над `app/`, `scripts/`, `max_worker/`, `writer` — над
+    `app/`, `scripts/`) даёт ровно одну находку на строке вызова вида «объект модуля» (узел атрибута `modules`).
+    Функция канала у обоих гейтов — один объект общего модуля `dynamic_construct_findings`.
+    """
+    assert len(PLANTED_DYNAMIC_SOURCE.splitlines()) == PLANTED_DYNAMIC_LINE, "подложенный скрипт не восьмистрочный"
+    planted = tmp_path / PLANTED_DYNAMIC_SCRIPT
+    planted.parent.mkdir(parents=True)
+    planted.write_text(PLANTED_DYNAMIC_SOURCE, encoding="utf-8")
+
+    assert privacy.dynamic_construct_findings is writer.dynamic_construct_findings is grammar.dynamic_construct_findings, (
+        "функция канала запрета у гейтов — не один объект общего модуля"
+    )
+    found: dict[str, list[str]] = {}
+    for title, module in (("приватности", privacy), ("писателя", writer)):
+        paths, offences = module.dynamic_construct_scan(tmp_path)
+        assert planted in paths, f"обход гейта {title} не видит подложенный скрипт: {paths}"
+        found[title] = offences
+    location = f"{PLANTED_DYNAMIC_SCRIPT}:{PLANTED_DYNAMIC_LINE} — "
+    reddened = [
+        title
+        for title, offences in found.items()
+        if len(offences) == 1 and offences[0].startswith(location) and grammar.DYNAMIC_KIND_MODULE_OBJECT in offences[0]
+    ]
+
+    assert reddened == ["приватности", "писателя"], (
+        "подложенное чтение журнала через объект модуля не краснит правило живых деревьев обоих гейтов: "
+        f"{found}"
+    )
+
+
+# Гейты канала по имени поля `DynamicConstructCase.gates`.
+DYNAMIC_CONSTRUCT_GATES: dict[str, ModuleType] = {"privacy": privacy, "writer": writer}
+
+# Нижние пределы таблиц канала: написаний на вид и двойников (истина 4 плана 16-53).
+DYNAMIC_CASES_PER_KIND = 3
+JUDGEABLE_TWINS_FLOOR = 20
+
+
+def _scan_planted(module: ModuleType, root: Path, source: str) -> list[str]:
+    """Находки канала гейта `module` над синтетическим деревом `root` с единственным файлом `app/x.py`."""
+    planted = root / "app" / "x.py"
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_text(source, encoding="utf-8")
+    paths, offences = module.dynamic_construct_scan(root)
+    assert planted in paths, f"обход канала не видит подложенный `app/x.py`: {paths}"
+    return offences
+
+
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.id) for case in grammar.DYNAMIC_CONSTRUCT_CASES])
+def test_every_dynamic_construct_case_is_banned_by_both_gates(tmp_path, case):
+    """Каждая строка `DYNAMIC_CONSTRUCT_CASES` краснит каждый гейт поля `gates` находкой ожидаемого вида."""
+    assert case.kind in grammar.DYNAMIC_CONSTRUCT_KINDS, f"вид строки `{case.id}` вне перечня: {case.kind}"
+    assert case.gates and set(case.gates) <= set(DYNAMIC_CONSTRUCT_GATES), f"гейты строки `{case.id}`: {case.gates}"
+    missed = {}
+    for gate in case.gates:
+        offences = _scan_planted(DYNAMIC_CONSTRUCT_GATES[gate], tmp_path, case.source)
+        if not any(f" — {case.kind} — " in offence for offence in offences):
+            missed[gate] = offences
+
+    assert not missed, (
+        f"строка таблицы видов не краснит гейт ожидаемым видом «{case.kind}» (`{case.id}`): {missed}"
+    )
+
+
+@pytest.mark.parametrize("twin", [pytest.param(twin, id=twin.id) for twin in grammar.JUDGEABLE_TWINS])
+def test_a_judgeable_twin_is_not_banned(tmp_path, twin):
+    """Судимый двойник `JUDGEABLE_TWINS` не даёт ни одной находки канала ни у одного гейта."""
+    found = {gate: _scan_planted(module, tmp_path, twin.source) for gate, module in DYNAMIC_CONSTRUCT_GATES.items()}
+
+    assert not any(found.values()), f"канал краснеет на судимом двойнике `{twin.id}`: {found}"
+
+
+def test_the_dynamic_construct_tables_cover_every_kind():
+    """Таблицы канала: девять видов, у каждого не меньше трёх написаний, двойников не меньше двадцати, `id` уникальны."""
+    per_kind = Counter(case.kind for case in grammar.DYNAMIC_CONSTRUCT_CASES)
+    ids = Counter(row.id for row in (*grammar.DYNAMIC_CONSTRUCT_CASES, *grammar.JUDGEABLE_TWINS))
+    problems = [
+        f"вид «{kind}»: написаний {per_kind[kind]}"
+        for kind in grammar.DYNAMIC_CONSTRUCT_KINDS
+        if per_kind[kind] < DYNAMIC_CASES_PER_KIND
+    ]
+    problems += [f"вид строки вне перечня: «{kind}»" for kind in per_kind if kind not in grammar.DYNAMIC_CONSTRUCT_KINDS]
+    problems += [f"`id` повторён: {row_id}" for row_id, count in ids.items() if count > 1]
+    if len(grammar.DYNAMIC_CONSTRUCT_KINDS) != 9:
+        problems.append(f"видов {len(grammar.DYNAMIC_CONSTRUCT_KINDS)}, а не девять")
+    if len(grammar.JUDGEABLE_TWINS) < JUDGEABLE_TWINS_FLOOR:
+        problems.append(f"двойников {len(grammar.JUDGEABLE_TWINS)} — меньше {JUDGEABLE_TWINS_FLOOR}")
+
+    assert not problems, "таблицы канала запрета держат вид одним написанием или меньше:\n" + "\n".join(
+        f"  {problem}" for problem in problems
+    )
+
+
+def _qualified_owners(tree: ast.Module) -> set[str]:
+    """Квалифицированные имена всех `def` / `class` модуля через точку и `<module>`."""
+    owners = {"<module>"}
+    pending: list[tuple[ast.AST, str]] = [(tree, "")]
+    while pending:
+        node, prefix = pending.pop()
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                name = f"{prefix}{child.name}"
+                owners.add(name)
+                pending.append((child, f"{name}."))
+            else:
+                pending.append((child, prefix))
+    return owners
+
+
+def _dynamic_exception_problems(registry: dict[str, str], ceiling: int) -> list[str]:
+    """Чем реестр исключений канала неправдив: число выше потолка, нет файла дерева гейта, владельца, конструкции, причины.
+
+    Один помощник у правила реестра и у его контроля: контроль доказывает, что правило краснеет на записи сверх
+    потолка и на устаревшей записи.
+    """
+    problems: list[str] = []
+    if len(registry) > ceiling:
+        problems.append(f"записей {len(registry)} — выше потолка {ceiling}: подъём потолка — решение владельца")
+    trees = set(privacy.PYTHON_TREES) | set(writer.WRITER_TREES)
+    judged = privacy.BANNED_GETATTR_NAMES | writer.BANNED_GETATTR_NAMES
+    for key, reason in registry.items():
+        parts = key.split("::")
+        if len(parts) != 3:
+            problems.append(f"`{key}`: ключ не вида `<путь>::<владелец>::<вид>`")
+            continue
+        path, owner, kind = parts
+        if not reason.strip():
+            problems.append(f"`{key}`: причина пуста")
+        if kind not in grammar.DYNAMIC_CONSTRUCT_KINDS:
+            problems.append(f"`{key}`: вид «{kind}» вне перечня")
+        file = privacy.PROJECT_ROOT / path
+        if path.split("/", 1)[0] not in trees or not file.is_file():
+            problems.append(f"`{key}`: файла нет в деревьях гейтов")
+            continue
+        source = file.read_text(encoding="utf-8")
+        if owner not in _qualified_owners(ast.parse(source)):
+            problems.append(f"`{key}`: владельца `{owner}` в файле нет")
+        elif not any(
+            grammar.dynamic_construct_key(found) == key
+            for found in grammar.dynamic_construct_findings(source, path, judged_names=judged)
+        ):
+            problems.append(f"`{key}`: запись устарела — конструкции вида «{kind}» у владельца нет")
+    return problems
+
+
+def test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling():
+    """Реестр `DYNAMIC_CONSTRUCT_EXCEPTIONS` правдив и не растёт молча (истина 5 плана 16-53; D-13, D-17).
+
+    Каждая запись называет существующий файл дерева гейта, существующего владельца и хотя бы одну конструкцию
+    названного вида у него, причина непуста, записей не больше потолка `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING`.
+    """
+    registry = grammar.DYNAMIC_CONSTRUCT_EXCEPTIONS
+    problems = _dynamic_exception_problems(registry, grammar.DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING)
+
+    assert registry, "реестр исключений канала пуст: замер планирования назвал шесть живых исключений"
+    assert not problems, "реестр исключений канала запрета неправдив:\n" + "\n".join(f"  {p}" for p in problems)
+
+
+def test_a_seventh_dynamic_construct_exception_reddens_the_ceiling():
+    """Контроль правила реестра: седьмая синтетическая запись — сверх потолка и устаревшая — краснит его."""
+    seventh = f"app/pages/accounts.py::_connect_status::{grammar.DYNAMIC_KIND_TEXT_EXECUTION}"
+    registry = {**grammar.DYNAMIC_CONSTRUCT_EXCEPTIONS, seventh: "синтетическая седьмая запись контроля"}
+    problems = _dynamic_exception_problems(registry, grammar.DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING)
+
+    assert any("выше потолка" in problem for problem in problems), (
+        f"седьмая запись реестра не краснит потолок {grammar.DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING}: {problems}"
+    )
+    assert any(seventh in problem and "устарела" in problem for problem in problems), (
+        f"запись без живой конструкции не краснит правило реестра: {problems}"
+    )
+
+
+# Правила канала запрета этого модуля (план 16-53): абзац канала докстринга называет каждое.
+BAN_CHANNEL_RULES = (
+    "test_a_planted_module_object_read_reddens_both_gates",
+    "test_every_dynamic_construct_case_is_banned_by_both_gates",
+    "test_a_judgeable_twin_is_not_banned",
+    "test_the_dynamic_construct_tables_cover_every_kind",
+    "test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling",
+    "test_a_seventh_dynamic_construct_exception_reddens_the_ceiling",
+    "test_the_parity_docstring_names_the_ban_channel_truthfully",
+)
+BAN_CHANNEL_DOC_NEEDLES = ("О-23 (а)", "запрещённ", "`dynamic_construct_findings`", "`DYNAMIC_CONSTRUCT_EXCEPTIONS`")
+NINTH_DICTIONARY_NEEDLES = ("`print`", "`update`", "`sys.modules[__name__]`", "`me = sys.modules[__name__]`")
+# Фраза абзаца словаря девятого круга до плана 16-53 (ревью IN-22): класс шире словаря.
+REFUTED_NINTH_DICTIONARY_CLAIM = (
+    "толкование псевдонима, закрывающее путь носителя (коллизия имени носителя), краснят матрицы"
+)
+BAN_CHANNEL_HEADER = "# --- Канал запрета динамических конструкций"
+BAN_CHANNEL_HEADER_NEEDLES = (
+    "О-23 (а)",
+    "свойство 1",
+    "в коде нет конструкции, которую гейт не умеет судить",
+    "исключения",
+    "потолок",
+)
+
+
+def _doc_bullet(doc: str, heading: str) -> str:
+    """Пункт докстринга, начатый строкой `* <heading>`, до следующего пункта (пробелы схлопнуты)."""
+    lines = doc.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith(f"* {heading}")), None)
+    if start is None:
+        return ""
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("* ")), len(lines))
+    return " ".join(" ".join(lines[start:end]).split())
+
+
+def _comment_block(source: str, header: str) -> str:
+    """Комментарий-шапка, начатая строкой `header`: подряд идущие строки `#` (пробелы схлопнуты)."""
+    lines = source.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith(header)), None)
+    if start is None:
+        return ""
+    block: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("#"):
+            if block and not line.strip():
+                continue
+            break
+        block.append(line.lstrip("#").strip())
+    return " ".join(" ".join(block).split())
+
+
+def test_the_parity_docstring_names_the_ban_channel_truthfully():
+    """Тексты канала правдивы (план 16-53; О-23 (а), свойства 1, 4, 5; ревью IN-22).
+
+    Докстринг этого модуля: пункт о канале называет «О-23 (а)», запрет, `dynamic_construct_findings`,
+    `DYNAMIC_CONSTRUCT_EXCEPTIONS` и каждое правило канала `BAN_CHANNEL_RULES`; пункт о словаре девятого круга называет
+    соперников словаря `print` и `update` и два написания объекта модуля и не содержит прежней фразы о классе
+    `REFUTED_NINTH_DICTIONARY_CLAIM`. Комментарий-шапка канала общего модуля называет решение, свойство 1, обещание,
+    исключения и потолок.
+    """
+    doc = ast.get_docstring(_module_tree()) or ""
+    channel = _doc_bullet(doc, "Канал запрета динамических конструкций")
+    ninth = _doc_bullet(doc, "Словарь девятого круга")
+    header = _comment_block(Path(grammar.__file__).read_text(encoding="utf-8"), BAN_CHANNEL_HEADER)
+    problems = [f"пункт канала не называет «{needle}»" for needle in BAN_CHANNEL_DOC_NEEDLES if needle not in channel]
+    problems += [f"пункт канала не называет правило `{rule}`" for rule in BAN_CHANNEL_RULES if f"`{rule}`" not in channel]
+    problems += [f"пункт словаря девятого круга не называет {needle}" for needle in NINTH_DICTIONARY_NEEDLES
+                 if needle not in ninth]
+    if not ninth or REFUTED_NINTH_DICTIONARY_CLAIM in " ".join(doc.split()):
+        problems.append(f"докстринг утверждает прежнюю фразу о классе: «{REFUTED_NINTH_DICTIONARY_CLAIM}»")
+    problems += [f"шапка канала общего модуля не называет «{needle}»" for needle in BAN_CHANNEL_HEADER_NEEDLES
+                 if needle not in header]
+
+    assert not problems, (
+        "докстринг паритета утверждает класс шире словаря или не называет канал:\n"
+        + "\n".join(f"  {problem}" for problem in problems)
     )

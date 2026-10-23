@@ -1402,3 +1402,1337 @@ def binding_form_source(
             rival=value.rival,
         )
     return form.template.format(value=value.value, use=use, decoy=value.decoy, rival=value.rival)
+
+
+# --- Канал запрета динамических конструкций (план 16-53; решение владельца О-23 (а), свойство 1) -----------------
+#
+# ЗАЧЕМ. Раунды 6–10 закрытия гэпа фазы 16 шли одним кругом: каждый новый корпус ревью или верификации находил
+# следующее написание динамического чтения или вызова (`sys.modules` под псевдонимом, атрибут-держатель объекта
+# модуля, `importlib`, `getattr`-строка, `operator.methodcaller` под именем носителя, имя в двух ролях — CR-05,
+# WR-32, WR-33, V10-1, V10-2), которое предикаты распознавания обоих гейтов не судили. Решение владельца О-23 (а),
+# 2026-10-22: сузить обещание гейтов до запрета динамики.
+#
+# ОБЕЩАНИЕ (свойство 1): в коде нет конструкции, которую гейт не умеет судить, — а не «любое её написание найдено».
+# Раунд финальный (свойство 5): новое написание динамики — не гэп, если его конструкция есть в перечне ниже.
+#
+# ПЕРЕЧЕНЬ ВИДОВ (`DYNAMIC_CONSTRUCT_KINDS`, закрытый); критерий каждого — синтаксический, по имени узла:
+# * «объект модуля» — атрибут `modules` у любого получателя, `from sys import modules`, ввоз `importlib` в любой
+#   форме, имя или атрибут `import_module`, имя `__import__`;
+# * «пространство имён» — имена `globals`, `locals`, `vars`, `__builtins__`, атрибуты `__dict__`, `__globals__`,
+#   `__builtins__`, ввоз `builtins`;
+# * «исполнение текста» — встроенные `eval`, `exec`, `compile`, `breakpoint` по имени (атрибут `re.compile` — не
+#   имя и не судится);
+# * «отложенный вызов по имени» — `methodcaller`, `attrgetter` именем, атрибутом или ввозом из `operator`;
+# * «отражение как значение» — `getattr` / `setattr` / `delattr` / `hasattr` (и они же атрибутом `builtins`) не в
+#   позиции вызываемого: псевдоним, атрибут-держатель, подача, `partial`, `map`;
+# * «вычисленное имя атрибута» — вызов этих четырёх с нелитеральным именем (переменная, распаковка, выражение) и
+#   `set_committed_value` / `flag_modified` / `set_attribute` / `del_attribute` с нелитеральным ключом;
+# * «имя запрещённой роли строкой» — `getattr` со строкой из `judged_names` гейта (методы, привязки и фабрики
+#   журнала и `print` у приватности, пишущий API у писателя — `BANNED_GETATTR_NAMES` модуля гейта) или из
+#   `BANNED_ATTRIBUTE_NAMES` (у обоих гейтов);
+# * «служебный протокол атрибутов» — `__getattribute__`, `__getattr__`, `__setattr__`, `__delattr__`, `__set__`,
+#   `__get__`, `__delete__` чтением атрибута или определением `def`;
+# * «вычисленный текст SQL» — `text` / `exec_driver_sql` / `executescript` с нелитералом и `execute` /
+#   `executemany` / `fetch` / `fetchrow` / `fetchval` с f-строкой, `%` или `.format` над строкой или склейкой
+#   константы с переменной.
+#
+# ПОЧЕМУ ПО ИМЕНИ КОНСТРУКЦИИ. Объект модуля в любом написании проходит через одну из этих конструкций, и канал
+# краснит её по имени узла: псевдоним получателя (`import sys as _s`) и имя, под которым связан результат, на
+# находку не влияют. Обход запрета потребовал бы той же динамики, а её канал запрещает. Канал один, в общем модуле
+# (О-12 (а)): оба гейта зовут `dynamic_construct_findings` тем же объектом (`REQUIRED_SHARED_NAMES` правила-паритета).
+# Находки канала — свой список, а не строки прежних предикатов: числа мест прежних таблиц не меняются (свойство 6).
+#
+# ИСКЛЮЧЕНИЯ. Законные исключения — поимённый реестр `DYNAMIC_CONSTRUCT_EXCEPTIONS` с причиной у каждой записи;
+# ключ `<путь>::<квалифицированный владелец>::<вид>` снимает находки этого вида у этого владельца. Шесть записей
+# замера планирования, потолок `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING = 6`; подъём потолка и новая запись — решение
+# владельца. Запись без файла, владельца или конструкции своего вида краснит правило-паритет реестра.
+#
+# ГРАНИЦА. Поток данных канал не судит: значение, пришедшее параметром или из контейнера, — прежний пункт границы
+# обоих гейтов. Динамика вне перечня — повод владельцу расширить перечень, а не молча норма и не гэп. Докстринги и
+# комментарии канал не судит: он читает `ast`, а не текст.
+
+
+class DynamicConstruct(NamedTuple):
+    """Одна запрещённая конструкция исходника: где стоит, какого вида, у какого владельца и чем написана.
+
+    `owner` — квалифицированное имя ближайших `def` / `class` через точку (`BaseRepository.update`), на уровне
+    модуля — `<module>`; `text` — фрагмент `ast.unparse` узла, не длиннее 80 знаков.
+    """
+
+    path: str
+    line: int
+    column: int
+    kind: str
+    owner: str
+    text: str
+
+
+DYNAMIC_KIND_MODULE_OBJECT = "объект модуля"
+DYNAMIC_KIND_NAMESPACE = "пространство имён"
+DYNAMIC_KIND_TEXT_EXECUTION = "исполнение текста"
+DYNAMIC_KIND_DEFERRED_CALL = "отложенный вызов по имени"
+DYNAMIC_KIND_REFLECTION_VALUE = "отражение как значение"
+DYNAMIC_KIND_COMPUTED_ATTRIBUTE = "вычисленное имя атрибута"
+DYNAMIC_KIND_BANNED_ROLE_STRING = "имя запрещённой роли строкой"
+DYNAMIC_KIND_ATTRIBUTE_PROTOCOL = "служебный протокол атрибутов"
+DYNAMIC_KIND_COMPUTED_SQL = "вычисленный текст SQL"
+
+DYNAMIC_CONSTRUCT_KINDS: tuple[str, ...] = (
+    DYNAMIC_KIND_MODULE_OBJECT,
+    DYNAMIC_KIND_NAMESPACE,
+    DYNAMIC_KIND_TEXT_EXECUTION,
+    DYNAMIC_KIND_DEFERRED_CALL,
+    DYNAMIC_KIND_REFLECTION_VALUE,
+    DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    DYNAMIC_KIND_BANNED_ROLE_STRING,
+    DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    DYNAMIC_KIND_COMPUTED_SQL,
+)
+
+# Реестр исключений канала: `<путь>::<квалифицированный владелец>::<вид>` → причина (замер планирования плана 16-53,
+# HEAD `c9da79b2`, подтверждён на дереве после волны 1 партии). Каждая запись измерена: правило-паритет
+# `test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling` требует у неё существующий файл дерева
+# гейта, владельца и хотя бы одну конструкцию названного вида; устаревшая запись краснит.
+DYNAMIC_CONSTRUCT_EXCEPTIONS: dict[str, str] = {
+    "app/pages/accounts.py::_connect_status::вычисленное имя атрибута": (
+        "макрос Jinja по имени: получатель — модуль шаблона `accounts/partials/connect_status.html` "
+        "(`templates.env.get_template(…).module`), не журнал и не пишущий API; имена — литералы вызывающих этого "
+        "файла `notice`, `connected`, `qr`"
+    ),
+    "app/pages/common.py::get_user_from_cookie::вычисленное имя атрибута": (
+        "`setattr(user, IMPERSONATOR_ATTR, actor)`: имя — константа модуля `IMPERSONATOR_ATTR = \"impersonated_by\"`, "
+        "объект — `User` из `db.get(User, …)`; колонок номера у него нет"
+    ),
+    "app/pages/common.py::actor_of::вычисленное имя атрибута": (
+        "`getattr(user, IMPERSONATOR_ATTR, None)`: та же константа; результат — `User` или `None`, он не вызывается"
+    ),
+    "app/repositories/base.py::BaseRepository.update::вычисленное имя атрибута": (
+        "обобщённая запись полей репозитория; запись колонок номера через неё отказывает на исполнении "
+        "(`app/models/phone_guard.py`, событие `set`, план 16-51), а вызов `update(…, phone=…)` ловит гейт писателя "
+        "видом «именованный аргумент»"
+    ),
+    "app/routes/schedules.py::update_schedule::вычисленное имя атрибута": (
+        "объект — `Schedule` из `repo.get_for_user(…)`, поля — ключи `data.model_dump(exclude_unset=True)` "
+        "(`UpdateScheduleRequest`); колонок номера у расписания нет"
+    ),
+    "max_worker/main.py::<module>::вычисленное имя атрибута": (
+        "уровень журнала по имени из окружения `LOG_LEVEL`: получатель — модуль `logging`, значение уходит в "
+        "`logging.root.setLevel(…)` и не вызывается; продуктовый код воркера партия не меняет (образ — деплой-гейт D-26)"
+    ),
+}
+
+# Потолок реестра: подъём — решение владельца, а не исполнителя (D-13, D-17; О-23 (а), свойства 1 и 6).
+DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING = 6
+
+
+# Объект модуля: атрибут `modules` (у любого получателя — `sys`, псевдоним `sys`, что угодно) и ввоз `modules` из
+# `sys`; ввоз `importlib` в любой форме; имя или атрибут `import_module` и `__import__`.
+MODULE_OBJECT_ATTRIBUTES = frozenset({"modules"})
+IMPORTER_NAMES = frozenset({"import_module", "__import__"})
+
+# Пространство имён: словари модуля, функции, объекта и встроенных — и сам модуль встроенных.
+NAMESPACE_NAMES = frozenset({"globals", "locals", "vars", "__builtins__"})
+NAMESPACE_ATTRIBUTES = frozenset({"__dict__", "__globals__", "__builtins__"})
+BUILTINS_MODULE = "builtins"
+
+# Исполнение текста — встроенные функции по имени (атрибут `re.compile` — не имя и не судится).
+TEXT_EXECUTION_NAMES = frozenset({"eval", "exec", "compile", "breakpoint"})
+
+# Отложенный вызов по имени: вызываемое, которое зовёт метод или читает атрибут по строке позже.
+DEFERRED_CALL_NAMES = frozenset({"methodcaller", "attrgetter"})
+
+# Функции отражения атрибутов: значением — вид «отражение как значение», вызовом с нелитеральным именем —
+# «вычисленное имя атрибута», `getattr` со строкой роли — «имя запрещённой роли строкой».
+REFLECTION_NAMES = frozenset({"getattr", "setattr", "delattr", "hasattr"})
+
+# Писатели атрибута SQLAlchemy по ключу (второй позиционный аргумент или `key=`), по последнему имени вызова.
+KEYED_ATTRIBUTE_WRITERS = frozenset({"set_committed_value", "flag_modified", "set_attribute", "del_attribute"})
+
+# Служебный протокол атрибутов — чтением атрибута или определением `def`.
+ATTRIBUTE_PROTOCOL_NAMES = frozenset(
+    {"__getattribute__", "__getattr__", "__setattr__", "__delattr__", "__set__", "__get__", "__delete__"}
+)
+
+# Вычисленный текст SQL: вызовы сырого текста (любой нелитерал — находка) и исполняющие вызовы (находка — текст,
+# собранный f-строкой, `%`, `.format` над строкой или склейкой константы с переменной), по последнему имени вызова.
+SQL_TEXT_CALLS = frozenset({"text", "exec_driver_sql", "executescript"})
+SQL_EXECUTE_CALLS = frozenset({"execute", "executemany", "fetch", "fetchrow", "fetchval"})
+SQL_TEXT_KEYWORDS = frozenset({"text", "statement", "sql", "query", "sql_script"})
+
+# Имена, которые канал добавляет к `judged_names` гейта у вида «имя запрещённой роли строкой»: `getattr` со строкой,
+# читающей объект модуля, пространство имён, отложенный вызов или служебный протокол, запрещён у обоих гейтов.
+BANNED_ATTRIBUTE_NAMES = (
+    MODULE_OBJECT_ATTRIBUTES | IMPORTER_NAMES | NAMESPACE_ATTRIBUTES | DEFERRED_CALL_NAMES | ATTRIBUTE_PROTOCOL_NAMES
+)
+
+
+def _is_importlib(module: str | None) -> bool:
+    return module is not None and (module == "importlib" or module.startswith("importlib."))
+
+
+def _string_constant(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _constant_text(node: ast.AST) -> bool:
+    """Строковая константа или склейка `+` одних строковых констант."""
+    if _string_constant(node):
+        return True
+    return (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Add)
+        and _constant_text(node.left)
+        and _constant_text(node.right)
+    )
+
+
+def _mentions_text(node: ast.AST) -> bool:
+    """В склейке `+` есть строковая константа."""
+    if _string_constant(node):
+        return True
+    return isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and (
+        _mentions_text(node.left) or _mentions_text(node.right)
+    )
+
+
+def _built_sql(node: ast.AST) -> bool:
+    """Текст SQL, собранный во время исполнения: f-строка, `%` или `.format` над строкой, константа плюс переменная."""
+    if isinstance(node, ast.JoinedStr):
+        return any(isinstance(value, ast.FormattedValue) for value in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return _string_constant(node.left)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+        return _string_constant(node.func.value)
+    return _mentions_text(node) and not _constant_text(node)
+
+
+def _last_call_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _reflection_function(node: ast.AST) -> str | None:
+    """Имя функции отражения, если узел — она сама: `getattr` … или `builtins.getattr` …"""
+    if isinstance(node, ast.Name) and node.id in REFLECTION_NAMES:
+        return node.id
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in REFLECTION_NAMES
+        and isinstance(node.value, ast.Name)
+        and node.value.id == BUILTINS_MODULE
+    ):
+        return node.attr
+    return None
+
+
+def _named_argument(call: ast.Call, keyword: str) -> ast.expr | None:
+    """Второй позиционный аргумент (имя атрибута или ключ) или именованный `keyword`; при распаковке — `None`."""
+    if any(isinstance(argument, ast.Starred) for argument in call.args[:2]):
+        return None
+    if len(call.args) >= 2:
+        return call.args[1]
+    return next((item.value for item in call.keywords if item.arg == keyword), None)
+
+
+def _import_kind(node: ast.Import | ast.ImportFrom) -> str | None:
+    if isinstance(node, ast.Import):
+        names = [alias.name for alias in node.names]
+        if any(_is_importlib(name) for name in names):
+            return DYNAMIC_KIND_MODULE_OBJECT
+        if BUILTINS_MODULE in names:
+            return DYNAMIC_KIND_NAMESPACE
+        return None
+    imported = {alias.name for alias in node.names}
+    if _is_importlib(node.module) or (node.module == "sys" and imported & MODULE_OBJECT_ATTRIBUTES):
+        return DYNAMIC_KIND_MODULE_OBJECT
+    if node.module == BUILTINS_MODULE:
+        return DYNAMIC_KIND_NAMESPACE
+    if node.module == "operator" and imported & DEFERRED_CALL_NAMES:
+        return DYNAMIC_KIND_DEFERRED_CALL
+    return None
+
+
+def _named_kind(node: ast.AST) -> str | None:
+    """Вид узла по его собственному имени: `Name.id` или `Attribute.attr`."""
+    name = node.id if isinstance(node, ast.Name) else None
+    attribute = node.attr if isinstance(node, ast.Attribute) else None
+    if name in IMPORTER_NAMES or attribute in IMPORTER_NAMES or attribute in MODULE_OBJECT_ATTRIBUTES:
+        return DYNAMIC_KIND_MODULE_OBJECT
+    if name in NAMESPACE_NAMES or attribute in NAMESPACE_ATTRIBUTES:
+        return DYNAMIC_KIND_NAMESPACE
+    if name in TEXT_EXECUTION_NAMES:
+        return DYNAMIC_KIND_TEXT_EXECUTION
+    if name in DEFERRED_CALL_NAMES or attribute in DEFERRED_CALL_NAMES:
+        return DYNAMIC_KIND_DEFERRED_CALL
+    if name in ATTRIBUTE_PROTOCOL_NAMES or attribute in ATTRIBUTE_PROTOCOL_NAMES:
+        return DYNAMIC_KIND_ATTRIBUTE_PROTOCOL
+    return None
+
+
+def _call_kind(call: ast.Call, judged_names: frozenset[str]) -> str | None:
+    """Вид вызова: отражение по вычисленному имени или строкой роли, писатель по ключу, вычисленный SQL."""
+    reflected = _reflection_function(call.func)
+    if reflected is not None:
+        name = _named_argument(call, "name")
+        if not _string_constant(name):
+            return DYNAMIC_KIND_COMPUTED_ATTRIBUTE
+        assert isinstance(name, ast.Constant)
+        if reflected == "getattr" and name.value in judged_names | BANNED_ATTRIBUTE_NAMES:
+            return DYNAMIC_KIND_BANNED_ROLE_STRING
+        return None
+    last = _last_call_name(call.func)
+    if last in KEYED_ATTRIBUTE_WRITERS:
+        return None if _string_constant(_named_argument(call, "key")) else DYNAMIC_KIND_COMPUTED_ATTRIBUTE
+    if last in SQL_TEXT_CALLS or last in SQL_EXECUTE_CALLS:
+        first = call.args[0] if call.args else next(
+            (item.value for item in call.keywords if item.arg in SQL_TEXT_KEYWORDS), None
+        )
+        if first is None:
+            return None
+        if isinstance(first, ast.Starred):
+            return DYNAMIC_KIND_COMPUTED_SQL
+        if last in SQL_TEXT_CALLS:
+            return None if _constant_text(first) else DYNAMIC_KIND_COMPUTED_SQL
+        return DYNAMIC_KIND_COMPUTED_SQL if _built_sql(first) else None
+    return None
+
+
+def _construct_kind(node: ast.AST, parent: ast.AST | None, judged_names: frozenset[str]) -> str | None:
+    """Вид запрещённой конструкции узла `node` (по имени узла, а не по получателю) или `None`."""
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return _import_kind(node)
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return DYNAMIC_KIND_ATTRIBUTE_PROTOCOL if node.name in ATTRIBUTE_PROTOCOL_NAMES else None
+    named = _named_kind(node)
+    if named is not None:
+        return named
+    if _reflection_function(node) is not None and not (isinstance(parent, ast.Call) and parent.func is node):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            return None
+        return DYNAMIC_KIND_REFLECTION_VALUE
+    if isinstance(node, ast.Call):
+        return _call_kind(node, judged_names)
+    return None
+
+
+def _construct_owners(tree: ast.Module) -> dict[int, str]:
+    """`id(узла)` → квалифицированное имя ближайших `def` / `class` через точку, на уровне модуля — `<module>`."""
+    owners: dict[int, str] = {}
+    pending: list[tuple[ast.AST, str]] = [(tree, "<module>")]
+    while pending:
+        node, owner = pending.pop()
+        for child in ast.iter_child_nodes(node):
+            owners[id(child)] = owner
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                pending.append((child, child.name if owner == "<module>" else f"{owner}.{child.name}"))
+            else:
+                pending.append((child, owner))
+    return owners
+
+
+def _construct_text(node: ast.AST) -> str:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        text = f"def {node.name}(…)"
+    else:
+        text = ast.unparse(node).splitlines()[0]
+    return text[:80]
+
+
+def dynamic_construct_findings(
+    source: str, path: str, *, judged_names: frozenset[str]
+) -> list[DynamicConstruct]:
+    """Запрещённые конструкции исходника `source` — по закрытому перечню видов `DYNAMIC_CONSTRUCT_KINDS`.
+
+    Обход `ast.walk` с картой родителей и картой владельцев; одна находка на узел. Конструкция судится по имени
+    самого узла (атрибут `modules`, ввоз `importlib`, имя `methodcaller` …), а не по написанию получателя:
+    псевдоним `sys` или имя, под которым связан объект модуля, на находку не влияют. `judged_names` — имена
+    запрещённой роли гейта (вид «имя запрещённой роли строкой»), их подаёт гейт: общий модуль гейтов не ввозит.
+    Вызовов журнала и записи номера канал не судит — это прежние предикаты гейтов.
+    """
+    tree = ast.parse(source)
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    owners = _construct_owners(tree)
+    found: list[DynamicConstruct] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.stmt, ast.expr)):
+            continue
+        kind = _construct_kind(node, parents.get(id(node)), judged_names)
+        if kind is not None:
+            found.append(
+                DynamicConstruct(
+                    path, node.lineno, node.col_offset, kind, owners.get(id(node), "<module>"), _construct_text(node)
+                )
+            )
+    return sorted(found, key=lambda construct: (construct.line, construct.column))
+
+
+def dynamic_construct_key(found: DynamicConstruct) -> str:
+    """Ключ находки в реестре `DYNAMIC_CONSTRUCT_EXCEPTIONS`: `<путь>::<владелец>::<вид>`."""
+    return f"{found.path}::{found.owner}::{found.kind}"
+
+
+def exempt_dynamic_constructs(found: list[DynamicConstruct]) -> list[DynamicConstruct]:
+    """Находки без тех, чей ключ `<путь>::<владелец>::<вид>` назван в `DYNAMIC_CONSTRUCT_EXCEPTIONS`."""
+    return [construct for construct in found if dynamic_construct_key(construct) not in DYNAMIC_CONSTRUCT_EXCEPTIONS]
+
+
+def format_dynamic_construct(found: DynamicConstruct) -> str:
+    """Находка строкой: «`путь:строка` — запрещённая конструкция — <вид> — <фрагмент>»."""
+    return f"{found.path}:{found.line} — запрещённая конструкция — {found.kind} — {found.text}"
+
+
+class DynamicConstructCase(NamedTuple):
+    """Строка таблицы видов канала: исходник с запрещённой конструкцией, ожидаемый вид и гейты, которые краснеют.
+
+    `gates` — `("privacy", "writer")` по умолчанию; вид «имя запрещённой роли строкой» судится по именам роли
+    гейта, поэтому у его строк с именем одной роли поле называет один гейт.
+    """
+
+    id: str
+    source: str
+    kind: str
+    gates: tuple[str, ...] = ("privacy", "writer")
+
+
+class JudgeableTwin(NamedTuple):
+    """Судимый двойник: исходник, похожий на запрещённую конструкцию, на котором канал не краснеет ни у одного гейта."""
+
+    id: str
+    source: str
+
+
+# Таблица видов (план 16-53; О-23 (а), свойства 1 и 4): у каждого из девяти видов — не одно написание; формы ревью и
+# верификации раунда 10 (CR-05, WR-32, WR-33, V10-1, V10-2) — строками своего вида. Правило-паритет
+# `test_every_dynamic_construct_case_is_banned_by_both_gates` судит каждую строку каждым гейтом поля `gates`
+# (`dynamic_construct_scan` над синтетическим деревом с файлом `app/x.py`).
+DYNAMIC_CONSTRUCT_CASES: tuple[DynamicConstructCase, ...] = (
+    # CR-05 (ревью раунда 10; верификация раунда 10, гэп 1): тринадцать написаний объекта модуля.
+    DynamicConstructCase(
+        "cr05-self-attribute",
+        (
+            "import sys\n"
+            "out = print\n"
+            "class K:\n"
+            "    def __init__(self):\n"
+            "        self.me = sys.modules[__name__]\n"
+            "    def go(self, account):\n"
+            "        self.me.out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-getattr-self-attribute",
+        (
+            "import sys\n"
+            "out = print\n"
+            "class K:\n"
+            "    def __init__(self):\n"
+            "        self.me = sys.modules[__name__]\n"
+            "    def go(self, account):\n"
+            '        getattr(self, "me").out(account.phone)\n'
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-class-body-through-self",
+        (
+            "import sys\n"
+            "out = print\n"
+            "class K:\n"
+            "    me = sys.modules[__name__]\n"
+            "    def go(self, account):\n"
+            "        self.me.out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-class-body-through-class",
+        (
+            "import sys\n"
+            "out = print\n"
+            "class K:\n"
+            "    me = sys.modules[__name__]\n"
+            "    def go(self, account):\n"
+            "        K.me.out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-import-alias",
+        (
+            "import sys as _s\n"
+            "out = print\n"
+            "def go(account):\n"
+            "    _s.modules[__name__].out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-import-alias-bound",
+        (
+            "import sys as _s\n"
+            "out = print\n"
+            "me = _s.modules[__name__]\n"
+            "def go(account):\n"
+            "    me.out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-from-sys-import-modules",
+        (
+            "from sys import modules\n"
+            "out = print\n"
+            "def go(account):\n"
+            "    modules[__name__].out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-from-sys-import-modules-as",
+        (
+            "from sys import modules as mods\n"
+            "out = print\n"
+            "def go(account):\n"
+            "    mods[__name__].out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-modules-get",
+        (
+            "import sys\n"
+            "out = print\n"
+            "def go(account):\n"
+            "    sys.modules.get(__name__).out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-getattr-sys-modules",
+        (
+            "import sys\n"
+            "out = print\n"
+            "def go(account):\n"
+            '    getattr(sys, "modules")[__name__].out(account.phone)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+    ),
+    DynamicConstructCase(
+        "cr05-importlib-import-module",
+        (
+            "import importlib\n"
+            "out = print\n"
+            "def go(account):\n"
+            "    importlib.import_module(__name__).out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-from-importlib-import-module",
+        (
+            "from importlib import import_module\n"
+            "out = print\n"
+            "def go(account):\n"
+            "    import_module(__name__).out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "cr05-importlib-bound",
+        (
+            "import importlib\n"
+            "out = print\n"
+            "me = importlib.import_module(__name__)\n"
+            "def go(account):\n"
+            "    me.out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # Получатель журнала через объект модуля (продолжение WR-30; гэп 2) и прочие написания.
+    DynamicConstructCase(
+        "cr05-receiver-through-module-object",
+        (
+            "import logging\n"
+            "import sys\n"
+            'lg = logging.getLogger("x")\n'
+            "class K:\n"
+            "    def __init__(self):\n"
+            "        self.me = sys.modules[__name__]\n"
+            "    def go(self, account):\n"
+            '        self.me.lg.info("x %s", account.phone)\n'
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "dunder-import",
+        (
+            "out = print\n"
+            "def go(account):\n"
+            "    __import__(__name__).out(account.phone)\n"
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    DynamicConstructCase(
+        "importlib-submodule",
+        (
+            "import importlib.util\n"
+            'spec = importlib.util.find_spec("x")\n'
+        ),
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # Пространство имён: имя достают из словаря модуля, функции, объекта или встроенных.
+    DynamicConstructCase(
+        "globals-subscript",
+        (
+            "import logging\n"
+            'lg = logging.getLogger("x")\n'
+            "def go(account):\n"
+            '    globals()["lg"].info("x %s", account.phone)\n'
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    DynamicConstructCase(
+        "locals-subscript",
+        (
+            "def go(account, f):\n"
+            '    locals()["f"](account.phone)\n'
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    DynamicConstructCase(
+        "vars-of-sys",
+        (
+            "import sys\n"
+            "out = print\n"
+            "def go(account):\n"
+            '    vars(sys)["modules"][__name__].out(account.phone)\n'
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    DynamicConstructCase(
+        "instance-dict-write",
+        (
+            "def go(account, x):\n"
+            '    account.__dict__["phone"] = x\n'
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    DynamicConstructCase(
+        "function-globals",
+        (
+            "def go(account, f):\n"
+            '    f.__globals__["lg"].info("x %s", account.phone)\n'
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    DynamicConstructCase(
+        "dunder-builtins",
+        (
+            "def go(account):\n"
+            '    __builtins__["print"](account.phone)\n'
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    DynamicConstructCase(
+        "import-builtins",
+        (
+            "import builtins\n"
+            "def go(account):\n"
+            "    builtins.print(account.phone)\n"
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    DynamicConstructCase(
+        "from-builtins-import",
+        (
+            "from builtins import print as p\n"
+            "def go(account):\n"
+            "    p(account.phone)\n"
+        ),
+        DYNAMIC_KIND_NAMESPACE,
+    ),
+    # Исполнение текста: исходник собирается строкой во время исполнения.
+    DynamicConstructCase(
+        "eval-text",
+        (
+            "def go(account, logger):\n"
+            '    eval("logger.info(account.phone)")\n'
+        ),
+        DYNAMIC_KIND_TEXT_EXECUTION,
+    ),
+    DynamicConstructCase(
+        "exec-code",
+        (
+            "def go(code):\n"
+            "    exec(code)\n"
+        ),
+        DYNAMIC_KIND_TEXT_EXECUTION,
+    ),
+    DynamicConstructCase(
+        "compile-text",
+        (
+            "def go(src):\n"
+            '    return compile(src, "<x>", "exec")\n'
+        ),
+        DYNAMIC_KIND_TEXT_EXECUTION,
+    ),
+    DynamicConstructCase(
+        "breakpoint-call",
+        (
+            "def go():\n"
+            "    breakpoint()\n"
+        ),
+        DYNAMIC_KIND_TEXT_EXECUTION,
+    ),
+    # WR-32 и WR-33: `operator.methodcaller` под последним именем носителя; прочие написания.
+    DynamicConstructCase(
+        "wr32-methodcaller-named-to-thread",
+        (
+            "import asyncio\n"
+            "import logging\n"
+            "import operator\n"
+            'logger = logging.getLogger("y")\n'
+            'to_thread = operator.methodcaller("noop")\n'
+            "async def go(account):\n"
+            '    f = operator.methodcaller("info", "x %s", account.phone)\n'
+            "    await asyncio.to_thread(f, logger)\n"
+        ),
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    DynamicConstructCase(
+        "wr32-methodcaller-named-run",
+        (
+            "import contextvars\n"
+            "import logging\n"
+            "import operator\n"
+            'logger = logging.getLogger("y")\n'
+            'run = operator.methodcaller("run")\n'
+            "def go(account):\n"
+            '    f = operator.methodcaller("info", "x %s", account.phone)\n'
+            "    contextvars.copy_context().run(f, logger)\n"
+        ),
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    DynamicConstructCase(
+        "wr33-to-thread-bound-to-methodcaller",
+        (
+            "import asyncio\n"
+            "import logging\n"
+            "import operator\n"
+            'logger = logging.getLogger("y")\n'
+            "to_thread = operator.methodcaller\n"
+            "async def go(account):\n"
+            '    await asyncio.to_thread(logger.info, "x %s", account.phone)\n'
+        ),
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    DynamicConstructCase(
+        "from-operator-import-methodcaller",
+        (
+            "from operator import methodcaller\n"
+            "def go(account, logger):\n"
+            '    methodcaller("info", "x %s", account.phone)(logger)\n'
+        ),
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    DynamicConstructCase(
+        "attrgetter-of-the-column",
+        (
+            "import operator\n"
+            "def go(account):\n"
+            '    return operator.attrgetter("phone")(account)\n'
+        ),
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    DynamicConstructCase(
+        "from-operator-import-attrgetter-as",
+        (
+            "from operator import attrgetter as ag\n"
+            "def go(account):\n"
+            '    return ag("phone")(account)\n'
+        ),
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    # WR-33 (писатель), V10-1, V10-2: функция отражения как значение — псевдоним, атрибут, подача.
+    DynamicConstructCase(
+        "wr33-to-thread-bound-to-getattr",
+        (
+            "import asyncio\n"
+            "from sqlalchemy.orm.attributes import set_committed_value\n"
+            "to_thread = getattr\n"
+            "async def go(account, x):\n"
+            '    await asyncio.to_thread(set_committed_value, account, "phone", x)\n'
+        ),
+        DYNAMIC_KIND_REFLECTION_VALUE,
+    ),
+    DynamicConstructCase(
+        "wr33-thread-bound-to-getattr",
+        (
+            "import threading\n"
+            "import logging\n"
+            'logger = logging.getLogger("y")\n'
+            "class A:\n"
+            "    Thread = getattr\n"
+            "def go(account):\n"
+            '    threading.Thread(target=logger.info, args=("x %s", account.phone)).start()\n'
+        ),
+        DYNAMIC_KIND_REFLECTION_VALUE,
+    ),
+    DynamicConstructCase(
+        "v10-1-pick-and-setattr-attribute",
+        (
+            "def pick(obj, name):\n"
+            "    f = getattr\n"
+            "    return f(obj, name)\n"
+            "class S:\n"
+            "    def __init__(self):\n"
+            "        self.f = setattr\n"
+            "    def go(self, account, x):\n"
+            '        self.f(account, "phone", x)\n'
+        ),
+        DYNAMIC_KIND_REFLECTION_VALUE,
+    ),
+    DynamicConstructCase(
+        "v10-2-getattr-string-of-setattr-attribute",
+        (
+            "class S:\n"
+            "    def __init__(self):\n"
+            "        self.f = setattr\n"
+            "    def go(self, account, x):\n"
+            '        getattr(self, "f")(account, "phone", x)\n'
+        ),
+        DYNAMIC_KIND_REFLECTION_VALUE,
+    ),
+    DynamicConstructCase(
+        "partial-of-setattr",
+        (
+            "import functools\n"
+            "def go(account, x):\n"
+            '    functools.partial(setattr, account)("phone", x)\n'
+        ),
+        DYNAMIC_KIND_REFLECTION_VALUE,
+    ),
+    DynamicConstructCase(
+        "map-of-getattr",
+        (
+            "def go(objects, names):\n"
+            "    return list(map(getattr, objects, names))\n"
+        ),
+        DYNAMIC_KIND_REFLECTION_VALUE,
+    ),
+    # Вычисленное имя атрибута: имя приходит переменной, распаковкой или выражением.
+    DynamicConstructCase(
+        "getattr-computed-log-method",
+        (
+            "def go(logger, name, account):\n"
+            '    getattr(logger, name)("x %s", account.phone)\n'
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "setattr-computed-field",
+        (
+            "def go(account, field, value):\n"
+            "    setattr(account, field, value)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "set-committed-value-computed-key",
+        (
+            "from sqlalchemy.orm.attributes import set_committed_value\n"
+            "def go(account, key, x):\n"
+            "    set_committed_value(account, key, x)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "flag-modified-computed-key",
+        (
+            "from sqlalchemy.orm.attributes import flag_modified\n"
+            "def go(account, key):\n"
+            "    flag_modified(account, key)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "set-attribute-computed-keyword-key",
+        (
+            "from sqlalchemy.orm import attributes\n"
+            "def go(account, name, x):\n"
+            "    attributes.set_attribute(account, key=name, value=x)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "del-attribute-computed-key",
+        (
+            "from sqlalchemy.orm.attributes import del_attribute\n"
+            "def go(account, name):\n"
+            "    del_attribute(account, name)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "hasattr-computed-name",
+        (
+            "def go(account, name):\n"
+            "    return hasattr(account, name)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "delattr-computed-name",
+        (
+            "def go(account, name):\n"
+            "    delattr(account, name)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "getattr-starred-name",
+        (
+            "def go(account, names):\n"
+            "    return getattr(account, *names)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    DynamicConstructCase(
+        "setattr-concatenated-name",
+        (
+            "def go(account, x):\n"
+            '    setattr(account, "ph" + "one", x)\n'
+        ),
+        DYNAMIC_KIND_COMPUTED_ATTRIBUTE,
+    ),
+    # Имя запрещённой роли строкой: `getattr` со строкой — именем роли гейта (поле `gates`) или
+    # `BANNED_ATTRIBUTE_NAMES` (у обоих гейтов).
+    DynamicConstructCase(
+        "getattr-string-log-method",
+        (
+            "import logging\n"
+            'logger = logging.getLogger("y")\n'
+            "def go(account):\n"
+            '    getattr(logger, "info")("x %s", account.phone)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+        gates=("privacy",),
+    ),
+    DynamicConstructCase(
+        "getattr-string-logger-factory",
+        (
+            "import structlog\n"
+            "def go(account):\n"
+            '    getattr(structlog, "get_logger")().info("x", phone=account.phone)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+        gates=("privacy",),
+    ),
+    DynamicConstructCase(
+        "getattr-string-print",
+        (
+            "import io\n"
+            "def go(module, account):\n"
+            '    getattr(module, "print")(account.phone)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+        gates=("privacy",),
+    ),
+    DynamicConstructCase(
+        "getattr-string-bind-contextvars",
+        (
+            "import structlog\n"
+            "def go(account):\n"
+            '    getattr(structlog.contextvars, "bind_contextvars")(phone=account.phone)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+        gates=("privacy",),
+    ),
+    DynamicConstructCase(
+        "getattr-string-update",
+        (
+            "import sqlalchemy as sa\n"
+            "from app.models import MessengerAccount\n"
+            "def go(x):\n"
+            '    return getattr(sa, "update")(MessengerAccount).values(phone=x)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+        gates=("writer",),
+    ),
+    DynamicConstructCase(
+        "getattr-string-execute",
+        (
+            "def go(session, stmt, rows):\n"
+            '    return getattr(session, "execute")(stmt, rows)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+        gates=("writer",),
+    ),
+    DynamicConstructCase(
+        "getattr-string-set-committed-value",
+        (
+            "from sqlalchemy.orm import attributes\n"
+            "def go(account, x):\n"
+            '    getattr(attributes, "set_committed_value")(account, "phone", x)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+        gates=("writer",),
+    ),
+    DynamicConstructCase(
+        "getattr-string-dunder-setattr",
+        (
+            "def go(account, x):\n"
+            '    getattr(account, "__setattr__")("phone", x)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+    ),
+    DynamicConstructCase(
+        "getattr-string-methodcaller",
+        (
+            "import operator\n"
+            "def go(account, logger):\n"
+            '    getattr(operator, "methodcaller")("info", "x %s", account.phone)(logger)\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+    ),
+    DynamicConstructCase(
+        "getattr-string-dunder-dict",
+        (
+            "def go(account, x):\n"
+            '    getattr(account, "__dict__")["phone"] = x\n'
+        ),
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+    ),
+    # Служебный протокол атрибутов: дескриптор и перехват атрибута — чтением или определением.
+    DynamicConstructCase(
+        "descriptor-set",
+        (
+            "from app.models import MessengerAccount\n"
+            "def go(account, x):\n"
+            "    MessengerAccount.phone.__set__(account, x)\n"
+        ),
+        DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    ),
+    DynamicConstructCase(
+        "object-setattr",
+        (
+            "def go(account, x):\n"
+            '    object.__setattr__(account, "phone", x)\n'
+        ),
+        DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    ),
+    DynamicConstructCase(
+        "class-defines-getattr",
+        (
+            "import logging\n"
+            'logger = logging.getLogger("y")\n'
+            "class P:\n"
+            "    def __getattr__(self, name):\n"
+            "        return getattr(logger, name)\n"
+        ),
+        DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    ),
+    DynamicConstructCase(
+        "type-getattribute",
+        (
+            "def go(account):\n"
+            '    return type(account).__getattribute__(account, "phone")\n'
+        ),
+        DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    ),
+    DynamicConstructCase(
+        "class-defines-set",
+        (
+            "class D:\n"
+            "    def __set__(self, obj, value):\n"
+            "        obj.raw = value\n"
+        ),
+        DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    ),
+    DynamicConstructCase(
+        "instance-delattr",
+        (
+            "def go(account):\n"
+            '    account.__delattr__("phone")\n'
+        ),
+        DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    ),
+    DynamicConstructCase(
+        "descriptor-get",
+        (
+            "from app.models import MessengerAccount\n"
+            "def go(account):\n"
+            "    return MessengerAccount.phone.__get__(account, type(account))\n"
+        ),
+        DYNAMIC_KIND_ATTRIBUTE_PROTOCOL,
+    ),
+    # Вычисленный текст SQL: сырой SQL, собранный во время исполнения.
+    DynamicConstructCase(
+        "text-f-string",
+        (
+            "from sqlalchemy import text\n"
+            "def go(session, x):\n"
+            "    session.execute(text(f\"UPDATE messenger_accounts SET phone = '{x}'\"))\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "text-of-a-variable",
+        (
+            "from sqlalchemy import text\n"
+            "def go(session, sql):\n"
+            "    session.execute(text(sql))\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "text-concatenated",
+        (
+            "import sqlalchemy as sa\n"
+            "def go(session, x):\n"
+            '    session.execute(sa.text("UPDATE messenger_accounts SET phone = " + x))\n'
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "exec-driver-sql-variable",
+        (
+            "def go(conn, sql):\n"
+            "    conn.exec_driver_sql(sql)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "executescript-variable",
+        (
+            "def go(cursor, script):\n"
+            "    cursor.executescript(script)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "execute-percent-format",
+        (
+            "def go(cursor, x):\n"
+            "    cursor.execute(\"UPDATE messenger_accounts SET phone = '%s'\" % x)\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "execute-str-format",
+        (
+            "async def go(conn, x):\n"
+            "    await conn.execute(\"UPDATE messenger_accounts SET phone = '{}'\".format(x))\n"
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "fetchval-f-string",
+        (
+            "async def go(conn, i):\n"
+            '    return await conn.fetchval(f"SELECT phone FROM messenger_accounts WHERE id = {i}")\n'
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+    DynamicConstructCase(
+        "executemany-concatenated",
+        (
+            "def go(cursor, table, rows):\n"
+            '    cursor.executemany("INSERT INTO " + table + " (phone) VALUES (?)", rows)\n'
+        ),
+        DYNAMIC_KIND_COMPUTED_SQL,
+    ),
+)
+
+# Судимые двойники (истина 4 плана 16-53 и соседи замера живых деревьев): литеральное имя атрибута, литеральный
+# SQL, `re.compile`, `sys.argv`, атрибут `module` / `modules_count`, ключ словаря `"modules"` — канал молчит у
+# обоих гейтов (`test_a_judgeable_twin_is_not_banned`).
+JUDGEABLE_TWINS: tuple[JudgeableTwin, ...] = (
+    JudgeableTwin(
+        "getattr-literal-title",
+        (
+            "def go(entity):\n"
+            '    return getattr(entity, "title", None)\n'
+        ),
+    ),
+    JudgeableTwin(
+        "setattr-literal-status",
+        (
+            "def go(obj, v):\n"
+            '    setattr(obj, "status", v)\n'
+        ),
+    ),
+    JudgeableTwin(
+        "set-committed-value-literal-status",
+        (
+            "from sqlalchemy.orm.attributes import set_committed_value\n"
+            "def go(db_payment, s):\n"
+            '    set_committed_value(db_payment, "status", s)\n'
+        ),
+    ),
+    JudgeableTwin(
+        "re-compile",
+        (
+            "import re\n"
+            'PATTERN = re.compile(r"\\d+")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "text-literal",
+        (
+            "from sqlalchemy import text\n"
+            'PREDICATE = text("is_active")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "execute-a-statement",
+        (
+            "def go(session, statement):\n"
+            "    return session.execute(statement)\n"
+        ),
+    ),
+    JudgeableTwin(
+        "sys-argv",
+        (
+            "import sys\n"
+            "ARGS = sys.argv[1:]\n"
+        ),
+    ),
+    JudgeableTwin(
+        "template-module-macro",
+        (
+            "def go(template):\n"
+            "    return template.module.notice()\n"
+        ),
+    ),
+    JudgeableTwin(
+        "modules-count-attribute",
+        (
+            "def go(x):\n"
+            "    return x.modules_count\n"
+        ),
+    ),
+    JudgeableTwin(
+        "operator-itemgetter",
+        (
+            "import operator\n"
+            'KEY = operator.itemgetter("a")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "partial-of-print",
+        (
+            "import functools\n"
+            'say = functools.partial(print, "x")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "level-names-mapping",
+        (
+            "import logging\n"
+            "LEVELS = logging.getLevelNamesMapping()\n"
+        ),
+    ),
+    JudgeableTwin(
+        "inspect-attribute-history",
+        (
+            "from sqlalchemy import inspect\n"
+            "def go(account):\n"
+            '    return inspect(account).attrs["phone"].history\n'
+        ),
+    ),
+    JudgeableTwin(
+        "getattr-literal-dunder-module",
+        (
+            "def go(endpoint):\n"
+            '    return getattr(endpoint, "__module__", "")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "getattr-literal-csafeloader",
+        (
+            "import yaml\n"
+            'LOADER = getattr(yaml, "CSafeLoader", None)\n'
+        ),
+    ),
+    JudgeableTwin(
+        "hasattr-literal-info",
+        (
+            "def go(logger):\n"
+            '    return hasattr(logger, "info")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "super-init-keyword",
+        (
+            "class A(Exception):\n"
+            "    def __init__(self, x):\n"
+            "        super().__init__(name=x)\n"
+        ),
+    ),
+    JudgeableTwin(
+        "execute-literal-sql",
+        (
+            "def go(cursor):\n"
+            '    cursor.execute("SELECT 1")\n'
+        ),
+    ),
+    JudgeableTwin("modules-dict-key", 'COUNTS = {"modules": 1}\n'),
+    JudgeableTwin(
+        "text-implicit-concatenation",
+        (
+            "from sqlalchemy import text\n"
+            'SQL = text("a" "b")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "text-constant-concatenation",
+        (
+            "from sqlalchemy import text\n"
+            'SQL = text("SELECT 1 " + "FROM t")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "execute-parameterised",
+        (
+            "def go(cursor, x):\n"
+            '    cursor.execute("UPDATE t SET a = %s", (x,))\n'
+        ),
+    ),
+    JudgeableTwin(
+        "fetchval-parameterised",
+        (
+            "async def go(conn, i):\n"
+            '    return await conn.fetchval("SELECT phone FROM messenger_accounts WHERE id = $1", i)\n'
+        ),
+    ),
+    JudgeableTwin(
+        "flag-modified-literal",
+        (
+            "from sqlalchemy.orm.attributes import flag_modified\n"
+            "def go(account):\n"
+            '    flag_modified(account, "payload")\n'
+        ),
+    ),
+    JudgeableTwin(
+        "log-call-with-presence-flag",
+        (
+            "import logging\n"
+            'logger = logging.getLogger("y")\n'
+            "def go(account):\n"
+            '    logger.info("x", extra={"phone_set": account.phone is not None})\n'
+        ),
+    ),
+    JudgeableTwin(
+        "dunder-repr-definition",
+        (
+            "class A:\n"
+            "    def __repr__(self):\n"
+            "        return type(self).__name__\n"
+        ),
+    ),
+)
