@@ -3,6 +3,8 @@ import sys
 
 import structlog
 
+from app.services.log_masking import mask_numbers_in_event
+
 
 def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     """Configure structlog + stdlib logging.
@@ -39,6 +41,8 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
     formatter = structlog.stdlib.ProcessorFormatter(
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.format_exc_info,
+            mask_numbers_in_event,
             renderer,
         ],
     )
