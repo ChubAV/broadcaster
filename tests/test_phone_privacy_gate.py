@@ -5224,10 +5224,86 @@ def test_a_planted_notice_through_the_module_object_is_red_as_a_banned_construct
 LOGGING_CONFIG_MODULE = "app/logging_config.py"
 LOGGING_RECONFIGURATION_TREES = ("app", "scripts")
 
+# Настройка structlog — вызов у получателя с последним именем `structlog` или имя, ввезённое из `structlog`.
+STRUCTLOG_CONFIGURATORS = frozenset({"configure", "configure_once", "reset_defaults"})
+# Настройка stdlib: `basicConfig` у любого получателя; `dictConfig` / `fileConfig` / `listen` — у получателя с
+# последним именем `config` или ввезённые из `logging.config`.
+STDLIB_BASIC_CONFIGURATORS = frozenset({"basicConfig"})
+STDLIB_CONFIG_CONFIGURATORS = frozenset({"dictConfig", "fileConfig", "listen"})
+# Перенастройка обработчиков и фильтров — вызов у любого получателя.
+HANDLER_RECONFIGURATORS = frozenset({"addHandler", "removeHandler", "removeFilter", "setFormatter"})
+# Присваивание этим атрибутам у любой цели.
+RECONFIGURED_ATTRIBUTES = frozenset({"handlers", "filters", "propagate"})
+# Списки обработчиков и фильтров на месте (`root.handlers.append(h)`, `handler.filters.clear()`) — та же перенастройка.
+RECONFIGURED_LISTS = frozenset({"handlers", "filters"})
+LIST_MUTATORS = frozenset({"append", "extend", "insert", "remove", "pop", "clear"})
+
+
+def _reconfigured_target(target: ast.expr) -> bool:
+    """Цель присваивания или `del`: атрибут `RECONFIGURED_ATTRIBUTES` или элемент списка обработчиков / фильтров."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_reconfigured_target(item) for item in target.elts)
+    if isinstance(target, ast.Starred):
+        return _reconfigured_target(target.value)
+    if isinstance(target, ast.Attribute):
+        return target.attr in RECONFIGURED_ATTRIBUTES
+    if isinstance(target, ast.Subscript):
+        return isinstance(target.value, ast.Attribute) and target.value.attr in RECONFIGURED_LISTS
+    return False
+
+
+def _is_reconfiguring_call(call: ast.Call, imported: dict[str, tuple[str, str]]) -> bool:
+    if isinstance(call.func, ast.Name):
+        module, name = imported.get(call.func.id, ("", call.func.id))
+        return (
+            name in STDLIB_BASIC_CONFIGURATORS
+            or (module == "structlog" and name in STRUCTLOG_CONFIGURATORS)
+            or (module == "logging.config" and name in STDLIB_CONFIG_CONFIGURATORS)
+            or (call.func.id == "setattr" and len(call.args) > 1 and isinstance(call.args[1], ast.Constant)
+                and call.args[1].value in RECONFIGURED_ATTRIBUTES)
+        )
+    member = _member(call.func)
+    if member is None:
+        return False
+    owner, name = member
+    if name in STDLIB_BASIC_CONFIGURATORS or name in HANDLER_RECONFIGURATORS:
+        return True
+    if name in STRUCTLOG_CONFIGURATORS and _last_name(owner) == "structlog":
+        return True
+    if name in STDLIB_CONFIG_CONFIGURATORS and _last_name(owner) == "config":
+        return True
+    return name in LIST_MUTATORS and isinstance(owner, ast.Attribute) and owner.attr in RECONFIGURED_LISTS
+
 
 def logging_reconfigurations(source: str, path: str) -> list[str]:
-    """Перенастройки журнала исходника вне `LOGGING_CONFIG_MODULE`: «`путь:строка` — перенастройка журнала — <фрагмент>»."""
-    return []
+    """Перенастройки журнала исходника вне `LOGGING_CONFIG_MODULE`: «`путь:строка` — перенастройка журнала — <фрагмент>».
+
+    Судятся вызовы `STRUCTLOG_CONFIGURATORS` (у `structlog` или ввезённые из него), `basicConfig`,
+    `STDLIB_CONFIG_CONFIGURATORS` (у `config` или ввезённые из `logging.config`), `HANDLER_RECONFIGURATORS` у любого
+    получателя, правка списков `.handlers` / `.filters` на месте, присваивание, `del` и `setattr` со строкой атрибутов
+    `RECONFIGURED_ATTRIBUTES` у любой цели. Сам `LOGGING_CONFIG_MODULE` — ноль: это единственное место настройки.
+    """
+    if path == LOGGING_CONFIG_MODULE:
+        return []
+    tree = ast.parse(source)
+    imported = {
+        alias.asname or alias.name: (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module in ("structlog", "logging.config")
+        for alias in node.names
+    }
+    found: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _is_reconfiguring_call(node, imported):
+            found.append(node)
+        elif isinstance(node, (ast.Assign, ast.Delete)) and any(_reconfigured_target(t) for t in node.targets):
+            found.append(node)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and _reconfigured_target(node.target):
+            found.append(node)
+    return [
+        f"{path}:{node.lineno} — перенастройка журнала — {ast.unparse(node).splitlines()[0][:80]}"
+        for node in sorted(found, key=lambda item: (item.lineno, item.col_offset))
+    ]
 
 
 def logging_reconfiguration_scan(root: Path) -> tuple[list[Path], list[str]]:
@@ -5271,6 +5347,15 @@ LOGGING_RECONFIGURATION_CONTROLS = (
     pytest.param('logging.getLogger("x").addHandler(h)', id="add-handler"),
     pytest.param('logging.getLogger("x").propagate = False', id="propagate"),
     pytest.param("root.handlers = []", id="handlers-assignment"),
+    # Сверх семи форм плана — те же перенастройки другими написаниями (правка списков на месте, `setattr` со строкой,
+    # `del`, составное присваивание, ввезённые настройщики, `reset_defaults`).
+    pytest.param("root.handlers.append(h)", id="handlers-append"),
+    pytest.param("h.filters.clear()", id="filters-clear"),
+    pytest.param("root.handlers += [h]", id="handlers-augmented"),
+    pytest.param("del root.handlers[0]", id="handlers-del"),
+    pytest.param('setattr(root, "propagate", False)', id="setattr-propagate"),
+    pytest.param("from logging.config import dictConfig as dc; dc({})", id="imported-dict-config"),
+    pytest.param("structlog.reset_defaults()", id="structlog-reset-defaults"),
 )
 
 
