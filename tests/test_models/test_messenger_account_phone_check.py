@@ -31,6 +31,14 @@
 `tests/test_migrations/test_0023_messenger_account_phone.py`; без неё
 ограничение существовало бы в модели и отсутствовало в очереди накатов, а это
 расхождение для остальной суиты невидимо ПО ПОСТРОЕНИЮ.
+
+СОСТОЯНИЯ СТРОЯТСЯ ПОД РАЗРЕШЕНИЕМ ПИСАТЕЛЯ (план 16-51). Защита на исполнении
+(`app/models/phone_guard.py`, О-23 (а), свойство 3) отказывает записи колонок
+номера вне модуля-писателя — и конструктору, и присваиванию, и сбросу. Правила
+этого файла строят состояние и сбрасывают его внутри `writer_scope()`: так
+моделируется писатель с ошибкой, psql или миграция данных, — и доказывают, что
+ОГРАНИЧЕНИЕ БАЗЫ отвергает невозможное состояние и тогда. Защита приложения
+CHECK не заменяет: «недостижимое через приложение» ≠ «невозможное».
 """
 
 import pytest
@@ -38,6 +46,7 @@ from sqlalchemy import Boolean, CheckConstraint, String
 from sqlalchemy.exc import IntegrityError
 
 from app.models.messenger_account import MessengerAccount
+from app.models.phone_guard import writer_scope
 from app.models.user import User
 
 CONSTRAINT_NAME = "ck_messenger_accounts_manual_requires_phone"
@@ -62,15 +71,17 @@ def _account(user: User, **fields) -> MessengerAccount:
 async def test_a_manual_flag_without_a_number_is_refused_on_insert(db_session):
     """⚠️ ГЛАВНОЕ УТВЕРЖДЕНИЕ: такую строку не принимает САМА ТАБЛИЦА.
 
-    Запись идёт мимо модуля-писателя — прямым ORM-вызовом, как её сделал бы
-    ручной скрипт обслуживания или писатель, не знающий про D-03. Именно этот
-    путь прикладная проверка не покрывает и покрыть не может.
+    Запись идёт мимо модуля-писателя — прямым ORM-вызовом под разрешением
+    защиты на исполнении, как её сделал бы ручной скрипт обслуживания или
+    писатель, не знающий про D-03. Именно этот путь прикладная проверка не
+    покрывает и покрыть не может.
     """
     user = await _user(db_session)
-    db_session.add(_account(user, phone=None, phone_is_manual=True))
+    with writer_scope():
+        db_session.add(_account(user, phone=None, phone_is_manual=True))
 
-    with pytest.raises(IntegrityError):
-        await db_session.flush()
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
 
     await db_session.rollback()
 
@@ -83,10 +94,11 @@ async def test_raising_the_flag_without_a_number_is_refused_on_update(db_session
     db_session.add(account)
     await db_session.flush()
 
-    account.phone_is_manual = True
+    with writer_scope():
+        account.phone_is_manual = True
 
-    with pytest.raises(IntegrityError):
-        await db_session.flush()
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
 
     await db_session.rollback()
 
@@ -99,14 +111,15 @@ async def test_erasing_the_number_under_a_raised_flag_is_refused(db_session):
     оператором, иначе её отвергнет ограничение.
     """
     user = await _user(db_session)
-    account = _account(user, phone=NUMBER, phone_is_manual=True)
-    db_session.add(account)
-    await db_session.flush()
-
-    account.phone = None
-
-    with pytest.raises(IntegrityError):
+    with writer_scope():
+        account = _account(user, phone=NUMBER, phone_is_manual=True)
+        db_session.add(account)
         await db_session.flush()
+
+        account.phone = None
+
+        with pytest.raises(IntegrityError):
+            await db_session.flush()
 
     await db_session.rollback()
 
@@ -130,9 +143,10 @@ async def test_the_three_legal_pairs_are_accepted(
     его, не дало бы ревизии пройти вовсе.
     """
     user = await _user(db_session)
-    db_session.add(_account(user, phone=phone, phone_is_manual=is_manual))
+    with writer_scope():
+        db_session.add(_account(user, phone=phone, phone_is_manual=is_manual))
 
-    await db_session.flush()  # падение здесь и есть провал теста (id называет пару)
+        await db_session.flush()  # падение здесь и есть провал теста (id называет пару)
 
 
 @pytest.mark.asyncio
@@ -152,14 +166,15 @@ async def test_a_new_account_has_an_unknown_number_by_default(db_session):
 async def test_two_accounts_share_one_number(db_session):
     """Уникальности по номеру нет (D-02): один SIM законно даёт TG и WA разом."""
     user = await _user(db_session)
-    db_session.add_all(
-        [
-            _account(user, type="tg_user", phone=NUMBER),
-            _account(user, type="wa", phone=NUMBER),
-        ]
-    )
+    with writer_scope():
+        db_session.add_all(
+            [
+                _account(user, type="tg_user", phone=NUMBER),
+                _account(user, type="wa", phone=NUMBER),
+            ]
+        )
 
-    await db_session.flush()  # падение здесь и есть провал теста
+        await db_session.flush()  # падение здесь и есть провал теста
 
 
 def test_the_column_forms_postgres_would_distinguish():
