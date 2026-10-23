@@ -5213,6 +5213,91 @@ def test_a_planted_notice_through_the_module_object_is_red_as_a_banned_construct
     )
 
 
+# --- Защита журнала на исполнении не обходится кодом приложения (план 16-54; О-23 (а), свойство 2) ---------------
+#
+# Маску на исполнении (`app/services/log_masking.py`, план 16-52) ставит `setup_logging` модуля `LOGGING_CONFIG_MODULE`:
+# процессор — в цепочку форматтера корневого обработчика, фильтр — на обработчики, существующие к вызову. Обработчик,
+# поставленный позже, снятый фильтр, заменённый форматтер, `basicConfig`, новая `structlog.configure` или
+# `propagate = False` выключают её молча — и номер уходит в Loki (D-11). Поэтому перенастройка журнала живёт только в
+# `LOGGING_CONFIG_MODULE`; деревья правила — `app/` и `scripts/` (`max_worker/` настраивает свой журнал сам, своей маски
+# у него нет — граница шапки).
+LOGGING_CONFIG_MODULE = "app/logging_config.py"
+LOGGING_RECONFIGURATION_TREES = ("app", "scripts")
+
+
+def logging_reconfigurations(source: str, path: str) -> list[str]:
+    """Перенастройки журнала исходника вне `LOGGING_CONFIG_MODULE`: «`путь:строка` — перенастройка журнала — <фрагмент>»."""
+    return []
+
+
+def logging_reconfiguration_scan(root: Path) -> tuple[list[Path], list[str]]:
+    """Перенастройки журнала в деревьях `LOGGING_RECONFIGURATION_TREES` под `root`: обойдённые файлы и находки."""
+    paths = [path for tree in LOGGING_RECONFIGURATION_TREES for path in python_sources(root)[tree]]
+    found: list[str] = []
+    for path in paths:
+        found += logging_reconfigurations(path.read_text(encoding="utf-8"), path.relative_to(root).as_posix())
+    return paths, found
+
+
+def test_no_logging_reconfiguration_outside_the_logging_config():
+    """Свойство 2 О-23 (а), D-11: в `app/` и `scripts/` журнал перенастраивает только `LOGGING_CONFIG_MODULE`.
+
+    Маска на исполнении стоит на обработчиках, существующих к вызову `setup_logging`, и в цепочке его форматтера:
+    `structlog.configure` / `reset_defaults`, `logging.basicConfig`, `logging.config.dictConfig` / `fileConfig` /
+    `listen`, вызовы `.addHandler` / `.removeHandler` / `.removeFilter` / `.setFormatter` и присваивания `.handlers` /
+    `.filters` / `.propagate` в другом модуле ставят обработчик без маски или снимают её фильтр — молча. Антивакуум:
+    `LOGGING_CONFIG_MODULE` виден обходом, и помощник, судящий его исходник под чужим путём, находит в нём настройку
+    (иначе ноль ничего не значит).
+    """
+    paths, found = logging_reconfiguration_scan(PROJECT_ROOT)
+    config = PROJECT_ROOT / LOGGING_CONFIG_MODULE
+    print(f"Перенастройка журнала вне {LOGGING_CONFIG_MODULE}: файлов {len(paths)}; находок {len(found)}")
+
+    assert config in paths and logging_reconfigurations(config.read_text(encoding="utf-8"), "app/x.py"), (
+        f"обход не видит {LOGGING_CONFIG_MODULE} или помощник не находит в нём ни одной настройки журнала — "
+        "правило перенастройки журнала проверяет ничто"
+    )
+    assert found == [], (
+        f"журнал перенастроен вне {LOGGING_CONFIG_MODULE} — маска на исполнении обходится:\n"
+        + "\n".join(f"  {offence}" for offence in found)
+    )
+
+
+LOGGING_RECONFIGURATION_CONTROLS = (
+    pytest.param("logging.basicConfig()", id="basic-config"),
+    pytest.param("structlog.configure(processors=[])", id="structlog-configure"),
+    pytest.param("logging.config.dictConfig({})", id="dict-config"),
+    pytest.param('logging.getLogger("x").removeFilter(f)', id="remove-filter"),
+    pytest.param('logging.getLogger("x").addHandler(h)', id="add-handler"),
+    pytest.param('logging.getLogger("x").propagate = False', id="propagate"),
+    pytest.param("root.handlers = []", id="handlers-assignment"),
+)
+
+
+@pytest.mark.parametrize("line", LOGGING_RECONFIGURATION_CONTROLS)
+def test_a_planted_logging_reconfiguration_reddens_the_rule(tmp_path, line):
+    """Контроль правила: перенастройка журнала в подложенном `app/x.py` — одна находка; в `LOGGING_CONFIG_MODULE` — ноль."""
+    source = f"import logging\nimport logging.config\nimport structlog\n\n\ndef reconfigure(f, h, root):\n    {line}\n"
+    elsewhere = tmp_path / "elsewhere"
+    planted = elsewhere / "app" / "x.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(source, encoding="utf-8")
+    exempt = tmp_path / "exempt"
+    configuring = exempt / LOGGING_CONFIG_MODULE
+    configuring.parent.mkdir(parents=True)
+    configuring.write_text(source, encoding="utf-8")
+
+    _, found = logging_reconfiguration_scan(elsewhere)
+    exempt_paths, exempt_found = logging_reconfiguration_scan(exempt)
+
+    assert len(found) == 1 and found[0].startswith("app/x.py:7 — перенастройка журнала — "), (
+        f"подложенная перенастройка журнала `{line}` вне {LOGGING_CONFIG_MODULE} не краснит правило: {found}"
+    )
+    assert configuring in exempt_paths and exempt_found == [], (
+        f"та же строка в {LOGGING_CONFIG_MODULE} краснит правило: {exempt_found}"
+    )
+
+
 # --- JS-половина: `wa_worker/` -----------------------------------------------------
 
 
