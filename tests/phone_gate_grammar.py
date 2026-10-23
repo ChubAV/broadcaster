@@ -1448,11 +1448,90 @@ DYNAMIC_CONSTRUCT_KINDS: tuple[str, ...] = (
 DYNAMIC_CONSTRUCT_EXCEPTIONS: dict[str, str] = {}
 
 
+# Объект модуля: атрибут `modules` (у любого получателя — `sys`, псевдоним `sys`, что угодно) и ввоз `modules` из
+# `sys`; ввоз `importlib` в любой форме; имя или атрибут `import_module` и `__import__`.
+MODULE_OBJECT_ATTRIBUTES = frozenset({"modules"})
+IMPORTER_NAMES = frozenset({"import_module", "__import__"})
+
+# Отложенный вызов по имени: вызываемое, которое зовёт метод или читает атрибут по строке позже.
+DEFERRED_CALL_NAMES = frozenset({"methodcaller", "attrgetter"})
+
+
+def _is_importlib(module: str | None) -> bool:
+    return module is not None and (module == "importlib" or module.startswith("importlib."))
+
+
+def _construct_kind(node: ast.AST, parent: ast.AST | None, judged_names: frozenset[str]) -> str | None:
+    """Вид запрещённой конструкции узла `node` (по имени узла, а не по получателю) или `None`."""
+    if isinstance(node, ast.Import):
+        if any(_is_importlib(alias.name) for alias in node.names):
+            return DYNAMIC_KIND_MODULE_OBJECT
+        return None
+    if isinstance(node, ast.ImportFrom):
+        imported = {alias.name for alias in node.names}
+        if _is_importlib(node.module) or (node.module == "sys" and imported & MODULE_OBJECT_ATTRIBUTES):
+            return DYNAMIC_KIND_MODULE_OBJECT
+        if node.module == "operator" and imported & DEFERRED_CALL_NAMES:
+            return DYNAMIC_KIND_DEFERRED_CALL
+        return None
+    name = node.id if isinstance(node, ast.Name) else None
+    attribute = node.attr if isinstance(node, ast.Attribute) else None
+    if name in IMPORTER_NAMES or attribute in IMPORTER_NAMES or attribute in MODULE_OBJECT_ATTRIBUTES:
+        return DYNAMIC_KIND_MODULE_OBJECT
+    if name in DEFERRED_CALL_NAMES or attribute in DEFERRED_CALL_NAMES:
+        return DYNAMIC_KIND_DEFERRED_CALL
+    return None
+
+
+def _construct_owners(tree: ast.Module) -> dict[int, str]:
+    """`id(узла)` → квалифицированное имя ближайших `def` / `class` через точку, на уровне модуля — `<module>`."""
+    owners: dict[int, str] = {}
+    pending: list[tuple[ast.AST, str]] = [(tree, "<module>")]
+    while pending:
+        node, owner = pending.pop()
+        for child in ast.iter_child_nodes(node):
+            owners[id(child)] = owner
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                pending.append((child, child.name if owner == "<module>" else f"{owner}.{child.name}"))
+            else:
+                pending.append((child, owner))
+    return owners
+
+
+def _construct_text(node: ast.AST) -> str:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        text = f"def {node.name}(…)"
+    else:
+        text = ast.unparse(node).splitlines()[0]
+    return text[:80]
+
+
 def dynamic_construct_findings(
     source: str, path: str, *, judged_names: frozenset[str]
 ) -> list[DynamicConstruct]:
-    """Запрещённые конструкции исходника `source` (RED-заглушка плана 16-53: канал ещё ничего не судит)."""
-    return []
+    """Запрещённые конструкции исходника `source` — по закрытому перечню видов `DYNAMIC_CONSTRUCT_KINDS`.
+
+    Обход `ast.walk` с картой родителей и картой владельцев; одна находка на узел. Конструкция судится по имени
+    самого узла (атрибут `modules`, ввоз `importlib`, имя `methodcaller` …), а не по написанию получателя:
+    псевдоним `sys` или имя, под которым связан объект модуля, на находку не влияют. `judged_names` — имена
+    запрещённой роли гейта (вид «имя запрещённой роли строкой»), их подаёт гейт: общий модуль гейтов не ввозит.
+    Вызовов журнала и записи номера канал не судит — это прежние предикаты гейтов.
+    """
+    tree = ast.parse(source)
+    parents = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    owners = _construct_owners(tree)
+    found: list[DynamicConstruct] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.stmt, ast.expr)):
+            continue
+        kind = _construct_kind(node, parents.get(id(node)), judged_names)
+        if kind is not None:
+            found.append(
+                DynamicConstruct(
+                    path, node.lineno, node.col_offset, kind, owners.get(id(node), "<module>"), _construct_text(node)
+                )
+            )
+    return sorted(found, key=lambda construct: (construct.line, construct.column))
 
 
 def dynamic_construct_key(found: DynamicConstruct) -> str:
