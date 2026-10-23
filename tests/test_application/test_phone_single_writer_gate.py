@@ -7899,7 +7899,73 @@ def test_a_named_cost_form_gives_its_named_count(source, rival):
     )
 
 
-NAMED_COST_MECHANISM_CASES: list = []
+# Цена по механизму (ревью WR-34, верификация раунда 10; решение владельца О-23 (а), свойство 4, вместе с решением
+# 2026-10-21 «Принять как цену» о `kw_ext`). Механизм: две находки на одном узле колонки при одной записи даёт любой API
+# из `NAMED_ATTRIBUTE_WRITERS` или `functools.partial(<такой API>, …)`, связанный с последним именем вызова, у которого
+# ссылка `operator.methodcaller("__set__", …)` с колонкой-получателем стоит первым позиционным аргументом; одну —
+# ссылка не первым аргументом (`run_in_executor`), именованный `enqueue(job=…)` и соперник `update`, не пишущий
+# атрибут. Числа — замер планирования (15 форм, `c9da79b2`; те же на `d31d86db` — регрессии нет), подтверждённый
+# исполнителем плана 16-55 на дереве после планов 16-51…16-53. Это закрепка цены, а не заявление: свести «двойку» к
+# одной находке значило бы править предикат распознавания (свойство 6) — владелец решил охват назвать, а не менять.
+# Каждая строка несёт `operator.methodcaller`, поэтому в судимых деревьях её краснит канал запрета.
+_NAMED_COST_MECHANISM_HEADER = (
+    "import asyncio, functools, operator\n"
+    "from sqlalchemy import update\n"
+    "from app.models.messenger_account import MessengerAccount\n"
+    "from sqlalchemy.orm.attributes import flag_modified, set_attribute, set_committed_value\n"
+)
+_NAMED_COST_MECHANISM_SETTER = 'f = operator.methodcaller("__set__", account, x)\n'
+# Носитель под именем API-соперника: (связывание, подача ссылки), измеренное число.
+_NAMED_COST_MECHANISM_CARRIERS = (
+    ("submit-setattr", "submit = setattr\n", "executor.submit(f, MessengerAccount.phone)\n", 2),
+    ("positional-enqueue-setattr", "enqueue = setattr\n", "scheduler.enqueue(f, MessengerAccount.phone)\n", 2),
+    (
+        "keyword-enqueue-setattr",
+        "enqueue = setattr\n",
+        "scheduler.enqueue(job=f, args=(MessengerAccount.phone,))\n",
+        1,
+    ),
+    ("call-soon-setattr", "call_soon = setattr\n", "loop.call_soon(f, MessengerAccount.phone)\n", 2),
+    ("applied-partial-setattr", "partial = setattr\n", "functools.partial(f, MessengerAccount.phone)()\n", 2),
+    ("to-thread-set-attribute", "to_thread = set_attribute\n", "asyncio.to_thread(f, MessengerAccount.phone)\n", 2),
+    (
+        "to-thread-object-setattr",
+        "to_thread = object.__setattr__\n",
+        "asyncio.to_thread(f, MessengerAccount.phone)\n",
+        2,
+    ),
+    (
+        "run-in-executor-setattr",
+        "run_in_executor = setattr\n",
+        "loop.run_in_executor(None, f, MessengerAccount.phone)\n",
+        1,
+    ),
+    ("to-thread-update", "to_thread = update\n", "asyncio.to_thread(f, MessengerAccount.phone)\n", 1),
+)
+# Имя применения, связанное прежде ссылки с API-соперником (цена kw): первое связывание, измеренное число.
+_NAMED_COST_MECHANISM_REBOUND = (
+    ("rebound-partial-set-committed-value", "f = functools.partial(set_committed_value, other)\n", 2),
+    ("rebound-partial-object-setattr", "f = functools.partial(object.__setattr__, other)\n", 2),
+    ("rebound-partial-flag-modified", "f = functools.partial(flag_modified, other)\n", 2),
+    ("rebound-partial-set-attribute", "f = functools.partial(set_attribute, other)\n", 2),
+    ("rebound-partial-setattr", "f = functools.partial(setattr, other)\n", 2),
+    ("rebound-object-setattr", "f = object.__setattr__\n", 2),
+)
+NAMED_COST_MECHANISM_CASES = [
+    pytest.param(
+        _NAMED_COST_MECHANISM_HEADER + binding + _NAMED_COST_MECHANISM_SETTER + use,
+        expected,
+        id=f"cost-mechanism-{row_id}",
+    )
+    for row_id, binding, use, expected in _NAMED_COST_MECHANISM_CARRIERS
+] + [
+    pytest.param(
+        _NAMED_COST_MECHANISM_HEADER + binding + _NAMED_COST_MECHANISM_SETTER + "f(MessengerAccount.phone)\n",
+        expected,
+        id=f"cost-mechanism-{row_id}",
+    )
+    for row_id, binding, expected in _NAMED_COST_MECHANISM_REBOUND
+]
 
 
 @pytest.mark.parametrize(("source", "expected"), NAMED_COST_MECHANISM_CASES)
@@ -8572,9 +8638,84 @@ def test_control_an_assignment_inside_the_writer_module_still_reddens():
     ], "присваивание номера в модуле-писателе прикрыто исключением"
 
 
+# Три законных места ссылки на защиту на исполнении и её разрешение (план 16-55; О-23 (а), свойство 3).
+RUNTIME_GUARD_PLACES = frozenset({RUNTIME_GUARD_MODULE, RUNTIME_GUARD_REGISTRATION, PHONE_WRITER_MODULE})
+# Модуль защиты ввозом и имена, ссылка на которые вне законных мест — вход в разрешение или в саму защиту.
+RUNTIME_GUARD_IMPORT = "app.models.phone_guard"
+RUNTIME_GUARD_NAMES = frozenset({"phone_guard", "writer_scope", "_WRITER_ACTIVE"})
+# Снятие слушателя защиты: `remove` у получателя с последним именем `event` (и у псевдонима модуля событий
+# SQLAlchemy), ввоз `remove` из `sqlalchemy.event` — везде, законных мест у снятия нет.
+EVENT_MODULE = "sqlalchemy.event"
+EVENT_RECEIVER = "event"
+EVENT_REMOVE = "remove"
+KIND_GUARD_BYPASS = "обход защиты на исполнении"
+
+
+def _guard_reference_import(node: ast.AST) -> bool:
+    """Ввоз модуля защиты или его имён: `import app.models.phone_guard [as g]`, `from app.models import phone_guard`,
+    `from app.models.phone_guard import writer_scope`, `from .phone_guard import …`."""
+    if isinstance(node, ast.Import):
+        return any(
+            alias.name == RUNTIME_GUARD_IMPORT
+            or alias.name.startswith(RUNTIME_GUARD_IMPORT + ".")
+            or alias.name.rsplit(".", 1)[-1] in RUNTIME_GUARD_NAMES
+            for alias in node.names
+        )
+    if isinstance(node, ast.ImportFrom):
+        return (node.module or "").rsplit(".", 1)[-1] in RUNTIME_GUARD_NAMES or any(
+            alias.name in RUNTIME_GUARD_NAMES for alias in node.names
+        )
+    return False
+
+
+def _event_receivers(tree: ast.AST) -> frozenset[str]:
+    """Последние имена получателя `remove` модуля событий: `event` и псевдонимы ввоза модуля событий в файле."""
+    names = {EVENT_RECEIVER}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {alias.asname for alias in node.names if alias.name == EVENT_MODULE and alias.asname}
+        elif isinstance(node, ast.ImportFrom) and node.module == "sqlalchemy":
+            names |= {alias.asname for alias in node.names if alias.name == EVENT_RECEIVER and alias.asname}
+    return frozenset(names)
+
+
+def _guard_last_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
 def runtime_guard_bypasses(source: str, path: str) -> list[str]:
-    """RED-заглушка плана 16-55: помощник обхода защиты на исполнении появится GREEN-коммитом задачи 2."""
-    return []
+    """Обходы защиты на исполнении в исходнике — строками «`путь:строка` — обход защиты на исполнении — <фрагмент>».
+
+    (а) Вне трёх законных мест (`RUNTIME_GUARD_PLACES`) — ввоз модуля защиты или его имён и любое `ast.Name` /
+    `ast.Attribute` с именем `phone_guard`, `writer_scope`, `_WRITER_ACTIVE` (атрибут псевдонима ввоза `g.writer_scope`
+    включительно). (б) Везде — вызов `remove` у получателя с последним именем `event` (или псевдонима модуля событий)
+    и ввоз `remove` из `sqlalchemy.event`. Одна находка на начало выражения: `phone_guard.writer_scope` — одна.
+    Чистая функция над текстом: снятие по пути — параметром `path`, поэтому ею же доказывается, что в писателе ссылка
+    видна.
+    """
+    tree = ast.parse(source, filename=path)
+    receivers = _event_receivers(tree)
+    found: dict[tuple[int, int], ast.AST] = {}
+    for node in ast.walk(tree):
+        bypass = False
+        if path not in RUNTIME_GUARD_PLACES:
+            bypass = _guard_reference_import(node) or (
+                isinstance(node, (ast.Name, ast.Attribute)) and _guard_last_name(node) in RUNTIME_GUARD_NAMES
+            )
+        if isinstance(node, ast.ImportFrom) and node.module == EVENT_MODULE:
+            bypass = bypass or any(alias.name == EVENT_REMOVE for alias in node.names)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == EVENT_REMOVE:
+            bypass = bypass or _guard_last_name(node.func.value) in receivers
+        if bypass:
+            found.setdefault((node.lineno, node.col_offset), node)
+    return [
+        f"{path}:{line} — {KIND_GUARD_BYPASS} — {ast.unparse(node).splitlines()[0][:80]}"
+        for (line, _column), node in sorted(found.items())
+    ]
 
 
 def test_the_runtime_guard_is_entered_only_by_the_writer():
