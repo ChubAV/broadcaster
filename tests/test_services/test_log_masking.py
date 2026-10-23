@@ -265,3 +265,45 @@ def test_the_filter_masks_exception_text_and_stack_info():
     assert "duplicate" in rendered and "Stack (most recent call last)" in rendered
     assert NUMBER_DIGITS not in rendered, f"текст исключения или `stack_info` несёт номер: {rendered!r}"
     assert MASK in rendered
+
+
+HEADER_TERMS = (
+    "О-23 (а)",
+    "свойство 2",
+    "О-24 (а)",
+    "normalize_reported",
+    "normalize_manual",
+    "format_phone",
+    "-100",
+    "JID",
+    "метки времени",
+    "названная цена",
+    "print",
+    "max_worker",
+    "wa_worker",
+    "uvicorn",
+    "второй рубеж",
+)
+
+
+def test_the_masking_module_names_what_it_masks_and_its_boundary():
+    """Шапка модуля маски называет решение, что маскируется, что видно, цену и границу; докстринг
+    `mask_phone` говорит правду о маске в журнале (D-11: место вызова номер не кладёт, маска —
+    последний рубеж процессора)."""
+    from app.services import log_masking, phone
+
+    header = " ".join((log_masking.__doc__ or "").split())
+    missing = [term for term in HEADER_TERMS if term not in header]
+    mask_doc = " ".join((phone.mask_phone.__doc__ or "").split())
+    untrue = [
+        problem
+        for problem, present in (
+            ("докстринг `mask_phone` утверждает «НЕ ПОПАДАЕТ ДАЖЕ МАСКОЙ»", "НЕ ПОПАДАЕТ ДАЖЕ МАСКОЙ" in mask_doc),
+            ("докстринг `mask_phone` не называет «последний рубеж»", "последний рубеж" not in mask_doc),
+            ("докстринг `mask_phone` не называет D-11", "D-11" not in mask_doc),
+        )
+        if present
+    ]
+    assert not missing and not untrue, (
+        f"шапка маски не называет, что маскирует и где её граница: нет {missing}; {untrue}"
+    )

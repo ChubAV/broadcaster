@@ -12,12 +12,14 @@ structlog и запись stdlib проходят его целиком, выв�
 соседние модули суиты.
 """
 
+import asyncio
 import copy
 import io
 import json
 import logging
 import logging.config
 import sys
+import types
 
 import pytest
 import structlog
@@ -287,3 +289,118 @@ def test_masking_is_attached_once(restored_logging):
     for handler in handlers:
         count = sum(1 for item in handler.filters if isinstance(item, masking_class))
         assert count == 1, f"на обработчике {handler!r} фильтров маски {count}, а не один"
+
+
+# --- Формы раунда 10 стороны приватности — исполнением через настоящий конвейер ----------
+
+# Исходники форм ревью CR-05, WR-32, WR-33 (16-REVIEW.md), где вызываемое журнала — метод
+# настоящего журнала (`out = logger.info`, получатель `lg = logging.getLogger(...)`). Каждая
+# форма исполняется по-настоящему: модуль, зарегистрированный в `sys.modules` (так
+# `sys.modules[__name__]` и `importlib.import_module(__name__)` находят его), точка входа
+# `go(account)`. Статический гейт эти написания не ловил — номер печатался; по решению
+# владельца О-23 (а), свойство 4, их закрывает запрет конструкции (планы 16-53, 16-54) и
+# защита на исполнении (этот план): в выводе журнала — маска, а не номер. Формы с `out = print`
+# — вне защиты на исполнении (`print` пишет в поток мимо журнала), их держит запрет конструкции.
+ROUND_TEN_PRIVACY_FORMS = [
+    pytest.param(
+        "import logging\n"
+        "import sys\n"
+        "logger = logging.getLogger('app.form')\n"
+        "out = logger.info\n"
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.me = sys.modules[__name__]\n"
+        "    def go(self, account):\n"
+        "        self.me.out('x %s', account.phone)\n"
+        "def go(account):\n"
+        "    K().go(account)\n",
+        False,
+        id="cr05-self-attribute-module-object",
+    ),
+    pytest.param(
+        "import logging\n"
+        "import sys as _s\n"
+        "logger = logging.getLogger('app.form')\n"
+        "out = logger.info\n"
+        "def go(account):\n"
+        "    _s.modules[__name__].out('x %s', account.phone)\n",
+        False,
+        id="cr05-import-alias-module-object",
+    ),
+    pytest.param(
+        "import importlib\n"
+        "import logging\n"
+        "logger = logging.getLogger('app.form')\n"
+        "out = logger.info\n"
+        "def go(account):\n"
+        "    importlib.import_module(__name__).out('x %s', account.phone)\n",
+        False,
+        id="cr05-importlib-module-object",
+    ),
+    pytest.param(
+        "import logging\n"
+        "import sys\n"
+        "lg = logging.getLogger('x')\n"
+        "class K:\n"
+        "    def __init__(self):\n"
+        "        self.me = sys.modules[__name__]\n"
+        "    def go(self, account):\n"
+        "        self.me.lg.info('x %s', account.phone)\n"
+        "def go(account):\n"
+        "    K().go(account)\n",
+        False,
+        id="cr05-receiver-through-module-object",
+    ),
+    pytest.param(
+        "import asyncio\n"
+        "import logging\n"
+        "import operator\n"
+        "logger = logging.getLogger('app.form')\n"
+        "to_thread = operator.methodcaller('noop')\n"
+        "async def go(account):\n"
+        "    f = operator.methodcaller('info', 'x %s', account.phone)\n"
+        "    await asyncio.to_thread(f, logger)\n",
+        True,
+        id="wr32-methodcaller-rival-on-the-carrier",
+    ),
+    pytest.param(
+        "import asyncio\n"
+        "import logging\n"
+        "import operator\n"
+        "logger = logging.getLogger('app.form')\n"
+        "to_thread = operator.methodcaller\n"
+        "async def go(account):\n"
+        "    f = operator.methodcaller('info', 'x %s', account.phone)\n"
+        "    await asyncio.to_thread(f, logger)\n",
+        True,
+        id="wr33-methodcaller-alias-on-the-carrier",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "is_async"), ROUND_TEN_PRIVACY_FORMS)
+def test_a_round_ten_privacy_form_prints_a_mask_not_a_number(restored_logging, request, source, is_async):
+    """Форма раунда 10, исполненная после `setup_logging`, печатает маску, а не номер.
+
+    `account` — заглушка `types.SimpleNamespace(phone=...)`, а не `MessengerAccount`: предмет
+    правила — вывод журнала, модель ему не нужна, а защита писателя плана 16-51 отказывает
+    конструктору `MessengerAccount(phone=…)` вне `writer_scope()`.
+    """
+    setup_logging(log_level="INFO", log_format="json")
+    stream = _root_stream()
+    account = types.SimpleNamespace(phone=NUMBER)
+    name = "phone_form_" + "".join(ch if ch.isalnum() else "_" for ch in request.node.callspec.id)
+    module = types.ModuleType(name)
+    sys.modules[name] = module
+    try:
+        exec(compile(source, f"<{name}>", "exec"), module.__dict__)
+        if is_async:
+            asyncio.run(module.go(account))
+        else:
+            module.go(account)
+    finally:
+        sys.modules.pop(name, None)
+
+    output = stream.getvalue()
+    assert MASK in output, f"форма не дошла до журнала: {output!r}"
+    assert NUMBER_DIGITS not in output, f"форма раунда 10 напечатала номер в журнал: {output}"
