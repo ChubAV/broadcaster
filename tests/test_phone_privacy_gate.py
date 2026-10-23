@@ -6,7 +6,11 @@
 жизни аккаунта. Фазы 17–20 вводят писателей номера (показ, ручная правка, захват
 при подключении, дозаполнение), и у каждого из них под рукой и номер, и журнал.
 Решение D-11: в журнал уходит только признак наличия `phone_set=True/False` и
-`account_id` — номер не попадает туда НИ В КАКОМ ВИДЕ, даже маской.
+`account_id` — номер не попадает туда НИ В КАКОМ ВИДЕ, даже маской. Точнее (с плана 16-54):
+место вызова номер в журнал не кладёт даже маской (D-11, правило (в) ниже), а маска в выводе
+журнала бывает только последним рубежом процессора `app/services/log_masking.py` (решение
+владельца О-23 (а), свойство 2; план 16-52) — номер, дошедший до вывода мимо этого гейта,
+печатается маской; это защита, а не разрешение.
 
 ЧТО СЧИТАЕТСЯ ВЫЗОВОМ ЖУРНАЛА (Python, деревья `app/`, `scripts/`, `max_worker/`).
 `print(...)` (и `builtins.print(...)`) — в контейнере он уходит в тот же stdout, что и
@@ -60,7 +64,11 @@
   каждому своему связыванию, а не по первому, — и каждое толкование узла: вызов, опознанный
   вызовом журнала, судится и как применение `methodcaller` и обёртки носителя, связанных с тем
   же последним именем; одно место печатается один раз — дедупликация по узлу (строка, столбец,
-  вид, предмет) (ревью CR-04, план 16-46). Связанное имя читается и getattr-строкой
+  вид, предмет) (ревью CR-04, план 16-46). С плана 16-53 (решение владельца О-23 (а), свойства 1,
+  5) это обещание — о толкованиях написаний, которые предикат судит: написание динамики вне них
+  (`methodcaller` или `getattr` под именем носителя, объект модуля вне двух написаний ниже) —
+  запрещённая конструкция канала (раздел о запрете динамики ниже), а не толкование предиката.
+  Связанное имя читается и getattr-строкой
   (`self.f = …` в `__init__`, `getattr(self, "f")(…)` в другом методе) — строка `getattr-read`
   общего словаря `BINDING_FORMS`: её держат обе матрицы и правило-паритет для каждого значения
   опознания и каждого носителя (ревью WR-28, решение владельца О-18 (а), свойство 3; план 16-44).
@@ -75,13 +83,19 @@
   (`structlog.get_logger()`): пара значения гейта писателя с тем же `id`; `receiver` — значение-получатель:
   связанное имя — журнал из вызова фабрики (`logging.getLogger()`), применение — его метод `info` с номером
   (поле `IdentificationValue.method`; с формами чтения через объект модуля это ровно форма WR-30; план 16-49).
-  Связанное имя читается и через объект модуля: имя, связанное в модуле с получателем
+  Связанное имя читается и через объект модуля (в двух написаниях; прочие — запрещённые
+  конструкции канала, см. конец пункта): имя, связанное в модуле с получателем
   журнала, с вызываемым журнала, `methodcaller` или обёрткой, — член `sys.modules[__name__]`
   и имени, связанного с ним (`getattr(sys.modules[__name__], "lg")`, с умолчанием,
   `sys.modules[__name__].lg`, `me = sys.modules[__name__]; me.lg`, поданный носителю или
   `methodcaller`); имя вызываемого журнала, связанное в модуле, членом другого объекта не
   читается — `fh.write(…)` при `write = print` не журнал (ревью WR-29, WR-30; решение
-  владельца О-20 (а), свойства 3, 4; помощник `_is_module_object`, план 16-47).
+  владельца О-20 (а), свойства 3, 4; помощник `_is_module_object`, план 16-47). Предикат читает
+  объект модуля в двух написаниях — `sys.modules[__name__]` и имя, связанное с ним
+  (`me = sys.modules[__name__]`); прочие написания — атрибут-держатель `self.me`, псевдоним `sys`,
+  `from sys import modules`, `sys.modules.get(__name__)`, `getattr(sys, "modules")`,
+  `importlib.import_module(__name__)` (ревью CR-05) — запрещённые конструкции канала (решение
+  владельца О-23 (а), план 16-53; строки `ROUND_TEN_BANNED_FORMS`, план 16-54).
 * ПО ССЫЛКЕ НА МЕТОД ОПОЗНАННОГО ЖУРНАЛА: имя или атрибут, связанные с любым методом
   опознанного журнала (`logger.info`, `logger._log`), `getattr(logger, "info")`, `print`, привязкой к контексту или `functools.partial(<то
   же>, …)` (`info = logger.info`, `out = print`, `self.out = logger.info`,
@@ -182,7 +196,9 @@
   (`getattr(self, "emit")(logger)`, с умолчанием тоже): имя читает один общий читатель
   `reading_name`, тот же, что у гейта писателя и у имени обёртки (ревью WR-28, план 16-43), —
   или поданный ЛЮБОМУ
-  носителю, — применяется к первому аргументу, который носитель подаст ссылке
+  носителю (с плана 16-53 — носителю, чьё имя предикат судит: `methodcaller(…)` или
+  `operator.methodcaller`, связанные под последним именем носителя, — запрещённая конструкция
+  канала, ревью WR-32, WR-33, решение владельца О-23 (а)), — применяется к первому аргументу, который носитель подаст ссылке
   (`to_thread(mc, logger)`, `to_thread(*[mc, logger])`, `Thread(target=mc, args=(logger,))`,
   `call(logger, fn=mc)`, `partial(asyncio.to_thread, mc)(logger)`,
   `partial(threading.Thread, target=mc)(args=(logger,))` — каждое прочтение носителя, как у
@@ -238,9 +254,13 @@ account=account, schedule_id=send_log.schedule_id)`; `send_log` — запись
 шаблону журнала D-17), находок нет; сверка множеств вызовов всех 106 файлов против
 `4cd68671` по строке и столбцу — новое место ровно одно, удалённых нет. Общее правило — в
 сторону лишней находки, а не пропуска: литеральный кортеж или словарь у ключа, который
-API ссылке не подаёт, судится тоже. Живые числа: `app` — 225 вызовов, `scripts` — 68,
-`max_worker` — 93, находок 0
-(`uv run pytest tests/test_phone_privacy_gate.py -q -p no:randomly -s -k live_trees`).
+API ссылке не подаёт, судится тоже. Живые числа после партии раунда 10 (замер плана 16-52,
+подтверждён на дереве плана 16-54): `app` — 227 вызовов в 102 файлах, `scripts` — 68 в 4,
+`max_worker` — 93 в 2, находок 0
+(`uv run pytest tests/test_phone_privacy_gate.py -q -p no:randomly -s -k live_trees`); до плана
+16-52 — 225 / 68 / 93: `app/logging_config.py` дал 6 → 7 (новый вызов
+`logging.getLevelNamesMapping()` вместо `getattr(logging, …)`), `app/services/log_masking.py` —
+0 → 1 (`logging.Formatter()`); прочие места прежние (сверка множеств мест плана 16-52, 386 → 388).
 `bind` включён НАМЕРЕННО: `logger.bind(phone=x)` кладёт номер в каждую следующую
 строку этого журнала. По той же причине вызовом журнала считается любой вызов с
 именем `bind_contextvars` или `bound_contextvars`, а также привязки устаревшего
@@ -439,6 +459,40 @@ GREEN с родителем и итог — с базой партии `d31d86db
 стоит в названной цене (`COST-KW` 281 — свойство 8 О-20; `COST-ATTR` 122 — О-22 (а)); свойства гейтов
 шире этого корпуса летопись не утверждает; решения владельца О-20 (а), О-21 (а), О-22 (а).
 
+Летопись CR-05: цикл WR-29 плана 16-47 (коммит `16573223`) сузил чтение имени вызываемого журнала
+членом объекта модуля до двух написаний — `sys.modules[__name__]` и имени-цели `ast.Name`,
+связанного с ним (`_is_module_object`, `_module_object_names`), — и `self.me.out(account.phone)`
+при `self.me = sys.modules[__name__]`, `_s.modules[__name__].out(…)` при `import sys as _s` и
+прочие написания, ловившиеся на базе партии `d31d86db`, ушли мимо гейта: регрессия наличия
+(верификация раунда 10, 2026-10-22: 977 ячеек корпуса верификатора 1 → 0 ровно у `16573223`,
+13 написаний; ревью раунда 10: 4 266 ячеек; `logging` и `print` напечатали номер); получатель
+через те же написания (`self.me.lg.info(…)`) не ловился ни на одном дереве — продолжение WR-30;
+шапка и докстринг `ModuleLogNames` («любой формой общей грамматики») обещали больше, а сводка
+16-47 записала сужение без решения владельца. Решение владельца О-23 (а), 2026-10-22, свойства
+1, 2, 4: закрыта не поимённой починкой предиката (вариант (б) ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ), а запретом
+конструкции — канал плана 16-53 (виды «объект модуля» и «имя запрещённой роли строкой»; 13
+написаний и получатель — строки `ROUND_TEN_BANNED_FORMS` плана 16-54) — и маской на исполнении
+(план 16-52: те же формы, исполненные через настоящий конвейер журнала, печатают маску). Девятый
+круг оси «как опознан журнал» (IN-06 → … → CR-04 / WR-29 / WR-30 → CR-05 / WR-32 / WR-33) —
+последний: раунд финальный (свойство 5).
+
+Летопись WR-32: `methodcaller(…)`, связанный в модуле под последним именем носителя
+(`to_thread = operator.methodcaller("noop")`, `run = operator.methodcaller("run")`), делал вызов
+носителя только применением (`_applied_log_methodcaller`), и поданный `methodcaller` над журналом
+(`asyncio.to_thread(f, logger)`, `contextvars.copy_context().run(f, logger)`) не судился ни на
+одном дереве (ревью и верификация раунда 10: 72 ячейки; `logging` напечатал номер), хотя гейт
+писателя ту же форму ловил; давний пропуск, не регрессия. Решение владельца О-23 (а): закрыт
+запретом конструкции (вид «отложенный вызов по имени», план 16-53; строки `ROUND_TEN_BANNED_FORMS`
+плана 16-54) и маской на исполнении (план 16-52).
+
+Летопись WR-33 (сторона приватности): псевдоним `operator.methodcaller` под последним именем
+носителя или обёртки (`to_thread = operator.methodcaller`, `partial = operator.methodcaller`) гасил
+путь носителя (`_not_carriers`): поданный `methodcaller` и применённая обёртка
+`partial(asyncio.to_thread, …)(…)` не судились (верификация раунда 10: 92 ячейки; номер
+напечатан); давний пропуск. Решение владельца О-23 (а): закрыт тем же — запретом конструкции
+(план 16-53; строки `ROUND_TEN_BANNED_FORMS` плана 16-54) и маской на исполнении (план 16-52);
+сторона писателя — план 16-55.
+
 ЧТО КРАСНИТ ГЕЙТ, внутри аргументов вызова журнала:
 (а) строковая константа, похожая на номер (`PHONE_LIKE_LITERAL`: `+`-форма с
     разделителями и 7…15 цифрами; 11 цифр подряд с ведущей 7/8; русская разбивка
@@ -487,6 +541,88 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
 суиту, а этот гейт читает чужие исходники: писатель номера Фаз 17–20, положивший его
 в журнал, иначе узнает об этом только на сорокаминутном прогоне после слияния.
 
+ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ (решение владельца О-23 (а), 2026-10-22; раунд финальный).
+Раунды 6–10 шли одним кругом: каждый новый корпус ревью или верификации находил следующее
+написание динамического чтения журнала (объект модуля под псевдонимом и атрибутом-держателем,
+`importlib`, `getattr`-строка, `operator.methodcaller` под именем носителя — CR-05, WR-32, WR-33),
+которое предикаты распознавания не судили. Обещание гейта с плана 16-53 (свойство 1): в коде нет
+конструкции, которую гейт не умеет судить, — а не «любое её написание найдено». Новое написание
+динамики — не гэп, если вид его конструкции есть в перечне ниже (свойство 5); динамика вне
+перечня — повод владельцу расширить перечень, а не молча норма.
+* Канал запрета — функция `dynamic_construct_findings` общего модуля `tests/phone_gate_grammar.py`
+  (одна у обоих гейтов; критерии видов — в шапке канала там же), правило
+  `test_no_dynamic_construct_in_the_python_trees` над деревьями `app/`, `scripts/`, `max_worker/`
+  (план 16-53) и строки `ROUND_TEN_BANNED_FORMS` с трасером подложенной службы (план 16-54). Девять
+  видов `DYNAMIC_CONSTRUCT_KINDS`, по примеру на вид (каждый пример — замер канала):
+  - «объект модуля» — `sys.modules[__name__]`, `import importlib`, `__import__("x")`;
+  - «пространство имён» — `globals()["f"]`, `vars(obj)`, `fn.__globals__`;
+  - «исполнение текста» — `eval(text)`, `exec(code)`;
+  - «отложенный вызов по имени» — `operator.methodcaller("info", …)`, `operator.attrgetter("info")`;
+  - «отражение как значение» — `to_thread = getattr`, `functools.partial(setattr, account)`;
+  - «вычисленное имя атрибута» — `getattr(logger, name)`, `setattr(obj, field, value)`;
+  - «имя запрещённой роли строкой» — `getattr(logger, "info")`, `getattr(sys, "modules")`;
+  - «служебный протокол атрибутов» — `def __getattr__(…)`, `type(x).__setattr__(…)`;
+  - «вычисленный текст SQL» — `text(f"UPDATE … {x}")`.
+  Находки канала — свой список, а не строки прежних предикатов: прежние таблицы и числа мест не
+  меняются. `getattr(logger, "info")(…)` предикат по-прежнему опознаёт вызовом журнала, а канал
+  сверх того краснит саму getattr-строку.
+* Исключения — поимённый реестр `DYNAMIC_CONSTRUCT_EXCEPTIONS` общего модуля: ключ
+  `<путь>::<владелец>::<вид>`, потолок `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING = 6`, подъём — решение
+  владельца; все шесть записей — вида «вычисленное имя атрибута»:
+  - `app/pages/accounts.py::_connect_status` — макрос Jinja по имени у модуля шаблона;
+  - `app/pages/common.py::get_user_from_cookie` — `setattr(user, IMPERSONATOR_ATTR, actor)`, имя — константа модуля;
+  - `app/pages/common.py::actor_of` — `getattr(user, IMPERSONATOR_ATTR, None)`, та же константа;
+  - `app/repositories/base.py::BaseRepository.update` — обобщённая запись полей; запись колонок номера отказывает на исполнении (`app/models/phone_guard.py`);
+  - `app/routes/schedules.py::update_schedule` — поля `Schedule` из `model_dump`, номера у расписания нет;
+  - `max_worker/main.py::<module>` — уровень журнала по имени из `LOG_LEVEL`, значение не вызывается.
+* Защита на исполнении (свойство 2; решение владельца О-24 (а)) — `app/services/log_masking.py`
+  (план 16-52): процессор structlog в цепочке корневого обработчика и фильтр stdlib на корне и на
+  обработчиках, существующих к вызову `setup_logging`, маскируют формой `mask_phone` (D-10) любую
+  подстроку, которую нормализатор фазы признаёт номером, в любом поле события. Видны ID групп
+  Telegram `-100…`, JID групп WhatsApp, метки времени в миллисекундах; цена — лишняя маска на числе
+  из 7–10 цифр, которое автопуть читает номером (`5123456789` → `+51 ******89`). Граница маски:
+  `print` и запись в `sys.stdout` мимо журнала, `max_worker` (свой журнал), `wa_worker` (Node),
+  процессы без `setup_logging` (скрипты `scripts/`), обработчики, поставленные после настройки,
+  край грамматики (`+7.999.123.45.67`) — там остаётся только этот гейт. Чтобы маска не выключалась
+  молча, журнал перенастраивает только `LOGGING_CONFIG_MODULE` (`app/logging_config.py`): правило
+  `test_no_logging_reconfiguration_outside_the_logging_config` (план 16-54) краснит в `app/` и
+  `scripts/` `structlog.configure`, `logging.basicConfig`, `dictConfig`, `.addHandler`,
+  `.removeFilter`, `.setFormatter`, присваивание `.handlers` / `.filters` / `.propagate` и правку
+  этих списков на месте; `max_worker/` правило не судит.
+* Статический гейт — второй рубеж. Место вызова номер не кладёт даже маской (D-11), поимённые формы
+  прежних раундов красны прежними предикатами распознавания, которые партия раунда 10 не правит
+  (свойство 6), а написание динамики вне них — запрещённая конструкция канала, а не обещание
+  предиката.
+* Мера «база ↔ HEAD» в раунде 10 не обязательна (свойство 4): правка сужает обещание, а не
+  расширяет распознавание; правило T11c её инструмента — больше не мера фазы (WR-35, `skipped`,
+  план 16-56).
+СОГЛАСОВАНИЕ ПРЕЖНИХ ЗАПРЕТОВ (свойства 4, 5, 6 О-23 (а); таблица целиком — `<scope_note>` плана
+16-56, общая для шапок обоих гейтов). Запреты исполненных планов неизменны; согласование записано
+там и здесь. Группа С1 «не сужать заявление шапки» — 16-09 №2, 16-12 №2, 16-17 №2, 16-22 №2,
+16-27 №2, 16-28 №2, 16-31 №2, 16-33 №2, 16-34 №2, 16-36 №2, 16-37 №2, 16-38 №2, 16-39 №2, 16-41 №2,
+16-42 №2, 16-43 №2, 16-44 №2, 16-46 №2, 16-47 №2, 16-48 №2, 16-49 №2: оговорка о сужении заявления
+шапки заменена с плана 16-51 — для обещания полноты распознавания написаний динамики (обещание —
+«в коде нет конструкции, которую гейт не умеет судить», свойства 1, 5); в силе остаётся: каждая
+форма, видимая в исходнике, красна — предикатом прежних раундов или запретом конструкции канала; в
+«ГРАНИЦЕ СРЕДСТВА» не появляется ни одна форма вместо поимки или запрета; `overrides` не пишется;
+отвергнутые владельцем варианты (а′) и (б) решений О-10…О-22 и (б) О-23 остаются отвергнутыми;
+журнал не угадывается по имени метода (16-37 №2, 16-43 №2, 16-47 №2); закрытая таблица ключей
+отдельных API не заводится (16-34 №2); строка словаря, давшая промах, не снимается (16-39 №2,
+16-44 №2, 16-49 №2). Группа С2 «сверка «база ↔ HEAD»» — 16-36 №4, 16-37 №4, 16-38 №4, 16-39 №4,
+16-41 №4, 16-42 №4, 16-43 №4, 16-44 №4, 16-46 №3, 16-46 №4, 16-47 №4, 16-48 №4, 16-49 №4: оговорка
+«не коммитить GREEN и не закрывать партию без сверки «база ↔ HEAD»» (и вход чужих корпусов 16-46
+№3) связывала свои планы; с плана 16-51 мера не обязательна (свойство 4), правило T11c — не мера
+фазы (WR-35); в силе: прежние строки и правила обоих гейтов и паритета не ослабляются, JS-половина
+этого гейта не правится, две находки ячейки цены 16-36 не сливаются (16-42 №4), летописи не
+утверждают свойство гейтов шире корпуса меры (16-49 №4), если инструмент меры прогоняют, его
+чужие корпуса не подменяются (16-46 №3). Группа У — 16-07 №3, 16-11 №3, 16-13 №2, 16-14 №2,
+16-16 №2, 16-18 №2, 16-21 №3, 16-23 №2, 16-26 №2, 16-26 №3, 16-29 №2, 16-32 №2, 16-32 №4, 16-47 №3:
+О-23 не меняет вовсе — получатель журнала не угадывается, форма, красная запретом конструкции,
+поймана, а не названа границей (16-13, 16-18, 16-23, 16-29, 16-32 №2); числа живых деревьев
+меняются только на названном месте со сверкой по файлам (16-32 №4 — сдвиг 225 → 227 выше назван
+по месту). Вердикты «соблюдён в живом дереве, средство неполно» (16-04 №1, 16-06 №1) О-23 не
+меняет: средство после партии — запрет конструкции и защита на исполнении.
+
 ГРАНИЦА СРЕДСТВА, НАЗВАННАЯ ПРЯМО (чего гейт НЕ видит):
 * журналы сторонних библиотек — Baileys/pino на уровне `warn` (`baileysLogger`
   внутри Baileys), pymax, Telethon: гейт читает только наши исходники;
@@ -508,7 +644,9 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
   - журнал, взятый из контейнера (`loggers["x"].info(…)`, `for lg in loggers:`), из
     атрибута чужого объекта, не связанного в этом модуле (объект самого модуля —
     `sys.modules[__name__]` и имя, связанное с ним, — чужим объектом не считается: его
-    члены, связанные в модуле, ловятся, см. «ПО СВЯЗЫВАНИЮ», план 16-47), из результата вызова
+    члены, связанные в модуле, ловятся, см. «ПО СВЯЗЫВАНИЮ», план 16-47; прочие написания объекта
+    модуля — атрибут-держатель `self.me`, псевдоним `sys`, `importlib` — с плана 16-53 — запрещённая
+    конструкция; пункт объясняет, почему предикат её не судит), из результата вызова
     не-фабрики (`lg = make_logger()`), из `with … as lg` (связывается результат
     `__enter__`, а не выражение) или ввезённый из другого модуля под именем, не похожим
     на журнал (`from app.x import lg`): гейт разбирает модуль за модулем;
@@ -530,7 +668,12 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
     `globals()["f"] = logger.info`, `vars(obj)["f"] = logger.info`: ссылка кладётся в
     контейнер объекта или модуля и читается оттуда — поток данных, который предикат не
     прослеживает; гейт писателя называет те же формы в пункте (1) своей границы (зонд
-    самопроверки исполнителя 16-29);
+    самопроверки исполнителя 16-29). `globals()[…]`, `vars(obj)[…]` и `operator.attrgetter(…)` с
+    плана 16-53 — запрещённая конструкция (виды «пространство имён» и «отложенный вызов по
+    имени»); пункт объясняет, почему предикат её не судит. `setattr(self, "f", …)` с литеральным
+    именем, `staticmethod(…)`, контейнер и `lambda` конструкциями канала не являются (замер плана
+    16-54) и остаются границей предиката — их ловит только маска на исполнении, если вывод идёт
+    через журнал;
 * аргументы ссылки на журнал, пришедшие нелитералом (`args=row`, `kwargs=opts`,
   распаковка `*rows` и `**opts`), — поток данных, который предикат не прослеживает: что
   лежит в кортеже или словаре, известно только во время исполнения; судится само выражение
@@ -538,7 +681,8 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
   кортеж, список и словарь; пункт (1) границы гейта писателя называет то же;
 * имя метода журнала или привязки, вычисленное во время исполнения
   (`getattr(logger, name)(…)`, `getattr(structlog.contextvars, attr)(…)`): строки в
-  исходнике нет; имя, записанное строкой, — ловится;
+  исходнике нет; имя, записанное строкой, — ловится; с плана 16-53 — запрещённая конструкция
+  (вид «вычисленное имя атрибута»); пункт объясняет, почему предикат её не судит;
 * область видимости одна — модуль: имя, связанное с журналом в одной функции, журналом
   считается и в другой, и каждое связывание имени судится — у `methodcaller` тоже: имя,
   связанное с `methodcaller(…)` в двух функциях, применяется каждым связыванием (цена в
@@ -579,6 +723,10 @@ import pytest
 # умолчанием) читают одно имя `f`; своего читателя имени гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
+    DYNAMIC_CONSTRUCT_EXCEPTIONS,
+    DYNAMIC_CONSTRUCT_KINDS,
+    DYNAMIC_KIND_BANNED_ROLE_STRING,
+    DYNAMIC_KIND_DEFERRED_CALL,
     DYNAMIC_KIND_MODULE_OBJECT,
     ELEMENTWISE_CARRIERS,
     REFERENCE_CARRIERS,
@@ -842,15 +990,23 @@ class ModuleLogNames:
     `getattr(sys.modules[__name__], "out")(…)`, `me.out(…)` (ревью WR-29: до плана 16-47 цикл
     самопроверки 1 плана 16-43, коммит `a77263ad`, клал его и сюда, и `fh.write(account.phone)`
     при `write = print` стал вызовом журнала; решение владельца О-20 (а), свойство 3).
-    `module_objects` — имена, связанные в модуле с объектом модуля `sys.modules[__name__]` любой
-    формой общей грамматики, цепочкой тоже (`me = sys.modules[__name__]`, `me2 = me`): член такого
-    имени — член модуля (ревью WR-29, WR-30; помощник `_is_module_object`, план 16-47).
+    `module_objects` — имена-цели `ast.Name` (на уровне модуля, в функции, в теле класса),
+    связанные в модуле с объектом модуля `sys.modules[__name__]`, цепочкой тоже
+    (`me = sys.modules[__name__]`, `me2 = me`): член такого имени — член модуля (ревью WR-29,
+    WR-30; помощник `_is_module_object`, план 16-47). Предикат читает объект модуля в этих двух
+    написаниях — текст `sys.modules[__name__]` и такое имя; прочие (атрибут-держатель `self.me`,
+    чтение `K.me`, псевдоним `sys`, `from sys import modules`, `sys.modules.get(__name__)`,
+    `getattr(sys, "modules")`, `importlib.import_module(__name__)`) — запрещённые конструкции канала
+    (решение владельца О-23 (а), план 16-53). До плана 16-54 здесь стояло «любой формой общей
+    грамматики» — шире предиката (ревью CR-05, верификация раунда 10).
     `methodcaller_names` — имена, под которыми модуль зовёт `operator.methodcaller`
     (`from operator import methodcaller as mc`, `mc = operator.methodcaller`,
     `self.mc = operator.methodcaller`); `methodcallers` — пары «имя → вызов
-    `methodcaller(…)`», связанные любой формой общей грамматики (`emit =
+    `methodcaller(…)`», связанные формой общей грамматики `BINDING_FORMS` (`emit =
     operator.methodcaller("info", …)`, `self.emit = …`, цепочка `g = emit`) — по имени их
-    зовут `emit(logger)` / `self.emit(logger)` (ревью WR-17).
+    зовут `emit(logger)` / `self.emit(logger)` (ревью WR-17); с плана 16-53 `operator.methodcaller`
+    в любом месте модуля — ещё и запрещённая конструкция канала (вид «отложенный вызов по имени»;
+    ревью WR-32, WR-33). До плана 16-54 здесь стояло «связанные любой формой общей грамматики».
     `partial_names` — имена, под которыми модуль зовёт `functools.partial`
     (`from functools import partial as bind_`, `bind_ = functools.partial`; самопроверка
     исполнителя 16-29 — гейт писателя разрешает псевдонимы `partial` с плана 16-22).
@@ -4454,6 +4610,107 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
     )
 
 
+BAN_SECTION_HEADING = "ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ"
+RECONCILIATION_HEADING = "СОГЛАСОВАНИЕ ПРЕЖНИХ ЗАПРЕТОВ"
+# Фразы прежних обещаний, которые решение О-23 (а) сужает: у каждой в шапке — оговорка о запрещённых конструкциях.
+NARROWED_PROMISES = (
+    "каждое толкование узла",
+    "Связанное имя читается и через объект модуля",
+    "поданный ЛЮБОМУ",
+)
+# Оговорка к пунктам «ГРАНИЦЫ СРЕДСТВА», ставшим конструкциями канала (план 16-53).
+BOUNDARY_BAN_CAVEAT = "пункт объясняет, почему предикат её не судит"
+
+
+def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
+    """Шапка правдива об обещании после решения владельца О-23 (а) (свойства 1, 2, 4, 5, 6; план 16-54).
+
+    Раздел «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» называет обещание «в коде нет конструкции, которую гейт не умеет
+    судить», каждый вид канала `DYNAMIC_CONSTRUCT_KINDS`, каждое исключение `DYNAMIC_CONSTRUCT_EXCEPTIONS` (путь и
+    владелец), маску на исполнении `app/services/log_masking.py` (О-24 (а)) и её границу (`print`, `max_worker`,
+    `wa_worker`), правило `LOGGING_CONFIG_MODULE`, второй рубеж и согласование прежних запретов (таблица `16-56`).
+    Летописи CR-05, WR-32, WR-33 называют регрессию `16573223` против `d31d86db`, канал (16-53), маску (16-52) и решение
+    О-23 (а); вступление D-11 — маску «последним рубежом»; прежние обещания полноты написаний — с оговоркой о
+    запрещённых конструкциях; докстринг `ModuleLogNames` — два написания объекта модуля и запрет остальных; «Живые
+    числа» — замер плана 16-52 и прежние «225 / 68 / 93» летописью.
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    missing: list[str] = []
+    start = flat.find(BAN_SECTION_HEADING)
+    end = flat.find("ГРАНИЦА СРЕДСТВА", start + 1) if start >= 0 else -1
+    section = flat[start:end] if 0 <= start < end else ""
+    if not section:
+        missing.append(f"нет раздела «{BAN_SECTION_HEADING}» перед «ГРАНИЦА СРЕДСТВА»")
+    for needle in (
+        "О-23 (а)",
+        "в коде нет конструкции, которую гейт не умеет судить",
+        *DYNAMIC_CONSTRUCT_KINDS,
+        *(key.rsplit("::", 1)[0] for key in DYNAMIC_CONSTRUCT_EXCEPTIONS),
+        "app/services/log_masking.py",
+        "О-24 (а)",
+        "второй рубеж",
+        "print",
+        "max_worker",
+        "wa_worker",
+        "LOGGING_CONFIG_MODULE",
+        "test_no_dynamic_construct_in_the_python_trees",
+        "WR-35",
+    ):
+        if section and needle not in section:
+            missing.append(f"раздел «{BAN_SECTION_HEADING}» не называет «{needle}»")
+    reconciliation_start = section.find(RECONCILIATION_HEADING)
+    reconciliation = section[reconciliation_start:] if reconciliation_start >= 0 else ""
+    if section and not reconciliation:
+        missing.append(f"нет абзаца «{RECONCILIATION_HEADING}»")
+    for needle in ("16-09 №2", "16-29 №2", "16-46 №2", "16-49 №2", "16-46 №4", "16-56"):
+        if reconciliation and needle not in reconciliation:
+            missing.append(f"абзац согласования прежних запретов не называет «{needle}»")
+    for heading, needles in (
+        ("Летопись CR-05", ("16573223", "d31d86db", "16-53", "16-52", "О-23 (а)")),
+        ("Летопись WR-32", ("16-53", "16-52", "О-23 (а)")),
+        ("Летопись WR-33", ("16-53", "16-52", "О-23 (а)")),
+    ):
+        chronicle = _chronicle_segment(flat, heading)
+        if not chronicle:
+            missing.append(f"нет «{heading}»")
+        for needle in needles:
+            if chronicle and needle not in chronicle:
+                missing.append(f"«{heading}» не называет «{needle}»")
+    intro = flat[: flat.find("ЧТО СЧИТАЕТСЯ ВЫЗОВОМ ЖУРНАЛА")]
+    if "последним рубежом" not in intro:
+        missing.append("вступление D-11 не говорит, что маска в журнале бывает только «последним рубежом»")
+    for phrase in NARROWED_PROMISES:
+        at = flat.find(phrase)
+        if at < 0:
+            missing.append(f"прежняя фраза стёрта: нет «{phrase}»")
+        elif "запрещённ" not in flat[at : at + 900]:
+            missing.append(f"у фразы «{phrase}» нет оговорки о запрещённых конструкциях канала")
+    boundary = flat[flat.find("ГРАНИЦА СРЕДСТВА") :]
+    if boundary.count(BOUNDARY_BAN_CAVEAT) < 3:
+        missing.append(
+            f"у пунктов границы, ставших конструкциями канала, нет оговорки «{BOUNDARY_BAN_CAVEAT}» (нужно три: "
+            "объект модуля, связывание вызовом или через пространство имён, вычисленное имя)"
+        )
+    names_doc = " ".join((ModuleLogNames.__doc__ or "").split())
+    for match in re.finditer("любой формой общей грамматики", names_doc):
+        if "До плана 16-54" not in names_doc[max(0, match.start() - 80) : match.start()]:
+            missing.append("докстринг `ModuleLogNames` утверждает «любой формой общей грамматики» без оговорки")
+    if "запрещ" not in names_doc:
+        missing.append("докстринг `ModuleLogNames` не называет запрет прочих написаний объекта модуля")
+    live = flat.find("Живые числа")
+    live_segment = flat[live : live + 700] if live >= 0 else ""
+    for needle in ("16-52", "227", "68", "93", "225"):
+        if needle not in live_segment:
+            missing.append(f"фраза «Живые числа» не называет «{needle}»")
+
+    assert not missing, (
+        "шапка гейта приватности не называет запрет динамики и защиту на исполнении "
+        f"({len(missing)}):\n" + "\n".join(f"  {item}" for item in missing)
+    )
+
+
 # --- Положительные контроли: ничего не найдено ---------------------------------
 
 POSITIVE_CONTROLS = [
@@ -4951,6 +5208,434 @@ def test_a_planted_dynamic_construct_is_found_in_each_python_tree(tmp_path, tree
         f"подложенный `import importlib` в дереве `{tree}` канал не нашёл: {offences}"
     )
     assert DYNAMIC_KIND_MODULE_OBJECT in offences[0], f"находка не того вида: {offences}"
+
+
+# --- Формы раунда 10: красны запретом конструкции (план 16-54; О-23 (а), свойства 1, 4) ---------------------------
+#
+# CR-05, WR-32, WR-33 ревью и верификации раунда 10 закрыты не поимённой починкой предиката распознавания, а запретом
+# конструкции (канал плана 16-53) и маской на исполнении (план 16-52; исполнение тех же форм — `ROUND_TEN_PRIVACY_FORMS`
+# в `tests/test_logging_config.py`). Строка формы судится тем путём, каким судится живое дерево, — `dynamic_construct_scan`
+# над синтетическим `app/`: так строка проверяет обещание «в коде нет конструкции, которую гейт не умеет судить», а не
+# помощника. Ответ прежнего `python_log_offences` на строке не утверждается (свойство 5 О-23: полнота распознавания
+# написаний — больше не мера); он записан в сводке плана 16-54 справочно.
+
+
+@dataclass(frozen=True)
+class RoundTenBannedForm:
+    """Форма раунда 10: тело модуля под общей шапкой, маркер строки конструкции и ожидаемый вид канала."""
+
+    id: str
+    body: str
+    marker: str
+    kind: str
+
+
+# Общая шапка тел форм: ввозы и журнал модуля. Ввоз `sys`, `operator`, `functools` находкой канала не является —
+# находка встаёт на узел самой конструкции (`sys.modules`, `operator.methodcaller`, ввоз `importlib` …).
+ROUND_TEN_FORM_HEADER = (
+    "import asyncio, contextvars, functools, logging, operator, sys\n"
+    "logger = logging.getLogger(__name__)\n"
+)
+
+_CR05_METHOD = "\n\nclass K:\n    def __init__(self):\n        self.me = sys.modules[__name__]\n\n    def go(self, account):\n"
+_CR05_CLASS_BODY = "\n\nclass K:\n    me = sys.modules[__name__]\n\n    def go(self, account):\n"
+_WR_METHODCALLER = '    f = operator.methodcaller("info", "x %s", account.phone)\n'
+
+ROUND_TEN_BANNED_FORMS: tuple[RoundTenBannedForm, ...] = (
+    # CR-05 (ревью раунда 10; верификация раунда 10, гэп 1): 13 написаний объекта модуля, которые `16573223` (16-47,
+    # цикл WR-29) перестал читать против базы партии `d31d86db`; номер печатался. Запрет конструкции, а не починка
+    # предиката.
+    RoundTenBannedForm(
+        "cr05-self-attribute",
+        "out = logger.info\n" + _CR05_METHOD + '        self.me.out("x %s", account.phone)\n',
+        "self.me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-getattr-self",
+        "out = logger.info\n" + _CR05_METHOD + '        getattr(self, "me").out("x %s", account.phone)\n',
+        "self.me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-class-body-self",
+        "out = logger.info\n" + _CR05_CLASS_BODY + '        self.me.out("x %s", account.phone)\n',
+        "me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-class-body-class-name",
+        "out = logger.info\n" + _CR05_CLASS_BODY + '        K.me.out("x %s", account.phone)\n',
+        "me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-sys-alias",
+        'import sys as _s\n\nout = logger.info\n\n\ndef go(account):\n    _s.modules[__name__].out("x %s", account.phone)\n',
+        "_s.modules[__name__].out(",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-sys-alias-bound",
+        "import sys as _s\n\nout = logger.info\nme = _s.modules[__name__]\n\n\n"
+        'def go(account):\n    me.out("x %s", account.phone)\n',
+        "me = _s.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-from-sys-import-modules",
+        'from sys import modules\n\nout = logger.info\n\n\ndef go(account):\n    modules[__name__].out("x %s", account.phone)\n',
+        "from sys import modules",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-from-sys-import-modules-as",
+        "from sys import modules as mods\n\nout = logger.info\n\n\n"
+        'def go(account):\n    mods[__name__].out("x %s", account.phone)\n',
+        "from sys import modules as mods",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-sys-modules-get",
+        'out = logger.info\n\n\ndef go(account):\n    sys.modules.get(__name__).out("x %s", account.phone)\n',
+        "sys.modules.get(__name__)",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # `getattr` со строкой из `BANNED_ATTRIBUTE_NAMES` канал судит видом «имя запрещённой роли строкой» (план 16-53,
+    # истина 1), а не «объект модуля»: вид — по замеру канала.
+    RoundTenBannedForm(
+        "cr05-getattr-sys-modules",
+        'out = logger.info\n\n\ndef go(account):\n    getattr(sys, "modules")[__name__].out("x %s", account.phone)\n',
+        'getattr(sys, "modules")[__name__]',
+        DYNAMIC_KIND_BANNED_ROLE_STRING,
+    ),
+    RoundTenBannedForm(
+        "cr05-importlib",
+        "import importlib\n\nout = logger.info\n\n\n"
+        'def go(account):\n    importlib.import_module(__name__).out("x %s", account.phone)\n',
+        "importlib.import_module(__name__).out(",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-from-importlib",
+        "from importlib import import_module\n\nout = logger.info\n\n\n"
+        'def go(account):\n    import_module(__name__).out("x %s", account.phone)\n',
+        "import_module(__name__).out(",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    RoundTenBannedForm(
+        "cr05-importlib-bound",
+        "import importlib\n\nout = logger.info\nme = importlib.import_module(__name__)\n\n\n"
+        'def go(account):\n    me.out("x %s", account.phone)\n',
+        "me = importlib.import_module(__name__)",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # CR-05, получатель (верификация раунда 10, гэп 2; продолжение WR-30): журнал модуля — член объекта модуля,
+    # прочитанного через атрибут; запрет конструкции, а не починка `_is_log_receiver`.
+    RoundTenBannedForm(
+        "cr05-receiver-through-self-module-object",
+        'lg = logging.getLogger("x")\n' + _CR05_METHOD + '        self.me.lg.info("x %s", account.phone)\n',
+        "self.me = sys.modules[__name__]",
+        DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+    # WR-32 (ревью раунда 10; верификация раунда 10, гэп 2): `methodcaller(…)`, связанный под последним именем
+    # носителя, закрывал путь носителя для поданного `methodcaller` над журналом; давний пропуск. Запрет конструкции.
+    RoundTenBannedForm(
+        "wr32-methodcaller-under-a-carrier-name",
+        'to_thread = operator.methodcaller("noop")\n\n\nasync def go(account):\n'
+        + _WR_METHODCALLER
+        + "    await asyncio.to_thread(f, logger)\n",
+        'to_thread = operator.methodcaller("noop")',
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    RoundTenBannedForm(
+        "wr32-methodcaller-under-run",
+        'run = operator.methodcaller("run")\n\n\ndef go(account):\n'
+        + _WR_METHODCALLER
+        + "    contextvars.copy_context().run(f, logger)\n",
+        'run = operator.methodcaller("run")',
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    # WR-33, сторона приватности (ревью раунда 10; верификация раунда 10, гэп 2): псевдоним `operator.methodcaller`
+    # под именем носителя или обёртки гасил путь носителя; давний пропуск. Запрет конструкции.
+    RoundTenBannedForm(
+        "wr33-operator-methodcaller-under-a-carrier-name",
+        "to_thread = operator.methodcaller\n\n\nasync def go(account):\n"
+        + _WR_METHODCALLER
+        + "    await asyncio.to_thread(f, logger)\n",
+        "to_thread = operator.methodcaller",
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+    RoundTenBannedForm(
+        "wr33-partial-alias-of-methodcaller",
+        "partial = operator.methodcaller\n\n\nasync def go(account):\n"
+        '    await functools.partial(asyncio.to_thread, logger.info, "x %s", account.phone)()\n',
+        "partial = operator.methodcaller",
+        DYNAMIC_KIND_DEFERRED_CALL,
+    ),
+)
+
+
+@pytest.mark.parametrize("form", [pytest.param(form, id=form.id) for form in ROUND_TEN_BANNED_FORMS])
+def test_a_round_ten_form_is_red_as_a_banned_construct(tmp_path, form):
+    """Свойства 1, 4 О-23 (а): форма CR-05 / WR-32 / WR-33, подложенная в `app/`, краснит канал гейта на своей строке.
+
+    Находка ожидаемого вида — на строке конструкции (маркер строки встречается в теле ровно один раз). Прочие находки
+    той же формы (ввоз `importlib` рядом с `importlib.import_module`, второй `methodcaller`) правило не запрещает:
+    форма красна, если красна её конструкция.
+    """
+    source = ROUND_TEN_FORM_HEADER + form.body
+    marked = [number for number, text in enumerate(source.splitlines(), 1) if form.marker in text]
+    assert len(marked) == 1, f"маркер {form.marker!r} строки формы `{form.id}` не однозначен: строки {marked}"
+    planted = tmp_path / "app" / "x.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(source, encoding="utf-8")
+
+    paths, offences = dynamic_construct_scan(tmp_path)
+    expected = f"app/x.py:{marked[0]} — запрещённая конструкция — {form.kind} — "
+
+    assert planted in paths and any(offence.startswith(expected) for offence in offences), (
+        f"форма раунда 10 `{form.id}` не красна запретом конструкции: ждали «{expected}…», канал дал {offences}"
+    )
+
+
+@dataclass(frozen=True)
+class PlantedBannedService:
+    """Подложенная служба Фаз 17–20: исходник, строка конструкции и вид единственной находки канала."""
+
+    source: str
+    line: int
+    kind: str
+
+
+# Подложенные службы трасеров канала: путь в синтетическом дереве → служба.
+PLANTED_BANNED_SERVICES: dict[str, PlantedBannedService] = {
+    # CR-05 (регрессия наличия `16573223` против `d31d86db`): журнал модуля через атрибут-объект модуля.
+    "app/services/phone_notice_via_module.py": PlantedBannedService(
+        source=(
+            "import logging\n"
+            "import sys\n"
+            "\n"
+            "logger = logging.getLogger(__name__)\n"
+            "out = logger.info\n"
+            "\n"
+            "\n"
+            "class PhoneNotice:\n"
+            "    def __init__(self, account):\n"
+            "        self.account = account\n"
+            "        self.me = sys.modules[__name__]\n"
+            "\n"
+            "    def run(self):\n"
+            '        self.me.out("notice %s", self.account.phone)\n'
+        ),
+        line=11,
+        kind=DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+}
+
+
+def test_a_planted_notice_through_the_module_object_is_red_as_a_banned_construct(tmp_path):
+    """CR-05 (D-11, D-17): служба читает журнал модуля через атрибут-объект модуля — красна запретом конструкции.
+
+    Служба Фаз 17–20 `app/services/phone_notice_via_module.py`: `out = logger.info` на уровне модуля,
+    `self.me = sys.modules[__name__]` в `__init__` и `self.me.out("notice %s", self.account.phone)` в методе `run`.
+    Это ровно написание, которое `16573223` (16-47, цикл WR-29) перестал читать против базы партии `d31d86db`
+    (регрессия наличия CR-05; ревью и верификация раунда 10; номер печатался). Решение владельца О-23 (а), свойство 1:
+    форма закрыта не поимённой починкой предиката распознавания, а запретом конструкции — канал
+    (`dynamic_construct_scan`, план 16-53) краснит правило живых деревьев ровно одной находкой вида «объект модуля» на
+    строке `self.me = sys.modules[__name__]`. Подложенный файл находится тем же обходом `python_sources(root)`, что и
+    живое дерево.
+    """
+    path = "app/services/phone_notice_via_module.py"
+    service = PLANTED_BANNED_SERVICES.get(path)
+    planted = tmp_path / path
+    if service is not None:
+        planted.parent.mkdir(parents=True)
+        planted.write_text(service.source, encoding="utf-8")
+
+    paths, offences = dynamic_construct_scan(tmp_path)
+    in_file = [offence for offence in offences if offence.startswith(f"{path}:")]
+
+    assert (
+        service is not None
+        and service.line == 11
+        and service.kind == DYNAMIC_KIND_MODULE_OBJECT
+        and planted in paths
+        and in_file == [f"{path}:11 — запрещённая конструкция — {DYNAMIC_KIND_MODULE_OBJECT} — sys.modules"]
+    ), (
+        "подложенная служба, читающая журнал модуля через атрибут-объект модуля, не красна запретом конструкции: "
+        f"служба {service!r}, находки файла {in_file}"
+    )
+
+
+# --- Защита журнала на исполнении не обходится кодом приложения (план 16-54; О-23 (а), свойство 2) ---------------
+#
+# Маску на исполнении (`app/services/log_masking.py`, план 16-52) ставит `setup_logging` модуля `LOGGING_CONFIG_MODULE`:
+# процессор — в цепочку форматтера корневого обработчика, фильтр — на обработчики, существующие к вызову. Обработчик,
+# поставленный позже, снятый фильтр, заменённый форматтер, `basicConfig`, новая `structlog.configure` или
+# `propagate = False` выключают её молча — и номер уходит в Loki (D-11). Поэтому перенастройка журнала живёт только в
+# `LOGGING_CONFIG_MODULE`; деревья правила — `app/` и `scripts/` (`max_worker/` настраивает свой журнал сам, своей маски
+# у него нет — граница шапки).
+LOGGING_CONFIG_MODULE = "app/logging_config.py"
+LOGGING_RECONFIGURATION_TREES = ("app", "scripts")
+
+# Настройка structlog — вызов у получателя с последним именем `structlog` или имя, ввезённое из `structlog`.
+STRUCTLOG_CONFIGURATORS = frozenset({"configure", "configure_once", "reset_defaults"})
+# Настройка stdlib: `basicConfig` у любого получателя; `dictConfig` / `fileConfig` / `listen` — у получателя с
+# последним именем `config` или ввезённые из `logging.config`.
+STDLIB_BASIC_CONFIGURATORS = frozenset({"basicConfig"})
+STDLIB_CONFIG_CONFIGURATORS = frozenset({"dictConfig", "fileConfig", "listen"})
+# Перенастройка обработчиков и фильтров — вызов у любого получателя.
+HANDLER_RECONFIGURATORS = frozenset({"addHandler", "removeHandler", "removeFilter", "setFormatter"})
+# Присваивание этим атрибутам у любой цели.
+RECONFIGURED_ATTRIBUTES = frozenset({"handlers", "filters", "propagate"})
+# Списки обработчиков и фильтров на месте (`root.handlers.append(h)`, `handler.filters.clear()`) — та же перенастройка.
+RECONFIGURED_LISTS = frozenset({"handlers", "filters"})
+LIST_MUTATORS = frozenset({"append", "extend", "insert", "remove", "pop", "clear"})
+
+
+def _reconfigured_target(target: ast.expr) -> bool:
+    """Цель присваивания или `del`: атрибут `RECONFIGURED_ATTRIBUTES` или элемент списка обработчиков / фильтров."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_reconfigured_target(item) for item in target.elts)
+    if isinstance(target, ast.Starred):
+        return _reconfigured_target(target.value)
+    if isinstance(target, ast.Attribute):
+        return target.attr in RECONFIGURED_ATTRIBUTES
+    if isinstance(target, ast.Subscript):
+        return isinstance(target.value, ast.Attribute) and target.value.attr in RECONFIGURED_LISTS
+    return False
+
+
+def _is_reconfiguring_call(call: ast.Call, imported: dict[str, tuple[str, str]]) -> bool:
+    if isinstance(call.func, ast.Name):
+        module, name = imported.get(call.func.id, ("", call.func.id))
+        return (
+            name in STDLIB_BASIC_CONFIGURATORS
+            or (module == "structlog" and name in STRUCTLOG_CONFIGURATORS)
+            or (module == "logging.config" and name in STDLIB_CONFIG_CONFIGURATORS)
+            or (call.func.id == "setattr" and len(call.args) > 1 and isinstance(call.args[1], ast.Constant)
+                and call.args[1].value in RECONFIGURED_ATTRIBUTES)
+        )
+    member = _member(call.func)
+    if member is None:
+        return False
+    owner, name = member
+    if name in STDLIB_BASIC_CONFIGURATORS or name in HANDLER_RECONFIGURATORS:
+        return True
+    if name in STRUCTLOG_CONFIGURATORS and _last_name(owner) == "structlog":
+        return True
+    if name in STDLIB_CONFIG_CONFIGURATORS and _last_name(owner) == "config":
+        return True
+    return name in LIST_MUTATORS and isinstance(owner, ast.Attribute) and owner.attr in RECONFIGURED_LISTS
+
+
+def logging_reconfigurations(source: str, path: str) -> list[str]:
+    """Перенастройки журнала исходника вне `LOGGING_CONFIG_MODULE`: «`путь:строка` — перенастройка журнала — <фрагмент>».
+
+    Судятся вызовы `STRUCTLOG_CONFIGURATORS` (у `structlog` или ввезённые из него), `basicConfig`,
+    `STDLIB_CONFIG_CONFIGURATORS` (у `config` или ввезённые из `logging.config`), `HANDLER_RECONFIGURATORS` у любого
+    получателя, правка списков `.handlers` / `.filters` на месте, присваивание, `del` и `setattr` со строкой атрибутов
+    `RECONFIGURED_ATTRIBUTES` у любой цели. Сам `LOGGING_CONFIG_MODULE` — ноль: это единственное место настройки.
+    """
+    if path == LOGGING_CONFIG_MODULE:
+        return []
+    tree = ast.parse(source)
+    imported = {
+        alias.asname or alias.name: (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module in ("structlog", "logging.config")
+        for alias in node.names
+    }
+    found: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _is_reconfiguring_call(node, imported):
+            found.append(node)
+        elif isinstance(node, (ast.Assign, ast.Delete)) and any(_reconfigured_target(t) for t in node.targets):
+            found.append(node)
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)) and _reconfigured_target(node.target):
+            found.append(node)
+    return [
+        f"{path}:{node.lineno} — перенастройка журнала — {ast.unparse(node).splitlines()[0][:80]}"
+        for node in sorted(found, key=lambda item: (item.lineno, item.col_offset))
+    ]
+
+
+def logging_reconfiguration_scan(root: Path) -> tuple[list[Path], list[str]]:
+    """Перенастройки журнала в деревьях `LOGGING_RECONFIGURATION_TREES` под `root`: обойдённые файлы и находки."""
+    paths = [path for tree in LOGGING_RECONFIGURATION_TREES for path in python_sources(root)[tree]]
+    found: list[str] = []
+    for path in paths:
+        found += logging_reconfigurations(path.read_text(encoding="utf-8"), path.relative_to(root).as_posix())
+    return paths, found
+
+
+def test_no_logging_reconfiguration_outside_the_logging_config():
+    """Свойство 2 О-23 (а), D-11: в `app/` и `scripts/` журнал перенастраивает только `LOGGING_CONFIG_MODULE`.
+
+    Маска на исполнении стоит на обработчиках, существующих к вызову `setup_logging`, и в цепочке его форматтера:
+    `structlog.configure` / `reset_defaults`, `logging.basicConfig`, `logging.config.dictConfig` / `fileConfig` /
+    `listen`, вызовы `.addHandler` / `.removeHandler` / `.removeFilter` / `.setFormatter` и присваивания `.handlers` /
+    `.filters` / `.propagate` в другом модуле ставят обработчик без маски или снимают её фильтр — молча. Антивакуум:
+    `LOGGING_CONFIG_MODULE` виден обходом, и помощник, судящий его исходник под чужим путём, находит в нём настройку
+    (иначе ноль ничего не значит).
+    """
+    paths, found = logging_reconfiguration_scan(PROJECT_ROOT)
+    config = PROJECT_ROOT / LOGGING_CONFIG_MODULE
+    print(f"Перенастройка журнала вне {LOGGING_CONFIG_MODULE}: файлов {len(paths)}; находок {len(found)}")
+
+    assert config in paths and logging_reconfigurations(config.read_text(encoding="utf-8"), "app/x.py"), (
+        f"обход не видит {LOGGING_CONFIG_MODULE} или помощник не находит в нём ни одной настройки журнала — "
+        "правило перенастройки журнала проверяет ничто"
+    )
+    assert found == [], (
+        f"журнал перенастроен вне {LOGGING_CONFIG_MODULE} — маска на исполнении обходится:\n"
+        + "\n".join(f"  {offence}" for offence in found)
+    )
+
+
+LOGGING_RECONFIGURATION_CONTROLS = (
+    pytest.param("logging.basicConfig()", id="basic-config"),
+    pytest.param("structlog.configure(processors=[])", id="structlog-configure"),
+    pytest.param("logging.config.dictConfig({})", id="dict-config"),
+    pytest.param('logging.getLogger("x").removeFilter(f)', id="remove-filter"),
+    pytest.param('logging.getLogger("x").addHandler(h)', id="add-handler"),
+    pytest.param('logging.getLogger("x").propagate = False', id="propagate"),
+    pytest.param("root.handlers = []", id="handlers-assignment"),
+    # Сверх семи форм плана — те же перенастройки другими написаниями (правка списков на месте, `setattr` со строкой,
+    # `del`, составное присваивание, ввезённые настройщики, `reset_defaults`).
+    pytest.param("root.handlers.append(h)", id="handlers-append"),
+    pytest.param("h.filters.clear()", id="filters-clear"),
+    pytest.param("root.handlers += [h]", id="handlers-augmented"),
+    pytest.param("del root.handlers[0]", id="handlers-del"),
+    pytest.param('setattr(root, "propagate", False)', id="setattr-propagate"),
+    pytest.param("from logging.config import dictConfig as dc; dc({})", id="imported-dict-config"),
+    pytest.param("structlog.reset_defaults()", id="structlog-reset-defaults"),
+)
+
+
+@pytest.mark.parametrize("line", LOGGING_RECONFIGURATION_CONTROLS)
+def test_a_planted_logging_reconfiguration_reddens_the_rule(tmp_path, line):
+    """Контроль правила: перенастройка журнала в подложенном `app/x.py` — одна находка; в `LOGGING_CONFIG_MODULE` — ноль."""
+    source = f"import logging\nimport logging.config\nimport structlog\n\n\ndef reconfigure(f, h, root):\n    {line}\n"
+    elsewhere = tmp_path / "elsewhere"
+    planted = elsewhere / "app" / "x.py"
+    planted.parent.mkdir(parents=True)
+    planted.write_text(source, encoding="utf-8")
+    exempt = tmp_path / "exempt"
+    configuring = exempt / LOGGING_CONFIG_MODULE
+    configuring.parent.mkdir(parents=True)
+    configuring.write_text(source, encoding="utf-8")
+
+    _, found = logging_reconfiguration_scan(elsewhere)
+    exempt_paths, exempt_found = logging_reconfiguration_scan(exempt)
+
+    assert len(found) == 1 and found[0].startswith("app/x.py:7 — перенастройка журнала — "), (
+        f"подложенная перенастройка журнала `{line}` вне {LOGGING_CONFIG_MODULE} не краснит правило: {found}"
+    )
+    assert configuring in exempt_paths and exempt_found == [], (
+        f"та же строка в {LOGGING_CONFIG_MODULE} краснит правило: {exempt_found}"
+    )
 
 
 # --- JS-половина: `wa_worker/` -----------------------------------------------------
