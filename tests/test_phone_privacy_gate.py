@@ -5154,7 +5154,29 @@ class PlantedBannedService:
 
 
 # Подложенные службы трасеров канала: путь в синтетическом дереве → служба.
-PLANTED_BANNED_SERVICES: dict[str, PlantedBannedService] = {}
+PLANTED_BANNED_SERVICES: dict[str, PlantedBannedService] = {
+    # CR-05 (регрессия наличия `16573223` против `d31d86db`): журнал модуля через атрибут-объект модуля.
+    "app/services/phone_notice_via_module.py": PlantedBannedService(
+        source=(
+            "import logging\n"
+            "import sys\n"
+            "\n"
+            "logger = logging.getLogger(__name__)\n"
+            "out = logger.info\n"
+            "\n"
+            "\n"
+            "class PhoneNotice:\n"
+            "    def __init__(self, account):\n"
+            "        self.account = account\n"
+            "        self.me = sys.modules[__name__]\n"
+            "\n"
+            "    def run(self):\n"
+            '        self.me.out("notice %s", self.account.phone)\n'
+        ),
+        line=11,
+        kind=DYNAMIC_KIND_MODULE_OBJECT,
+    ),
+}
 
 
 def test_a_planted_notice_through_the_module_object_is_red_as_a_banned_construct(tmp_path):
