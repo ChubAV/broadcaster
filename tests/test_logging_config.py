@@ -12,14 +12,21 @@ structlog и запись stdlib проходят его целиком, выв�
 соседние модули суиты.
 """
 
+import copy
 import io
 import json
 import logging
+import logging.config
+import sys
 
 import pytest
 import structlog
 
 from app.logging_config import setup_logging
+
+NUMBER = "+79991234567"
+NUMBER_DIGITS = "9991234567"
+MASK = "+7 *** ***-**-67"
 
 NAMED_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access", "celery", "telethon", "sqlalchemy.engine")
 
@@ -120,3 +127,163 @@ def test_a_number_in_a_structlog_field_is_masked_in_the_rendered_line(restored_l
     assert event["group_id"] == "-1001234567890", f"ID группы спрятан маской (О-24 (а)): {line}"
     assert event["account_id"] == 7, f"`account_id` изменён маской: {line}"
     assert "9991234567" not in line, f"цифры номера остались в строке журнала: {line}"
+
+
+# --- Полный конвейер: запись stdlib, исключения, обработчики uvicorn, режим `console` ---------
+
+
+def _integrity_error() -> Exception:
+    """Ошибка SQLAlchemy с параметрами запроса — так номер попадает в трассировку."""
+    from sqlalchemy.exc import IntegrityError
+
+    return IntegrityError(
+        "UPDATE messenger_accounts SET phone=? WHERE id=?",
+        (NUMBER, 1),
+        Exception("UNIQUE constraint failed: messenger_accounts.phone"),
+    )
+
+
+def _uvicorn_logging_before_the_app() -> None:
+    """Обработчики uvicorn ставятся ДО `create_app()` — тем же `dictConfig`, что у uvicorn."""
+    import uvicorn.config
+
+    logging.config.dictConfig(copy.deepcopy(uvicorn.config.LOGGING_CONFIG))
+
+
+def _masking_filter_class():
+    from app.services import log_masking
+
+    found = log_masking.__dict__.get("NumberMaskingFilter")
+    assert found is not None, "фильтра stdlib `NumberMaskingFilter` нет: запись мимо процессора печатает номер"
+    return found
+
+
+def test_a_stdlib_record_through_the_root_is_masked(restored_logging, monkeypatch):
+    """Запись stdlib (telethon) через корень — маска; отчёт об ошибке подстановки — без номера."""
+    setup_logging(log_level="INFO", log_format="json")
+    stream = _root_stream()
+    report = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", report)
+
+    logging.getLogger("telethon").warning("connection to %s lost", NUMBER)
+    logging.getLogger("telethon").warning("bad %d", NUMBER)
+
+    output = stream.getvalue()
+    event = json.loads(output.strip().splitlines()[0])
+    assert event["event"] == f"connection to {MASK} lost", f"запись stdlib через корень без маски: {output}"
+    assert NUMBER_DIGITS not in output, f"номер в выводе корня: {output}"
+    text = report.getvalue()
+    assert "--- Logging error ---" in text, f"отчёт об ошибке подстановки не напечатан: {text!r}"
+    assert NUMBER_DIGITS not in text, f"отчёт `--- Logging error ---` записи через корень напечатал номер: {text}"
+
+
+def test_an_exception_with_bound_parameters_is_masked_in_both_paths(restored_logging):
+    """Трассировка `IntegrityError` с параметрами — маска и у structlog, и у записи stdlib."""
+    setup_logging(log_level="INFO", log_format="json")
+    stream = _root_stream()
+
+    try:
+        raise _integrity_error()
+    except Exception:
+        structlog.get_logger("app.writer").exception("phone_update_failed", account_id=1)
+        logging.getLogger("sqlalchemy.engine").exception("database error")
+
+    output = stream.getvalue()
+    events = [json.loads(line) for line in output.strip().splitlines()]
+    assert [event["event"] for event in events] == ["phone_update_failed", "database error"], output
+    for event in events:
+        assert "IntegrityError" in event["exception"], f"трассировка потеряна: {event}"
+        assert f"[parameters: ('{MASK}', 1)]" in event["exception"], f"параметры запроса без маски: {event}"
+    assert NUMBER_DIGITS not in output, f"номер в трассировке: {output}"
+
+
+def test_uvicorn_handlers_set_up_before_the_app_are_masked(restored_logging):
+    """Обработчики uvicorn (`propagate=False`) корня не достигают — фильтр стоит и на них."""
+    _uvicorn_logging_before_the_app()
+    setup_logging(log_level="INFO", log_format="json")
+    error_stream = io.StringIO()
+    access_stream = io.StringIO()
+    for handler in logging.getLogger("uvicorn").handlers:
+        handler.setStream(error_stream)
+    for handler in logging.getLogger("uvicorn.access").handlers:
+        handler.setStream(access_stream)
+    # Уровень самого uvicorn (`--log-level info`); `setup_logging` опускает его до WARNING.
+    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
+
+    try:
+        raise _integrity_error()
+    except Exception:
+        logging.getLogger("uvicorn.error").error("Exception in ASGI application", exc_info=True)
+    logging.getLogger("uvicorn.access").info(
+        '%s - "%s %s HTTP/%s" %d', "127.0.0.1:50000", "GET", f"/x?phone={NUMBER}", "1.1", 500
+    )
+
+    output = error_stream.getvalue() + access_stream.getvalue()
+    assert "Exception in ASGI application" in output and "/x?phone=" in output, f"вывод uvicorn пуст: {output!r}"
+    assert NUMBER_DIGITS not in output, (
+        f"запись обработчика uvicorn, поставленного до setup_logging, напечатала номер: {output}"
+    )
+    assert MASK in output
+
+
+def test_the_console_mode_masks_too(restored_logging):
+    setup_logging(log_level="INFO", log_format="console")
+    stream = _root_stream()
+
+    structlog.get_logger("app.console").info("send_forbidden", group_id="-1001234567890", phone_raw=79991234567)
+    logging.getLogger("telethon").warning("connection to %s lost", NUMBER)
+
+    output = stream.getvalue()
+    assert NUMBER_DIGITS not in output, f"режим `console` напечатал номер: {output}"
+    assert output.count("***-**-67") == 2, f"маска в режиме `console` не на своих местах: {output}"
+    assert "-1001234567890" in output, f"ID группы спрятан в режиме `console`: {output}"
+
+
+def test_every_json_line_parses(restored_logging):
+    """Каждая строка вывода корня в режиме `json` — разбираемый JSON, и номер в ней — маска."""
+    setup_logging(log_level="INFO", log_format="json")
+    stream = _root_stream()
+
+    log = structlog.get_logger("app.lines")
+    log.info("send_forbidden", group_id=-1001234567890, phone_raw=79991234567, nested={"a": [NUMBER, 5]})
+    log.info("positional %s", NUMBER)
+    logging.getLogger("telethon").warning("x %d", 79991234567)
+    logging.getLogger("telethon").warning("x %s and %d", NUMBER, 7)
+    try:
+        raise _integrity_error()
+    except Exception:
+        log.exception("phone_update_failed")
+        logging.getLogger("sqlalchemy.engine").exception("database error")
+
+    lines = stream.getvalue().strip().splitlines()
+    assert len(lines) == 6, f"не все события дошли до вывода: {lines}"
+    for line in lines:
+        event = json.loads(line)
+        assert "event" in event, line
+        assert NUMBER_DIGITS not in line, f"номер в строке JSON: {line}"
+    assert json.loads(lines[0])["group_id"] == -1001234567890
+
+
+def test_an_unknown_level_name_falls_back_to_info(restored_logging):
+    """Уровень по имени — `logging.getLevelNamesMapping()`, а не чтение атрибута модуля `logging`."""
+    for name in ("nope", "basic_format", "raiseExceptions"):
+        try:
+            setup_logging(log_level=name, log_format="json")
+        except (TypeError, ValueError) as error:
+            raise AssertionError(f"имя уровня {name!r} не свелось к INFO: {error}") from None
+        assert logging.getLogger().level == logging.INFO, f"имя уровня {name!r} дало {logging.getLogger().level}"
+
+
+def test_masking_is_attached_once(restored_logging):
+    _uvicorn_logging_before_the_app()
+    masking_class = _masking_filter_class()
+
+    setup_logging(log_level="INFO", log_format="json")
+    setup_logging(log_level="INFO", log_format="json")
+
+    handlers = logging.getLogger().handlers + logging.getLogger("uvicorn").handlers
+    handlers += logging.getLogger("uvicorn.access").handlers
+    assert len(handlers) == 3, handlers
+    for handler in handlers:
+        count = sum(1 for item in handler.filters if isinstance(item, masking_class))
+        assert count == 1, f"на обработчике {handler!r} фильтров маски {count}, а не один"
