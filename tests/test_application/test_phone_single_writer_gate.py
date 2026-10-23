@@ -3743,7 +3743,127 @@ class RoundTenBannedForm(NamedTuple):
     constructs: tuple[tuple[int, str], ...]
 
 
-ROUND_TEN_BANNED_FORMS: tuple[RoundTenBannedForm, ...] = ()
+# Шапка тела формы: строки 1–6; тело начинается строкой 7.
+_ROUND_TEN_HEADER = (
+    "import asyncio, contextvars, functools, operator, threading\n"
+    "\n"
+    "from app.models.messenger_account import MessengerAccount\n"
+    "from sqlalchemy.orm.attributes import set_committed_value\n"
+    "\n"
+    "\n"
+)
+# Служебная функция скрипта (строки 7–11) и класс с `self.f = setattr` (строки 12–17, запись — строкой 17).
+_ROUND_TEN_PICK_GETATTR = "def pick(obj, name):\n    f = getattr\n    return f(obj, name)\n\n\n"
+_ROUND_TEN_PICK_METHODCALLER = "def pick(name):\n    f = operator.methodcaller(name)\n    return f\n\n\n"
+_ROUND_TEN_SELF_F_CLASS = (
+    "class Backfill:\n"
+    "    def __init__(self):\n"
+    "        self.f = setattr\n"
+    "\n"
+    "    def run(self, account, x):\n"
+    "        {use}\n"
+)
+
+# Формы раунда 10 стороны писателя — строки канала запрета (план 16-55; решение владельца О-23 (а), свойства 1, 4).
+# Тела — ручные формы ревью WR-33 (`16-REVIEW.md`) и верификации раунда 10 (V10-1, V10-2, `16-VERIFICATION.md`);
+# числа находок канала — замер исполнителя плана 16-55 на дереве после планов 16-51…16-53. Каждая форма закрыта
+# запретом конструкции (канал плана 16-53), а не починкой `_rename_aliases`; исполнение той же записи отказывает
+# защитой на исполнении (план 16-51, `ROUND_TEN_WRITER_FORMS`).
+ROUND_TEN_BANNED_FORMS: tuple[RoundTenBannedForm, ...] = (
+    # Ревью WR-33: последнее имя носителя `to_thread` связано с функцией `getattr` — давний пропуск
+    # (`_rename_aliases` переписывал `asyncio.to_thread` в носитель опознания `getattr`).
+    RoundTenBannedForm(
+        "wr33-getattr-under-to-thread",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = getattr\n"
+        '    await asyncio.to_thread(set_committed_value, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE),),
+    ),
+    # Ревью WR-33: носитель `run_in_executor` под именем `getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-run-in-executor",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    run_in_executor = getattr\n"
+        "    loop = asyncio.get_running_loop()\n"
+        '    await loop.run_in_executor(None, setattr, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (10, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: `Context.run` под именем `getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-context-run",
+        _ROUND_TEN_HEADER
+        + "def backfill(account, x):\n"
+        "    run = getattr\n"
+        '    contextvars.copy_context().run(setattr, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: `threading.Thread(target=…)` под именем `getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-thread",
+        _ROUND_TEN_HEADER
+        + "def backfill(account, x):\n"
+        "    Thread = getattr\n"
+        '    threading.Thread(target=setattr, args=(account, "phone", x)).start()\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: обёртка `functools.partial(asyncio.to_thread, …)()` при `to_thread = getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-a-partial-wrapper",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = getattr\n"
+        '    await functools.partial(asyncio.to_thread, setattr, account, "phone", x)()\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: последнее имя носителя связано с `operator.methodcaller`, поданный `setattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-methodcaller-under-to-thread",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = operator.methodcaller\n"
+        '    await asyncio.to_thread(setattr, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_DEFERRED_CALL), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: то же с поданным `methodcaller("__set__", …)` и колонкой-получателем — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-methodcaller-under-to-thread-descriptor",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = operator.methodcaller\n"
+        '    f = operator.methodcaller("__set__", account, x)\n'
+        "    await asyncio.to_thread(f, MessengerAccount.phone)\n",
+        ((8, DYNAMIC_KIND_DEFERRED_CALL), (9, DYNAMIC_KIND_DEFERRED_CALL)),
+    ),
+    # Верификация раунда 10, V10-1: имя значения `f` связано в функции с `getattr`, в классе — `self.f = setattr`
+    # и `self.f(account, "phone", x)`; давний пропуск.
+    RoundTenBannedForm(
+        "v10-1-function-binds-getattr-class-binds-setattr",
+        _ROUND_TEN_HEADER
+        + _ROUND_TEN_PICK_GETATTR
+        + _ROUND_TEN_SELF_F_CLASS.format(use='self.f(account, "phone", x)'),
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (14, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Верификация раунда 10, V10-1: то же с `f = operator.methodcaller(name)` в функции; давний пропуск.
+    RoundTenBannedForm(
+        "v10-1-function-binds-a-methodcaller-class-binds-setattr",
+        _ROUND_TEN_HEADER
+        + _ROUND_TEN_PICK_METHODCALLER
+        + _ROUND_TEN_SELF_F_CLASS.format(use='self.f(account, "phone", x)'),
+        ((8, DYNAMIC_KIND_DEFERRED_CALL), (14, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Верификация раунда 10, V10-2: чтение `getattr(self, "f")` пишущего атрибута при `f = getattr` в функции —
+    # регрессия наличия `cc7fbce7` (план 16-42) против `e61ab80d` (384 ячейки корпуса верификатора; против
+    # `fb8fef72` — 336), не увиденная мерой партии раунда 8. Сама строка `"f"` — не роль: красны связывания.
+    RoundTenBannedForm(
+        "v10-2-getattr-string-of-a-setattr-attribute",
+        _ROUND_TEN_HEADER
+        + _ROUND_TEN_PICK_GETATTR
+        + _ROUND_TEN_SELF_F_CLASS.format(use='getattr(self, "f")(account, "phone", x)'),
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (14, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+)
 
 
 def test_a_planted_backfill_pick_is_red_as_a_banned_construct(tmp_path):
