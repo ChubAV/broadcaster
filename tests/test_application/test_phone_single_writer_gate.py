@@ -661,7 +661,9 @@ import pytest
 # модуля (планы 16-27, 16-32, 16-34; О-12 (а), О-14 (а), О-15): своих копий гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
+    DYNAMIC_KIND_DEFERRED_CALL,
     DYNAMIC_KIND_MODULE_OBJECT,
+    DYNAMIC_KIND_REFLECTION_VALUE,
     ELEMENTWISE_CARRIERS,
     LITERAL_CONTAINER_WRAPPERS,
     OUT_OF_GRAMMAR_BINDING_FORMS,
@@ -3718,6 +3720,96 @@ def test_a_planted_dynamic_construct_is_found_in_each_writer_tree(tmp_path, tree
         f"подложенный `import importlib` в дереве `{tree}` канал не нашёл: {offences}"
     )
     assert DYNAMIC_KIND_MODULE_OBJECT in offences[0], f"находка не того вида: {offences}"
+
+
+def _channel_places(offences: list[str]) -> list[tuple[int, str]]:
+    """Находки канала строками формата `format_dynamic_construct` → пары (строка, вид), по порядку."""
+    places = []
+    for offence in offences:
+        where, _banned, kind, _text = offence.split(" — ", 3)
+        places.append((int(where.rsplit(":", 1)[1]), kind))
+    return places
+
+
+class RoundTenBannedForm(NamedTuple):
+    """Форма раунда 10 стороны писателя (WR-33, V10-1, V10-2) — строка канала запрета.
+
+    `source` подкладывается в синтетическое `scripts/x.py`; `constructs` — измеренные находки канала в файле парами
+    (строка, вид), первой — конструкция связывания, которая делает форму запрещённой.
+    """
+
+    id: str
+    source: str
+    constructs: tuple[tuple[int, str], ...]
+
+
+ROUND_TEN_BANNED_FORMS: tuple[RoundTenBannedForm, ...] = ()
+
+
+def test_a_planted_backfill_pick_is_red_as_a_banned_construct(tmp_path):
+    """ТРАСЕР V10-1 / V10-2: скрипт со служебной `pick` и `self.f = setattr` красен как запрещённая конструкция.
+
+    Скрипт дозаполнения Фазы 20 держит служебную функцию `pick(obj, name)` с `f = getattr`, а в классе —
+    `self.f = setattr` в `__init__` и `self.f(account, "phone", number)` в методе. Предикат распознавания
+    (`_rename_aliases`) переписывал каждое чтение с последним именем `f` в носитель опознания `getattr` и не судил
+    запись (V10-1 — давний пропуск; чтение `getattr(self, "f")` того же атрибута — V10-2, регрессия наличия
+    `cc7fbce7`, план 16-42, против `e61ab80d`). Решение владельца О-23 (а), свойство 1: закрывается не починкой
+    предиката, а запретом конструкции — `getattr` и `setattr` значением краснит канал (план 16-53) видом
+    «отражение как значение». Исполнение той же записи отказывает защитой на исполнении (план 16-51,
+    `ROUND_TEN_WRITER_FORMS`). Форма закреплена и строкой `ROUND_TEN_BANNED_FORMS`.
+    """
+    _plant(
+        tmp_path,
+        "scripts/phone_backfill_pick.py",
+        "def pick(obj, name):\n"
+        "    f = getattr\n"
+        "    return f(obj, name)\n"
+        "\n"
+        "\n"
+        "class Backfill:\n"
+        "    def __init__(self):\n"
+        "        self.f = setattr\n"
+        "\n"
+        "    def run(self, account, number):\n"
+        '        self.f(account, "phone", number)\n',
+    )
+
+    paths, offences = dynamic_construct_scan(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in paths] == ["scripts/phone_backfill_pick.py"], (
+        "обход канала синтетического дерева не нашёл подложенный скрипт в `scripts/`"
+    )
+    in_file = [offence for offence in offences if offence.startswith("scripts/phone_backfill_pick.py:")]
+    expected = [(2, DYNAMIC_KIND_REFLECTION_VALUE), (8, DYNAMIC_KIND_REFLECTION_VALUE)]
+    assert _channel_places(in_file) == expected, (
+        "подложенный скрипт с `f = getattr` в `pick` и `self.f = setattr` в классе не красен как запрещённая "
+        f"конструкция двумя находками «отражение как значение» на строках 2 и 8: {in_file}"
+    )
+    pinned = {form.id: form for form in ROUND_TEN_BANNED_FORMS}.get("v10-1-function-binds-getattr-class-binds-setattr")
+    assert pinned is not None and [kind for _line, kind in pinned.constructs] == [kind for _line, kind in expected], (
+        "подложенный скрипт с `f = getattr` в `pick` и `self.f = setattr` в классе не красен как запрещённая "
+        "конструкция строкой таблицы `ROUND_TEN_BANNED_FORMS` (форма V10-1 не закреплена тем же видом): "
+        f"{pinned}"
+    )
+
+
+@pytest.mark.parametrize("form", [pytest.param(form, id=form.id) for form in ROUND_TEN_BANNED_FORMS])
+def test_a_round_ten_form_is_red_as_a_banned_construct(tmp_path, form: RoundTenBannedForm):
+    """Каждая форма раунда 10 стороны писателя красна каналом запрета (О-23 (а), свойства 1, 4; D-13).
+
+    Форма подкладывается в синтетическое `scripts/x.py` и судится тем же сканером, что и живые деревья
+    (`dynamic_construct_scan`, реестр исключений включительно): измеренные находки (строка, вид) — ровно
+    `constructs` строки. Ответ прежнего предиката `phone_write_offences` правило не утверждает — он справочно в сводке
+    плана 16-55: формы закрываются запретом конструкции, а не починкой `_rename_aliases` (свойство 6).
+    """
+    _plant(tmp_path, "scripts/x.py", form.source)
+
+    _paths, offences = dynamic_construct_scan(tmp_path)
+
+    assert _channel_places(offences) == list(form.constructs), (
+        f"форма раунда 10 стороны писателя `{form.id}` не красна каналом запрета ожидаемым видом на строке "
+        f"конструкции: ожидались {list(form.constructs)}, найдено {offences}"
+    )
 
 
 def test_a_raw_sql_phone_write_reddens_the_gate(tmp_path):
