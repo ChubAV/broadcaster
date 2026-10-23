@@ -20,9 +20,11 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import functools
 import operator
+import pathlib
 import types
 
 import pytest
@@ -626,3 +628,71 @@ async def test_a_read_check_write_outside_the_writer_scope_is_refused(db_session
     )
     await db_session.rollback()
     assert await _columns(db_session, account_id) == (None, False)
+
+
+# ---------------------------------------------------------------------------
+# Задача 3: правдивые тексты — шапка защиты, абзац писателя, комментарий модели.
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+GUARD_PATH = REPO_ROOT / "app" / "models" / "phone_guard.py"
+WRITER_PATH = REPO_ROOT / "app" / "application" / "accounts" / "phone.py"
+MODEL_PATH = REPO_ROOT / "app" / "models" / "messenger_account.py"
+
+# Причинный литерал RED задачи 3.
+HEADER_RED = "шапка защиты не называет, что отказывает и где её граница"
+
+GUARD_HEADER_NAMES = (
+    "О-23 (а)",
+    "свойство 3",
+    "D-13",
+    "writer_scope",
+    "set",
+    "remove",
+    "modified",
+    "before_flush",
+    "do_orm_execute",
+    "set_committed_value",
+    "bulk_update_mappings",
+    "session.connection()",
+    "сырой SQL",
+    "план 16-53",
+    "план 16-55",
+)
+WRITER_PARAGRAPH_HEAD = "ЗАЩИТА НА ИСПОЛНЕНИИ"
+WRITER_PARAGRAPH_NAMES = ("app/models/phone_guard.py", "writer_scope")
+
+
+def _docstring(path: pathlib.Path) -> str:
+    return ast.get_docstring(ast.parse(path.read_text(encoding="utf-8"))) or ""
+
+
+def _phone_column_comment() -> str:
+    """Комментарий над объявлением колонки `phone` модели, строки подряд."""
+    lines = MODEL_PATH.read_text(encoding="utf-8").splitlines()
+    index = next(i for i, line in enumerate(lines) if line.startswith("    phone: Mapped"))
+    comment: list[str] = []
+    for line in reversed(lines[:index]):
+        if not line.strip().startswith("#"):
+            break
+        comment.insert(0, line.strip().lstrip("#").strip())
+    return " ".join(comment)
+
+
+def test_the_guard_module_names_what_it_refuses_and_its_boundary():
+    """Шапка защиты, абзац писателя и комментарий модели называют защиту правдиво."""
+    guard = " ".join(_docstring(GUARD_PATH).split())
+    paragraphs = [" ".join(p.split()) for p in _docstring(WRITER_PATH).split("\n\n")]
+    writer = next((p for p in paragraphs if p.startswith(WRITER_PARAGRAPH_HEAD)), "")
+    comment = " ".join(_phone_column_comment().split())
+
+    missing = [f"шапка защиты: {name}" for name in GUARD_HEADER_NAMES if name not in guard]
+    if not writer:
+        missing.append(f"писатель: абзац «{WRITER_PARAGRAPH_HEAD}»")
+    missing += [
+        f"абзац писателя: {name}" for name in WRITER_PARAGRAPH_NAMES if name not in writer
+    ]
+    if "app/models/phone_guard.py" not in comment:
+        missing.append("комментарий колонки phone: app/models/phone_guard.py")
+
+    assert not missing, f"{HEADER_RED}: {missing}"
