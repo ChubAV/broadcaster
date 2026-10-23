@@ -165,6 +165,10 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 Каждое связывание имени судится: имя, связанное в модуле дважды и трижды — подряд, в
 разных функциях или в разных классах, — судится по каждому своему значению, а вызов
 такого имени даёт одну находку на место (план 16-31, ревью WR-18; цена — ниже).
+Оговорка решения владельца О-23 (а), свойство 1 (план 16-55): имя, связанное со встроенным
+`getattr` / `setattr` / `delattr` / `hasattr` или с `operator.methodcaller` / `attrgetter` как
+значение, — запрещённая конструкция канала (виды «отражение как значение» и «отложенный вызов по
+имени», раздел запрета ниже); толкований такого имени предикат не перечисляет.
 1. присваивание атрибуту `phone` / `phone_is_manual` — по грамматике Python: узел
    `Attribute` в контексте `Store`, то есть атрибут номера в любой позиции цели
    присваивания: `=`, `+=`, аннотированное, распаковка кортежа, цель `for` /
@@ -328,7 +332,11 @@ bulk_update_mappings, M), rows)`) — тогда первыми идут при�
 и носитель поданной ссылки (план 16-48; до плана толкование псевдонима закрывало путь
 носителя, и `asyncio.to_thread(set_committed_value, account, "phone", x)` рядом с
 `to_thread = setattr` проходил гейт на всех деревьях; то же у имени `partial`, связанного с
-пишущим API, при применённой обёртке носителя `functools.partial(<носитель>, ref)`). Цена kw
+пишущим API, при применённой обёртке носителя `functools.partial(<носитель>, ref)`). Оговорка
+решения владельца О-23 (а), свойство 1 (план 16-55): когда последнее имя связано не с пишущим API, а
+со встроенным `getattr` / `setattr` / `delattr` / `hasattr` или с `operator.methodcaller` /
+`attrgetter` (`to_thread = getattr`, ревью WR-33), связывание — запрещённая конструкция канала, и
+толкований такого вызова предикат не перечисляет. Цена kw
 (свойство 8 О-20, заметка верификатора раунда 9): имя, связанное с
 `functools.partial(setattr, other)` и с `operator.methodcaller("__set__", account, x)` и
 применённое к `MessengerAccount.phone`, судится по каждому связыванию — две находки на одном узле
@@ -339,11 +347,31 @@ API соперника (`setattr`, `set_committed_value`, `flag_modified`), св
 `operator.methodcaller("__set__", …)`, поданная этому носителю с получателем-колонкой
 (`to_thread = setattr` и `asyncio.to_thread(f, MessengerAccount.phone)`): подача через
 получатель-колонку сама читается как вызов соперника — две находки на одном узле колонки при одной
-записи; соперники `update` и `functools.partial(setattr, other)` и носители, у которых ссылка не первым
-аргументом (`run_in_executor`, `Thread`, `Timer`, `enqueue`, `starmap`, `apply_async`, `map`, обёртки),
-пары не дают (замер плана 16-48: 156 форм самопроверки; улика исполнения — одно событие записи
-колонки при двух находках). Решение владельца 2026-10-21 — «Принять как цену»: `kw_ext` — названная
-цена, а не дефект и не починка; строки `NAMED_COST_CASES` закрепляют число две находки, и правка,
+записи. Охват обеих цен — по механизму (ревью WR-34, верификация раунда 10; решение владельца
+О-23 (а), свойство 4, 2026-10-22): две находки на одном узле колонки при одной записи даёт любой API
+из `NAMED_ATTRIBUTE_WRITERS` (`setattr`, `set_committed_value`, `flag_modified`, `set_attribute`,
+`object.__setattr__`), связанный с последним именем вызова, у которого ссылка
+`operator.methodcaller("__set__", …)` с получателем-колонкой стоит первым позиционным аргументом, —
+носители `to_thread`, `run_sync`, `Context.run`, `to_thread(*[…])`, `submit`, позиционный `enqueue`,
+`call_soon` и применённый `functools.partial(f, MessengerAccount.phone)()`, — и такой API или
+`functools.partial(<такой API>, other)`, связанный прежде ссылки с именем самого применения
+`f(MessengerAccount.phone)` (цена kw); одну — ссылка не первым позиционным аргументом
+(`run_in_executor(None, f, …)`), именованный `enqueue(job=…)` и соперник `update`, не пишущий
+атрибут. Числа — замер, а не ожидание: 15 форм таблицы `NAMED_COST_MECHANISM_CASES` (двенадцать
+«двоек» и три «единицы»; замер планирования на `c9da79b2`, те же числа на `d31d86db` — регрессии нет,
+подтверждены исполнителем плана 16-55); каждая форма несёт `operator.methodcaller` и в судимых
+деревьях красна каналом запрета видом «отложенный вызов по имени». Замер исполнителя плана 16-55 вне
+таблицы (строками не закреплён): `functools.partial(<API>, other)`, связанный с последним именем
+НОСИТЕЛЯ (`to_thread = functools.partial(setattr, other)`), — одна находка, как и
+`threading.Thread(target=f, args=(…))` и `threading.Timer(1.0, f, args=(…))`. Свести «двойку» к одной
+находке значило бы править предикат распознавания (свойство 6) — владелец решил охват назвать, а не
+менять. До плана 16-55 абзац относил к носителям без пары и `enqueue`, называя охватом замер плана
+16-48 на четырёх носителях и трёх соперниках (156 форм самопроверки); ревью WR-34 и верификация
+раунда 10 показали, что позиционный `enqueue`, `submit`, `call_soon` и применённый `partial(f, C)()`
+пару дают, а пары не даёт именованная форма `enqueue(job=…)`. Улика исполнения — одно событие записи
+колонки при двух находках (планы 16-48, 16-49). Решение владельца 2026-10-21 — «Принять как цену»:
+`kw_ext` — названная цена, а не дефект и не починка; строки `NAMED_COST_CASES` закрепляют число две
+находки, строки `NAMED_COST_MECHANISM_CASES` — измеренное число каждой формы механизма, и правка,
 меняющая его, видна; в сторону лишней находки, а не пропуска. Цель-атрибут
 `self.bum = …` связывает имя последнего звена `bum`, и
 `other.bum(…)` любого объекта того же файла судится так же (план 16-27). Та же
@@ -381,6 +409,84 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
 хотя на SQLite с SQLAlchemy 2.0.46 такая строка колонку не пишет (замер исполнителя
 плана 16-17): ключ называет колонку номера литералом в аргументе пишущего вызова.
 
+ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ (решение владельца О-23 (а), 2026-10-22; раунд
+финальный). Раунды 6–10 закрытия гэпа шли одним кругом: каждый новый корпус ревью или
+верификации находил следующее написание динамического чтения или вызова, которое предикат
+распознавания не судил (у этого гейта — WR-33, V10-1, V10-2). Обещание гейта с плана 16-51
+(свойство 1): в коде нет конструкции, которую гейт не умеет судить, — а не «любое её написание
+найдено». Рубежей два.
+- Запрет конструкции (план 16-53). Функция канала общего модуля `dynamic_construct_findings`
+  (`tests/phone_gate_grammar.py`, одна с гейтом приватности) в деревьях `app/` и `scripts/`
+  (правило `test_no_dynamic_construct_in_the_writer_trees`, сканер `dynamic_construct_scan`,
+  модуль-писатель включительно) краснит саму конструкцию по закрытому перечню
+  `DYNAMIC_CONSTRUCT_KINDS` — девять видов: «объект модуля» (`sys.modules[…]`, ввоз `importlib`,
+  `__import__`); «пространство имён» (`globals()`, `vars(…)`, `__dict__`); «исполнение текста»
+  (`eval`, `exec`, `compile`); «отложенный вызов по имени» (`operator.methodcaller`,
+  `attrgetter`); «отражение как значение» (`f = getattr`, `self.f = setattr`, поданный
+  `setattr`); «вычисленное имя атрибута» (`setattr(obj, name, …)`, `set_committed_value(obj, key,
+  …)` с нелитеральным ключом); «имя запрещённой роли строкой» (`getattr(s,
+  "bulk_update_mappings")` — пишущий API гейта, набор `BANNED_GETATTR_NAMES`, и
+  `BANNED_ATTRIBUTE_NAMES` общего модуля); «служебный протокол атрибутов» (`object.__setattr__`,
+  `__set__`, `__getattribute__` чтением или `def`); «вычисленный текст SQL» (`text(f"…")`,
+  `execute("…".format(…))`). Формы раунда 10 этого гейта — строки `ROUND_TEN_BANNED_FORMS` и
+  трасер `test_a_planted_backfill_pick_is_red_as_a_banned_construct` (план 16-55). Исключения
+  деревьев гейта — пять записей реестра `DYNAMIC_CONSTRUCT_EXCEPTIONS` общего модуля, все вида
+  «вычисленное имя атрибута», ключ и причина: `app/pages/accounts.py::_connect_status` — макрос
+  Jinja по имени, получатель — модуль шаблона; `app/pages/common.py::get_user_from_cookie` и
+  `app/pages/common.py::actor_of` — константа `IMPERSONATOR_ATTR` у объекта `User` без колонок
+  номера; `app/repositories/base.py::BaseRepository.update` — обобщённая запись полей
+  репозитория, запись колонок номера через неё отказывает на исполнении, а вызов `update(…,
+  phone=…)` ловит вид 2; `app/routes/schedules.py::update_schedule` — поля расписания из
+  `model_dump`, колонок номера нет. Шестая запись реестра (`max_worker/main.py`) — дерево гейта
+  приватности; потолок реестра 6, подъём и новая запись — решение владельца.
+- Защита на исполнении (план 16-51; свойство 3). `app/models/phone_guard.py`: запись колонок
+  номера вне модуля-писателя отказывает `PhoneWriteOutsideWriter` — события атрибута `set` /
+  `remove` / `modified` обеих колонок, `before_flush` и `do_orm_execute` (UPDATE / INSERT по
+  таблице аккаунтов). Разрешение `writer_scope()` — только у писателя: правило
+  `test_the_runtime_guard_is_entered_only_by_the_writer` (план 16-55) с контролем
+  `test_a_planted_guard_bypass_reddens_the_rule` — ссылка на модуль защиты, `writer_scope` или
+  `_WRITER_ACTIVE` законна только в `PHONE_WRITER_MODULE`, `RUNTIME_GUARD_MODULE` и
+  `RUNTIME_GUARD_REGISTRATION`, а снятие слушателя `event.remove(…)` не законно нигде. Граница
+  защиты (шапка модуля защиты): `set_committed_value` меняет только объект в памяти;
+  `bulk_update_mappings` / `bulk_insert_mappings` / `bulk_save_objects` событий не дают; оператор
+  через `session.connection()` / движок и сырой SQL через соединение, текст `text("UPDATE …")` и
+  через `Session.execute`; ветка `ON CONFLICT DO UPDATE SET …`; процесс, не ввозящий
+  `app.models`. Для этих путей статический гейт остаётся первым рубежом (виды 2–6 и запрет
+  конструкции), для путей ORM — вторым. Вычисленное имя колонки в операторе сессии
+  (`values(**{…})`) отказывает на исполнении, хотя статически это пункт (1) границы ниже.
+- Исключение из обещания, найденное замером исполнителя плана 16-55 и вынесенное владельцу:
+  связывание держателя вызовом `setattr(self, "f", api)` с литеральным именем — не конструкция
+  канала, и с API за границей защиты (`bulk_update_mappings`, исполнение через соединение) такая
+  запись не судится ни одним рубежом (пункт (1) границы ниже). Это открытая находка, а не
+  принятая граница.
+- Что остаётся от прежнего (свойства 5, 6). Распознавание прежних раундов остаётся для
+  поимённых форм: строки `LITERAL_FORM_CASES` (268) и `LEGITIMATE_CASES` (107), матрицы и
+  предикаты (`_rename_aliases`, `_referenced_calls`, `_phone_writes` и соседи) прежние, реестр
+  `PHONE_WRITER_EXCEPTIONS` — ровно модуль-писатель. Новое написание динамики — не гэп, если вид
+  его конструкции в перечне; динамика вне перечня — повод владельцу расширить перечень, а не молча
+  норма. Полноту распознавания написаний динамики шапка не утверждает. Мера «база ↔ HEAD» в этом
+  раунде не обязательна, правило T11c её инструмента — не мера фазы (свойство 4, WR-35).
+- Согласование прежних запретов с решением О-23 (а) (суть таблицы `<scope_note>` плана 16-56;
+  засеянные формулировки реестра запретов не переписываются). Группа С1 — «не сужать заявление
+  шапки»: 16-09 №2, 16-12 №2, 16-17 №2, 16-22 №2, 16-27 №2, 16-28 №2, 16-31 №2, 16-33 №2, 16-34 №2,
+  16-36 №2, 16-37 №2, 16-38 №2, 16-39 №2, 16-41 №2, 16-42 №2, 16-43 №2, 16-44 №2, 16-46 №2, 16-47
+  №2, 16-48 №2, 16-49 №2: оговорка о сужении заявления шапки — для обещания полноты распознавания
+  написаний ДИНАМИКИ — заменена с плана 16-51 обещанием «в коде нет конструкции, которую гейт не
+  умеет судить» (свойства 1, 5); в силе — каждая форма, видимая в исходнике, красна предикатом
+  прежних раундов или запретом конструкции канала; в границе не появляется ни одна форма вместо
+  поимки или запрета; `overrides` не пишется; отвергнутые владельцем варианты (а′) и (б) решений
+  О-10…О-22 и (б) О-23 остаются отвергнутыми. Группа С2 — «сверка «база ↔ HEAD»»: 16-36 №4, 16-37
+  №4, 16-38 №4, 16-39 №4, 16-41 №4, 16-42 №4, 16-43 №4, 16-44 №4, 16-46 №3, 16-46 №4, 16-47 №4,
+  16-48 №4, 16-49 №4: оговорка «MUST NOT коммитить GREEN / закрывать партию без сверки «база ↔
+  HEAD»» связывала свои планы и на партию раунда 10 не переходит (свойство 4; правило T11c — не мера
+  фазы, WR-35); в силе — прежние строки и правила обоих гейтов и паритета не ослабляются, две
+  находки ячейки цены 16-36 не сливаются (16-42 №4), летописи не утверждают свойство гейтов шире
+  корпуса меры (16-49 №4), чужие корпуса инструмента меры, если его прогоняют, не подменяются (16-46
+  №3).
+- Живое дерево после партии раунда 10 — 106 файлов (с модулями `app/models/phone_guard.py` и
+  `app/services/log_masking.py`), 0 находок прежнего правила и канала, 0 обходов защиты, в
+  модуле-писателе 6 сырых (замер исполнителя плана 16-55: `OK 6 106 offences 0`).
+
 ГРАНИЦА ПРЕДИКАТА — через механизм, а не через «всё». Ловится всякая запись, в
 которой колонка номера — или таблица аккаунтов во вставке, загрузке и слиянии —
 названа литералом в самом пишущем вызове, в его аргументе-контейнере (грамматика
@@ -407,7 +513,10 @@ getattr-строку; ссылка —
 литеральными аргументами того же вызова по общему правилу (`reference_arguments`);
 обёртка носителя — вызванная, поданная носителю литералом или именем, вложенная в
 `partial` — как применённая с аргументами внешнего носителя, на каждом чтении её имени
-(`wrapper_applications`);
+(`wrapper_applications`); оговорка решения владельца О-23 (а), свойство 1 (план 16-55): ссылка-значение
+`getattr` / `setattr` / `delattr` / `hasattr` или `operator.methodcaller` / `attrgetter`, поданная
+носителю или связанная с его последним именем, — запрещённая конструкция канала, и толкований такой
+подачи предикат не перечисляет;
 судимый параметр — при любом литеральном связывании
 (`JUDGED_PARAMETERS`); атрибут номера — в любой позиции цели присваивания. Вне
 охвата, каждая форма с правдивой причиной:
@@ -429,13 +538,28 @@ getattr-строку; ссылка —
     общего модуля, одни и те же у обоих гейтов). И связывание не оператором, а вызовом
     или через пространство имён — `setattr(self, "f", api)`, `globals()["f"] = api`,
     `vars(obj)["f"] = api`: ссылка кладётся в контейнер объекта или модуля и читается
-    оттуда, это поток данных через контейнер (зонд самопроверки исполнителя 16-27);
+    оттуда, это поток данных через контейнер (зонд самопроверки исполнителя 16-27).
+    С плана 16-53 из этих трёх форм `globals()["f"] = api` и `vars(obj)["f"] = api` —
+    конструкции канала запрета (вид «пространство имён»); `setattr(self, "f", api)` с
+    литеральным именем — нет: канал судит `setattr` с нелитеральным именем и `setattr`
+    значением, а здесь он вызван и имя — литерал (замер исполнителя плана 16-55). Запись через
+    такой держатель, идущая через события ORM, отказывает на исполнении (план 16-51); путь за
+    границей защиты — держатель с `bulk_update_mappings` или с исполнением через соединение —
+    не судит сегодня ни предикат, ни канал, ни защита: это открытая находка плана 16-55,
+    вынесенная владельцу (сводка плана), а не граница, принятая решением; вычисленное имя
+    колонки в операторе сессии (`values(**{"PHONE".lower(): x})`, `{k: v for …}` с вычисленным
+    ключом) отказывает на исполнении (`do_orm_execute`), хотя статически это этот пункт;
 (2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
     name, …)`, `getattr(s, name)(…)`, f-строка с колонкой в подстановке,
     `.format(col)`, склейка с переменной, результат вызова над строкой
     (`"PHONE".lower()`, `"{}".format("phone")`, `"".join([…])`, `str("phone")`):
     предикат вызовов не исполняет (самопроверка исполнителя 16-22 — 8 456 форм,
-    ни одна не поймана, и это граница, а не слепота);
+    ни одна не поймана, и это граница, а не слепота). С плана 16-53 `setattr(obj, name, …)`
+    и `getattr(s, name)(…)` — конструкции канала запрета (вид «вычисленное имя атрибута»), а
+    f-строка, `.format` и склейка с переменной, поданные прямо API SQL (`text`,
+    `exec_driver_sql`, `executescript` — любой нелитерал; `execute` и соседи — f-строка, `%`,
+    `.format`, склейка), — тоже (вид «вычисленный текст SQL»; замер исполнителя плана 16-55);
+    `"PHONE".lower()` и прочие вычисления имени вне API SQL — прежняя граница;
 (3) вставка позиционным кортежем значений без имён колонок —
     `insert(MessengerAccount).values((…))`: колонку по исходнику не назвать,
     порядок колонок живёт в модели;
@@ -453,7 +577,12 @@ getattr-строку; ссылка —
     `del account.phone`, `delattr(account, "phone")`, `del_attribute(account,
     "phone")` — на SQLAlchemy 2.0.46 flush падает `KeyError` и строку не меняет
     (замер планирования 2026-10-12, перепроверен исполнителем плана 16-17 на SQLite
-    в памяти).
+    в памяти). С плана 16-53 `account.__dict__["phone"] = …` и `vars(account)[…] = …` —
+    конструкции канала запрета (вид «пространство имён»); `instance_dict(account)[…] = …` —
+    нет и по-прежнему не запись (защита на исполнении его не видит, а `flag_modified` рядом с
+    ним отказывает событием `modified`); `del account.phone`, `delattr(account, "phone")`,
+    `del_attribute(account, "phone")` с плана 16-51 отказывают на исполнении событием
+    `remove` (замер исполнителя плана 16-55 на объекте модели).
 Такие формы в коде записи номера сами по себе повод для ревью. Форма, которая
 под механизм подпадает, но предикатом не ловится, — слепота предиката, а не
 граница средства: повод дописать строку `LITERAL_FORM_CASES` и предикат.
@@ -634,6 +763,45 @@ GREEN с родителем и итог — с базой партии `d31d86db
 стоит в названной цене (`COST-KW` 281 — свойство 8 О-20; `COST-ATTR` 122 — О-22 (а)); свойства гейтов
 шире этого корпуса летопись не утверждает; решения владельца О-20 (а), О-21 (а), О-22 (а).
 
+Летопись WR-33: имя носителя, связанное с функцией `getattr` или `operator.methodcaller`, — `to_thread
+= getattr` с `asyncio.to_thread(set_committed_value, account, "phone", x)`, то же под
+`run_in_executor`, `Context.run`, `Thread` и в обёртке `functools.partial(asyncio.to_thread, …)()`,
+`to_thread = operator.methodcaller` с поданным `setattr` и с поданным `methodcaller("__set__", …)`, —
+гейт не ловил ни на одном дереве: `_rename_aliases` переписывал КАЖДОЕ чтение с последним именем
+псевдонима носителя опознания в `Name("getattr")` / `Name("methodcaller")`, и ранние возвраты
+`_referenced_calls` судили вызов только как носитель опознания (ревью WR-33, верификация раунда 10,
+2026-10-22: 39 форм ручного семейства CN — ноль на `fb8fef72`, `d31d86db` и HEAD). Давний пропуск, в
+отличие от V10-2 — регрессии `cc7fbce7` против `e61ab80d`; девятый круг одной оси. Закрыт не
+починкой предиката, а решением владельца О-23 (а), свойства 1, 3, 4: связывание `to_thread = getattr`
+/ `to_thread = operator.methodcaller` — запрещённая конструкция канала (план 16-53; строки `wr33-*`
+таблицы `ROUND_TEN_BANNED_FORMS`, план 16-55), запись той же формы отказывает на исполнении (план
+16-51); вариант (б) поимённой починки ОТВЕРГНУТ ВЛАДЕЛЬЦЕМ.
+
+Летопись V10-1: имя значения, связанное где-либо в модуле с функцией `getattr` или
+`operator.methodcaller` — `def pick(obj, name): f = getattr` в служебной функции скрипта и `self.f =
+setattr; self.f(account, "phone", x)` в классе, — гейт не ловил: `_rename_aliases` переписывал
+плоско по последнему имени, и запись не судилась (верификация раунда 10, 2026-10-22: 1 184 ячейки
+семейств WK2 / WK2B, ноль на HEAD; SQLite записал «+79991234567»). Давний пропуск, в отличие от
+V10-2 — регрессии `cc7fbce7` против `e61ab80d` на чтении того же атрибута getattr-строкой. Закрыт
+решением владельца О-23 (а), свойства 1, 3: связывания `f = getattr` / `f =
+operator.methodcaller(name)` и `self.f = setattr` — запрещённые конструкции канала (план 16-53;
+строки `v10-1-*` и трасер `test_a_planted_backfill_pick_is_red_as_a_banned_construct` — две находки
+«отражение как значение», план 16-55), запись той же формы отказывает на исполнении (план 16-51).
+
+Летопись V10-2: GREEN `cc7fbce7` (план 16-42, «read an alias name through the shared reader in
+renames and chains») научил `_rename_aliases` переписывать и getattr-строку: чтение `getattr(self,
+"f")` пишущего атрибута превращалось в `Name("getattr")`, если то же последнее имя `f` где-либо в
+модуле связано с `getattr` или `operator.methodcaller`. Ручная форма (`def pick(obj, name): f =
+getattr` и класс с `self.f = setattr`, `getattr(self, "f")(account, "phone", x)`) — одна находка на
+`fb8fef72`, `e62799d3` и `e61ab80d`, ноль с `cc7fbce7`: регрессия наличия против родителя `e61ab80d`
+(384 ячейки корпуса верификатора; против `fb8fef72` — 336), не увиденная мерой партии раунда 8 — в
+её корпусе (64 483 ячейки) соперника `getattr` / `operator.methodcaller` не было; пятая регрессия
+партии против своей базы за пять раундов (верификация раунда 10, 2026-10-22). Закрыта не починкой
+`_rename_aliases`, а решением владельца О-23 (а), свойства 1, 3, 4: связывания `f = getattr` и `self.f
+= setattr` — запрещённые конструкции канала (план 16-53; строка
+`v10-2-getattr-string-of-a-setattr-attribute`, план 16-55; сама строка `"f"` — не роль), запись той
+же формы отказывает на исполнении (план 16-51); мера «база ↔ HEAD» в этом раунде не обязательна.
+
 РЕЕСТР ИСКЛЮЧЕНИЙ `PHONE_WRITER_EXCEPTIONS` — поимённо, с причиной, и в нём ровно
 модуль-писатель. Второй исключённый модуль есть второй писатель, поэтому
 расширение реестра — решение владельца, а не правка ради зелени; состав реестра
@@ -661,7 +829,11 @@ import pytest
 # модуля (планы 16-27, 16-32, 16-34; О-12 (а), О-14 (а), О-15): своих копий гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
+    DYNAMIC_CONSTRUCT_EXCEPTIONS,
+    DYNAMIC_CONSTRUCT_KINDS,
+    DYNAMIC_KIND_DEFERRED_CALL,
     DYNAMIC_KIND_MODULE_OBJECT,
+    DYNAMIC_KIND_REFLECTION_VALUE,
     ELEMENTWISE_CARRIERS,
     LITERAL_CONTAINER_WRAPPERS,
     OUT_OF_GRAMMAR_BINDING_FORMS,
@@ -697,6 +869,12 @@ WRITER_TREES = ("app", "scripts")
 
 # Единственный законный писатель номера (D-12, D-13).
 PHONE_WRITER_MODULE = "app/application/accounts/phone.py"
+
+# Защита единственного писателя на исполнении (план 16-51; О-23 (а), свойство 3): модуль защиты и строка его
+# регистрации в пакете моделей. Вместе с модулем-писателем — три законных места ссылки на защиту и её разрешение
+# `writer_scope` (правило `test_the_runtime_guard_is_entered_only_by_the_writer`, план 16-55).
+RUNTIME_GUARD_MODULE = "app/models/phone_guard.py"
+RUNTIME_GUARD_REGISTRATION = "app/models/__init__.py"
 
 # Колонки номера в `messenger_accounts` (ревизия 0023).
 PHONE_COLUMNS = frozenset({"phone", "phone_is_manual"})
@@ -3720,6 +3898,216 @@ def test_a_planted_dynamic_construct_is_found_in_each_writer_tree(tmp_path, tree
     assert DYNAMIC_KIND_MODULE_OBJECT in offences[0], f"находка не того вида: {offences}"
 
 
+def _channel_places(offences: list[str]) -> list[tuple[int, str]]:
+    """Находки канала строками формата `format_dynamic_construct` → пары (строка, вид), по порядку."""
+    places = []
+    for offence in offences:
+        where, _banned, kind, _text = offence.split(" — ", 3)
+        places.append((int(where.rsplit(":", 1)[1]), kind))
+    return places
+
+
+class RoundTenBannedForm(NamedTuple):
+    """Форма раунда 10 стороны писателя (WR-33, V10-1, V10-2) — строка канала запрета.
+
+    `source` подкладывается в синтетическое `scripts/x.py`; `constructs` — измеренные находки канала в файле парами
+    (строка, вид), первой — конструкция связывания, которая делает форму запрещённой.
+    """
+
+    id: str
+    source: str
+    constructs: tuple[tuple[int, str], ...]
+
+
+# Шапка тела формы: строки 1–6; тело начинается строкой 7.
+_ROUND_TEN_HEADER = (
+    "import asyncio, contextvars, functools, operator, threading\n"
+    "\n"
+    "from app.models.messenger_account import MessengerAccount\n"
+    "from sqlalchemy.orm.attributes import set_committed_value\n"
+    "\n"
+    "\n"
+)
+# Служебная функция скрипта (строки 7–11) и класс с `self.f = setattr` (строки 12–17, запись — строкой 17).
+_ROUND_TEN_PICK_GETATTR = "def pick(obj, name):\n    f = getattr\n    return f(obj, name)\n\n\n"
+_ROUND_TEN_PICK_METHODCALLER = "def pick(name):\n    f = operator.methodcaller(name)\n    return f\n\n\n"
+_ROUND_TEN_SELF_F_CLASS = (
+    "class Backfill:\n"
+    "    def __init__(self):\n"
+    "        self.f = setattr\n"
+    "\n"
+    "    def run(self, account, x):\n"
+    "        {use}\n"
+)
+
+# Формы раунда 10 стороны писателя — строки канала запрета (план 16-55; решение владельца О-23 (а), свойства 1, 4).
+# Тела — ручные формы ревью WR-33 (`16-REVIEW.md`) и верификации раунда 10 (V10-1, V10-2, `16-VERIFICATION.md`);
+# числа находок канала — замер исполнителя плана 16-55 на дереве после планов 16-51…16-53. Каждая форма закрыта
+# запретом конструкции (канал плана 16-53), а не починкой `_rename_aliases`; исполнение той же записи отказывает
+# защитой на исполнении (план 16-51, `ROUND_TEN_WRITER_FORMS`).
+ROUND_TEN_BANNED_FORMS: tuple[RoundTenBannedForm, ...] = (
+    # Ревью WR-33: последнее имя носителя `to_thread` связано с функцией `getattr` — давний пропуск
+    # (`_rename_aliases` переписывал `asyncio.to_thread` в носитель опознания `getattr`).
+    RoundTenBannedForm(
+        "wr33-getattr-under-to-thread",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = getattr\n"
+        '    await asyncio.to_thread(set_committed_value, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE),),
+    ),
+    # Ревью WR-33: носитель `run_in_executor` под именем `getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-run-in-executor",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    run_in_executor = getattr\n"
+        "    loop = asyncio.get_running_loop()\n"
+        '    await loop.run_in_executor(None, setattr, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (10, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: `Context.run` под именем `getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-context-run",
+        _ROUND_TEN_HEADER
+        + "def backfill(account, x):\n"
+        "    run = getattr\n"
+        '    contextvars.copy_context().run(setattr, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: `threading.Thread(target=…)` под именем `getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-thread",
+        _ROUND_TEN_HEADER
+        + "def backfill(account, x):\n"
+        "    Thread = getattr\n"
+        '    threading.Thread(target=setattr, args=(account, "phone", x)).start()\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: обёртка `functools.partial(asyncio.to_thread, …)()` при `to_thread = getattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-getattr-under-a-partial-wrapper",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = getattr\n"
+        '    await functools.partial(asyncio.to_thread, setattr, account, "phone", x)()\n',
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: последнее имя носителя связано с `operator.methodcaller`, поданный `setattr` — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-methodcaller-under-to-thread",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = operator.methodcaller\n"
+        '    await asyncio.to_thread(setattr, account, "phone", x)\n',
+        ((8, DYNAMIC_KIND_DEFERRED_CALL), (9, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Ревью WR-33: то же с поданным `methodcaller("__set__", …)` и колонкой-получателем — давний пропуск.
+    RoundTenBannedForm(
+        "wr33-methodcaller-under-to-thread-descriptor",
+        _ROUND_TEN_HEADER
+        + "async def backfill(account, x):\n"
+        "    to_thread = operator.methodcaller\n"
+        '    f = operator.methodcaller("__set__", account, x)\n'
+        "    await asyncio.to_thread(f, MessengerAccount.phone)\n",
+        ((8, DYNAMIC_KIND_DEFERRED_CALL), (9, DYNAMIC_KIND_DEFERRED_CALL)),
+    ),
+    # Верификация раунда 10, V10-1: имя значения `f` связано в функции с `getattr`, в классе — `self.f = setattr`
+    # и `self.f(account, "phone", x)`; давний пропуск.
+    RoundTenBannedForm(
+        "v10-1-function-binds-getattr-class-binds-setattr",
+        _ROUND_TEN_HEADER
+        + _ROUND_TEN_PICK_GETATTR
+        + _ROUND_TEN_SELF_F_CLASS.format(use='self.f(account, "phone", x)'),
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (14, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Верификация раунда 10, V10-1: то же с `f = operator.methodcaller(name)` в функции; давний пропуск.
+    RoundTenBannedForm(
+        "v10-1-function-binds-a-methodcaller-class-binds-setattr",
+        _ROUND_TEN_HEADER
+        + _ROUND_TEN_PICK_METHODCALLER
+        + _ROUND_TEN_SELF_F_CLASS.format(use='self.f(account, "phone", x)'),
+        ((8, DYNAMIC_KIND_DEFERRED_CALL), (14, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+    # Верификация раунда 10, V10-2: чтение `getattr(self, "f")` пишущего атрибута при `f = getattr` в функции —
+    # регрессия наличия `cc7fbce7` (план 16-42) против `e61ab80d` (384 ячейки корпуса верификатора; против
+    # `fb8fef72` — 336), не увиденная мерой партии раунда 8. Сама строка `"f"` — не роль: красны связывания.
+    RoundTenBannedForm(
+        "v10-2-getattr-string-of-a-setattr-attribute",
+        _ROUND_TEN_HEADER
+        + _ROUND_TEN_PICK_GETATTR
+        + _ROUND_TEN_SELF_F_CLASS.format(use='getattr(self, "f")(account, "phone", x)'),
+        ((8, DYNAMIC_KIND_REFLECTION_VALUE), (14, DYNAMIC_KIND_REFLECTION_VALUE)),
+    ),
+)
+
+
+def test_a_planted_backfill_pick_is_red_as_a_banned_construct(tmp_path):
+    """ТРАСЕР V10-1 / V10-2: скрипт со служебной `pick` и `self.f = setattr` красен как запрещённая конструкция.
+
+    Скрипт дозаполнения Фазы 20 держит служебную функцию `pick(obj, name)` с `f = getattr`, а в классе —
+    `self.f = setattr` в `__init__` и `self.f(account, "phone", number)` в методе. Предикат распознавания
+    (`_rename_aliases`) переписывал каждое чтение с последним именем `f` в носитель опознания `getattr` и не судил
+    запись (V10-1 — давний пропуск; чтение `getattr(self, "f")` того же атрибута — V10-2, регрессия наличия
+    `cc7fbce7`, план 16-42, против `e61ab80d`). Решение владельца О-23 (а), свойство 1: закрывается не починкой
+    предиката, а запретом конструкции — `getattr` и `setattr` значением краснит канал (план 16-53) видом
+    «отражение как значение». Исполнение той же записи отказывает защитой на исполнении (план 16-51,
+    `ROUND_TEN_WRITER_FORMS`). Форма закреплена и строкой `ROUND_TEN_BANNED_FORMS`.
+    """
+    _plant(
+        tmp_path,
+        "scripts/phone_backfill_pick.py",
+        "def pick(obj, name):\n"
+        "    f = getattr\n"
+        "    return f(obj, name)\n"
+        "\n"
+        "\n"
+        "class Backfill:\n"
+        "    def __init__(self):\n"
+        "        self.f = setattr\n"
+        "\n"
+        "    def run(self, account, number):\n"
+        '        self.f(account, "phone", number)\n',
+    )
+
+    paths, offences = dynamic_construct_scan(tmp_path)
+
+    assert [path.relative_to(tmp_path).as_posix() for path in paths] == ["scripts/phone_backfill_pick.py"], (
+        "обход канала синтетического дерева не нашёл подложенный скрипт в `scripts/`"
+    )
+    in_file = [offence for offence in offences if offence.startswith("scripts/phone_backfill_pick.py:")]
+    expected = [(2, DYNAMIC_KIND_REFLECTION_VALUE), (8, DYNAMIC_KIND_REFLECTION_VALUE)]
+    assert _channel_places(in_file) == expected, (
+        "подложенный скрипт с `f = getattr` в `pick` и `self.f = setattr` в классе не красен как запрещённая "
+        f"конструкция двумя находками «отражение как значение» на строках 2 и 8: {in_file}"
+    )
+    pinned = {form.id: form for form in ROUND_TEN_BANNED_FORMS}.get("v10-1-function-binds-getattr-class-binds-setattr")
+    assert pinned is not None and [kind for _line, kind in pinned.constructs] == [kind for _line, kind in expected], (
+        "подложенный скрипт с `f = getattr` в `pick` и `self.f = setattr` в классе не красен как запрещённая "
+        "конструкция строкой таблицы `ROUND_TEN_BANNED_FORMS` (форма V10-1 не закреплена тем же видом): "
+        f"{pinned}"
+    )
+
+
+@pytest.mark.parametrize("form", [pytest.param(form, id=form.id) for form in ROUND_TEN_BANNED_FORMS])
+def test_a_round_ten_form_is_red_as_a_banned_construct(tmp_path, form: RoundTenBannedForm):
+    """Каждая форма раунда 10 стороны писателя красна каналом запрета (О-23 (а), свойства 1, 4; D-13).
+
+    Форма подкладывается в синтетическое `scripts/x.py` и судится тем же сканером, что и живые деревья
+    (`dynamic_construct_scan`, реестр исключений включительно): измеренные находки (строка, вид) — ровно
+    `constructs` строки. Ответ прежнего предиката `phone_write_offences` правило не утверждает — он справочно в сводке
+    плана 16-55: формы закрываются запретом конструкции, а не починкой `_rename_aliases` (свойство 6).
+    """
+    _plant(tmp_path, "scripts/x.py", form.source)
+
+    _paths, offences = dynamic_construct_scan(tmp_path)
+
+    assert _channel_places(offences) == list(form.constructs), (
+        f"форма раунда 10 стороны писателя `{form.id}` не красна каналом запрета ожидаемым видом на строке "
+        f"конструкции: ожидались {list(form.constructs)}, найдено {offences}"
+    )
+
+
 def test_a_raw_sql_phone_write_reddens_the_gate(tmp_path):
     """Сырой UPDATE в строковой константе синтетического `app/` краснит гейт."""
     _plant(
@@ -5068,6 +5456,93 @@ def test_the_writer_gate_header_names_four_quote_kinds_and_every_column_construc
     assert not missing, (
         "шапка гейта писателя не называет четыре вида кавычек SQLite и каждый конструктор "
         "колонки:\n" + "\n".join(f"  {entry}" for entry in missing)
+    )
+
+
+# Прежняя фраза абзаца цены (до плана 16-55): позиционный `enqueue` пару даёт (ревью WR-34, верификация раунда 10), и
+# фраза ложна; летопись пересказывает её словами, дословного текста в шапке нет.
+REFUTED_CARRIER_COST_CLAIM = (
+    "носители, у которых ссылка не первым аргументом (`run_in_executor`, `Thread`, `Timer`, `enqueue`"
+)
+
+
+def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
+    """Шапка правдива об обещании после решения владельца О-23 (а) (свойства 1, 3, 4, 5, 6; план 16-55).
+
+    Раздел «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» перед «ГРАНИЦЕЙ ПРЕДИКАТА» называет обещание («в коде нет
+    конструкции, которую гейт не умеет судить»), каждый вид канала `DYNAMIC_CONSTRUCT_KINDS`, ключ каждого исключения
+    `DYNAMIC_CONSTRUCT_EXCEPTIONS` деревьев гейта, защиту на исполнении `app/models/phone_guard.py` с разрешением
+    `writer_scope` и правилом `RUNTIME_GUARD_MODULE`, её границу (`set_committed_value`, `bulk_update_mappings`,
+    `session.connection()`) и то, что за ней статический гейт остаётся первым рубежом; согласование прежних запретов
+    (таблица плана 16-56) и живое дерево (106 файлов). Абзац цены называет механизм WR-34 и таблицу
+    `NAMED_COST_MECHANISM_CASES` и не содержит прежней фразы о носителях без пары; летописи WR-33, V10-1, V10-2 называют
+    регрессию `cc7fbce7` против `e61ab80d`, канал (план 16-53), защиту (план 16-51) и решение О-23 (а).
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    missing: list[str] = []
+
+    section_start = flat.find("ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ")
+    section_end = flat.find("ГРАНИЦА ПРЕДИКАТА", section_start) if section_start >= 0 else -1
+    section = flat[section_start:section_end] if 0 <= section_start < section_end else ""
+    if not section:
+        missing.append("нет раздела «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» перед «ГРАНИЦА ПРЕДИКАТА»")
+    tree_exceptions = sorted(
+        {key.rsplit("::", 1)[0] for key in DYNAMIC_CONSTRUCT_EXCEPTIONS if key.split("/", 1)[0] in WRITER_TREES}
+    )
+    for needle in (
+        "О-23 (а)",
+        "в коде нет конструкции, которую гейт не умеет судить",
+        *DYNAMIC_CONSTRUCT_KINDS,
+        *tree_exceptions,
+        "app/models/phone_guard.py",
+        "writer_scope",
+        "set_committed_value",
+        "bulk_update_mappings",
+        "session.connection()",
+        "первым рубежом",
+        "RUNTIME_GUARD_MODULE",
+        "16-09 №2",
+        "16-12 №2",
+        "16-17 №2",
+        "16-48 №2",
+        "16-48 №4",
+        "16-56",
+        "106",
+    ):
+        if section and needle not in section:
+            missing.append(f"раздел запрета не называет «{needle}»")
+
+    price_start = flat.find("ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ")
+    price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_start)
+    price = flat[price_start:price_end] if 0 <= price_start < price_end else ""
+    if not price:
+        missing.append("нет абзаца «ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ»")
+    for needle in (
+        "NAMED_ATTRIBUTE_WRITERS",
+        "первым позиционным аргументом",
+        "run_in_executor",
+        "enqueue(job=",
+        "WR-34",
+        "NAMED_COST_MECHANISM_CASES",
+    ):
+        if price and needle not in price:
+            missing.append(f"абзац цены не называет механизм WR-34: нет «{needle}»")
+    if REFUTED_CARRIER_COST_CLAIM in flat:
+        missing.append(f"шапка всё ещё утверждает прежнюю фразу о носителях без пары: «{REFUTED_CARRIER_COST_CLAIM}»")
+
+    for heading in ("Летопись WR-33", "Летопись V10-1", "Летопись V10-2"):
+        chronicle = _chronicle_segment(flat, heading)
+        if not chronicle:
+            missing.append(f"нет «{heading}»")
+        for needle in ("cc7fbce7", "e61ab80d", "16-53", "16-51", "О-23 (а)"):
+            if chronicle and needle not in chronicle:
+                missing.append(f"«{heading}» не называет «{needle}»")
+
+    assert not missing, (
+        "шапка гейта писателя не называет запрет динамики и защиту на исполнении:\n"
+        + "\n".join(f"  {entry}" for entry in missing)
     )
 
 
@@ -7637,8 +8112,12 @@ def test_the_writer_place_count_rule_reddens_a_receiver_write_merged_by_subject(
 # свойство 8 О-20): пишущий API соперника, связанный с последним именем носителя (`to_thread = setattr`), и ссылка
 # `operator.methodcaller("__set__", account, x)`, поданная носителю с получателем-колонкой, — две находки на одном узле
 # колонки при ОДНОЙ записи (`setattr(…, MessengerAccount.phone, …)` и `MessengerAccount.phone.__set__(…)`; улика
-# исполнения 16-48 и 16-49: одно событие `set` колонки). Строка на каждый API соперника, дающий пару (`setattr`,
-# `set_committed_value`, `flag_modified`; `update` и `functools.partial(setattr, other)` пары не дают). Число находок —
+# исполнения 16-48 и 16-49: одно событие `set` колонки). Строка на каждый API соперника замера плана 16-48 (`setattr`,
+# `set_committed_value`, `flag_modified`); охват цены — по механизму (ревью WR-34; решение владельца О-23 (а), свойство
+# 4; план 16-55): пару даёт любой API из `NAMED_ATTRIBUTE_WRITERS`, связанный с последним именем вызова, у которого
+# ссылка-`methodcaller` с колонкой-получателем стоит первым позиционным аргументом, а `update` и
+# `functools.partial(setattr, other)` под именем НОСИТЕЛЯ пары не дают (под именем самого применения `partial` над
+# таким API пару даёт — цена kw); измеренные формы механизма — `NAMED_COST_MECHANISM_CASES` ниже. Число находок —
 # `NAMED_COST_FINDINGS`, а не число мест (`LITERAL_FORM_PLACES` — узлы колонки, здесь он один): правка гейта, меняющая
 # число этих строк, — видимое решение, а не тихая смена. Это закрепка цены, а не заявление: в корпусе сверки строки
 # судятся ожиданием «одно место» с допустимым числом цены 2 (`cost` `kw_ext`).
@@ -7678,6 +8157,99 @@ def test_a_named_cost_form_gives_its_named_count(source, rival):
     assert len(places) == 1, f"находки названной цены не на одном месте: {offences}"
     assert subjects == sorted([f"{rival}(…, MessengerAccount.phone, …)", "MessengerAccount.phone.__set__(…)"]), (
         f"находки названной цены `kw_ext` называют не соперника и дескриптор колонки: {offences}"
+    )
+
+
+# Цена по механизму (ревью WR-34, верификация раунда 10; решение владельца О-23 (а), свойство 4, вместе с решением
+# 2026-10-21 «Принять как цену» о `kw_ext`). Механизм: две находки на одном узле колонки при одной записи даёт любой API
+# из `NAMED_ATTRIBUTE_WRITERS` или `functools.partial(<такой API>, …)`, связанный с последним именем вызова, у которого
+# ссылка `operator.methodcaller("__set__", …)` с колонкой-получателем стоит первым позиционным аргументом; одну —
+# ссылка не первым аргументом (`run_in_executor`), именованный `enqueue(job=…)` и соперник `update`, не пишущий
+# атрибут. Числа — замер планирования (15 форм, `c9da79b2`; те же на `d31d86db` — регрессии нет), подтверждённый
+# исполнителем плана 16-55 на дереве после планов 16-51…16-53. Это закрепка цены, а не заявление: свести «двойку» к
+# одной находке значило бы править предикат распознавания (свойство 6) — владелец решил охват назвать, а не менять.
+# Каждая строка несёт `operator.methodcaller`, поэтому в судимых деревьях её краснит канал запрета.
+_NAMED_COST_MECHANISM_HEADER = (
+    "import asyncio, functools, operator\n"
+    "from sqlalchemy import update\n"
+    "from app.models.messenger_account import MessengerAccount\n"
+    "from sqlalchemy.orm.attributes import flag_modified, set_attribute, set_committed_value\n"
+)
+_NAMED_COST_MECHANISM_SETTER = 'f = operator.methodcaller("__set__", account, x)\n'
+# Носитель под именем API-соперника: (связывание, подача ссылки), измеренное число.
+_NAMED_COST_MECHANISM_CARRIERS = (
+    ("submit-setattr", "submit = setattr\n", "executor.submit(f, MessengerAccount.phone)\n", 2),
+    ("positional-enqueue-setattr", "enqueue = setattr\n", "scheduler.enqueue(f, MessengerAccount.phone)\n", 2),
+    (
+        "keyword-enqueue-setattr",
+        "enqueue = setattr\n",
+        "scheduler.enqueue(job=f, args=(MessengerAccount.phone,))\n",
+        1,
+    ),
+    ("call-soon-setattr", "call_soon = setattr\n", "loop.call_soon(f, MessengerAccount.phone)\n", 2),
+    ("applied-partial-setattr", "partial = setattr\n", "functools.partial(f, MessengerAccount.phone)()\n", 2),
+    ("to-thread-set-attribute", "to_thread = set_attribute\n", "asyncio.to_thread(f, MessengerAccount.phone)\n", 2),
+    (
+        "to-thread-object-setattr",
+        "to_thread = object.__setattr__\n",
+        "asyncio.to_thread(f, MessengerAccount.phone)\n",
+        2,
+    ),
+    (
+        "run-in-executor-setattr",
+        "run_in_executor = setattr\n",
+        "loop.run_in_executor(None, f, MessengerAccount.phone)\n",
+        1,
+    ),
+    ("to-thread-update", "to_thread = update\n", "asyncio.to_thread(f, MessengerAccount.phone)\n", 1),
+)
+# Имя применения, связанное прежде ссылки с API-соперником (цена kw): первое связывание, измеренное число.
+_NAMED_COST_MECHANISM_REBOUND = (
+    ("rebound-partial-set-committed-value", "f = functools.partial(set_committed_value, other)\n", 2),
+    ("rebound-partial-object-setattr", "f = functools.partial(object.__setattr__, other)\n", 2),
+    ("rebound-partial-flag-modified", "f = functools.partial(flag_modified, other)\n", 2),
+    ("rebound-partial-set-attribute", "f = functools.partial(set_attribute, other)\n", 2),
+    ("rebound-partial-setattr", "f = functools.partial(setattr, other)\n", 2),
+    ("rebound-object-setattr", "f = object.__setattr__\n", 2),
+)
+NAMED_COST_MECHANISM_CASES = [
+    pytest.param(
+        _NAMED_COST_MECHANISM_HEADER + binding + _NAMED_COST_MECHANISM_SETTER + use,
+        expected,
+        id=f"cost-mechanism-{row_id}",
+    )
+    for row_id, binding, use, expected in _NAMED_COST_MECHANISM_CARRIERS
+] + [
+    pytest.param(
+        _NAMED_COST_MECHANISM_HEADER + binding + _NAMED_COST_MECHANISM_SETTER + "f(MessengerAccount.phone)\n",
+        expected,
+        id=f"cost-mechanism-{row_id}",
+    )
+    for row_id, binding, expected in _NAMED_COST_MECHANISM_REBOUND
+]
+
+
+@pytest.mark.parametrize(("source", "expected"), NAMED_COST_MECHANISM_CASES)
+def test_a_named_cost_mechanism_form_gives_its_measured_count(source, expected):
+    """Форма цены по механизму (WR-34) даёт ровно измеренное число находок на одном узле колонки (О-23 (а), свойство 4).
+
+    Число — замер, а не ожидание: починка предиката, сводящая «двойку» к одной находке, или рост числа — оба видимы,
+    строка краснеет, и решение владельца пересматривается явно. Каждая форма несёт `operator.methodcaller`, поэтому в
+    судимых деревьях её краснит канал запрета видом «отложенный вызов по имени» — цена касается только прежнего
+    предиката.
+    """
+    offences = phone_write_offences(source, "scripts/x.py")
+    constructs = dynamic_construct_findings(source, "scripts/x.py", judged_names=BANNED_GETATTR_NAMES)
+
+    assert source.count("MessengerAccount.phone") == 1, "строка цены несёт не один узел колонки"
+    assert len(offences) == expected, (
+        f"форма цены по механизму (WR-34): находок {len(offences)}, измерено {expected}: {offences}"
+    )
+    assert len({offence.split(" — ", 1)[0] for offence in offences}) == 1, (
+        f"находки формы цены не на одном месте: {offences}"
+    )
+    assert "operator.methodcaller" in source and DYNAMIC_KIND_DEFERRED_CALL in {c.kind for c in constructs}, (
+        f"форма цены по механизму не красна каналом запрета видом «{DYNAMIC_KIND_DEFERRED_CALL}»: {constructs}"
     )
 
 
@@ -8325,3 +8897,200 @@ def test_control_an_assignment_inside_the_writer_module_still_reddens():
     assert judged_offences(source, PHONE_WRITER_MODULE) == [
         f"{PHONE_WRITER_MODULE}:{line} — {KIND_ASSIGNMENT} — account.phone"
     ], "присваивание номера в модуле-писателе прикрыто исключением"
+
+
+# Три законных места ссылки на защиту на исполнении и её разрешение (план 16-55; О-23 (а), свойство 3).
+RUNTIME_GUARD_PLACES = frozenset({RUNTIME_GUARD_MODULE, RUNTIME_GUARD_REGISTRATION, PHONE_WRITER_MODULE})
+# Модуль защиты ввозом и имена, ссылка на которые вне законных мест — вход в разрешение или в саму защиту.
+RUNTIME_GUARD_IMPORT = "app.models.phone_guard"
+RUNTIME_GUARD_NAMES = frozenset({"phone_guard", "writer_scope", "_WRITER_ACTIVE"})
+# Снятие слушателя защиты: `remove` у получателя с последним именем `event` (и у псевдонима модуля событий
+# SQLAlchemy), ввоз `remove` из `sqlalchemy.event` — везде, законных мест у снятия нет.
+EVENT_MODULE = "sqlalchemy.event"
+EVENT_RECEIVER = "event"
+EVENT_REMOVE = "remove"
+KIND_GUARD_BYPASS = "обход защиты на исполнении"
+
+
+def _guard_reference_import(node: ast.AST) -> bool:
+    """Ввоз модуля защиты или его имён: `import app.models.phone_guard [as g]`, `from app.models import phone_guard`,
+    `from app.models.phone_guard import writer_scope`, `from .phone_guard import …`."""
+    if isinstance(node, ast.Import):
+        return any(
+            alias.name == RUNTIME_GUARD_IMPORT
+            or alias.name.startswith(RUNTIME_GUARD_IMPORT + ".")
+            or alias.name.rsplit(".", 1)[-1] in RUNTIME_GUARD_NAMES
+            for alias in node.names
+        )
+    if isinstance(node, ast.ImportFrom):
+        return (node.module or "").rsplit(".", 1)[-1] in RUNTIME_GUARD_NAMES or any(
+            alias.name in RUNTIME_GUARD_NAMES for alias in node.names
+        )
+    return False
+
+
+def _event_receivers(tree: ast.AST) -> frozenset[str]:
+    """Последние имена получателя `remove` модуля событий: `event` и псевдонимы ввоза модуля событий в файле."""
+    names = {EVENT_RECEIVER}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names |= {alias.asname for alias in node.names if alias.name == EVENT_MODULE and alias.asname}
+        elif isinstance(node, ast.ImportFrom) and node.module == "sqlalchemy":
+            names |= {alias.asname for alias in node.names if alias.name == EVENT_RECEIVER and alias.asname}
+    return frozenset(names)
+
+
+def _guard_last_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def runtime_guard_bypasses(source: str, path: str) -> list[str]:
+    """Обходы защиты на исполнении в исходнике — строками «`путь:строка` — обход защиты на исполнении — <фрагмент>».
+
+    (а) Вне трёх законных мест (`RUNTIME_GUARD_PLACES`) — ввоз модуля защиты или его имён и любое `ast.Name` /
+    `ast.Attribute` с именем `phone_guard`, `writer_scope`, `_WRITER_ACTIVE` (атрибут псевдонима ввоза `g.writer_scope`
+    включительно). (б) Везде — вызов `remove` у получателя с последним именем `event` (или псевдонима модуля событий)
+    и ввоз `remove` из `sqlalchemy.event`. Одна находка на начало выражения: `phone_guard.writer_scope` — одна.
+    Чистая функция над текстом: снятие по пути — параметром `path`, поэтому ею же доказывается, что в писателе ссылка
+    видна.
+    """
+    tree = ast.parse(source, filename=path)
+    receivers = _event_receivers(tree)
+    found: dict[tuple[int, int], ast.AST] = {}
+    for node in ast.walk(tree):
+        bypass = False
+        if path not in RUNTIME_GUARD_PLACES:
+            bypass = _guard_reference_import(node) or (
+                isinstance(node, (ast.Name, ast.Attribute)) and _guard_last_name(node) in RUNTIME_GUARD_NAMES
+            )
+        if isinstance(node, ast.ImportFrom) and node.module == EVENT_MODULE:
+            bypass = bypass or any(alias.name == EVENT_REMOVE for alias in node.names)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == EVENT_REMOVE:
+            bypass = bypass or _guard_last_name(node.func.value) in receivers
+        if bypass:
+            found.setdefault((node.lineno, node.col_offset), node)
+    return [
+        f"{path}:{line} — {KIND_GUARD_BYPASS} — {ast.unparse(node).splitlines()[0][:80]}"
+        for (line, _column), node in sorted(found.items())
+    ]
+
+
+def test_the_runtime_guard_is_entered_only_by_the_writer():
+    """Защита писателя на исполнении не обходится кодом приложения (О-23 (а), свойство 3; D-07, D-13).
+
+    Разрешение `writer_scope()` снимает защиту `app/models/phone_guard.py` (план 16-51): код, вошедший в него вне
+    модуля-писателя, — второй писатель, которому защита больше не мешает затереть ручной номер. Снятый слушатель
+    (`event.remove(…)`) выключает защиту молча — для всех путей ORM сразу. Поэтому в `app/` и `scripts/` ссылка на
+    модуль защиты, на `writer_scope` или `_WRITER_ACTIVE` законна только в трёх местах — модуль-писатель, сам модуль
+    защиты и строка регистрации в `app/models/__init__.py`, — а вызова `remove` у получателя `event` нет нигде.
+
+    Антивакуум в том же правиле: обход видит все три законных места, и помощник без снятия по пути находит в
+    модуле-писателе ссылку на `writer_scope` — иначе ноль находок ничего бы не значил.
+    """
+    sources = writer_sources(PROJECT_ROOT)
+    walked = {path.relative_to(PROJECT_ROOT).as_posix() for path in sources}
+    bypasses = [
+        bypass
+        for path in sources
+        for bypass in runtime_guard_bypasses(
+            path.read_text(encoding="utf-8"), path.relative_to(PROJECT_ROOT).as_posix()
+        )
+    ]
+    writer_source = (PROJECT_ROOT / PHONE_WRITER_MODULE).read_text(encoding="utf-8")
+    unexempt = runtime_guard_bypasses(writer_source, "app/x.py")
+
+    assert {PHONE_WRITER_MODULE, RUNTIME_GUARD_MODULE, RUNTIME_GUARD_REGISTRATION} <= walked, (
+        f"обход ({len(sources)} файлов) не видит законные места защиты: модуль-писатель, модуль защиты, регистрацию"
+    )
+    assert any("writer_scope" in bypass for bypass in unexempt), (
+        "защита писателя на исполнении обходится кодом приложения незаметно: помощник без снятия по пути не видит "
+        f"в модуле-писателе ссылки на `writer_scope` — он слеп, и ноль находок на дереве ничего не значит: {unexempt}"
+    )
+    assert bypasses == [], (
+        f"защита писателя на исполнении обходится кодом приложения (обойдено {len(sources)} файлов) — вход в "
+        "разрешение или ссылка на модуль защиты вне трёх законных мест, или снятый слушатель (D-07, D-13):\n"
+        + "\n".join(f"  {bypass}" for bypass in bypasses)
+    )
+
+
+GUARD_BYPASS_CONTROLS = [
+    pytest.param(
+        "from app.models.phone_guard import writer_scope\n",
+        "app/x.py",
+        1,
+        id="from-the-guard-module-import-writer-scope",
+    ),
+    pytest.param(
+        "from app.models import phone_guard\n\n\ndef backfill(account):\n"
+        '    with phone_guard.writer_scope():\n        account.status = "x"\n',
+        "app/x.py",
+        2,
+        id="the-guard-module-from-models-with-writer-scope",
+    ),
+    # Псевдоним ввоза: имя `writer_scope` правило судит в любой позиции, атрибутом псевдонима `g` включительно.
+    pytest.param(
+        "import app.models.phone_guard as g\n\n\ndef backfill(account):\n"
+        '    with g.writer_scope():\n        account.status = "x"\n',
+        "app/x.py",
+        2,
+        id="an-aliased-import-of-the-guard-module",
+    ),
+    pytest.param(
+        "from sqlalchemy import event\n\nfrom app.models.messenger_account import MessengerAccount\n\n\n"
+        'def unguard(f):\n    event.remove(MessengerAccount.phone, "set", f)\n',
+        "app/x.py",
+        1,
+        id="event-remove-of-the-phone-listener",
+    ),
+    pytest.param(
+        "import sqlalchemy\nfrom sqlalchemy.orm import Session\n\n\n"
+        'def unguard(f):\n    sqlalchemy.event.remove(Session, "do_orm_execute", f)\n',
+        "app/x.py",
+        1,
+        id="qualified-event-remove-of-the-session-listener",
+    ),
+    # Сверх плана (Rule 2): псевдоним модуля `event` и ввоз самой `remove` — тот же снятый слушатель.
+    pytest.param(
+        "from sqlalchemy import event as sa_event\nfrom sqlalchemy.orm import Session\n\n\n"
+        'def unguard(f):\n    sa_event.remove(Session, "before_flush", f)\n',
+        "app/x.py",
+        1,
+        id="an-aliased-event-module-remove",
+    ),
+    pytest.param(
+        "from sqlalchemy.event import remove\n",
+        "app/x.py",
+        1,
+        id="an-imported-event-remove",
+    ),
+    # Законное место: тот же ввоз в модуле-писателе — ноль.
+    pytest.param(
+        "from app.models.phone_guard import writer_scope\n",
+        PHONE_WRITER_MODULE,
+        0,
+        id="the-writer-imports-writer-scope",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "path", "expected"), GUARD_BYPASS_CONTROLS)
+def test_a_planted_guard_bypass_reddens_the_rule(tmp_path, source, path, expected):
+    """Контроль правила входа в разрешение: подложенный обход находит тот же обход дерева, законное место — нет."""
+    planted = _plant(tmp_path, path, source)
+
+    sources = writer_sources(tmp_path)
+    bypasses = [
+        bypass
+        for file in sources
+        for bypass in runtime_guard_bypasses(file.read_text(encoding="utf-8"), file.relative_to(tmp_path).as_posix())
+    ]
+
+    assert planted in sources, f"обход не видит подложенный файл `{path}`: {sources}"
+    assert len(bypasses) == expected and all(bypass.startswith(f"{path}:") for bypass in bypasses), (
+        f"подложенный обход защиты на исполнении не краснит правило входа в разрешение писателя ожидаемым числом "
+        f"находок ({expected}) в `{path}`: {bypasses}"
+    )
