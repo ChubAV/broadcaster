@@ -1,5 +1,6 @@
 """Маска номера в выводе журнала: подстрока, которую нормализатор фазы признаёт номером, — `mask_phone`."""
 
+import logging
 import re
 
 from app.services.phone import (
@@ -162,3 +163,68 @@ def _guarded(value: object) -> object:
 def mask_numbers_in_event(logger: object, method_name: str, event_dict: dict) -> dict:
     """Процессор structlog: новый словарь события, где номер в любом поле — маска."""
     return {_guarded(key): _guarded(value) for key, value in event_dict.items()}
+
+
+def _masked_reprs(args: object) -> tuple:
+    """Аргументы записи, чья подстановка упала, — маскированным текстом (отчёт `--- Logging error ---`)."""
+    if not args:
+        return ()
+    if isinstance(args, tuple):
+        return tuple(mask_numbers(repr(item)) for item in args)
+    return (mask_numbers(repr(args)),)
+
+
+def _mask_message(record: logging.LogRecord) -> None:
+    try:
+        rendered = record.getMessage()
+    except Exception:
+        record.msg = mask_numbers(str(record.msg))
+        record.args = _masked_reprs(record.args)
+        return
+    if mask_numbers(rendered) == rendered:
+        return
+    if isinstance(record.args, tuple):
+        record.args = tuple(mask_numbers(item) if isinstance(item, str) else item for item in record.args)
+    if isinstance(record.msg, str):
+        record.msg = mask_numbers(record.msg)
+    try:
+        again = record.getMessage()
+    except Exception:
+        again = None
+    if again is None or mask_numbers(again) != again:
+        record.msg = mask_numbers(rendered)
+        record.args = ()
+
+
+class NumberMaskingFilter(logging.Filter):
+    """Фильтр stdlib: номер в сообщении, аргументах, тексте исключения и `stack_info` — маска.
+
+    Всегда пропускает запись. Строковые аргументы маскируются на месте, прочие сохраняют тип
+    (`%d` не ломается); если номер остался в тексте — запись несёт готовый маскированный текст.
+    Запись structlog (словарь в `msg`) не трогается: её маскирует `mask_numbers_in_event`.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, dict):
+                return True
+            _mask_message(record)
+            if record.exc_text:
+                record.exc_text = mask_numbers(record.exc_text)
+            elif record.exc_info:
+                record.exc_text = mask_numbers(logging.Formatter().formatException(record.exc_info))
+            if record.stack_info:
+                record.stack_info = mask_numbers(record.stack_info)
+        except Exception:
+            record.msg = _MASK_ERROR
+            record.args = ()
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+        return True
+
+
+def attach_number_masking(handler: logging.Handler) -> None:
+    """Поставить `NumberMaskingFilter` на обработчик, если его там ещё нет."""
+    if not any(isinstance(existing, NumberMaskingFilter) for existing in handler.filters):
+        handler.addFilter(NumberMaskingFilter())
