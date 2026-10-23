@@ -108,7 +108,7 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   гейт; `test_the_dynamic_construct_tables_cover_every_kind` — у каждого из девяти видов не одно написание;
   `test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling` и его контроль
   `test_a_seventh_dynamic_construct_exception_reddens_the_ceiling` — реестр `DYNAMIC_CONSTRUCT_EXCEPTIONS` правдив и
-  под потолком.
+  под потолком; `test_the_parity_docstring_names_the_ban_channel_truthfully` — тексты канала.
 * Тексты, на которых держатся закрытия ревью (ревью IN-19 и IN-18, решение владельца О-19, план
   16-44): `test_the_parity_docstring_names_what_it_checks` — этот докстринг называет каждое имя
   `REQUIRED_SHARED_NAMES`, `CARRIER_SEMANTICS`, `GRAMMAR_TABLES` (без вариантов с подчёркиванием),
@@ -1313,4 +1313,84 @@ def test_a_seventh_dynamic_construct_exception_reddens_the_ceiling():
     )
     assert any(seventh in problem and "устарела" in problem for problem in problems), (
         f"запись без живой конструкции не краснит правило реестра: {problems}"
+    )
+
+
+# Правила канала запрета этого модуля (план 16-53): абзац канала докстринга называет каждое.
+BAN_CHANNEL_RULES = (
+    "test_a_planted_module_object_read_reddens_both_gates",
+    "test_every_dynamic_construct_case_is_banned_by_both_gates",
+    "test_a_judgeable_twin_is_not_banned",
+    "test_the_dynamic_construct_tables_cover_every_kind",
+    "test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling",
+    "test_a_seventh_dynamic_construct_exception_reddens_the_ceiling",
+    "test_the_parity_docstring_names_the_ban_channel_truthfully",
+)
+BAN_CHANNEL_DOC_NEEDLES = ("О-23 (а)", "запрещённ", "`dynamic_construct_findings`", "`DYNAMIC_CONSTRUCT_EXCEPTIONS`")
+NINTH_DICTIONARY_NEEDLES = ("`print`", "`update`", "`sys.modules[__name__]`", "`me = sys.modules[__name__]`")
+# Фраза абзаца словаря девятого круга до плана 16-53 (ревью IN-22): класс шире словаря.
+REFUTED_NINTH_DICTIONARY_CLAIM = (
+    "толкование псевдонима, закрывающее путь носителя (коллизия имени носителя), краснят матрицы"
+)
+BAN_CHANNEL_HEADER = "# --- Канал запрета динамических конструкций"
+BAN_CHANNEL_HEADER_NEEDLES = (
+    "О-23 (а)",
+    "свойство 1",
+    "в коде нет конструкции, которую гейт не умеет судить",
+    "исключения",
+    "потолок",
+)
+
+
+def _doc_bullet(doc: str, heading: str) -> str:
+    """Пункт докстринга, начатый строкой `* <heading>`, до следующего пункта (пробелы схлопнуты)."""
+    lines = doc.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith(f"* {heading}")), None)
+    if start is None:
+        return ""
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("* ")), len(lines))
+    return " ".join(" ".join(lines[start:end]).split())
+
+
+def _comment_block(source: str, header: str) -> str:
+    """Комментарий-шапка, начатая строкой `header`: подряд идущие строки `#` (пробелы схлопнуты)."""
+    lines = source.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith(header)), None)
+    if start is None:
+        return ""
+    block: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("#"):
+            if block and not line.strip():
+                continue
+            break
+        block.append(line.lstrip("#").strip())
+    return " ".join(" ".join(block).split())
+
+
+def test_the_parity_docstring_names_the_ban_channel_truthfully():
+    """Тексты канала правдивы (план 16-53; О-23 (а), свойства 1, 4, 5; ревью IN-22).
+
+    Докстринг этого модуля: пункт о канале называет «О-23 (а)», запрет, `dynamic_construct_findings`,
+    `DYNAMIC_CONSTRUCT_EXCEPTIONS` и каждое правило канала `BAN_CHANNEL_RULES`; пункт о словаре девятого круга называет
+    соперников словаря `print` и `update` и два написания объекта модуля и не содержит прежней фразы о классе
+    `REFUTED_NINTH_DICTIONARY_CLAIM`. Комментарий-шапка канала общего модуля называет решение, свойство 1, обещание,
+    исключения и потолок.
+    """
+    doc = ast.get_docstring(_module_tree()) or ""
+    channel = _doc_bullet(doc, "Канал запрета динамических конструкций")
+    ninth = _doc_bullet(doc, "Словарь девятого круга")
+    header = _comment_block(Path(grammar.__file__).read_text(encoding="utf-8"), BAN_CHANNEL_HEADER)
+    problems = [f"пункт канала не называет «{needle}»" for needle in BAN_CHANNEL_DOC_NEEDLES if needle not in channel]
+    problems += [f"пункт канала не называет правило `{rule}`" for rule in BAN_CHANNEL_RULES if f"`{rule}`" not in channel]
+    problems += [f"пункт словаря девятого круга не называет {needle}" for needle in NINTH_DICTIONARY_NEEDLES
+                 if needle not in ninth]
+    if not ninth or REFUTED_NINTH_DICTIONARY_CLAIM in " ".join(doc.split()):
+        problems.append(f"докстринг утверждает прежнюю фразу о классе: «{REFUTED_NINTH_DICTIONARY_CLAIM}»")
+    problems += [f"шапка канала общего модуля не называет «{needle}»" for needle in BAN_CHANNEL_HEADER_NEEDLES
+                 if needle not in header]
+
+    assert not problems, (
+        "докстринг паритета утверждает класс шире словаря или не называет канал:\n"
+        + "\n".join(f"  {problem}" for problem in problems)
     )
