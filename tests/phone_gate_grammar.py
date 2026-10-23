@@ -1444,8 +1444,40 @@ DYNAMIC_CONSTRUCT_KINDS: tuple[str, ...] = (
     DYNAMIC_KIND_COMPUTED_SQL,
 )
 
-# Реестр исключений канала: `<путь>::<квалифицированный владелец>::<вид>` → причина.
-DYNAMIC_CONSTRUCT_EXCEPTIONS: dict[str, str] = {}
+# Реестр исключений канала: `<путь>::<квалифицированный владелец>::<вид>` → причина (замер планирования плана 16-53,
+# HEAD `c9da79b2`, подтверждён на дереве после волны 1 партии). Каждая запись измерена: правило-паритет
+# `test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling` требует у неё существующий файл дерева
+# гейта, владельца и хотя бы одну конструкцию названного вида; устаревшая запись краснит.
+DYNAMIC_CONSTRUCT_EXCEPTIONS: dict[str, str] = {
+    "app/pages/accounts.py::_connect_status::вычисленное имя атрибута": (
+        "макрос Jinja по имени: получатель — модуль шаблона `accounts/partials/connect_status.html` "
+        "(`templates.env.get_template(…).module`), не журнал и не пишущий API; имена — литералы вызывающих этого "
+        "файла `notice`, `connected`, `qr`"
+    ),
+    "app/pages/common.py::get_user_from_cookie::вычисленное имя атрибута": (
+        "`setattr(user, IMPERSONATOR_ATTR, actor)`: имя — константа модуля `IMPERSONATOR_ATTR = \"impersonated_by\"`, "
+        "объект — `User` из `db.get(User, …)`; колонок номера у него нет"
+    ),
+    "app/pages/common.py::actor_of::вычисленное имя атрибута": (
+        "`getattr(user, IMPERSONATOR_ATTR, None)`: та же константа; результат — `User` или `None`, он не вызывается"
+    ),
+    "app/repositories/base.py::BaseRepository.update::вычисленное имя атрибута": (
+        "обобщённая запись полей репозитория; запись колонок номера через неё отказывает на исполнении "
+        "(`app/models/phone_guard.py`, событие `set`, план 16-51), а вызов `update(…, phone=…)` ловит гейт писателя "
+        "видом «именованный аргумент»"
+    ),
+    "app/routes/schedules.py::update_schedule::вычисленное имя атрибута": (
+        "объект — `Schedule` из `repo.get_for_user(…)`, поля — ключи `data.model_dump(exclude_unset=True)` "
+        "(`UpdateScheduleRequest`); колонок номера у расписания нет"
+    ),
+    "max_worker/main.py::<module>::вычисленное имя атрибута": (
+        "уровень журнала по имени из окружения `LOG_LEVEL`: получатель — модуль `logging`, значение уходит в "
+        "`logging.root.setLevel(…)` и не вызывается; продуктовый код воркера партия не меняет (образ — деплой-гейт D-26)"
+    ),
+}
+
+# Потолок реестра: подъём — решение владельца, а не исполнителя (D-13, D-17; О-23 (а), свойства 1 и 6).
+DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING = 6
 
 
 # Объект модуля: атрибут `modules` (у любого получателя — `sys`, псевдоним `sys`, что угодно) и ввоз `modules` из
@@ -1453,33 +1485,191 @@ DYNAMIC_CONSTRUCT_EXCEPTIONS: dict[str, str] = {}
 MODULE_OBJECT_ATTRIBUTES = frozenset({"modules"})
 IMPORTER_NAMES = frozenset({"import_module", "__import__"})
 
+# Пространство имён: словари модуля, функции, объекта и встроенных — и сам модуль встроенных.
+NAMESPACE_NAMES = frozenset({"globals", "locals", "vars", "__builtins__"})
+NAMESPACE_ATTRIBUTES = frozenset({"__dict__", "__globals__", "__builtins__"})
+BUILTINS_MODULE = "builtins"
+
+# Исполнение текста — встроенные функции по имени (атрибут `re.compile` — не имя и не судится).
+TEXT_EXECUTION_NAMES = frozenset({"eval", "exec", "compile", "breakpoint"})
+
 # Отложенный вызов по имени: вызываемое, которое зовёт метод или читает атрибут по строке позже.
 DEFERRED_CALL_NAMES = frozenset({"methodcaller", "attrgetter"})
+
+# Функции отражения атрибутов: значением — вид «отражение как значение», вызовом с нелитеральным именем —
+# «вычисленное имя атрибута», `getattr` со строкой роли — «имя запрещённой роли строкой».
+REFLECTION_NAMES = frozenset({"getattr", "setattr", "delattr", "hasattr"})
+
+# Писатели атрибута SQLAlchemy по ключу (второй позиционный аргумент или `key=`), по последнему имени вызова.
+KEYED_ATTRIBUTE_WRITERS = frozenset({"set_committed_value", "flag_modified", "set_attribute", "del_attribute"})
+
+# Служебный протокол атрибутов — чтением атрибута или определением `def`.
+ATTRIBUTE_PROTOCOL_NAMES = frozenset(
+    {"__getattribute__", "__getattr__", "__setattr__", "__delattr__", "__set__", "__get__", "__delete__"}
+)
+
+# Вычисленный текст SQL: вызовы сырого текста (любой нелитерал — находка) и исполняющие вызовы (находка — текст,
+# собранный f-строкой, `%`, `.format` над строкой или склейкой константы с переменной), по последнему имени вызова.
+SQL_TEXT_CALLS = frozenset({"text", "exec_driver_sql", "executescript"})
+SQL_EXECUTE_CALLS = frozenset({"execute", "executemany", "fetch", "fetchrow", "fetchval"})
+SQL_TEXT_KEYWORDS = frozenset({"text", "statement", "sql", "query", "sql_script"})
+
+# Имена, которые канал добавляет к `judged_names` гейта у вида «имя запрещённой роли строкой»: `getattr` со строкой,
+# читающей объект модуля, пространство имён, отложенный вызов или служебный протокол, запрещён у обоих гейтов.
+BANNED_ATTRIBUTE_NAMES = (
+    MODULE_OBJECT_ATTRIBUTES | IMPORTER_NAMES | NAMESPACE_ATTRIBUTES | DEFERRED_CALL_NAMES | ATTRIBUTE_PROTOCOL_NAMES
+)
 
 
 def _is_importlib(module: str | None) -> bool:
     return module is not None and (module == "importlib" or module.startswith("importlib."))
 
 
-def _construct_kind(node: ast.AST, parent: ast.AST | None, judged_names: frozenset[str]) -> str | None:
-    """Вид запрещённой конструкции узла `node` (по имени узла, а не по получателю) или `None`."""
+def _string_constant(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
+def _constant_text(node: ast.AST) -> bool:
+    """Строковая константа или склейка `+` одних строковых констант."""
+    if _string_constant(node):
+        return True
+    return (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Add)
+        and _constant_text(node.left)
+        and _constant_text(node.right)
+    )
+
+
+def _mentions_text(node: ast.AST) -> bool:
+    """В склейке `+` есть строковая константа."""
+    if _string_constant(node):
+        return True
+    return isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and (
+        _mentions_text(node.left) or _mentions_text(node.right)
+    )
+
+
+def _built_sql(node: ast.AST) -> bool:
+    """Текст SQL, собранный во время исполнения: f-строка, `%` или `.format` над строкой, константа плюс переменная."""
+    if isinstance(node, ast.JoinedStr):
+        return any(isinstance(value, ast.FormattedValue) for value in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        return _string_constant(node.left)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+        return _string_constant(node.func.value)
+    return _mentions_text(node) and not _constant_text(node)
+
+
+def _last_call_name(func: ast.expr) -> str | None:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _reflection_function(node: ast.AST) -> str | None:
+    """Имя функции отражения, если узел — она сама: `getattr` … или `builtins.getattr` …"""
+    if isinstance(node, ast.Name) and node.id in REFLECTION_NAMES:
+        return node.id
+    if (
+        isinstance(node, ast.Attribute)
+        and node.attr in REFLECTION_NAMES
+        and isinstance(node.value, ast.Name)
+        and node.value.id == BUILTINS_MODULE
+    ):
+        return node.attr
+    return None
+
+
+def _named_argument(call: ast.Call, keyword: str) -> ast.expr | None:
+    """Второй позиционный аргумент (имя атрибута или ключ) или именованный `keyword`; при распаковке — `None`."""
+    if any(isinstance(argument, ast.Starred) for argument in call.args[:2]):
+        return None
+    if len(call.args) >= 2:
+        return call.args[1]
+    return next((item.value for item in call.keywords if item.arg == keyword), None)
+
+
+def _import_kind(node: ast.Import | ast.ImportFrom) -> str | None:
     if isinstance(node, ast.Import):
-        if any(_is_importlib(alias.name) for alias in node.names):
+        names = [alias.name for alias in node.names]
+        if any(_is_importlib(name) for name in names):
             return DYNAMIC_KIND_MODULE_OBJECT
+        if BUILTINS_MODULE in names:
+            return DYNAMIC_KIND_NAMESPACE
         return None
-    if isinstance(node, ast.ImportFrom):
-        imported = {alias.name for alias in node.names}
-        if _is_importlib(node.module) or (node.module == "sys" and imported & MODULE_OBJECT_ATTRIBUTES):
-            return DYNAMIC_KIND_MODULE_OBJECT
-        if node.module == "operator" and imported & DEFERRED_CALL_NAMES:
-            return DYNAMIC_KIND_DEFERRED_CALL
-        return None
+    imported = {alias.name for alias in node.names}
+    if _is_importlib(node.module) or (node.module == "sys" and imported & MODULE_OBJECT_ATTRIBUTES):
+        return DYNAMIC_KIND_MODULE_OBJECT
+    if node.module == BUILTINS_MODULE:
+        return DYNAMIC_KIND_NAMESPACE
+    if node.module == "operator" and imported & DEFERRED_CALL_NAMES:
+        return DYNAMIC_KIND_DEFERRED_CALL
+    return None
+
+
+def _named_kind(node: ast.AST) -> str | None:
+    """Вид узла по его собственному имени: `Name.id` или `Attribute.attr`."""
     name = node.id if isinstance(node, ast.Name) else None
     attribute = node.attr if isinstance(node, ast.Attribute) else None
     if name in IMPORTER_NAMES or attribute in IMPORTER_NAMES or attribute in MODULE_OBJECT_ATTRIBUTES:
         return DYNAMIC_KIND_MODULE_OBJECT
+    if name in NAMESPACE_NAMES or attribute in NAMESPACE_ATTRIBUTES:
+        return DYNAMIC_KIND_NAMESPACE
+    if name in TEXT_EXECUTION_NAMES:
+        return DYNAMIC_KIND_TEXT_EXECUTION
     if name in DEFERRED_CALL_NAMES or attribute in DEFERRED_CALL_NAMES:
         return DYNAMIC_KIND_DEFERRED_CALL
+    if name in ATTRIBUTE_PROTOCOL_NAMES or attribute in ATTRIBUTE_PROTOCOL_NAMES:
+        return DYNAMIC_KIND_ATTRIBUTE_PROTOCOL
+    return None
+
+
+def _call_kind(call: ast.Call, judged_names: frozenset[str]) -> str | None:
+    """Вид вызова: отражение по вычисленному имени или строкой роли, писатель по ключу, вычисленный SQL."""
+    reflected = _reflection_function(call.func)
+    if reflected is not None:
+        name = _named_argument(call, "name")
+        if not _string_constant(name):
+            return DYNAMIC_KIND_COMPUTED_ATTRIBUTE
+        assert isinstance(name, ast.Constant)
+        if reflected == "getattr" and name.value in judged_names | BANNED_ATTRIBUTE_NAMES:
+            return DYNAMIC_KIND_BANNED_ROLE_STRING
+        return None
+    last = _last_call_name(call.func)
+    if last in KEYED_ATTRIBUTE_WRITERS:
+        return None if _string_constant(_named_argument(call, "key")) else DYNAMIC_KIND_COMPUTED_ATTRIBUTE
+    if last in SQL_TEXT_CALLS or last in SQL_EXECUTE_CALLS:
+        first = call.args[0] if call.args else next(
+            (item.value for item in call.keywords if item.arg in SQL_TEXT_KEYWORDS), None
+        )
+        if first is None:
+            return None
+        if isinstance(first, ast.Starred):
+            return DYNAMIC_KIND_COMPUTED_SQL
+        if last in SQL_TEXT_CALLS:
+            return None if _constant_text(first) else DYNAMIC_KIND_COMPUTED_SQL
+        return DYNAMIC_KIND_COMPUTED_SQL if _built_sql(first) else None
+    return None
+
+
+def _construct_kind(node: ast.AST, parent: ast.AST | None, judged_names: frozenset[str]) -> str | None:
+    """Вид запрещённой конструкции узла `node` (по имени узла, а не по получателю) или `None`."""
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return _import_kind(node)
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return DYNAMIC_KIND_ATTRIBUTE_PROTOCOL if node.name in ATTRIBUTE_PROTOCOL_NAMES else None
+    named = _named_kind(node)
+    if named is not None:
+        return named
+    if _reflection_function(node) is not None and not (isinstance(parent, ast.Call) and parent.func is node):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            return None
+        return DYNAMIC_KIND_REFLECTION_VALUE
+    if isinstance(node, ast.Call):
+        return _call_kind(node, judged_names)
     return None
 
 
