@@ -30,6 +30,14 @@ Python, записать» оставляла бы ровно такой про�
   `ck_messenger_accounts_manual_requires_phone` отвергает признак без номера,
   так что очистка одной колонки упала бы на нём.
 
+ЗАЩИТА НА ИСПОЛНЕНИИ (план 16-51; О-23 (а), свойство 3). Операторы записи
+этого модуля идут под разрешением `writer_scope()` защиты
+`app/models/phone_guard.py`; любая другая запись колонок номера — присваивание
+атрибуту, сброс, оператор UPDATE / INSERT через сессию — отказывает на
+исполнении исключением `PhoneWriteOutsideWriter`. Разрешение берут ровно два
+оператора: UPDATE `_fill_if_unknown` и UPDATE `set_manual_phone`; проба
+существования ничего не пишет, а `set_committed_value` событий не даёт.
+
 ОТСУТСТВИЕ СТРОКИ НАЗЫВАЕТСЯ, А НЕ СКРЫВАЕТСЯ (ревью WR-05). Автоисточник
 называет его исходом `PhoneWrite.MISSING`, ручная запись — `LookupError`.
 Формы разные, потому что разные вызывающие: автоисточник зовут пакетом мастер
@@ -65,6 +73,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.messenger_account import MessengerAccount
+from app.models.phone_guard import writer_scope
 from app.services.phone import normalize_manual, normalize_reported
 
 # Проверка членства: объект не добавлен, отсоединён или живёт в чужой сессии.
@@ -107,16 +116,17 @@ async def _fill_if_unknown(session: AsyncSession, account_id: int, e164: str) ->
     операторы через `execute`, и проба мимо него стала бы им невидимой.
     Строку, удалённую между записью и пробой, проба честно называет `MISSING`.
     """
-    result = await session.execute(
-        update(MessengerAccount)
-        .where(
-            MessengerAccount.id == account_id,
-            MessengerAccount.phone.is_(None),
-            MessengerAccount.phone_is_manual.is_(False),
+    with writer_scope():
+        result = await session.execute(
+            update(MessengerAccount)
+            .where(
+                MessengerAccount.id == account_id,
+                MessengerAccount.phone.is_(None),
+                MessengerAccount.phone_is_manual.is_(False),
+            )
+            .values(phone=e164)
+            .execution_options(synchronize_session=False)
         )
-        .values(phone=e164)
-        .execution_options(synchronize_session=False)
-    )
     if result.rowcount == 1:
         return PhoneWrite.WRITTEN
     probe = await session.execute(
@@ -208,9 +218,10 @@ async def set_manual_phone(session: AsyncSession, account_id: int, text: str | N
     else:
         e164 = normalize_manual(text)
         statement = statement.values(phone=e164, phone_is_manual=True)
-    result = await session.execute(
-        statement.execution_options(synchronize_session=False)
-    )
+    with writer_scope():
+        result = await session.execute(
+            statement.execution_options(synchronize_session=False)
+        )
     if result.rowcount != 1:
         raise LookupError(f"аккаунт {account_id} не найден")
     return e164

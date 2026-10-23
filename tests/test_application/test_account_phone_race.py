@@ -38,6 +38,13 @@ UPDATE автоисточник ничего не держит. Позиция �
 ручной номер ровно в позиции 2 — между чтением и записью: итог — чужой номер под
 поднятым признаком «ручной». Если боевой писатель когда-нибудь «упростят» до
 такой пары, правило боевого писателя покраснеет так же, как краснеет отрицание.
+Свой UPDATE отрицание исполняет под разрешением писателя `writer_scope()`
+(`app/models/phone_guard.py`): так оно моделирует «прочитать-проверить-записать»
+ВНУТРИ модуля-писателя — ровно ту подмену, которую запрещает D-08. Без
+разрешения его отказывает защита на исполнении (план 16-51), и правило краснело
+бы отказом защиты, а не потерей ручного номера, — контроль стал бы вакуумом
+(свидетель — `test_a_read_check_write_outside_the_writer_scope_is_refused` в
+`tests/test_application/test_phone_writer_runtime_guard.py`).
 """
 
 import itertools
@@ -55,6 +62,7 @@ from app.application.accounts.phone import (
 )
 from app.database import Base
 from app.models.messenger_account import MessengerAccount
+from app.models.phone_guard import writer_scope
 from app.models.user import User
 from app.services.phone import normalize_reported
 
@@ -118,11 +126,19 @@ async def _final(factory, account_id: int) -> tuple:
         return tuple(result.one())
 
 
-async def read_check_write(session: AsyncSession, account_id: int, raw: object) -> PhoneWrite:
+async def read_check_write(
+    session: AsyncSession, account_id: int, raw: object, *, scope=writer_scope
+) -> PhoneWrite:
     """ОТРИЦАНИЕ: прочитать, проверить в Python, записать безусловно.
 
     Оба оператора идут через `session.execute`, поэтому помощник может
     вклиниться между ними. Ровно эта форма запрещена боевому писателю.
+
+    Запись идёт внутри `scope()` — по умолчанию разрешения писателя
+    `writer_scope()`: под ним отрицание моделирует «прочитать-проверить-записать»
+    внутри модуля-писателя (подмена D-08). Без разрешения
+    (`scope=contextlib.nullcontext`) запись отказывает защита на исполнении
+    (план 16-51) — до оператора, и потери ручного номера не было бы вовсе.
     """
     e164 = normalize_reported(raw)
     if e164 is None:
@@ -136,12 +152,13 @@ async def read_check_write(session: AsyncSession, account_id: int, raw: object) 
     ).one()
     if current.phone is not None or current.phone_is_manual:
         return PhoneWrite.KEPT
-    await session.execute(
-        update(MessengerAccount)
-        .where(MessengerAccount.id == account_id)
-        .values(phone=e164)
-        .execution_options(synchronize_session=False)
-    )
+    with scope():
+        await session.execute(
+            update(MessengerAccount)
+            .where(MessengerAccount.id == account_id)
+            .values(phone=e164)
+            .execution_options(synchronize_session=False)
+        )
     return PhoneWrite.WRITTEN
 
 
