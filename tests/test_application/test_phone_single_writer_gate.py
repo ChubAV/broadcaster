@@ -700,6 +700,12 @@ WRITER_TREES = ("app", "scripts")
 # Единственный законный писатель номера (D-12, D-13).
 PHONE_WRITER_MODULE = "app/application/accounts/phone.py"
 
+# Защита единственного писателя на исполнении (план 16-51; О-23 (а), свойство 3): модуль защиты и строка его
+# регистрации в пакете моделей. Вместе с модулем-писателем — три законных места ссылки на защиту и её разрешение
+# `writer_scope` (правило `test_the_runtime_guard_is_entered_only_by_the_writer`, план 16-55).
+RUNTIME_GUARD_MODULE = "app/models/phone_guard.py"
+RUNTIME_GUARD_REGISTRATION = "app/models/__init__.py"
+
 # Колонки номера в `messenger_accounts` (ревизия 0023).
 PHONE_COLUMNS = frozenset({"phone", "phone_is_manual"})
 
@@ -7893,6 +7899,33 @@ def test_a_named_cost_form_gives_its_named_count(source, rival):
     )
 
 
+NAMED_COST_MECHANISM_CASES: list = []
+
+
+@pytest.mark.parametrize(("source", "expected"), NAMED_COST_MECHANISM_CASES)
+def test_a_named_cost_mechanism_form_gives_its_measured_count(source, expected):
+    """Форма цены по механизму (WR-34) даёт ровно измеренное число находок на одном узле колонки (О-23 (а), свойство 4).
+
+    Число — замер, а не ожидание: починка предиката, сводящая «двойку» к одной находке, или рост числа — оба видимы,
+    строка краснеет, и решение владельца пересматривается явно. Каждая форма несёт `operator.methodcaller`, поэтому в
+    судимых деревьях её краснит канал запрета видом «отложенный вызов по имени» — цена касается только прежнего
+    предиката.
+    """
+    offences = phone_write_offences(source, "scripts/x.py")
+    constructs = dynamic_construct_findings(source, "scripts/x.py", judged_names=BANNED_GETATTR_NAMES)
+
+    assert source.count("MessengerAccount.phone") == 1, "строка цены несёт не один узел колонки"
+    assert len(offences) == expected, (
+        f"форма цены по механизму (WR-34): находок {len(offences)}, измерено {expected}: {offences}"
+    )
+    assert len({offence.split(" — ", 1)[0] for offence in offences}) == 1, (
+        f"находки формы цены не на одном месте: {offences}"
+    )
+    assert "operator.methodcaller" in source and DYNAMIC_KIND_DEFERRED_CALL in {c.kind for c in constructs}, (
+        f"форма цены по механизму не красна каналом запрета видом «{DYNAMIC_KIND_DEFERRED_CALL}»: {constructs}"
+    )
+
+
 LEGITIMATE_CASES = [
     pytest.param(
         'return render(request, "x.html", phone=phone)\n', id="render-phone-kwarg"
@@ -8537,3 +8570,125 @@ def test_control_an_assignment_inside_the_writer_module_still_reddens():
     assert judged_offences(source, PHONE_WRITER_MODULE) == [
         f"{PHONE_WRITER_MODULE}:{line} — {KIND_ASSIGNMENT} — account.phone"
     ], "присваивание номера в модуле-писателе прикрыто исключением"
+
+
+def runtime_guard_bypasses(source: str, path: str) -> list[str]:
+    """RED-заглушка плана 16-55: помощник обхода защиты на исполнении появится GREEN-коммитом задачи 2."""
+    return []
+
+
+def test_the_runtime_guard_is_entered_only_by_the_writer():
+    """Защита писателя на исполнении не обходится кодом приложения (О-23 (а), свойство 3; D-07, D-13).
+
+    Разрешение `writer_scope()` снимает защиту `app/models/phone_guard.py` (план 16-51): код, вошедший в него вне
+    модуля-писателя, — второй писатель, которому защита больше не мешает затереть ручной номер. Снятый слушатель
+    (`event.remove(…)`) выключает защиту молча — для всех путей ORM сразу. Поэтому в `app/` и `scripts/` ссылка на
+    модуль защиты, на `writer_scope` или `_WRITER_ACTIVE` законна только в трёх местах — модуль-писатель, сам модуль
+    защиты и строка регистрации в `app/models/__init__.py`, — а вызова `remove` у получателя `event` нет нигде.
+
+    Антивакуум в том же правиле: обход видит все три законных места, и помощник без снятия по пути находит в
+    модуле-писателе ссылку на `writer_scope` — иначе ноль находок ничего бы не значил.
+    """
+    sources = writer_sources(PROJECT_ROOT)
+    walked = {path.relative_to(PROJECT_ROOT).as_posix() for path in sources}
+    bypasses = [
+        bypass
+        for path in sources
+        for bypass in runtime_guard_bypasses(
+            path.read_text(encoding="utf-8"), path.relative_to(PROJECT_ROOT).as_posix()
+        )
+    ]
+    writer_source = (PROJECT_ROOT / PHONE_WRITER_MODULE).read_text(encoding="utf-8")
+    unexempt = runtime_guard_bypasses(writer_source, "app/x.py")
+
+    assert {PHONE_WRITER_MODULE, RUNTIME_GUARD_MODULE, RUNTIME_GUARD_REGISTRATION} <= walked, (
+        f"обход ({len(sources)} файлов) не видит законные места защиты: модуль-писатель, модуль защиты, регистрацию"
+    )
+    assert any("writer_scope" in bypass for bypass in unexempt), (
+        "защита писателя на исполнении обходится кодом приложения незаметно: помощник без снятия по пути не видит "
+        f"в модуле-писателе ссылки на `writer_scope` — он слеп, и ноль находок на дереве ничего не значит: {unexempt}"
+    )
+    assert bypasses == [], (
+        f"защита писателя на исполнении обходится кодом приложения (обойдено {len(sources)} файлов) — вход в "
+        "разрешение или ссылка на модуль защиты вне трёх законных мест, или снятый слушатель (D-07, D-13):\n"
+        + "\n".join(f"  {bypass}" for bypass in bypasses)
+    )
+
+
+GUARD_BYPASS_CONTROLS = [
+    pytest.param(
+        "from app.models.phone_guard import writer_scope\n",
+        "app/x.py",
+        1,
+        id="from-the-guard-module-import-writer-scope",
+    ),
+    pytest.param(
+        "from app.models import phone_guard\n\n\ndef backfill(account):\n"
+        '    with phone_guard.writer_scope():\n        account.status = "x"\n',
+        "app/x.py",
+        2,
+        id="the-guard-module-from-models-with-writer-scope",
+    ),
+    # Псевдоним ввоза: имя `writer_scope` правило судит в любой позиции, атрибутом псевдонима `g` включительно.
+    pytest.param(
+        "import app.models.phone_guard as g\n\n\ndef backfill(account):\n"
+        '    with g.writer_scope():\n        account.status = "x"\n',
+        "app/x.py",
+        2,
+        id="an-aliased-import-of-the-guard-module",
+    ),
+    pytest.param(
+        "from sqlalchemy import event\n\nfrom app.models.messenger_account import MessengerAccount\n\n\n"
+        'def unguard(f):\n    event.remove(MessengerAccount.phone, "set", f)\n',
+        "app/x.py",
+        1,
+        id="event-remove-of-the-phone-listener",
+    ),
+    pytest.param(
+        "import sqlalchemy\nfrom sqlalchemy.orm import Session\n\n\n"
+        'def unguard(f):\n    sqlalchemy.event.remove(Session, "do_orm_execute", f)\n',
+        "app/x.py",
+        1,
+        id="qualified-event-remove-of-the-session-listener",
+    ),
+    # Сверх плана (Rule 2): псевдоним модуля `event` и ввоз самой `remove` — тот же снятый слушатель.
+    pytest.param(
+        "from sqlalchemy import event as sa_event\nfrom sqlalchemy.orm import Session\n\n\n"
+        'def unguard(f):\n    sa_event.remove(Session, "before_flush", f)\n',
+        "app/x.py",
+        1,
+        id="an-aliased-event-module-remove",
+    ),
+    pytest.param(
+        "from sqlalchemy.event import remove\n",
+        "app/x.py",
+        1,
+        id="an-imported-event-remove",
+    ),
+    # Законное место: тот же ввоз в модуле-писателе — ноль.
+    pytest.param(
+        "from app.models.phone_guard import writer_scope\n",
+        PHONE_WRITER_MODULE,
+        0,
+        id="the-writer-imports-writer-scope",
+    ),
+]
+
+
+@pytest.mark.parametrize(("source", "path", "expected"), GUARD_BYPASS_CONTROLS)
+def test_a_planted_guard_bypass_reddens_the_rule(tmp_path, source, path, expected):
+    """Контроль правила входа в разрешение: подложенный обход находит тот же обход дерева, законное место — нет."""
+    planted = _plant(tmp_path, path, source)
+
+    sources = writer_sources(tmp_path)
+    bypasses = [
+        bypass
+        for file in sources
+        for bypass in runtime_guard_bypasses(file.read_text(encoding="utf-8"), file.relative_to(tmp_path).as_posix())
+    ]
+
+    assert planted in sources, f"обход не видит подложенный файл `{path}`: {sources}"
+    assert len(bypasses) == expected and all(bypass.startswith(f"{path}:") for bypass in bypasses), (
+        f"подложенный обход защиты на исполнении не краснит правило входа в разрешение писателя ожидаемым числом "
+        f"находок ({expected}) в `{path}`: {bypasses}"
+    )
