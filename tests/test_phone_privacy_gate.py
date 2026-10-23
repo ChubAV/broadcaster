@@ -579,6 +579,8 @@ import pytest
 # умолчанием) читают одно имя `f`; своего читателя имени гейт не держит.
 from tests.phone_gate_grammar import (  # noqa: F401 — имена общего модуля для паритета
     BINDING_FORMS,
+    DYNAMIC_CONSTRUCT_EXCEPTIONS,
+    DYNAMIC_CONSTRUCT_KINDS,
     DYNAMIC_KIND_BANNED_ROLE_STRING,
     DYNAMIC_KIND_DEFERRED_CALL,
     DYNAMIC_KIND_MODULE_OBJECT,
@@ -4452,6 +4454,108 @@ def test_the_privacy_gate_header_names_the_shared_grammar_and_every_carrier():
 
     assert not missing, (
         "шапка гейта приватности не называет носителя ссылки и общую грамматику "
+        f"({len(missing)}):\n" + "\n".join(f"  {item}" for item in missing)
+    )
+
+
+BAN_SECTION_HEADING = "ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ"
+RECONCILIATION_HEADING = "СОГЛАСОВАНИЕ ПРЕЖНИХ ЗАПРЕТОВ"
+# Фразы прежних обещаний, которые решение О-23 (а) сужает: у каждой в шапке — оговорка о запрещённых конструкциях.
+NARROWED_PROMISES = (
+    "каждое толкование узла",
+    "Связанное имя читается и через объект модуля",
+    "поданный ЛЮБОМУ",
+)
+# Оговорка к пунктам «ГРАНИЦЫ СРЕДСТВА», ставшим конструкциями канала (план 16-53).
+BOUNDARY_BAN_CAVEAT = "пункт объясняет, почему предикат её не судит"
+
+
+def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
+    """Шапка правдива об обещании после решения владельца О-23 (а) (свойства 1, 2, 4, 5, 6; план 16-54).
+
+    Раздел «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» называет обещание «в коде нет конструкции, которую гейт не умеет
+    судить», каждый вид канала `DYNAMIC_CONSTRUCT_KINDS`, каждое исключение `DYNAMIC_CONSTRUCT_EXCEPTIONS` (путь и
+    владелец), маску на исполнении `app/services/log_masking.py` (О-24 (а)) и её границу (`print`, `max_worker`,
+    `wa_worker`), правило `LOGGING_CONFIG_MODULE`, второй рубеж и согласование прежних запретов (таблица `16-56`).
+    Летописи CR-05, WR-32, WR-33 называют регрессию `16573223` против `d31d86db`, канал (16-53), маску (16-52) и решение
+    О-23 (а); вступление D-11 — маску «последним рубежом»; прежние обещания полноты написаний — с оговоркой о
+    запрещённых конструкциях; докстринг `ModuleLogNames` — два написания объекта модуля и запрет остальных; «Живые
+    числа» — замер плана 16-52 и прежние «225 / 68 / 93» летописью.
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    missing: list[str] = []
+    start = flat.find(BAN_SECTION_HEADING)
+    end = flat.find("ГРАНИЦА СРЕДСТВА", start + 1) if start >= 0 else -1
+    section = flat[start:end] if 0 <= start < end else ""
+    if not section:
+        missing.append(f"нет раздела «{BAN_SECTION_HEADING}» перед «ГРАНИЦА СРЕДСТВА»")
+    for needle in (
+        "О-23 (а)",
+        "в коде нет конструкции, которую гейт не умеет судить",
+        *DYNAMIC_CONSTRUCT_KINDS,
+        *(key.rsplit("::", 1)[0] for key in DYNAMIC_CONSTRUCT_EXCEPTIONS),
+        "app/services/log_masking.py",
+        "О-24 (а)",
+        "второй рубеж",
+        "print",
+        "max_worker",
+        "wa_worker",
+        "LOGGING_CONFIG_MODULE",
+        "test_no_dynamic_construct_in_the_python_trees",
+        "WR-35",
+    ):
+        if section and needle not in section:
+            missing.append(f"раздел «{BAN_SECTION_HEADING}» не называет «{needle}»")
+    reconciliation_start = section.find(RECONCILIATION_HEADING)
+    reconciliation = section[reconciliation_start:] if reconciliation_start >= 0 else ""
+    if section and not reconciliation:
+        missing.append(f"нет абзаца «{RECONCILIATION_HEADING}»")
+    for needle in ("16-09 №2", "16-29 №2", "16-46 №2", "16-49 №2", "16-46 №4", "16-56"):
+        if reconciliation and needle not in reconciliation:
+            missing.append(f"абзац согласования прежних запретов не называет «{needle}»")
+    for heading, needles in (
+        ("Летопись CR-05", ("16573223", "d31d86db", "16-53", "16-52", "О-23 (а)")),
+        ("Летопись WR-32", ("16-53", "16-52", "О-23 (а)")),
+        ("Летопись WR-33", ("16-53", "16-52", "О-23 (а)")),
+    ):
+        chronicle = _chronicle_segment(flat, heading)
+        if not chronicle:
+            missing.append(f"нет «{heading}»")
+        for needle in needles:
+            if chronicle and needle not in chronicle:
+                missing.append(f"«{heading}» не называет «{needle}»")
+    intro = flat[: flat.find("ЧТО СЧИТАЕТСЯ ВЫЗОВОМ ЖУРНАЛА")]
+    if "последним рубежом" not in intro:
+        missing.append("вступление D-11 не говорит, что маска в журнале бывает только «последним рубежом»")
+    for phrase in NARROWED_PROMISES:
+        at = flat.find(phrase)
+        if at < 0:
+            missing.append(f"прежняя фраза стёрта: нет «{phrase}»")
+        elif "запрещённ" not in flat[at : at + 900]:
+            missing.append(f"у фразы «{phrase}» нет оговорки о запрещённых конструкциях канала")
+    boundary = flat[flat.find("ГРАНИЦА СРЕДСТВА") :]
+    if boundary.count(BOUNDARY_BAN_CAVEAT) < 3:
+        missing.append(
+            f"у пунктов границы, ставших конструкциями канала, нет оговорки «{BOUNDARY_BAN_CAVEAT}» (нужно три: "
+            "объект модуля, связывание вызовом или через пространство имён, вычисленное имя)"
+        )
+    names_doc = " ".join((ModuleLogNames.__doc__ or "").split())
+    phrase_at = names_doc.find("любой формой общей грамматики")
+    chronicle_at = names_doc.find("До плана 16-54")
+    if phrase_at >= 0 and not 0 <= chronicle_at < phrase_at:
+        missing.append("докстринг `ModuleLogNames` утверждает «любой формой общей грамматики» без оговорки")
+    if "запрещ" not in names_doc:
+        missing.append("докстринг `ModuleLogNames` не называет запрет прочих написаний объекта модуля")
+    live = flat.find("Живые числа")
+    live_segment = flat[live : live + 700] if live >= 0 else ""
+    for needle in ("16-52", "227", "68", "93", "225"):
+        if needle not in live_segment:
+            missing.append(f"фраза «Живые числа» не называет «{needle}»")
+
+    assert not missing, (
+        "шапка гейта приватности не называет запрет динамики и защиту на исполнении "
         f"({len(missing)}):\n" + "\n".join(f"  {item}" for item in missing)
     )
 
