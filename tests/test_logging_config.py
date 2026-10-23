@@ -31,6 +31,8 @@ NUMBER_DIGITS = "9991234567"
 MASK = "+7 *** ***-**-67"
 
 NAMED_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access", "celery", "telethon", "sqlalchemy.engine")
+# Журналы, в которые пишут правила модуля; на время правила они включены (см. `restored_logging`).
+RULE_LOGGERS = NAMED_LOGGERS + ("app.tracer", "app.writer", "app.console", "app.lines", "app.form", "x")
 
 
 def _every_logger() -> list[logging.Logger]:
@@ -41,8 +43,14 @@ def _every_logger() -> list[logging.Logger]:
 
 @pytest.fixture(autouse=True)
 def restored_logging():
-    """Снимок настройки журнала процесса до правила и возврат после него."""
-    for name in NAMED_LOGGERS:
+    """Снимок настройки журнала процесса до правила и возврат после него.
+
+    После снимка журналы правил (`RULE_LOGGERS`) включаются: `logging.config.fileConfig` в
+    `alembic/env.py` (суита миграций) выключает все существующие журналы
+    (`disable_existing_loggers`), и запись правила иначе не дошла бы до обработчика. Прежнее
+    состояние `disabled` возвращается после правила вместе со всем снимком.
+    """
+    for name in RULE_LOGGERS:
         logging.getLogger(name)
     config = structlog.get_config()
     # `get_config` отдаёт САМ список процессоров, а `configure` меняет его на месте.
@@ -56,6 +64,8 @@ def restored_logging():
         for _item, saved, *_rest in loggers.values()
         for handler in saved
     }
+    for name in RULE_LOGGERS:
+        logging.getLogger(name).disabled = False
     yield
     for item in _every_logger():
         if id(item) not in loggers:
