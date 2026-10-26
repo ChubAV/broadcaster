@@ -5660,6 +5660,11 @@ REFUTED_CARRIER_COST_CLAIM = (
     "носители, у которых ссылка не первым аргументом (`run_in_executor`, `Thread`, `Timer`, `enqueue`"
 )
 
+# Прежняя фраза раздела «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» (до плана 16-62) о путях за границей защиты: для
+# записи `bulk_*` / через соединение / upsert с данными из переменной она была ложна (ревью CR-08, верификация раунда 11
+# `553933d8`, истины 18 и 168: предикат 0, канал 0); в шапке она стоит только в «Летописи CR-08».
+REFUTED_FIRST_RUNG_CLAIM = "Для этих путей статический гейт остаётся первым рубежом"
+
 
 def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
     """Шапка правдива об обещании после решения владельца О-23 (а) (свойства 1, 3, 4, 5, 6; план 16-55).
@@ -5667,9 +5672,14 @@ def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
     Раздел «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» перед «ГРАНИЦЕЙ ПРЕДИКАТА» называет обещание («в коде нет
     конструкции, которую гейт не умеет судить»), каждый вид канала `DYNAMIC_CONSTRUCT_KINDS`, ключ каждого исключения
     `DYNAMIC_CONSTRUCT_EXCEPTIONS` деревьев гейта, защиту на исполнении `app/models/phone_guard.py` с разрешением
-    `writer_scope` и правилом `RUNTIME_GUARD_MODULE`, её границу (`set_committed_value`, `bulk_update_mappings`,
-    `session.connection()`) и то, что за ней статический гейт остаётся первым рубежом; согласование прежних запретов
-    (таблица плана 16-56) и живое дерево (106 файлов). Абзац цены называет механизм WR-34 и таблицу
+    `writer_scope` и правилом `RUNTIME_GUARD_MODULE`, её линии и границу (`set_committed_value`, `bulk_update_mappings`,
+    `session.connection()`, линия `before_cursor_execute` плана 16-58, таблица `GUARD_BOUNDARY_WRITES`), рубежи по
+    путям (для текста SQL и сырого соединения DBAPI статический гейт — единственный рубеж, `RAW_SQL_BOUNDARY_FORMS`),
+    закрепление реестра `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS`; согласование прежних запретов (таблица плана 16-56) и
+    живое дерево (106 файлов). С плана 16-62 (ревью CR-08, верификация раунда 11 `553933d8`, истины 18 и 168; О-25 (а),
+    свойство 5) прежняя фраза `REFUTED_FIRST_RUNG_CLAIM` стоит в шапке только в «Летописи CR-08» раздела, рядом с
+    «CR-08», «О-25 (а)», «16-58» и «553933d8»: правило закрепляет новое утверждение, а снятое — летописью, не стирая
+    его. Абзац цены называет механизм WR-34 и таблицу
     `NAMED_COST_MECHANISM_CASES` и не содержит прежней фразы о носителях без пары; летописи WR-33, V10-1, V10-2 называют
     регрессию `cc7fbce7` против `e61ab80d`, канал (план 16-53), защиту (план 16-51) и решение О-23 (а).
     """
@@ -5696,7 +5706,12 @@ def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
         "set_committed_value",
         "bulk_update_mappings",
         "session.connection()",
-        "первым рубежом",
+        "before_cursor_execute",
+        "план 16-58",
+        "GUARD_BOUNDARY_WRITES",
+        "RAW_SQL_BOUNDARY_FORMS",
+        "DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS",
+        "единственный рубеж",
         "RUNTIME_GUARD_MODULE",
         "16-09 №2",
         "16-12 №2",
@@ -5708,6 +5723,15 @@ def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
     ):
         if section and needle not in section:
             missing.append(f"раздел запрета не называет «{needle}»")
+    # Прежняя фраза о путях за границей защиты (CR-08) — только летописью в разделе, рядом с причиной.
+    rung_chronicle = _chronicle_segment(flat, "Летопись CR-08")
+    if not rung_chronicle or not section or "Летопись CR-08" not in section:
+        missing.append("нет «Летопись CR-08» в разделе запрета")
+    if flat.count(REFUTED_FIRST_RUNG_CLAIM) != rung_chronicle.count(REFUTED_FIRST_RUNG_CLAIM):
+        missing.append(f"шапка всё ещё утверждает прежнюю фразу вне летописи: «{REFUTED_FIRST_RUNG_CLAIM}»")
+    for needle in (REFUTED_FIRST_RUNG_CLAIM, "CR-08", "О-25 (а)", "16-58", "553933d8"):
+        if rung_chronicle and needle not in rung_chronicle:
+            missing.append(f"«Летопись CR-08» не называет «{needle}»")
 
     price_start = flat.find("ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ")
     price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_start)
