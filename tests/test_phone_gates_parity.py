@@ -122,7 +122,10 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   `test_the_dynamic_construct_tables_cover_every_kind` — у каждого из девяти видов не одно написание;
   `test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling` и его контроль
   `test_a_seventh_dynamic_construct_exception_reddens_the_ceiling` — реестр правдив (файл дерева гейта, владелец,
-  конструкция вида, причина) и под потолком; `test_the_parity_docstring_names_the_ban_channel_truthfully` — этот
+  конструкция вида, причина) и под потолком; трасер `test_an_extra_construct_in_an_exempt_owner_is_red` (ревью WR-38,
+  решение владельца О-25 (а), свойство 6; план 16-59) — вторая конструкция того же вида в теле исключённого владельца
+  `BaseRepository.update`, новая `getattr(self.session, op)(…)` или повтор закреплённой, краснит правило живых деревьев
+  обоих гейтов; `test_the_parity_docstring_names_the_ban_channel_truthfully` — этот
   пункт, пункт о словаре девятого круга и комментарий-шапка канала общего модуля правдивы.
 * Тексты, на которых держатся закрытия ревью (ревью IN-19 и IN-18, решение владельца О-19, план
   16-44): `test_the_parity_docstring_names_what_it_checks` — этот докстринг называет каждое имя
@@ -1331,6 +1334,71 @@ def test_a_seventh_dynamic_construct_exception_reddens_the_ceiling():
     )
 
 
+# Исключённый владелец трасера WR-38 (план 16-59): общий путь записи репозитория. Строка его тела, после которой
+# правило подкладывает в памяти вторую конструкцию того же вида; файл на диске не меняется.
+EXEMPT_OWNER_PATH = "app/repositories/base.py"
+EXEMPT_OWNER_KEY = f"{EXEMPT_OWNER_PATH}::BaseRepository.update::{grammar.DYNAMIC_KIND_COMPUTED_ATTRIBUTE}"
+EXEMPT_OWNER_ANCHOR = "setattr(entity, field, value)"
+
+
+def _plant_after_anchor(source: str, anchor: str, lines: tuple[str, ...]) -> tuple[str, int]:
+    """`source` с `lines`, вставленными тем же отступом сразу после единственной строки `anchor`; номер последней."""
+    rows = source.splitlines(keepends=True)
+    at = [i for i, row in enumerate(rows) if row.strip() == anchor]
+    assert len(at) == 1, f"строка `{anchor}` в `{EXEMPT_OWNER_PATH}` не единственна: строки {[i + 1 for i in at]}"
+    indent = rows[at[0]][: len(rows[at[0]]) - len(rows[at[0]].lstrip())]
+    planted = rows[: at[0] + 1] + [f"{indent}{line}\n" for line in lines] + rows[at[0] + 1 :]
+    return "".join(planted), at[0] + 1 + len(lines)
+
+
+@pytest.mark.parametrize(
+    ("planted_lines", "expected_text"),
+    [
+        pytest.param(
+            ('op = kwargs.pop("op", "add")', "getattr(self.session, op)(type(entity), [kwargs])"),
+            "getattr(self.session, op)",
+            id="a-new-construct-of-the-same-kind",
+        ),
+        pytest.param((EXEMPT_OWNER_ANCHOR,), EXEMPT_OWNER_ANCHOR, id="the-pinned-construct-repeated"),
+    ],
+)
+def test_an_extra_construct_in_an_exempt_owner_is_red(tmp_path, planted_lines, expected_text):
+    """ТРАСЕР WR-38 (план 16-59; О-25 (а), свойство 6; О-23 (а), свойство 1; D-13, D-17): вторая конструкция того же
+    вида в теле исключённого владельца — находка канала у обоих гейтов, а не молчание реестра.
+
+    Живой `app/repositories/base.py` с подложенными в тело `BaseRepository.update` строками (новая
+    `getattr(self.session, op)(…)` — вычисленный вызов любого API сессии, в том числе `bulk_update_mappings`, — или
+    повтор закреплённой `setattr(entity, field, value)`, ось числа) кладётся в синтетическое дерево; правило живых
+    деревьев каждого гейта (`dynamic_construct_scan`: канал `dynamic_construct_findings` и `exempt_dynamic_constructs`)
+    даёт ровно одну находку вида «вычисленное имя атрибута» на подложенной строке. До плана 16-59 ключ записи
+    реестра снимал ВСЕ конструкции своего вида у владельца — 0 находок у обоих гейтов.
+    """
+    live = (privacy.PROJECT_ROOT / EXEMPT_OWNER_PATH).read_text(encoding="utf-8")
+    source, planted_line = _plant_after_anchor(live, EXEMPT_OWNER_ANCHOR, planted_lines)
+    planted = tmp_path / EXEMPT_OWNER_PATH
+    planted.parent.mkdir(parents=True)
+    planted.write_text(source, encoding="utf-8")
+
+    location = f"{EXEMPT_OWNER_PATH}:{planted_line} — "
+    found: dict[str, list[str]] = {}
+    for title, module in (("приватности", privacy), ("писателя", writer)):
+        paths, offences = module.dynamic_construct_scan(tmp_path)
+        assert planted in paths, f"обход гейта {title} не видит подложенный владелец: {paths}"
+        found[title] = offences
+    reddened = [
+        title
+        for title, offences in found.items()
+        if len(offences) == 1
+        and offences[0].startswith(location)
+        and f"— {grammar.DYNAMIC_KIND_COMPUTED_ATTRIBUTE} — {expected_text}" in offences[0]
+    ]
+
+    assert reddened == ["приватности", "писателя"], (
+        "конструкция в теле исключённого владельца снята реестром молча (WR-38): ключ "
+        f"`{EXEMPT_OWNER_KEY}` снимает больше закреплённого; находки гейтов: {found}"
+    )
+
+
 # Правила канала запрета этого модуля (план 16-53): абзац канала докстринга называет каждое.
 BAN_CHANNEL_RULES = (
     "test_a_planted_module_object_read_reddens_both_gates",
@@ -1339,6 +1407,7 @@ BAN_CHANNEL_RULES = (
     "test_the_dynamic_construct_tables_cover_every_kind",
     "test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling",
     "test_a_seventh_dynamic_construct_exception_reddens_the_ceiling",
+    "test_an_extra_construct_in_an_exempt_owner_is_red",
     "test_the_parity_docstring_names_the_ban_channel_truthfully",
 )
 BAN_CHANNEL_DOC_NEEDLES = ("О-23 (а)", "запрещённ", "`dynamic_construct_findings`", "`DYNAMIC_CONSTRUCT_EXCEPTIONS`")
