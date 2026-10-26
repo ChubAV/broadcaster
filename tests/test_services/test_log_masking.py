@@ -251,9 +251,12 @@ MASK_COST_INPUTS = [
 @pytest.mark.parametrize("text", MASK_COST_INPUTS)
 def test_a_long_split_field_is_masked_in_bounded_time(monkeypatch, text):
     """Поле из 8 000 знаков разбитого входа — в предел времени и в бюджет судов; номера не остаётся."""
+    import gc
+
     from app.services import log_masking
 
     calls = _counting_judge(monkeypatch)
+    gc.collect()  # сборка мусора большой суиты — не цена маски: до окна замера
     started = time.perf_counter()
     masked = log_masking.mask_numbers(text)
     elapsed = time.perf_counter() - started

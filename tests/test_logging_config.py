@@ -253,7 +253,14 @@ LONG_SPLIT_REQUEST_PATHS = [
 
 
 def _logged_request(raw_path: str) -> float:
-    """Запрос `GET raw_path` к пустому приложению с `RequestIdMiddleware`; время запроса, с."""
+    """Запрос `GET raw_path` к пустому приложению с `RequestIdMiddleware`; время запроса, с.
+
+    Меряется только сам запрос: клиент (контекст SSL) построен и стек middleware Starlette
+    собран прогревочным запросом `GET /x` до окна замера, мусор собран перед ним — в окне
+    остаются обработка запроса, событие `request` и маска его полей (CR-07).
+    """
+    import gc
+
     import httpx
     from starlette.applications import Starlette
 
@@ -262,15 +269,17 @@ def _logged_request(raw_path: str) -> float:
     app = Starlette()
     app.add_middleware(RequestIdMiddleware)
 
-    async def run() -> int:
+    async def run() -> tuple[int, float]:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            await client.get("/x")
+            gc.collect()
+            started = time.perf_counter()
             response = await client.get(raw_path)
-        return response.status_code
+            elapsed = time.perf_counter() - started
+        return response.status_code, elapsed
 
-    started = time.perf_counter()
-    status = asyncio.run(run())
-    elapsed = time.perf_counter() - started
+    status, elapsed = asyncio.run(run())
     assert status == 404, f"пустое приложение ответило {status}, а не 404"
     return elapsed
 
