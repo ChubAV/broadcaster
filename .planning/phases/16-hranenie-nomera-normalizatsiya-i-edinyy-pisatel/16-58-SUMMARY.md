@@ -248,6 +248,12 @@ None — внешних сервисов нет.
 - 16-64: GREEN CR-08 — `a75f30be`, `f4ee8a3b`, `db8f0d67`; GREEN WR-36 — `f4ee8a3b`.
 - После слияния линия движка живёт и в подпроцессе зонда Celery плана 16-57 (ввоз `app.models`); на SELECT и записях других таблиц она выходит на быстром пути.
 
+## Self-Check: PASSED
+
+- Файлы на месте: `app/models/phone_guard.py`, `tests/test_application/test_phone_writer_runtime_guard.py`, эта сводка.
+- Коммиты на HEAD: `1da1b36a`, `a75f30be`, `f4565b38`, `f4ee8a3b`, `52ec6e5d`, `db8f0d67`, сводка `16552feb`.
+- `uv run pytest tests/test_planning -q -p no:randomly` после коммита сводки — 218 passed, 2 skipped (база — так же).
+
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-26*
