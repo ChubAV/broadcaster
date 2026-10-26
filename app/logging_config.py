@@ -55,7 +55,8 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
-    attach_number_masking(handler)
+    # Словарь события (structlog и чужой записи) на корне маскирует процессор форматтера.
+    attach_number_masking(handler, formatter_masks_event_dicts=True)
 
     root = logging.getLogger()
     root.handlers.clear()

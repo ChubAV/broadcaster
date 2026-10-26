@@ -111,6 +111,37 @@ MASK_JUDGMENT_BUDGET: int = 64
 
 _CLOSED_DIGITS = str.maketrans("0123456789", "**********")
 
+# СВЁРТКА (WR-39; О-25 (а), свойство 2). Знаки, которые `normalize_manual` читает внутри номера,
+# а грамматика маски — нет: замер исполнения 16-60 (2026-10-26, HEAD `14b8cfbe`, перебор
+# U+0021…U+FFFF формой `+7{c}999{c}123{c}45{c}67` и всех блоков `Nd` формой `+` + цифры; правило
+# `test_every_character_the_normalizer_reads_in_a_number_is_folded_or_named` держит таблицу в
+# согласии с нормализатором — обновление `phonenumberslite` покраснит его). Маска судит копию,
+# где эти знаки свёрнуты знак в знак (`str.translate`: позиции те же, NFKC менял бы длину), и
+# кладёт маску на исходные позиции.
+# НЕ свёрнуты: `.`, `/`, `[`, `]` и полноширинные U+FF0E, U+FF0F, U+FF3B, U+FF3D — граница 16-52
+# (дроби, адреса, пути); `*` — знак самой маски (свёртка сломала бы идемпотентность); U+202F и
+# U+2009 — нормализатор номером их не читает (замер), а по О-24 (а) «похоже на номер» судит он.
+_FOLDED_DIGIT_ZEROS: tuple[int, ...] = (
+    0x0660, 0x06F0, 0x07C0, 0x0966, 0x09E6, 0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6,
+    0x0D66, 0x0DE6, 0x0E50, 0x0ED0, 0x0F20, 0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0,
+    0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0, 0xA900, 0xA9D0, 0xA9F0,
+    0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x11066, 0x110F0, 0x11136, 0x111D0, 0x112F0,
+    0x11450, 0x114D0, 0x11650, 0x116C0, 0x11730, 0x118E0, 0x11950, 0x11C50, 0x11D50, 0x11DA0,
+    0x11F50, 0x16A60, 0x16AC0, 0x16B50, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6, 0x1E140,
+    0x1E2F0, 0x1E4F0, 0x1E950, 0x1FBF0,
+)
+_FOLDED_SEPARATORS: dict[int, str] = {
+    0x00A0: " ", 0x200B: " ", 0x2060: " ", 0x3000: " ",
+    0x00AD: "-", 0x2010: "-", 0x2011: "-", 0x2012: "-", 0x2013: "-", 0x2014: "-", 0x2015: "-",
+    0x2053: "-", 0x2212: "-", 0x223C: "-", 0x30FC: "-", 0xFF0D: "-",
+    0xFF08: "(", 0xFF09: ")",
+    0xFF0B: "+",
+}
+_NUMBER_FOLD: dict[int, str] = {
+    **{zero + value: str(value) for zero in _FOLDED_DIGIT_ZEROS for value in range(10)},
+    **_FOLDED_SEPARATORS,
+}
+
 
 def _digit_count(text: str) -> int:
     return sum(1 for ch in text if "0" <= ch <= "9")
@@ -266,15 +297,32 @@ def _apply_spans(text: str, spans: list[tuple[int, int, str]]) -> str:
     return "".join(parts)
 
 
+def _mask_pass(text: str, view: str, judgments: _Judgments) -> str:
+    """Кандидаты и суд — на `view` (та же длина, знак в знак), маска — на позициях `text`.
+
+    Порядок прежний: сначала разбивка, затем цепочки цифр на тексте после первой стадии.
+    """
+    spaced = _spaced_spans(view, judgments)
+    spaced_text = _apply_spans(text, spaced)
+    spaced_view = _apply_spans(view, spaced)
+    return _apply_spans(spaced_text, _run_spans(spaced_view, judgments))
+
+
 def mask_numbers(text: str) -> str:
     """Текст, где каждая подстрока, признанная номером, заменена маской `mask_phone` (D-10).
 
-    Порядок прежний: сначала разбивка, затем цепочки цифр на тексте после первой стадии. Судов
-    нормализатора на вызов — не больше `MASK_JUDGMENT_BUDGET`, сверх — отказ в закрытую.
+    Первый проход судит текст как есть — ровно то, что маскировала маска до свёртки; второй —
+    только если в тексте есть знаки `_NUMBER_FOLD`: судит свёрнутую копию и кладёт маску на
+    исходные позиции. Так свёртка добавляет номера Юникода, но не меняет края (`_LEFT`,
+    `_RIGHT`) номера, который первый проход уже нашёл. Судов нормализатора на вызов — не больше
+    `MASK_JUDGMENT_BUDGET`, сверх — отказ в закрытую.
     """
     judgments = _Judgments()
-    spaced = _apply_spans(text, _spaced_spans(text, judgments))
-    return _apply_spans(spaced, _run_spans(spaced, judgments))
+    masked = _mask_pass(text, text, judgments)
+    folded = masked.translate(_NUMBER_FOLD)
+    if folded == masked:
+        return masked
+    return _mask_pass(masked, folded, judgments)
 
 
 def _masked_text(value: object) -> str | None:
@@ -367,13 +415,22 @@ class NumberMaskingFilter(logging.Filter):
 
     Всегда пропускает запись. Строковые аргументы маскируются на месте, прочие сохраняют тип
     (`%d` не ломается); если номер остался в тексте — запись несёт готовый маскированный текст.
-    Запись structlog (словарь в `msg`) не трогается: её маскирует `mask_numbers_in_event`.
+    Словарь в `msg` (событие structlog или словарь любой записи): на обработчике, чей форматтер
+    маскирует словарь события сам (`formatter_masks_event_dicts=True` — корневой обработчик
+    `setup_logging` с `mask_numbers_in_event`), запись не трогается; на прочих обработчиках
+    (uvicorn: обычный `Formatter`) словарь заменяется маскированным (IN-25).
     """
+
+    def __init__(self, *, formatter_masks_event_dicts: bool = False) -> None:
+        super().__init__()
+        self.formatter_masks_event_dicts = formatter_masks_event_dicts
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
             if isinstance(record.msg, dict):
-                return True
+                if self.formatter_masks_event_dicts:
+                    return True
+                record.msg = _guarded(record.msg)
             _mask_message(record)
             if record.exc_text:
                 record.exc_text = mask_numbers(record.exc_text)
@@ -390,7 +447,7 @@ class NumberMaskingFilter(logging.Filter):
         return True
 
 
-def attach_number_masking(handler: logging.Handler) -> None:
+def attach_number_masking(handler: logging.Handler, *, formatter_masks_event_dicts: bool = False) -> None:
     """Поставить `NumberMaskingFilter` на обработчик, если его там ещё нет."""
     if not any(isinstance(existing, NumberMaskingFilter) for existing in handler.filters):
-        handler.addFilter(NumberMaskingFilter())
+        handler.addFilter(NumberMaskingFilter(formatter_masks_event_dicts=formatter_masks_event_dicts))
