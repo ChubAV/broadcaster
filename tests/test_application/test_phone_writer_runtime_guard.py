@@ -1250,13 +1250,32 @@ GUARD_HEADER_NAMES = (
     "сырое соединение DBAPI",
     "CLOSED_FAILING_WRITES",
     "О-25 (а)",
+    # План 16-61: сравнение у `set`, автосброс писателя, копия разрешения в задаче
+    # и таблица измеренной границы (WR-37, IN-23, IN-24; О-25 (а), свойство 5).
+    "merge",
+    "autoflush=False",
+    "create_task",
+    "IN-23",
+    "IN-24",
+    "WR-37",
+    "GUARD_BOUNDARY_WRITES",
 )
 # Фраза прежнего обещания: после плана 16-58 — только в летописи, с причиной.
 RETIRED_PROMISE = "каким бы написанием она ни была сделана"
 CHRONICLE_HEAD = "Летопись"
 CHRONICLE_CAUSES = ("CR-08", "WR-36")
 WRITER_PARAGRAPH_HEAD = "ЗАЩИТА НА ИСПОЛНЕНИИ"
-WRITER_PARAGRAPH_NAMES = ("app/models/phone_guard.py", "writer_scope")
+WRITER_PARAGRAPH_NAMES = (
+    "app/models/phone_guard.py",
+    "writer_scope",
+    "autoflush=False",
+    "IN-23",
+)
+# План 16-61 (IN-24): `finally` снимает разрешение только в ТЕКУЩЕМ контексте —
+# фраза о снятии стоит в шапке лишь рядом с этим словом.
+SCOPE_RELEASE_PHRASE = "снимается токеном в `finally`"
+SCOPE_RELEASE_QUALIFIER = "текущем"
+SCOPE_RELEASE_WINDOW = 300
 
 
 def _docstring(path: pathlib.Path) -> str:
@@ -1294,6 +1313,14 @@ def test_the_guard_module_names_what_it_refuses_and_its_boundary():
             for cause in CHRONICLE_CAUSES
             if cause not in chronicle
         ]
+    at = guard.find(SCOPE_RELEASE_PHRASE)
+    while at >= 0:
+        near = guard[max(0, at - SCOPE_RELEASE_WINDOW) : at + SCOPE_RELEASE_WINDOW]
+        if SCOPE_RELEASE_QUALIFIER not in near:
+            missing.append(
+                f"шапка защиты: «{SCOPE_RELEASE_PHRASE}» без «{SCOPE_RELEASE_QUALIFIER}» (IN-24)"
+            )
+        at = guard.find(SCOPE_RELEASE_PHRASE, at + 1)
     if not writer:
         missing.append(f"писатель: абзац «{WRITER_PARAGRAPH_HEAD}»")
     missing += [
