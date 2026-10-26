@@ -113,7 +113,13 @@ test_phone_single_writer_gate.py`, D-13) и гейт приватности но
   `test_no_dynamic_construct_in_the_python_trees` гейта приватности (`app/`, `scripts/`, `max_worker/`) и
   `test_no_dynamic_construct_in_the_writer_trees` гейта писателя (`app/`, `scripts/`); законные исключения — реестр
   `DYNAMIC_CONSTRUCT_EXCEPTIONS` общего модуля (шесть записей замера с причиной, потолок
-  `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING`, подъём — решение владельца). Правила этого модуля: трасер
+  `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING`, подъём — решение владельца); запись снимает только закреплённые за ней
+  конструкции — текст (`DynamicConstruct.text`) и число по таблице `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS` общего модуля
+  (по одной у каждой из шести записей на дереве `19c99ffb`), лишняя и недостающая краснят правило реестра. Летопись —
+  ревью WR-38 (верификация раунда 11, advisory 3; решение владельца О-25 (а), свойство 6; план 16-59): до плана 16-59
+  ключ `<путь>::<владелец>::<вид>` снимал ВСЕ конструкции своего вида у владельца, а правило реестра краснило только
+  запись без конструкций, и вторая `getattr(self.session, op)(…)` в `BaseRepository.update` проходила канал и предикат
+  молча. Правила этого модуля: трасер
   `test_a_planted_module_object_read_reddens_both_gates` — скрипт с чтением журнала через объект модуля, подложенный в
   синтетическое дерево, краснит правило живых деревьев обоих гейтов одной функцией общего модуля;
   `test_every_dynamic_construct_case_is_banned_by_both_gates` — каждая строка таблицы видов `DYNAMIC_CONSTRUCT_CASES`
@@ -1273,12 +1279,21 @@ def _qualified_owners(tree: ast.Module) -> set[str]:
     return owners
 
 
-def _dynamic_exception_problems(registry: dict[str, str], ceiling: int) -> list[str]:
-    """Чем реестр исключений канала неправдив: число выше потолка, нет файла дерева гейта, владельца, конструкции, причины.
+def _dynamic_exception_problems(
+    registry: dict[str, str], ceiling: int, pinned: dict[str, tuple[str, ...]] | None = None
+) -> list[str]:
+    """Чем реестр исключений канала неправдив: число выше потолка, нет файла дерева гейта, владельца, конструкции,
+    причины, закрепления — или закреплённые тексты расходятся с конструкциями владельца.
 
-    Один помощник у правила реестра и у его контроля: контроль доказывает, что правило краснеет на записи сверх
-    потолка и на устаревшей записи.
+    `pinned` — таблица закреплённых текстов; при `None` помощник читает `grammar.DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS` в
+    момент вызова (не значением по умолчанию при определении), так что подмена таблицы в контроле видна. У каждой записи
+    множество текстов (`DynamicConstruct.text`) конструкций её вида у владельца сверяется с закреплённым с числом:
+    лишняя конструкция и недостающая закреплённая — проблемы (ревью WR-38, план 16-59). Один помощник у правил реестра
+    и закрепления и у их контролей: контроли доказывают, что правила краснеют на записи сверх потолка, на устаревшей
+    записи, на лишней и на недостающей конструкции.
     """
+    if pinned is None:
+        pinned = grammar.DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS
     problems: list[str] = []
     if len(registry) > ceiling:
         problems.append(f"записей {len(registry)} — выше потолка {ceiling}: подъём потолка — решение владельца")
@@ -1301,11 +1316,26 @@ def _dynamic_exception_problems(registry: dict[str, str], ceiling: int) -> list[
         source = file.read_text(encoding="utf-8")
         if owner not in _qualified_owners(ast.parse(source)):
             problems.append(f"`{key}`: владельца `{owner}` в файле нет")
-        elif not any(
-            grammar.dynamic_construct_key(found) == key
+            continue
+        texts = Counter(
+            found.text
             for found in grammar.dynamic_construct_findings(source, path, judged_names=judged)
-        ):
+            if grammar.dynamic_construct_key(found) == key
+        )
+        if not texts:
             problems.append(f"`{key}`: запись устарела — конструкции вида «{kind}» у владельца нет")
+        if key not in pinned:
+            problems.append(f"`{key}`: закрепления нет — `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS` не называет запись")
+            continue
+        expected = Counter(pinned[key])
+        problems += [
+            f"`{key}`: лишняя конструкция у исключённого владельца — `{text}`" + (f" (×{count})" if count > 1 else "")
+            for text, count in (texts - expected).items()
+        ]
+        problems += [
+            f"`{key}`: запись устарела — нет закреплённой конструкции `{text}`" + (f" (×{count})" if count > 1 else "")
+            for text, count in (expected - texts).items()
+        ]
     return problems
 
 
@@ -1313,7 +1343,10 @@ def test_the_dynamic_construct_exceptions_are_named_and_under_their_ceiling():
     """Реестр `DYNAMIC_CONSTRUCT_EXCEPTIONS` правдив и не растёт молча (истина 5 плана 16-53; D-13, D-17).
 
     Каждая запись называет существующий файл дерева гейта, существующего владельца и хотя бы одну конструкцию
-    названного вида у него, причина непуста, записей не больше потолка `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING`.
+    названного вида у него, причина непуста, записей не больше потолка `DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING`. С плана
+    16-59 (ревью WR-38) запись снимает только закреплённые конструкции — текст и число по
+    `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS`; тексты конструкций владельца с числом равны закреплённым, лишняя и недостающая
+    краснят это правило и правило `test_every_dynamic_construct_exception_pins_its_construct_texts`.
     """
     registry = grammar.DYNAMIC_CONSTRUCT_EXCEPTIONS
     problems = _dynamic_exception_problems(registry, grammar.DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING)
