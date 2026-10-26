@@ -1076,7 +1076,22 @@ GUARD_HEADER_NAMES = (
     "сырой SQL",
     "план 16-53",
     "план 16-55",
+    # План 16-58: четвёртая линия, её место и граница по замеру (О-25 (а), свойство 5).
+    "before_cursor_execute",
+    "Engine",
+    "messenger_accounts",
+    "bulk_insert_mappings",
+    "on_conflict_do_update",
+    "text(",
+    "exec_driver_sql",
+    "сырое соединение DBAPI",
+    "CLOSED_FAILING_WRITES",
+    "О-25 (а)",
 )
+# Фраза прежнего обещания: после плана 16-58 — только в летописи, с причиной.
+RETIRED_PROMISE = "каким бы написанием она ни была сделана"
+CHRONICLE_HEAD = "Летопись"
+CHRONICLE_CAUSES = ("CR-08", "WR-36")
 WRITER_PARAGRAPH_HEAD = "ЗАЩИТА НА ИСПОЛНЕНИИ"
 WRITER_PARAGRAPH_NAMES = ("app/models/phone_guard.py", "writer_scope")
 
@@ -1105,6 +1120,17 @@ def test_the_guard_module_names_what_it_refuses_and_its_boundary():
     comment = " ".join(_phone_column_comment().split())
 
     missing = [f"шапка защиты: {name}" for name in GUARD_HEADER_NAMES if name not in guard]
+    chronicle_at = guard.find(CHRONICLE_HEAD)
+    promise = guard[:chronicle_at] if chronicle_at >= 0 else guard
+    chronicle = guard[chronicle_at:] if chronicle_at >= 0 else ""
+    if RETIRED_PROMISE in promise:
+        missing.append(f"шапка защиты: «{RETIRED_PROMISE}» вне летописи")
+    if RETIRED_PROMISE in chronicle:
+        missing += [
+            f"летопись шапки защиты: {cause}"
+            for cause in CHRONICLE_CAUSES
+            if cause not in chronicle
+        ]
     if not writer:
         missing.append(f"писатель: абзац «{WRITER_PARAGRAPH_HEAD}»")
     missing += [
