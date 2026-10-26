@@ -28,11 +28,13 @@ import pathlib
 import types
 
 import pytest
-from sqlalchemy import delete, func, insert, literal, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete, event, func, insert, literal, select, update
+from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm.attributes import flag_modified, set_attribute, set_committed_value
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
+from app.database import Base
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
 from app.repositories.account import AccountRepository
@@ -628,6 +630,81 @@ async def test_a_read_check_write_outside_the_writer_scope_is_refused(db_session
     )
     await db_session.rollback()
     assert await _columns(db_session, account_id) == (None, False)
+
+
+# ---------------------------------------------------------------------------
+# План 16-58: запись мимо событий ORM — линия движка `before_cursor_execute`
+# (гэп 3 раунда 11, CR-08, WR-36; решение владельца О-25 (а), свойство 4).
+# ---------------------------------------------------------------------------
+
+# Причинный литерал RED трасера плана 16-58 (задача 1).
+ENGINE_LINE_RED = "запись номера мимо событий ORM не отказала на курсоре (CR-08)"
+
+
+async def planted_backfill_with_a_list_of_rows(session, pairs) -> None:
+    """Подложенный сценарий дозаполнения Фазы 20 со СПИСКОМ СТРОК, без писателя.
+
+    Так его написал бы скрипт, собирающий строки циклом из выгрузки воркеров:
+    `bulk_update_mappings` событий атрибута и `do_orm_execute` не даёт, а
+    строки из переменной не судит ни предикат гейта, ни канал запрета (CR-08).
+    """
+    rows = []
+    for account_id, raw in pairs:
+        rows.append({"id": account_id, "phone": normalize_reported(raw)})
+    await session.run_sync(lambda sync: sync.bulk_update_mappings(MessengerAccount, rows))
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_planted_backfill_with_a_list_of_rows_is_refused_and_the_writer_writes(
+    db_session,
+):
+    """ТРАСЕР 16-58: дозаполнение списком строк отказывает на курсоре, писатель пишет."""
+    account_id = await _seed(db_session)
+
+    refusal = await _refusal_of(
+        planted_backfill_with_a_list_of_rows(db_session, [(account_id, RAW)])
+    )
+
+    assert _is_guard_refusal(refusal), f"{ENGINE_LINE_RED}; исход: {type(refusal).__name__}"
+    assert DIGITS not in str(refusal)
+
+    await db_session.rollback()
+    assert await _columns(db_session, account_id) == (None, False)
+
+    outcome = await fill_reported_phone(db_session, account_id, RAW)
+
+    assert outcome is PhoneWrite.WRITTEN
+    assert await _columns(db_session, account_id) == (NUMBER, False)
+
+
+@pytest.mark.asyncio
+async def test_the_engine_line_stands_on_the_engine_class():
+    """Линия движка стоит на классе `Engine`: и на движке, созданном после ввоза моделей."""
+    guard = _guard()
+    listener = vars(guard).get("_refuse_unscoped_cursor")
+
+    assert listener is not None, f"{ENGINE_LINE_RED}: в модуле защиты нет слушателя курсора"
+    assert event.contains(Engine, "before_cursor_execute", listener), (
+        f"{ENGINE_LINE_RED}: слушатель курсора не стоит на классе Engine"
+    )
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with engine.connect() as conn:
+            refusal = await _refusal_of(
+                conn.execute(update(MessengerAccount.__table__).values(phone=NUMBER))
+            )
+    finally:
+        await engine.dispose()
+
+    assert _is_guard_refusal(refusal), (
+        f"{ENGINE_LINE_RED}: движок, созданный после ввоза моделей; "
+        f"исход: {type(refusal).__name__}"
+    )
+    assert DIGITS not in str(refusal)
 
 
 # ---------------------------------------------------------------------------
