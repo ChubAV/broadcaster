@@ -19,12 +19,15 @@ import json
 import logging
 import logging.config
 import sys
+import time
 import types
+import urllib.parse
 
 import pytest
 import structlog
 
 from app.logging_config import setup_logging
+from tests.test_services.test_log_masking import MASK_FIELD_TIME_BOUND_SECONDS
 
 NUMBER = "+79991234567"
 NUMBER_DIGITS = "9991234567"
@@ -236,6 +239,99 @@ def test_uvicorn_handlers_set_up_before_the_app_are_masked(restored_logging):
         f"запись обработчика uvicorn, поставленного до setup_logging, напечатала номер: {output}"
     )
     assert MASK in output
+
+
+# --- Стоимость маски на пути запроса (CR-07; решение владельца О-25 (а), свойство 3) ----------
+
+# Путь запроса без входа: `RequestIdMiddleware` кладёт раскодированный `path` в контекст structlog
+# и пишет событие `request` на каждом запросе, в том числе на 404. На HEAD `535c4f20` путь из
+# 1 801 знака стоил 2,45 с синхронной маски в цикле событий единственного uvicorn.
+LONG_SPLIT_REQUEST_PATHS = [
+    pytest.param("/" + "(1)%20" * 300, id="1801-chars"),
+    pytest.param("/" + "(1)%20" * 1333, id="7999-chars"),
+]
+
+
+def _logged_request(raw_path: str) -> float:
+    """Запрос `GET raw_path` к пустому приложению с `RequestIdMiddleware`; время запроса, с.
+
+    Меряется только сам запрос: клиент (контекст SSL) построен и стек middleware Starlette
+    собран прогревочным запросом `GET /x` до окна замера, мусор собран перед ним — в окне
+    остаются обработка запроса, событие `request` и маска его полей (CR-07).
+    """
+    import gc
+
+    import httpx
+    from starlette.applications import Starlette
+
+    from app.middleware import RequestIdMiddleware
+
+    app = Starlette()
+    app.add_middleware(RequestIdMiddleware)
+
+    async def run() -> tuple[int, float]:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            await client.get("/x")
+            gc.collect()
+            started = time.perf_counter()
+            response = await client.get(raw_path)
+            elapsed = time.perf_counter() - started
+        return response.status_code, elapsed
+
+    status, elapsed = asyncio.run(run())
+    assert status == 404, f"пустое приложение ответило {status}, а не 404"
+    return elapsed
+
+
+@pytest.mark.parametrize("raw_path", LONG_SPLIT_REQUEST_PATHS)
+def test_a_long_split_request_path_is_logged_in_bounded_time(restored_logging, raw_path):
+    """Событие `request` с длинным разбитым путём пишется в журнал за названный предел (CR-07)."""
+    setup_logging(log_level="INFO", log_format="json")
+    stream = _root_stream()
+
+    elapsed = _logged_request(raw_path)
+
+    events = [json.loads(line) for line in stream.getvalue().strip().splitlines()]
+    requests = [event for event in events if event.get("event") == "request"]
+    assert requests, f"событие `request` не дошло до журнала: {events}"
+    assert requests[-1]["path"] == urllib.parse.unquote(raw_path), (
+        "маска изменила путь запроса без номера"
+    )
+    assert elapsed <= MASK_FIELD_TIME_BOUND_SECONDS, (
+        f"строка журнала с длинным путём запроса стоит дольше названного предела — цена маски не "
+        f"ограничена (CR-07): {elapsed:.3f} с на {len(raw_path)} знаков, предел "
+        f"{MASK_FIELD_TIME_BOUND_SECONDS} с"
+    )
+
+
+def test_a_dict_message_on_a_handler_set_up_before_the_app_is_masked(restored_logging):
+    """Словарь в `msg` на обработчике uvicorn (обычный `Formatter`) — маска (IN-25).
+
+    На корневом обработчике словарь маскирует процессор форматтера, и событие structlog через
+    корень печатает одну маску; на обработчике, поставленном до `setup_logging`, — фильтр.
+    """
+    _uvicorn_logging_before_the_app()
+    setup_logging(log_level="INFO", log_format="json")
+    root_stream = _root_stream()
+    error_stream = io.StringIO()
+    for handler in logging.getLogger("uvicorn").handlers:
+        handler.setStream(error_stream)
+
+    logging.getLogger("uvicorn.error").error({"detail": NUMBER})
+    structlog.get_logger("uvicorn.error").error("x", phone=NUMBER)
+    structlog.get_logger("app.tracer").info("y", phone=NUMBER)
+
+    uvicorn_output = error_stream.getvalue()
+    root_output = root_stream.getvalue()
+    assert "detail" in uvicorn_output and "phone" in uvicorn_output, "вывод обработчика uvicorn пуст"
+    assert NUMBER_DIGITS not in uvicorn_output and uvicorn_output.count(MASK) == 2, (
+        "словарь в `msg` на обработчике, поставленном до приложения, печатает номер (IN-25)"
+    )
+    (line,) = root_output.strip().splitlines()
+    assert json.loads(line)["phone"] == MASK and NUMBER_DIGITS not in root_output, (
+        "событие structlog через корень печатает не одну маску"
+    )
 
 
 def test_the_console_mode_masks_too(restored_logging):
