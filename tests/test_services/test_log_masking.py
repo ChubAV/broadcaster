@@ -295,6 +295,10 @@ MASK_BOUNDARY_CHARACTERS = ("*", ".", "/", "[", "]", "．", "／", "［", "］")
 _NOT_READ = "нормализатор номером не читает (замер) — по О-24 (а) это не номер"
 _BOUNDARY_SPLIT = "нормализатор читает, маска не сворачивает — граница 16-52 (дроби, адреса, пути)"
 _LETTER_EDGE = "номер, прилегающий к букве, — край `_LEFT` грамматики (ID, хэши, слитный текст)"
+_GRAMMAR_START = (
+    "начало вне грамматики разбивки (`8` перед `)`, шесть цифр в скобках начала): нормализатор читает, "
+    "маска не маскировала и до плана 16-60 — замер сверки «база ↔ HEAD», семейство (b)"
+)
 
 MASK_BOUNDARY_SUBSTRINGS = [
     pytest.param("+7.999.123.45.67", _BOUNDARY_SPLIT, id="full-stop-split"),
@@ -306,6 +310,8 @@ MASK_BOUNDARY_SUBSTRINGS = [
     pytest.param("+7 999 123 45 67", _NOT_READ, id="thin-space-split"),
     pytest.param("id79991234567", _LETTER_EDGE, id="number-after-a-letter"),
     pytest.param("x+79991234567", _LETTER_EDGE, id="plus-after-a-letter"),
+    pytest.param("8)999)123)45)67", _GRAMMAR_START, id="eight-before-closing-bracket"),
+    pytest.param("(999123) 45 67", _GRAMMAR_START, id="six-digit-bracket-start"),
 ]
 
 
