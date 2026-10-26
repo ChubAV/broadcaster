@@ -142,6 +142,7 @@ from sqlalchemy.dialects.sqlite.dml import OnConflictDoUpdate as SqliteOnConflic
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import ORMExecuteState, Session, UOWTransaction
 from sqlalchemy.orm.attributes import QueryableAttribute
+from sqlalchemy.orm.base import NEVER_SET, NO_VALUE
 from sqlalchemy.sql.dml import Insert, Update
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.selectable import Alias, TableClause
@@ -178,16 +179,48 @@ def writer_scope() -> Iterator[None]:
 
 
 def _refuse_attribute_write(*args: object, **kwargs: object) -> None:
-    """Слушатель `set` / `remove` / `modified` колонок номера."""
+    """Слушатель `remove` / `modified` колонок номера: вне разрешения — всегда отказ."""
     if not _WRITER_ACTIVE.get():
         raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
 
 
+# Типы значений колонок номера в словаре объекта: строка номера, `None`, признак.
+_PLAIN_VALUE_TYPES = (str, bool, int, type(None))
+
+
+def _refuse_attribute_set(
+    target: object, value: object, oldvalue: object, initiator: object
+) -> None:
+    """Слушатель `set` колонок номера: отказ, если значение не то, что уже загружено.
+
+    Перенос объекта (`session.merge` при `load=True` переносит каждое значение
+    событием `set`) и присваивание загруженному атрибуту того же значения — не
+    запись: истории нет, UPDATE нет (WR-37). Сравнение — только с УЖЕ
+    загруженным значением: незагруженное или истёкшее старое значение
+    (`NO_VALUE` / `NEVER_SET`) — отказ, как и аргумент конструктора нового
+    объекта. `active_history` не включается: ленивая загрузка старого значения в
+    async дала бы `MissingGreenlet` вместо отказа. Значение не простого типа
+    (выражение SQL) не сравнивается — отказ.
+    """
+    if _WRITER_ACTIVE.get():
+        return
+    if oldvalue is NO_VALUE or oldvalue is NEVER_SET:
+        raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
+    if type(value) not in _PLAIN_VALUE_TYPES or type(oldvalue) not in _PLAIN_VALUE_TYPES:
+        raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
+    if value != oldvalue:
+        raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
+
+
 _GUARDED_ATTRIBUTES = (MessengerAccount.phone, MessengerAccount.phone_is_manual)
-_ATTRIBUTE_EVENTS = ("set", "remove", "modified")
+# Событие `set` судит `_refuse_attribute_set` (сравнение значения), прочие —
+# `_refuse_attribute_write` (всегда отказ вне разрешения).
+_SET_EVENT = "set"
+_ALWAYS_REFUSED_EVENTS = ("remove", "modified")
 
 for _attribute in _GUARDED_ATTRIBUTES:
-    for _event_name in _ATTRIBUTE_EVENTS:
+    event.listen(_attribute, _SET_EVENT, _refuse_attribute_set)
+    for _event_name in _ALWAYS_REFUSED_EVENTS:
         event.listen(_attribute, _event_name, _refuse_attribute_write)
 
 
