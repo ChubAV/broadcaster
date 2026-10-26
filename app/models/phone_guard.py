@@ -70,10 +70,20 @@ from contextvars import ContextVar
 
 from sqlalchemy import event
 from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.dialects.postgresql.dml import (
+    OnConflictDoNothing as PostgresOnConflictDoNothing,
+)
+from sqlalchemy.dialects.postgresql.dml import (
+    OnConflictDoUpdate as PostgresOnConflictDoUpdate,
+)
+from sqlalchemy.dialects.sqlite.dml import OnConflictDoNothing as SqliteOnConflictDoNothing
+from sqlalchemy.dialects.sqlite.dml import OnConflictDoUpdate as SqliteOnConflictDoUpdate
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import ORMExecuteState, Session, UOWTransaction
 from sqlalchemy.orm.attributes import QueryableAttribute
 from sqlalchemy.sql.dml import Insert, Update
 from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.sql.selectable import Alias, TableClause
 
 from app.models.messenger_account import MessengerAccount
 
@@ -197,5 +207,94 @@ def _refuse_unscoped_statement(orm_execute_state: ORMExecuteState) -> None:
         raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
 
 
+# Таблица аккаунтов судится ПО ИМЕНИ, а не по тождеству объекта: так видны
+# лёгкая `sqlalchemy.table(…)`, отражённая таблица и таблица миграции.
+_ACCOUNTS_TABLE_NAME = MessengerAccount.__tablename__
+_GUARDED = frozenset(GUARDED_COLUMNS)
+_UPSERT_UPDATES = (SqliteOnConflictDoUpdate, PostgresOnConflictDoUpdate)
+_UPSERT_NOTHING = (SqliteOnConflictDoNothing, PostgresOnConflictDoNothing)
+
+
+def _target_table(table: object) -> object:
+    """Таблица оператора без псевдонимов: `Alias` разворачивается до своей таблицы."""
+    while isinstance(table, Alias):
+        table = table.element
+    return table
+
+
+def _cursor_columns(
+    statement: Insert | Update, compiled: object
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Колонки, которые задаёт скомпилированный оператор, и колонки ветки upsert.
+
+    Первая часть — ключи `values(…)`, `ordered_values(…)`, строк многострочных
+    `values([…])`, `from_select([…])` и ключи параметров исполнения
+    (`compiled.column_keys`), пересечённые с колонками таблицы: имя привязки,
+    совпадающее с колонкой, в `WHERE` оператора DML SQLAlchemy запрещает.
+    Вторая — ключи `ON CONFLICT DO UPDATE SET`; ветка, которую защита не
+    читает, судится как задающая обе колонки номера (отказ в закрытую).
+    """
+    table = _target_table(statement.table)
+    positional = list(table.c.keys())
+    keys: list[object] = []
+    keys.extend(statement._values or ())
+    keys.extend(key for key, _value in statement._ordered_values or ())
+    for rows in statement._multi_values or ():
+        for row in rows:
+            if isinstance(row, dict):
+                keys.extend(row)
+            else:
+                keys.extend(positional[: len(row)])
+    upsert: list[object] = []
+    if isinstance(statement, Insert):
+        keys.extend(statement._select_names or ())
+        post_values = statement._post_values_clause
+        if isinstance(post_values, _UPSERT_UPDATES):
+            upsert.extend(key for key, _value in post_values.update_values_to_set)
+        elif post_values is not None and not isinstance(post_values, _UPSERT_NOTHING):
+            upsert.extend(GUARDED_COLUMNS)
+    names = {_column_name(key) for key in keys}
+    names.update(set(positional) & set(compiled.column_keys or ()))
+    return frozenset(names), frozenset(_column_name(key) for key in upsert)
+
+
+def _refuse_unscoped_cursor(
+    conn: object,
+    cursor: object,
+    statement: str,
+    parameters: object,
+    context: object,
+    executemany: bool,
+) -> None:
+    """Слушатель `before_cursor_execute` класса `Engine`: запись колонки номера мимо событий ORM."""
+    if context is None or not (context.isinsert or context.isupdate):
+        return
+    compiled = context.compiled
+    if compiled is None:
+        return
+    dml = compiled.statement
+    if not isinstance(dml, (Update, Insert)):
+        return
+    table = _target_table(dml.table)
+    if not isinstance(table, TableClause) or table.name != _ACCOUNTS_TABLE_NAME:
+        return
+    if _WRITER_ACTIVE.get():
+        return
+    columns, upsert = _cursor_columns(dml, compiled)
+    if upsert & _GUARDED:
+        raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
+    written = columns & _GUARDED
+    if not written:
+        return
+    if isinstance(dml, Update):
+        raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
+    for row in context.compiled_parameters or ({},):
+        if any(column not in row for column in written):
+            raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
+        if row.get("phone") is not None or row.get("phone_is_manual"):
+            raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
+
+
 event.listen(Session, "before_flush", _refuse_unscoped_flush)
 event.listen(Session, "do_orm_execute", _refuse_unscoped_statement)
+event.listen(Engine, "before_cursor_execute", _refuse_unscoped_cursor)
