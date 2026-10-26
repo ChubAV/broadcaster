@@ -28,11 +28,15 @@ import pathlib
 import types
 
 import pytest
-from sqlalchemy import delete, func, insert, literal, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+import sqlalchemy
+from sqlalchemy import delete, event, func, insert, literal, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Engine
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm.attributes import flag_modified, set_attribute, set_committed_value
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
+from app.database import Base
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
 from app.repositories.account import AccountRepository
@@ -314,6 +318,104 @@ async def _orm_insert_from_select(session, account):
     )
 
 
+# --- пути мимо событий ORM (план 16-58; формы B1–B6 и W36 верификатора раунда 11,
+# CR-08, WR-36): их отказывает линия движка `before_cursor_execute` ---------------
+
+
+def backfill(sync, rows):
+    """Помощник скрипта дозаполнения: строки приходят параметром (форма B2)."""
+    sync.bulk_update_mappings(MessengerAccount, rows)
+
+
+async def _bulk_update_mappings_rows_from_a_variable(session, account):
+    payload = [dict(id=account.id, phone=NUMBER, phone_is_manual=True)]
+    await session.run_sync(lambda sync: sync.bulk_update_mappings(MessengerAccount, payload))
+
+
+async def _bulk_update_mappings_rows_as_a_parameter(session, account):
+    rows = [{"id": account.id, "phone": NUMBER}]
+    await session.run_sync(backfill, rows)
+
+
+async def _bulk_insert_mappings_rows_built_in_a_loop(session, account):
+    rows = []
+    for raw in (RAW,):
+        rows.append(
+            {
+                "user_id": account.user_id,
+                "type": "wa",
+                "credentials": "cred",
+                "phone": normalize_reported(raw),
+                "phone_is_manual": True,
+            }
+        )
+    await session.run_sync(lambda sync: sync.bulk_insert_mappings(MessengerAccount, rows))
+
+
+async def _bulk_save_objects_with_a_committed_number(session, account):
+    created = MessengerAccount(user_id=account.user_id, type="wa", credentials="cred")
+    set_committed_value(created, "phone", NUMBER)
+    await session.run_sync(lambda sync: sync.bulk_save_objects([created]))
+
+
+async def _table_update_through_the_connection(session, account):
+    changes = {"phone": NUMBER, "phone_is_manual": True}
+    accounts = MessengerAccount.__table__
+    conn = await session.connection()
+    await conn.execute(accounts.update().where(accounts.c.id == account.id).values(changes))
+
+
+async def _core_insert_through_the_connection_with_execution_rows(session, account):
+    rows = [
+        {
+            "user_id": account.user_id,
+            "type": "wa",
+            "credentials": "cred",
+            "phone": NUMBER,
+            "phone_is_manual": True,
+        }
+    ]
+    conn = await session.connection()
+    await conn.execute(insert(MessengerAccount.__table__), rows)
+
+
+async def _upsert_on_conflict_set_from_a_variable(session, account):
+    changes = {"phone": NUMBER, "phone_is_manual": True}
+    await session.execute(
+        sqlite_insert(MessengerAccount.__table__)
+        .values(
+            id=account.id, user_id=account.user_id, type="tg_user", credentials="cred"
+        )
+        .on_conflict_do_update(index_elements=["id"], set_=changes)
+    )
+
+
+def _lightweight_accounts_table():
+    """Лёгкая таблица: другой объект, то же имя `messenger_accounts`."""
+    return sqlalchemy.table(
+        "messenger_accounts", sqlalchemy.column("id"), sqlalchemy.column("phone")
+    )
+
+
+async def _lightweight_table_update_through_the_session(session, account):
+    light = _lightweight_accounts_table()
+    await session.execute(update(light).where(light.c.id == account.id).values(phone=NUMBER))
+
+
+async def _lightweight_table_update_through_the_connection(session, account):
+    light = _lightweight_accounts_table()
+    conn = await session.connection()
+    await conn.execute(update(light).where(light.c.id == account.id).values(phone=NUMBER))
+
+
+async def _new_object_with_a_committed_number_then_add(session, account):
+    created = MessengerAccount(user_id=account.user_id, type="wa", credentials="cred")
+    set_committed_value(created, "phone", NUMBER)
+    set_committed_value(created, "phone_is_manual", True)
+    session.add(created)
+    await session.flush()
+
+
 # (id, запись, посеять номер писателем)
 FOREIGN_WRITES = [
     pytest.param(_assignment, False, id="assignment"),
@@ -334,6 +436,57 @@ FOREIGN_WRITES = [
     pytest.param(_bulk_update_by_primary_key, False, id="bulk-update-by-primary-key"),
     pytest.param(_orm_insert_values, False, id="orm-insert-values"),
     pytest.param(_orm_insert_from_select, False, id="orm-insert-from-select"),
+    # План 16-58: пути мимо событий ORM — отказ линии движка (CR-08, WR-36).
+    pytest.param(
+        _bulk_update_mappings_rows_from_a_variable,
+        False,
+        id="bulk-update-mappings-rows-from-a-variable",
+    ),
+    pytest.param(
+        _bulk_update_mappings_rows_as_a_parameter,
+        False,
+        id="bulk-update-mappings-rows-as-a-parameter",
+    ),
+    pytest.param(
+        _bulk_insert_mappings_rows_built_in_a_loop,
+        False,
+        id="bulk-insert-mappings-rows-built-in-a-loop",
+    ),
+    pytest.param(
+        _bulk_save_objects_with_a_committed_number,
+        False,
+        id="bulk-save-objects-of-a-new-account-with-a-committed-number",
+    ),
+    pytest.param(
+        _table_update_through_the_connection,
+        False,
+        id="table-update-through-the-connection",
+    ),
+    pytest.param(
+        _core_insert_through_the_connection_with_execution_rows,
+        False,
+        id="core-insert-through-the-connection-with-execution-rows",
+    ),
+    pytest.param(
+        _upsert_on_conflict_set_from_a_variable,
+        False,
+        id="upsert-on-conflict-set-from-a-variable",
+    ),
+    pytest.param(
+        _lightweight_table_update_through_the_session,
+        False,
+        id="lightweight-table-update-through-the-session",
+    ),
+    pytest.param(
+        _lightweight_table_update_through_the_connection,
+        False,
+        id="lightweight-table-update-through-the-connection",
+    ),
+    pytest.param(
+        _new_object_with_a_committed_number_then_add,
+        False,
+        id="new-object-with-a-committed-number-then-add",
+    ),
 ]
 
 
@@ -420,6 +573,86 @@ async def _delete_statement(session, account):
     assert left == 0
 
 
+# --- законные пути мимо событий ORM (план 16-58): линия движка их не отказывает --
+
+
+async def _status_of(session, account_id: int) -> str:
+    return await session.scalar(
+        select(MessengerAccount.status).where(MessengerAccount.id == account_id)
+    )
+
+
+async def _status_update_through_the_connection(session, account):
+    accounts = MessengerAccount.__table__
+    conn = await session.connection()
+    await conn.execute(
+        update(accounts).where(accounts.c.id == account.id).values(status="paused")
+    )
+    assert await _status_of(session, account.id) == "paused"
+
+
+async def _status_bulk_update_mappings(session, account):
+    rows = [{"id": account.id, "status": "paused"}]
+    await session.run_sync(lambda sync: sync.bulk_update_mappings(MessengerAccount, rows))
+    assert await _status_of(session, account.id) == "paused"
+    assert await _columns(session, account.id) == (None, False)
+
+
+async def _accounts_of(session, user_id: int) -> list[tuple]:
+    result = await session.execute(
+        select(MessengerAccount.phone, MessengerAccount.phone_is_manual).where(
+            MessengerAccount.user_id == user_id
+        )
+    )
+    return [tuple(row) for row in result]
+
+
+async def _bulk_insert_mappings_without_a_number(session, account):
+    rows = [{"user_id": account.user_id, "type": "wa", "credentials": "cred"}]
+    await session.run_sync(lambda sync: sync.bulk_insert_mappings(MessengerAccount, rows))
+    assert await _accounts_of(session, account.user_id) == [(None, False), (None, False)]
+
+
+async def _core_insert_with_an_unknown_number(session, account):
+    conn = await session.connection()
+    await conn.execute(
+        insert(MessengerAccount.__table__).values(
+            user_id=account.user_id,
+            type="wa",
+            credentials="cred",
+            phone=None,
+            phone_is_manual=False,
+        )
+    )
+    assert await _accounts_of(session, account.user_id) == [(None, False), (None, False)]
+
+
+async def _create_several_without_a_number(session, account):
+    created = [
+        MessengerAccount(user_id=account.user_id, type="wa", credentials=f"cred-{n}")
+        for n in range(3)
+    ]
+    session.add_all(created)
+    await session.flush()
+    assert await _accounts_of(session, account.user_id) == [(None, False)] * 4
+
+
+async def _status_update_filtered_by_the_number_through_the_connection(session, account):
+    accounts = MessengerAccount.__table__
+    conn = await session.connection()
+    result = await conn.execute(
+        update(accounts).where(accounts.c.phone == NUMBER).values(status="paused")
+    )
+    assert result.rowcount == 0
+
+
+async def _delete_through_the_connection(session, account):
+    accounts = MessengerAccount.__table__
+    conn = await session.connection()
+    await conn.execute(delete(accounts).where(accounts.c.id == account.id))
+    assert await _accounts_of(session, account.user_id) == []
+
+
 LEGITIMATE_WRITES = [
     pytest.param(_create_without_a_number, id="create-without-a-number"),
     pytest.param(_status_assignment, id="status-assignment"),
@@ -432,6 +665,23 @@ LEGITIMATE_WRITES = [
         _repository_update_of_the_status, id="repository-update-of-the-status"
     ),
     pytest.param(_delete_statement, id="delete-statement"),
+    # План 16-58: законные пути мимо событий ORM (О-25 (а), свойство 4).
+    pytest.param(
+        _status_update_through_the_connection, id="status-update-through-the-connection"
+    ),
+    pytest.param(_status_bulk_update_mappings, id="status-bulk-update-mappings"),
+    pytest.param(
+        _bulk_insert_mappings_without_a_number, id="bulk-insert-mappings-without-a-number"
+    ),
+    pytest.param(
+        _core_insert_with_an_unknown_number, id="core-insert-with-an-unknown-number"
+    ),
+    pytest.param(_create_several_without_a_number, id="create-several-without-a-number"),
+    pytest.param(
+        _status_update_filtered_by_the_number_through_the_connection,
+        id="status-update-filtered-by-the-number-through-the-connection",
+    ),
+    pytest.param(_delete_through_the_connection, id="delete-through-the-connection"),
 ]
 
 
@@ -631,6 +881,174 @@ async def test_a_read_check_write_outside_the_writer_scope_is_refused(db_session
 
 
 # ---------------------------------------------------------------------------
+# План 16-58: запись мимо событий ORM — линия движка `before_cursor_execute`
+# (гэп 3 раунда 11, CR-08, WR-36; решение владельца О-25 (а), свойство 4).
+# ---------------------------------------------------------------------------
+
+# Причинный литерал RED трасера плана 16-58 (задача 1).
+ENGINE_LINE_RED = "запись номера мимо событий ORM не отказала на курсоре (CR-08)"
+
+
+async def planted_backfill_with_a_list_of_rows(session, pairs) -> None:
+    """Подложенный сценарий дозаполнения Фазы 20 со СПИСКОМ СТРОК, без писателя.
+
+    Так его написал бы скрипт, собирающий строки циклом из выгрузки воркеров:
+    `bulk_update_mappings` событий атрибута и `do_orm_execute` не даёт, а
+    строки из переменной не судит ни предикат гейта, ни канал запрета (CR-08).
+    """
+    rows = []
+    for account_id, raw in pairs:
+        rows.append({"id": account_id, "phone": normalize_reported(raw)})
+    await session.run_sync(lambda sync: sync.bulk_update_mappings(MessengerAccount, rows))
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_planted_backfill_with_a_list_of_rows_is_refused_and_the_writer_writes(
+    db_session,
+):
+    """ТРАСЕР 16-58: дозаполнение списком строк отказывает на курсоре, писатель пишет."""
+    account_id = await _seed(db_session)
+
+    refusal = await _refusal_of(
+        planted_backfill_with_a_list_of_rows(db_session, [(account_id, RAW)])
+    )
+
+    assert _is_guard_refusal(refusal), f"{ENGINE_LINE_RED}; исход: {type(refusal).__name__}"
+    assert DIGITS not in str(refusal)
+
+    await db_session.rollback()
+    assert await _columns(db_session, account_id) == (None, False)
+
+    outcome = await fill_reported_phone(db_session, account_id, RAW)
+
+    assert outcome is PhoneWrite.WRITTEN
+    assert await _columns(db_session, account_id) == (NUMBER, False)
+
+
+@pytest.mark.asyncio
+async def test_the_engine_line_stands_on_the_engine_class():
+    """Линия движка стоит на классе `Engine`: и на движке, созданном после ввоза моделей."""
+    guard = _guard()
+    listener = vars(guard).get("_refuse_unscoped_cursor")
+
+    assert listener is not None, f"{ENGINE_LINE_RED}: в модуле защиты нет слушателя курсора"
+    assert event.contains(Engine, "before_cursor_execute", listener), (
+        f"{ENGINE_LINE_RED}: слушатель курсора не стоит на классе Engine"
+    )
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with engine.connect() as conn:
+            refusal = await _refusal_of(
+                conn.execute(update(MessengerAccount.__table__).values(phone=NUMBER))
+            )
+    finally:
+        await engine.dispose()
+
+    assert _is_guard_refusal(refusal), (
+        f"{ENGINE_LINE_RED}: движок, созданный после ввоза моделей; "
+        f"исход: {type(refusal).__name__}"
+    )
+    assert DIGITS not in str(refusal)
+
+
+# --- цена «отказ в закрытую» (план 16-58; D-11): значение колонки номера на
+# курсоре не находится по ключу колонки — вставка отказывает и без номера -------
+
+# Причинные литералы RED задачи 2 плана 16-58.
+CLOSED_RED = (
+    "вставка с несудимым на курсоре значением колонки номера не отказала в закрытую"
+)
+SECOND_LINE_RED = (
+    "новый аккаунт с номером, поставленным set_committed_value, не отказал во второй "
+    "линии — before_flush судит историю, а не значения (WR-36)"
+)
+
+
+async def _core_insert_multi_values_with_an_unknown_number(session, account):
+    conn = await session.connection()
+    await conn.execute(
+        insert(MessengerAccount.__table__).values(
+            [
+                {
+                    "user_id": account.user_id,
+                    "type": "wa",
+                    "credentials": "cred",
+                    "phone": None,
+                }
+            ]
+        )
+    )
+
+
+async def _core_insert_of_a_sql_expression_for_the_number(session, account):
+    conn = await session.connection()
+    await conn.execute(
+        insert(MessengerAccount.__table__).values(
+            user_id=account.user_id,
+            type="wa",
+            credentials="cred",
+            phone=sqlalchemy.null(),
+        )
+    )
+
+
+CLOSED_FAILING_WRITES = [
+    pytest.param(
+        _core_insert_multi_values_with_an_unknown_number,
+        id="core-insert-multi-values-with-an-unknown-number",
+    ),
+    pytest.param(
+        _core_insert_of_a_sql_expression_for_the_number,
+        id="core-insert-of-a-sql-expression-for-the-number",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write", CLOSED_FAILING_WRITES)
+async def test_a_write_whose_values_cannot_be_judged_is_refused_closed(db_session, write):
+    """Названная цена линии движка: несудимое значение колонки номера — отказ, номера нет."""
+    account_id = await _seed(db_session)
+    before = await _state(db_session, account_id)
+    account = await db_session.get(MessengerAccount, account_id)
+    user_id = account.user_id
+
+    refusal = await _refusal_of(write(db_session, account))
+
+    assert _is_guard_refusal(refusal), f"{CLOSED_RED}; исход: {type(refusal).__name__}"
+    await db_session.rollback()
+    assert await _state(db_session, account_id) == before
+    assert await _accounts_of(db_session, user_id) == [(None, False)]
+
+
+@pytest.mark.asyncio
+async def test_a_new_account_is_judged_by_its_values_before_the_flush(db_session):
+    """Вторая линия судит новый объект по значениям (WR-36), а не по истории.
+
+    Линия движка в этом вызове не участвует: слушатель `before_flush` зовётся
+    напрямую над сессией, в которой лежит новый аккаунт.
+    """
+    account_id = await _seed(db_session)
+    account = await db_session.get(MessengerAccount, account_id)
+    created = MessengerAccount(user_id=account.user_id, type="wa", credentials="cred")
+    set_committed_value(created, "phone", NUMBER)
+    set_committed_value(created, "phone_is_manual", True)
+    db_session.add(created)
+
+    refusal = _refusal_of_call(
+        lambda: _guard()._refuse_unscoped_flush(db_session.sync_session, None, None)
+    )
+
+    assert _is_guard_refusal(refusal), f"{SECOND_LINE_RED}; исход: {type(refusal).__name__}"
+    assert DIGITS not in str(refusal)
+    db_session.expunge(created)
+
+
+# ---------------------------------------------------------------------------
 # Задача 3: правдивые тексты — шапка защиты, абзац писателя, комментарий модели.
 # ---------------------------------------------------------------------------
 
@@ -658,7 +1076,22 @@ GUARD_HEADER_NAMES = (
     "сырой SQL",
     "план 16-53",
     "план 16-55",
+    # План 16-58: четвёртая линия, её место и граница по замеру (О-25 (а), свойство 5).
+    "before_cursor_execute",
+    "Engine",
+    "messenger_accounts",
+    "bulk_insert_mappings",
+    "on_conflict_do_update",
+    "text(",
+    "exec_driver_sql",
+    "сырое соединение DBAPI",
+    "CLOSED_FAILING_WRITES",
+    "О-25 (а)",
 )
+# Фраза прежнего обещания: после плана 16-58 — только в летописи, с причиной.
+RETIRED_PROMISE = "каким бы написанием она ни была сделана"
+CHRONICLE_HEAD = "Летопись"
+CHRONICLE_CAUSES = ("CR-08", "WR-36")
 WRITER_PARAGRAPH_HEAD = "ЗАЩИТА НА ИСПОЛНЕНИИ"
 WRITER_PARAGRAPH_NAMES = ("app/models/phone_guard.py", "writer_scope")
 
@@ -687,6 +1120,17 @@ def test_the_guard_module_names_what_it_refuses_and_its_boundary():
     comment = " ".join(_phone_column_comment().split())
 
     missing = [f"шапка защиты: {name}" for name in GUARD_HEADER_NAMES if name not in guard]
+    chronicle_at = guard.find(CHRONICLE_HEAD)
+    promise = guard[:chronicle_at] if chronicle_at >= 0 else guard
+    chronicle = guard[chronicle_at:] if chronicle_at >= 0 else ""
+    if RETIRED_PROMISE in promise:
+        missing.append(f"шапка защиты: «{RETIRED_PROMISE}» вне летописи")
+    if RETIRED_PROMISE in chronicle:
+        missing += [
+            f"летопись шапки защиты: {cause}"
+            for cause in CHRONICLE_CAUSES
+            if cause not in chronicle
+        ]
     if not writer:
         missing.append(f"писатель: абзац «{WRITER_PARAGRAPH_HEAD}»")
     missing += [
