@@ -3,6 +3,7 @@ import time
 
 from celery import Celery
 from celery.signals import beat_init, worker_init
+from celery.signals import setup_logging as celery_setup_logging
 
 from app.services.ops_state import (
     INFRA_BEAT,
@@ -107,7 +108,46 @@ celery = create_celery_app()
 
 @worker_init.connect
 def setup_worker_logging(**kwargs):
-    """Initialize structlog when Celery worker starts."""
+    """Initialize structlog when Celery worker starts.
+
+    Ранняя настройка в `worker_init` — до первой строки признака живости, которую пишет тот же сигнал; Celery затем
+    шлёт свой сигнал `setup_logging`, и `setup_celery_logging` настраивает журнал ещё раз (идемпотентно).
+    """
+    from app.config import get_settings
+    from app.logging_config import setup_logging
+    settings = get_settings()
+    setup_logging(log_level=settings.log_level, log_format=settings.log_format)
+
+
+# ⚠️ МАСКА НОМЕРА В ПРОЦЕССАХ CELERY: ЖУРНАЛ НАСТРАИВАЕТ ПРОЕКТ, А НЕ CELERY (гэп 1 раунда 11, CR-06; решение
+# владельца О-25 (а), свойство 1; PHONE-21 «журналы … воркеров»; D-10, D-11).
+#
+# ЗАЧЕМ. Получатель `worker_init` выше ставит маску, но Celery её снимал: сразу после `worker_init` конструктор
+# воркера зовёт `app.log.setup`, и событие с номером из задач синка, опроса WA и дозаполнения Фаз 18–20 печаталось
+# целиком.
+#
+# МЕХАНИЗМ (Celery 5.6.2). `Logging.setup_logging_subsystem` шлёт сигнал `setup_logging` и, если получателей нет,
+# исполняет ветку `worker_hijack_root_logger`: `root.handlers = []` и свой `StreamHandler` с `ColorFormatter` — без
+# фильтра `NumberMaskingFilter` и процессора маски. Живой получатель этого сигнала говорит Celery «журнал настроен»:
+# корень не очищается, свой обработчик не ставится, `Logging.setup` не перенаправляет `stdout` в журнал, а
+# `Worker.on_start` — тоже (`_custom_logging` истинно). Поэтому `print` в задаче идёт в поток процесса мимо журнала,
+# как в веб-процессе; это граница `print`, её называет шапка маски.
+#
+# ГДЕ ДЕЙСТВУЕТ. Главный процесс воркера (`Worker.on_init_blueprint` → `Worker.setup_logging`); `celery beat`
+# (`Beat.start_scheduler` → `Beat.setup_logging` — `worker_init` в beat не приходит, настройка журнала здесь
+# единственная); дочерние процессы пула prefork (обработчик корня унаследован при `fork`, а `process_initializer` →
+# `app.log.setup` возвращается по `already_setup`).
+#
+# ЧЕГО НЕ ЗАДЕВАЕТ. `celery flower` зовёт свой `setup_logging` (tornado) и `app.log.setup` не вызывает — получатель
+# там не срабатывает; признак живости и конфигурацию приложения (`app.conf.update`) получатель не трогает. Почему
+# сигнал, а не `worker_hijack_root_logger=False`: без получателя Celery всё равно ставит свой обработчик рядом с
+# обработчиком маски, и половина вывода идёт без маски.
+#
+# Правило — `tests/test_worker/test_celery_log_mask.py` (настоящий `Worker`, `Beat` и дочерний процесс пула в
+# отдельном процессе; контроль-отрицание без получателя печатает номер).
+@celery_setup_logging.connect
+def setup_celery_logging(**kwargs):
+    """Настройка журнала проекта по сигналу Celery `setup_logging`: Celery корень не захватывает."""
     from app.config import get_settings
     from app.logging_config import setup_logging
     settings = get_settings()
