@@ -4669,6 +4669,12 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
     О-23 (а); вступление D-11 — маску «последним рубежом»; прежние обещания полноты написаний — с оговоркой о
     запрещённых конструкциях; докстринг `ModuleLogNames` — два написания объекта модуля и запрет остальных; «Живые
     числа» — замер плана 16-52 и прежние «225 / 68 / 93» летописью.
+    С плана 16-63 (решение владельца О-25 (а), свойства 5, 7; D-30, D-32): раздел называет закрепление реестра
+    `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS` (план 16-59), статический гейт вторым рубежом в процессах с `setup_logging` и
+    единственным рубежом без неё, маску в Celery (`celery.signals.setup_logging`, план 16-57); летописи CR-06 (граница
+    маски до плана 16-57 и верификация раунда 11 `553933d8`), WR-39 (край грамматики до плана 16-60) и CR-07
+    (кубическая стоимость `535c4f20`) называют прежнее с причиной. Границу маски по замеру сверяет правило
+    `test_the_privacy_gate_header_names_the_measured_mask_boundary`.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4693,6 +4699,10 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
         "LOGGING_CONFIG_MODULE",
         "test_no_dynamic_construct_in_the_python_trees",
         "WR-35",
+        # План 16-63 (О-25 (а), свойства 5, 7; D-30, D-32): закрепление реестра, рубеж по процессам, маска в Celery.
+        "DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS",
+        "единственный рубеж",
+        "celery.signals.setup_logging",
     ):
         if section and needle not in section:
             missing.append(f"раздел «{BAN_SECTION_HEADING}» не называет «{needle}»")
@@ -4707,8 +4717,12 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
         ("Летопись CR-05", ("16573223", "d31d86db", "16-53", "16-52", "О-23 (а)")),
         ("Летопись WR-32", ("16-53", "16-52", "О-23 (а)")),
         ("Летопись WR-33", ("16-53", "16-52", "О-23 (а)")),
+        ("Летопись CR-06", ("16-57", "553933d8", "О-25 (а)")),
+        ("Летопись WR-39", ("16-60", "U+00A0", "О-25 (а)", "+7.999.123.45.67")),
+        ("Летопись CR-07", ("16-60", "535c4f20", "О-25 (а)", "2,45 с")),
     ):
-        chronicle = _chronicle_segment(flat, heading)
+        # Летописи плана 16-63 стоят внутри раздела запрета, перед пунктом «Статический гейт»: абзац кончается там.
+        chronicle = _chronicle_segment(flat, heading).split("Статический гейт", 1)[0]
         if not chronicle:
             missing.append(f"нет «{heading}»")
         for needle in needles:
