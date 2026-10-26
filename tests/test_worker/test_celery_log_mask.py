@@ -16,6 +16,16 @@
 живости отсоединён от сигналов в самом зонде — продукт ради правила не правится. Каждый запуск ограничен таймаутом:
 зависший зонд роняет правило, а не суиту.
 
+Механизм закреплён отдельно: при живом получателе `setup_celery_logging` у воркера `_custom_logging` истинно и на
+корне ровно один обработчик (Celery рядом свой не поставил, `stdout` в журнал не перенаправляется — `print` в задаче
+идёт в поток процесса мимо журнала). Контроль-отрицание — тот же зонд с отсоединённым получателем печатает номер
+целиком: правила воркера видят отказ маски, а не вакуум.
+
+ЧТО НЕ МЕРИТСЯ ЗДЕСЬ. `celery flower` — свой журнал tornado (`flower.command.setup_logging`), `app.log.setup` не
+вызывается, получатель там не срабатывает: граница шапки маски (план 16-60). Настоящий пул prefork с брокером — без
+брокера его не поднять; путь дочернего процесса пула мерится вызовом, который пул делает в каждом дочернем процессе,
+`process_initializer`, после `os.fork()`.
+
 Номер в тексте правил — только константа `NUMBER`, которую правила ищут в выводе; вывод зонда в сообщениях отказа
 печатается с вычеркнутыми цифрами номера (D-11).
 """
@@ -52,7 +62,7 @@ import structlog
 from celery.apps.beat import Beat
 from celery.apps.worker import Worker
 from celery.concurrency.prefork import process_initializer
-from celery.signals import beat_init, worker_init
+from celery.signals import beat_init, setup_logging, worker_init
 
 import app.worker.celery_app as ca
 
@@ -87,6 +97,16 @@ def build_worker():
 
 
 if target == "worker":
+    build_worker()
+    root_line()
+    write_records(True)
+elif target == "worker-state":
+    worker = build_worker()
+    root_line()
+    sys.__stderr__.write("CUSTOM_LOGGING " + str(bool(worker._custom_logging)) + "\n")
+    sys.__stderr__.write("ROOT_HANDLERS " + str(len(logging.getLogger().handlers)) + "\n")
+elif target == "worker-without-receiver":
+    setup_logging.disconnect(ca.setup_celery_logging)
     build_worker()
     root_line()
     write_records(True)
@@ -185,3 +205,48 @@ def test_celery_beat_prints_a_mask_not_a_number(tmp_path):
 def test_a_prefork_pool_child_keeps_the_mask(tmp_path):
     """Дочерний процесс пула (`os.fork()` + `process_initializer`) печатает запись с номером маской."""
     _assert_masked(_run_celery_probe("child", tmp_path), records=1, with_event=False)
+
+
+def _stderr_value(result: subprocess.CompletedProcess, key: str) -> str:
+    values = [line[len(key) + 1:] for line in result.stderr.splitlines() if line.startswith(key + " ")]
+    assert len(values) == 1, f"зонд не напечатал ровно одну строку {key}:\n{_redacted(result.stderr)[-3000:]}"
+    return values[0]
+
+
+def test_the_worker_neither_hijacks_the_root_nor_redirects_print(tmp_path):
+    """Механизм маски в воркере: Celery видит настройку проекта (`_custom_logging`) и корень не захватывает.
+
+    Следствие, которое правило закрепляет вместе с механизмом: `stdout` в журнал Celery не перенаправляется, и
+    `print` в задаче идёт в поток процесса мимо журнала и маски — граница `print`, её называет шапка маски (план 16-60).
+    """
+    result = _run_celery_probe("worker-state", tmp_path)
+    assert result.returncode == 0, f"зонд Celery упал (код {result.returncode}):\n{_redacted(result.stderr)[-3000:]}"
+    custom_logging = _stderr_value(result, "CUSTOM_LOGGING")
+    root_handlers = _stderr_value(result, "ROOT_HANDLERS")
+    assert custom_logging == "True", (
+        f"у воркера `_custom_logging` = {custom_logging}: Celery не увидел настройку журнала проекта — он захватит "
+        "корень и перенаправит `stdout` (`print` в задаче) в свой журнал без маски (CR-06)"
+    )
+    assert root_handlers == "1", (
+        f"на корне воркера обработчиков {root_handlers}, а не один: Celery поставил свой обработчик рядом с "
+        f"обработчиком маски — часть вывода идёт без маски; корень: {_root_handlers(result)}"
+    )
+
+
+def test_control_without_the_receiver_the_worker_prints_the_number(tmp_path):
+    """Контроль-отрицание: без получателя `setup_celery_logging` тот же воркер печатает номер целиком.
+
+    Правило воркера видит отказ маски, а не вакуум: зонд, его цель и вывод — те же, отличается только получатель.
+    """
+    result = _run_celery_probe("worker-without-receiver", tmp_path)
+    assert result.returncode == 0, f"зонд Celery упал (код {result.returncode}):\n{_redacted(result.stderr)[-3000:]}"
+    root = _root_handlers(result)
+    # Обработчик Celery пишет в `sys.__stderr__`: номер ищется во всём выводе зонда, как и в правилах маски.
+    number_printed = NUMBER_DIGITS in result.stdout + result.stderr
+    assert number_printed, (
+        "без получателя сигнала Celery `setup_logging` номер в выводе воркера не найден — контроль не видит "
+        f"захвата корня, и правило воркера ничего не доказывает; корень: {root}"
+    )
+    assert any(formatter == "ColorFormatter" for _kind, _filters, formatter in root), (
+        f"без получателя на корне нет `ColorFormatter` Celery — контроль мерит не тот путь; корень: {root}"
+    )
