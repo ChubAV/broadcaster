@@ -19,12 +19,15 @@ import json
 import logging
 import logging.config
 import sys
+import time
 import types
+import urllib.parse
 
 import pytest
 import structlog
 
 from app.logging_config import setup_logging
+from tests.test_services.test_log_masking import MASK_FIELD_TIME_BOUND_SECONDS
 
 NUMBER = "+79991234567"
 NUMBER_DIGITS = "9991234567"
@@ -236,6 +239,60 @@ def test_uvicorn_handlers_set_up_before_the_app_are_masked(restored_logging):
         f"запись обработчика uvicorn, поставленного до setup_logging, напечатала номер: {output}"
     )
     assert MASK in output
+
+
+# --- Стоимость маски на пути запроса (CR-07; решение владельца О-25 (а), свойство 3) ----------
+
+# Путь запроса без входа: `RequestIdMiddleware` кладёт раскодированный `path` в контекст structlog
+# и пишет событие `request` на каждом запросе, в том числе на 404. На HEAD `535c4f20` путь из
+# 1 801 знака стоил 2,45 с синхронной маски в цикле событий единственного uvicorn.
+LONG_SPLIT_REQUEST_PATHS = [
+    pytest.param("/" + "(1)%20" * 300, id="1801-chars"),
+]
+
+
+def _logged_request(raw_path: str) -> float:
+    """Запрос `GET raw_path` к пустому приложению с `RequestIdMiddleware`; время запроса, с."""
+    import httpx
+    from starlette.applications import Starlette
+
+    from app.middleware import RequestIdMiddleware
+
+    app = Starlette()
+    app.add_middleware(RequestIdMiddleware)
+
+    async def run() -> int:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+            response = await client.get(raw_path)
+        return response.status_code
+
+    started = time.perf_counter()
+    status = asyncio.run(run())
+    elapsed = time.perf_counter() - started
+    assert status == 404, f"пустое приложение ответило {status}, а не 404"
+    return elapsed
+
+
+@pytest.mark.parametrize("raw_path", LONG_SPLIT_REQUEST_PATHS)
+def test_a_long_split_request_path_is_logged_in_bounded_time(restored_logging, raw_path):
+    """Событие `request` с длинным разбитым путём пишется в журнал за названный предел (CR-07)."""
+    setup_logging(log_level="INFO", log_format="json")
+    stream = _root_stream()
+
+    elapsed = _logged_request(raw_path)
+
+    events = [json.loads(line) for line in stream.getvalue().strip().splitlines()]
+    requests = [event for event in events if event.get("event") == "request"]
+    assert requests, f"событие `request` не дошло до журнала: {events}"
+    assert requests[-1]["path"] == urllib.parse.unquote(raw_path), (
+        "маска изменила путь запроса без номера"
+    )
+    assert elapsed <= MASK_FIELD_TIME_BOUND_SECONDS, (
+        f"строка журнала с длинным путём запроса стоит дольше названного предела — цена маски не "
+        f"ограничена (CR-07): {elapsed:.3f} с на {len(raw_path)} знаков, предел "
+        f"{MASK_FIELD_TIME_BOUND_SECONDS} с"
+    )
 
 
 def test_the_console_mode_masks_too(restored_logging):

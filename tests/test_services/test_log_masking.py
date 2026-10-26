@@ -17,13 +17,24 @@
 
 import io
 import logging
+import random
 import sys
+import time
 
 import pytest
 
 NUMBER = "+79991234567"
 NUMBER_DIGITS = "9991234567"
 MASK = "+7 *** ***-**-67"
+
+# Бюджет судов нормализатора на один вызов `mask_numbers` (CR-07; решение владельца О-25 (а),
+# свойство 3): сверх него кандидат маскируется без суда — отказ в закрытую.
+MASK_JUDGMENT_BUDGET = 64
+# Предел времени маски на одно поле журнала. Замер планирования 2026-10-26, HEAD `19c99ffb`
+# (код как на `2816cfb2`): прототип ограниченного кандидата — не больше 25 мс на 8 000 знаков
+# разбитого входа (`"(1) " * 2000` — 22,5 мс); на HEAD путь запроса из 1 801 знака через
+# `setup_logging` и `RequestIdMiddleware` стоил 2,45 с (CR-07). Запас ×10 — на занятую машину.
+MASK_FIELD_TIME_BOUND_SECONDS = 0.25
 
 MASKED_SUBSTRINGS = [
     # Истина 1 плана 16-52: 25 форм, которые нормализатор фазы признаёт номером.
@@ -153,6 +164,67 @@ def test_masking_never_raises():
         masked = mask_numbers(text)
         assert isinstance(masked, str), f"маска вернула не строку на {text[:40]!r}"
     assert NUMBER_DIGITS not in mask_numbers(many), "в длинном тексте с тысячей номеров номер уцелел"
+
+
+# --- Стоимость маски на поле журнала (CR-07; решение владельца О-25 (а), свойство 3) -----------
+
+
+def _random_split_inputs(length: int) -> dict[str, str]:
+    """Пять случайных разбитых входов длины `length` (зерно 11) — формы замера планирования."""
+    rnd = random.Random(11)
+
+    def digits(count: int) -> str:
+        return "".join(rnd.choice("0123456789") for _ in range(count))
+
+    makers = (
+        ("(d) ", lambda: f"({digits(1)}) "),
+        ("8 d ", lambda: f"8 {digits(1)} "),
+        ("(dd)", lambda: f"({digits(2)})"),
+        ("8 (ddd) ", lambda: f"8 ({digits(3)}) "),
+        ("nine-digit-chains", lambda: digits(9) + " "),
+    )
+    inputs = {}
+    for name, make in makers:
+        pieces: list[str] = []
+        size = 0
+        while size < length:
+            piece = make()
+            pieces.append(piece)
+            size += len(piece)
+        inputs[name] = "".join(pieces)[:length]
+    return inputs
+
+
+def _counting_judge(monkeypatch) -> list[int]:
+    """Счётчик судов: обёртка над судьёй маски `log_masking._recognised`."""
+    from app.services import log_masking
+
+    calls = [0]
+    judge = log_masking._recognised
+
+    def counted(text: str) -> str | None:
+        calls[0] += 1
+        return judge(text)
+
+    monkeypatch.setattr(log_masking, "_recognised", counted)
+    return calls
+
+
+def test_the_mask_judges_at_most_the_budget_per_field(monkeypatch):
+    """Один вызов маски судит не больше `MASK_JUDGMENT_BUDGET` кандидатов (CR-07)."""
+    from app.services import log_masking
+
+    calls = _counting_judge(monkeypatch)
+    judged = {}
+    for name, text in _random_split_inputs(400).items():
+        calls[0] = 0
+        log_masking.mask_numbers(text)
+        judged[name] = calls[0]
+    module_budget = vars(log_masking).get("MASK_JUDGMENT_BUDGET")
+    assert module_budget == MASK_JUDGMENT_BUDGET and max(judged.values()) <= MASK_JUDGMENT_BUDGET, (
+        f"маска судит больше кандидатов, чем названный бюджет поля (CR-07): судов {judged}, "
+        f"бюджет модуля маски {module_budget!r}, названный {MASK_JUDGMENT_BUDGET}"
+    )
 
 
 class _Carrier:
