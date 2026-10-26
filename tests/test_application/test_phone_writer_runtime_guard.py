@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import contextlib
 import functools
 import operator
@@ -29,11 +30,17 @@ import types
 
 import pytest
 import sqlalchemy
-from sqlalchemy import delete, event, func, insert, literal, select, update
+from sqlalchemy import delete, event, func, insert, literal, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm.attributes import flag_modified, set_attribute, set_committed_value
+from sqlalchemy.orm.attributes import (
+    flag_modified,
+    instance_dict,
+    instance_state,
+    set_attribute,
+    set_committed_value,
+)
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
 from app.database import Base
@@ -153,6 +160,10 @@ async def test_a_planted_backfill_assigning_the_phone_is_refused_and_the_writer_
     [
         pytest.param("phone", NUMBER, id="phone"),
         pytest.param("phone_is_manual", True, id="phone_is_manual"),
+        # План 16-61 (WR-37): у нового объекта загруженного значения нет — и `None`
+        # / `False` в конструкторе отказывают, сравнивать не с чем.
+        pytest.param("phone", None, id="phone-none"),
+        pytest.param("phone_is_manual", False, id="phone-is-manual-false"),
     ],
 )
 def test_a_constructor_argument_of_a_phone_column_is_refused(column, value):
@@ -416,6 +427,72 @@ async def _new_object_with_a_committed_number_then_add(session, account):
     await session.flush()
 
 
+# --- план 16-61 (WR-37): соседи послабления слушателя `set` — перенос объекта
+# (`merge`) и присваивание, несущие ДРУГОЕ значение или без загруженного старого,
+# и запись того же номера мимо событий атрибута — отказ ------------------------
+
+
+async def _detached_copy(session, account_id: int) -> MessengerAccount:
+    """Копия аккаунта, загруженная другой сессией и отсоединённая (`expunge`)."""
+    async with AsyncSession(session.bind) as other:
+        copy = await other.get(MessengerAccount, account_id)
+        other.expunge(copy)
+    return copy
+
+
+async def _merge_carrying_a_different_number(session, account):
+    copy = await _detached_copy(session, account.id)
+    set_committed_value(copy, "phone", NUMBER)
+    await session.merge(copy, load=True)
+    await session.flush()
+
+
+async def _merge_changing_only_the_manual_flag(session, account):
+    copy = await _detached_copy(session, account.id)
+    set_committed_value(copy, "phone_is_manual", True)
+    await session.merge(copy, load=True)
+    await session.flush()
+
+
+async def _merge_of_a_new_object_carrying_a_number(session, account):
+    created = MessengerAccount(user_id=account.user_id, type="wa", credentials="cred")
+    set_committed_value(created, "phone", NUMBER)
+    await session.merge(created, load=True)
+    await session.flush()
+
+
+async def _assignment_to_an_expired_attribute(session, account):
+    session.expire(account, ["phone"])
+    account.phone = None
+    await session.flush()
+
+
+async def _assignment_of_a_sql_expression(session, account):
+    account.phone = sqlalchemy.null()
+    await session.flush()
+
+
+async def _same_value_over_a_committed_number_on_a_new_object(session, account):
+    created = MessengerAccount(user_id=account.user_id, type="wa", credentials="cred")
+    set_committed_value(created, "phone", NUMBER)
+    created.phone = NUMBER
+    session.add(created)
+    await session.flush()
+
+
+async def _bulk_update_mappings_of_the_same_number(session, account):
+    rows = [{"id": account.id, "phone": NUMBER}]
+    await session.run_sync(lambda sync: sync.bulk_update_mappings(MessengerAccount, rows))
+
+
+async def _connection_update_of_the_same_number(session, account):
+    accounts = MessengerAccount.__table__
+    conn = await session.connection()
+    await conn.execute(
+        update(accounts).where(accounts.c.id == account.id).values(phone=NUMBER)
+    )
+
+
 # (id, запись, посеять номер писателем)
 FOREIGN_WRITES = [
     pytest.param(_assignment, False, id="assignment"),
@@ -486,6 +563,41 @@ FOREIGN_WRITES = [
         _new_object_with_a_committed_number_then_add,
         False,
         id="new-object-with-a-committed-number-then-add",
+    ),
+    # План 16-61 (WR-37): соседи послабления слушателя `set` — отказ и после него.
+    pytest.param(
+        _merge_carrying_a_different_number, False, id="merge-carrying-a-different-number"
+    ),
+    pytest.param(
+        _merge_changing_only_the_manual_flag,
+        True,
+        id="merge-changing-only-the-manual-flag",
+    ),
+    pytest.param(
+        _merge_of_a_new_object_carrying_a_number,
+        False,
+        id="merge-of-a-new-object-carrying-a-number",
+    ),
+    pytest.param(
+        _assignment_to_an_expired_attribute, False, id="assignment-to-an-expired-attribute"
+    ),
+    pytest.param(
+        _assignment_of_a_sql_expression, False, id="assignment-of-a-sql-expression"
+    ),
+    pytest.param(
+        _same_value_over_a_committed_number_on_a_new_object,
+        False,
+        id="same-value-over-a-committed-number-on-a-new-object",
+    ),
+    pytest.param(
+        _bulk_update_mappings_of_the_same_number,
+        True,
+        id="bulk-update-mappings-of-the-same-number",
+    ),
+    pytest.param(
+        _connection_update_of_the_same_number,
+        True,
+        id="connection-update-of-the-same-number",
     ),
 ]
 
@@ -653,6 +765,35 @@ async def _delete_through_the_connection(session, account):
     assert await _accounts_of(session, account.user_id) == []
 
 
+# --- план 16-61 (WR-37): перенос объекта и присваивание того же значения — не запись
+
+
+async def _merge_of_a_loaded_account(session, account):
+    """Перенос копии из другой сессии (`merge` при `load=True`) — значения те же."""
+    before = await _state(session, account.id)
+    copy = await _detached_copy(session, account.id)
+
+    merged = await session.merge(copy, load=True)
+    await session.flush()
+
+    assert merged is account
+    assert await _state(session, account.id) == before
+
+
+async def _same_value_assignment_of_a_loaded_account(session, account):
+    """Присваивание загруженному атрибуту его же значения: истории нет, UPDATE нет."""
+    before = await _state(session, account.id)
+
+    account.phone = account.phone
+    account.phone_is_manual = account.phone_is_manual
+
+    attributes = sqlalchemy.inspect(account).attrs
+    assert not attributes.phone.history.has_changes()
+    assert not attributes.phone_is_manual.history.has_changes()
+    await session.flush()
+    assert await _state(session, account.id) == before
+
+
 LEGITIMATE_WRITES = [
     pytest.param(_create_without_a_number, id="create-without-a-number"),
     pytest.param(_status_assignment, id="status-assignment"),
@@ -682,6 +823,12 @@ LEGITIMATE_WRITES = [
         id="status-update-filtered-by-the-number-through-the-connection",
     ),
     pytest.param(_delete_through_the_connection, id="delete-through-the-connection"),
+    # План 16-61 (WR-37; О-25 (а), свойство 6): перенос объекта и то же значение.
+    pytest.param(_merge_of_a_loaded_account, id="merge-of-a-loaded-account"),
+    pytest.param(
+        _same_value_assignment_of_a_loaded_account,
+        id="same-value-assignment-of-a-loaded-account",
+    ),
 ]
 
 
@@ -996,6 +1143,13 @@ async def _core_insert_of_a_sql_expression_for_the_number(session, account):
     )
 
 
+async def _merge_into_a_session_holding_an_expired_copy(session, account):
+    """План 16-61 (WR-37): старое значение не загружено — сравнивать не с чем, отказ."""
+    copy = await _detached_copy(session, account.id)
+    session.expire(account, ["phone"])
+    await session.merge(copy, load=True)
+
+
 CLOSED_FAILING_WRITES = [
     pytest.param(
         _core_insert_multi_values_with_an_unknown_number,
@@ -1005,13 +1159,22 @@ CLOSED_FAILING_WRITES = [
         _core_insert_of_a_sql_expression_for_the_number,
         id="core-insert-of-a-sql-expression-for-the-number",
     ),
+    # План 16-61: цена линии атрибута — `merge` поверх истёкшей копии в сессии.
+    pytest.param(
+        _merge_into_a_session_holding_an_expired_copy,
+        id="merge-into-a-session-holding-an-expired-copy",
+    ),
 ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("write", CLOSED_FAILING_WRITES)
 async def test_a_write_whose_values_cannot_be_judged_is_refused_closed(db_session, write):
-    """Названная цена линии движка: несудимое значение колонки номера — отказ, номера нет."""
+    """Названная цена защиты: несудимое значение колонки номера — отказ, номера нет.
+
+    Строки 16-58 — цена линии движка (значение на курсоре не находится по ключу
+    колонки); строка 16-61 — цена линии атрибута (старое значение не загружено).
+    """
     account_id = await _seed(db_session)
     before = await _state(db_session, account_id)
     account = await db_session.get(MessengerAccount, account_id)
@@ -1087,13 +1250,32 @@ GUARD_HEADER_NAMES = (
     "сырое соединение DBAPI",
     "CLOSED_FAILING_WRITES",
     "О-25 (а)",
+    # План 16-61: сравнение у `set`, автосброс писателя, копия разрешения в задаче
+    # и таблица измеренной границы (WR-37, IN-23, IN-24; О-25 (а), свойство 5).
+    "merge",
+    "autoflush=False",
+    "create_task",
+    "IN-23",
+    "IN-24",
+    "WR-37",
+    "GUARD_BOUNDARY_WRITES",
 )
 # Фраза прежнего обещания: после плана 16-58 — только в летописи, с причиной.
 RETIRED_PROMISE = "каким бы написанием она ни была сделана"
 CHRONICLE_HEAD = "Летопись"
 CHRONICLE_CAUSES = ("CR-08", "WR-36")
 WRITER_PARAGRAPH_HEAD = "ЗАЩИТА НА ИСПОЛНЕНИИ"
-WRITER_PARAGRAPH_NAMES = ("app/models/phone_guard.py", "writer_scope")
+WRITER_PARAGRAPH_NAMES = (
+    "app/models/phone_guard.py",
+    "writer_scope",
+    "autoflush=False",
+    "IN-23",
+)
+# План 16-61 (IN-24): `finally` снимает разрешение только в ТЕКУЩЕМ контексте —
+# фраза о снятии стоит в шапке лишь рядом с этим словом.
+SCOPE_RELEASE_PHRASE = "снимается токеном в `finally`"
+SCOPE_RELEASE_QUALIFIER = "текущем"
+SCOPE_RELEASE_WINDOW = 300
 
 
 def _docstring(path: pathlib.Path) -> str:
@@ -1131,6 +1313,14 @@ def test_the_guard_module_names_what_it_refuses_and_its_boundary():
             for cause in CHRONICLE_CAUSES
             if cause not in chronicle
         ]
+    at = guard.find(SCOPE_RELEASE_PHRASE)
+    while at >= 0:
+        near = guard[max(0, at - SCOPE_RELEASE_WINDOW) : at + SCOPE_RELEASE_WINDOW]
+        if SCOPE_RELEASE_QUALIFIER not in near:
+            missing.append(
+                f"шапка защиты: «{SCOPE_RELEASE_PHRASE}» без «{SCOPE_RELEASE_QUALIFIER}» (IN-24)"
+            )
+        at = guard.find(SCOPE_RELEASE_PHRASE, at + 1)
     if not writer:
         missing.append(f"писатель: абзац «{WRITER_PARAGRAPH_HEAD}»")
     missing += [
@@ -1140,3 +1330,132 @@ def test_the_guard_module_names_what_it_refuses_and_its_boundary():
         missing.append("комментарий колонки phone: app/models/phone_guard.py")
 
     assert not missing, f"{HEADER_RED}: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# План 16-61: автосброс под разрешением писателя (IN-23) и измеренная граница
+# защиты (IN-24; О-25 (а), свойства 5, 6).
+# ---------------------------------------------------------------------------
+
+# Причинный литерал RED правила автосброса (задача 2 плана 16-61).
+PENDING_RED = "чужое отложенное изменение номера сброшено под разрешением писателя (IN-23)"
+FOREIGN_PENDING_NUMBER = "+79990000001"
+
+
+async def _fill_then_commit(session, account_id: int) -> None:
+    assert await fill_reported_phone(session, account_id, RAW) is PhoneWrite.WRITTEN
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_pending_change_is_not_flushed_under_the_writer_scope(db_session):
+    """Отложенное изменение колонок номера чужого кода не сбрасывается писателем.
+
+    История помечена мимо события атрибута (приватный API — публичного пути
+    нет: `flag_modified` отказывает событием `modified`). Оператор писателя
+    исполняется с `autoflush=False`, поэтому чужое изменение сбрасывается
+    позже, на коммите вне `writer_scope()`, и отказывает второй линией.
+    """
+    first_id = await _seed(db_session)
+    first = await db_session.get(MessengerAccount, first_id)
+    second = MessengerAccount(
+        user_id=first.user_id, type="wa", credentials="cred", status="active"
+    )
+    db_session.add(second)
+    await db_session.commit()
+    second_id = second.id
+
+    state, values = instance_state(first), instance_dict(first)
+    for column, value in (("phone", FOREIGN_PENDING_NUMBER), ("phone_is_manual", True)):
+        state._modified_event(values, state.manager[column].impl, values.get(column))
+        values[column] = value
+
+    refusal = await _refusal_of(_fill_then_commit(db_session, second_id))
+
+    assert _is_guard_refusal(refusal), f"{PENDING_RED}; исход: {type(refusal).__name__}"
+    assert DIGITS not in str(refusal)
+    await db_session.rollback()
+    assert await _columns(db_session, first_id) == (None, False), PENDING_RED
+    assert await _columns(db_session, second_id) == (None, False)
+
+
+# --- измеренная граница защиты: каждая строка исполнением ПИШЕТ номер ----------
+#
+# Это мера границы для шапки, а не норма поведения (урок «тесты фазы закрепляют
+# старые дефекты»): если строка однажды начнёт отказывать, граница закрылась —
+# строку убирают из таблицы и из шапки, а не чинят тест.
+
+GUARD_BOUNDARY_RED = (
+    "граница закрылась: строка отказывает — уберите её из `GUARD_BOUNDARY_WRITES` "
+    "и из шапки защиты (это не поломка)"
+)
+BOUNDARY_HEADER_RED = "шапка защиты не называет измеренную границу"
+_RAW_UPDATE = "UPDATE messenger_accounts SET phone = ? WHERE id = ?"
+
+
+async def _text_update_through_the_session(session, account):
+    await session.execute(
+        text("UPDATE messenger_accounts SET phone = :phone WHERE id = :id"),
+        {"phone": NUMBER, "id": account.id},
+    )
+
+
+async def _exec_driver_sql_update(session, account):
+    conn = await session.connection()
+    await conn.exec_driver_sql(_RAW_UPDATE, (NUMBER, account.id))
+
+
+async def _raw_dbapi_driver_connection_update(session, account):
+    raw = await (await session.connection()).get_raw_connection()
+    await raw.driver_connection.execute(_RAW_UPDATE, (NUMBER, account.id))
+
+
+async def _task_spawned_inside_the_writer_scope(session, account):
+    """Задача, порождённая внутри разрешения, исполняет UPDATE после выхода из него."""
+
+    async def late_write():
+        await session.execute(
+            update(MessengerAccount)
+            .where(MessengerAccount.id == account.id)
+            .values(phone=NUMBER)
+            .execution_options(synchronize_session=False)
+        )
+
+    with _guard().writer_scope():
+        task = asyncio.create_task(late_write())
+    await task
+
+
+# (запись, фраза шапки защиты, называющая строку)
+GUARD_BOUNDARY_WRITES = [
+    pytest.param(_text_update_through_the_session, "text(", id="text-update-through-the-session"),
+    pytest.param(_exec_driver_sql_update, "exec_driver_sql", id="exec-driver-sql-update"),
+    pytest.param(
+        _raw_dbapi_driver_connection_update,
+        "сырое соединение DBAPI",
+        id="raw-dbapi-driver-connection-update",
+    ),
+    pytest.param(
+        _task_spawned_inside_the_writer_scope,
+        "create_task",
+        id="task-spawned-inside-the-writer-scope",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write,header_phrase", GUARD_BOUNDARY_WRITES)
+async def test_a_named_boundary_of_the_guard_is_measured_and_named(
+    db_session, write, header_phrase
+):
+    """Строка границы исполнением пишет номер, и шапка защиты её называет."""
+    account_id = await _seed(db_session)
+    account = await db_session.get(MessengerAccount, account_id)
+
+    refusal = await _refusal_of(write(db_session, account))
+
+    assert refusal is None, f"{GUARD_BOUNDARY_RED}; исход: {type(refusal).__name__}"
+    await db_session.commit()
+    assert await _columns(db_session, account_id) == (NUMBER, False), GUARD_BOUNDARY_RED
+    guard = " ".join(_docstring(GUARD_PATH).split())
+    assert header_phrase in guard, f"{BOUNDARY_HEADER_RED}: «{header_phrase}»"

@@ -36,7 +36,13 @@ Python, записать» оставляла бы ровно такой про�
 атрибуту, сброс, оператор UPDATE / INSERT через сессию — отказывает на
 исполнении исключением `PhoneWriteOutsideWriter`. Разрешение берут ровно два
 оператора: UPDATE `_fill_if_unknown` и UPDATE `set_manual_phone`; проба
-существования ничего не пишет, а `set_committed_value` событий не даёт.
+существования ничего не пишет, а `set_committed_value` событий не даёт. Оба
+оператора исполняются с `autoflush=False` (план 16-61, IN-23): автосброс
+сессии под разрешением сбросил бы чужие отложенные изменения колонок номера
+как запись писателя; так они сбрасываются позже, вне разрешения, и отказывают
+второй линией защиты. Прочие отложенные изменения сессии вызывающего тоже
+сбрасываются не перед оператором писателя, а на его следующем сбросе или
+коммите.
 
 ОТСУТСТВИЕ СТРОКИ НАЗЫВАЕТСЯ, А НЕ СКРЫВАЕТСЯ (ревью WR-05). Автоисточник
 называет его исходом `PhoneWrite.MISSING`, ручная запись — `LookupError`.
@@ -125,7 +131,9 @@ async def _fill_if_unknown(session: AsyncSession, account_id: int, e164: str) ->
                 MessengerAccount.phone_is_manual.is_(False),
             )
             .values(phone=e164)
-            .execution_options(synchronize_session=False)
+            # Без автосброса: под разрешением он сбросил бы чужие отложенные изменения
+            # колонок номера как запись писателя (IN-23); они сбросятся вне разрешения.
+            .execution_options(synchronize_session=False, autoflush=False)
         )
     if result.rowcount == 1:
         return PhoneWrite.WRITTEN
@@ -220,7 +228,9 @@ async def set_manual_phone(session: AsyncSession, account_id: int, text: str | N
         statement = statement.values(phone=e164, phone_is_manual=True)
     with writer_scope():
         result = await session.execute(
-            statement.execution_options(synchronize_session=False)
+            # Без автосброса: под разрешением он сбросил бы чужие отложенные изменения
+            # колонок номера как запись писателя (IN-23); они сбросятся вне разрешения.
+            statement.execution_options(synchronize_session=False, autoflush=False)
         )
     if result.rowcount != 1:
         raise LookupError(f"аккаунт {account_id} не найден")
