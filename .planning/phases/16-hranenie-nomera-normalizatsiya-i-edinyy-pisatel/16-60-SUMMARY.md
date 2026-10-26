@@ -308,6 +308,12 @@ None — внешней настройки нет.
 
 Волна 3 (16-63) получает имена: `PROCESSES_WITHOUT_SETUP_LOGGING` (`scripts/`, `Alembic`, `max_worker`, `flower`, `wa_worker`), `MASK_BOUNDARY_CHARACTERS` (`*`, `.`, `/`, `[`, `]`, U+FF0E, U+FF0F, U+FF3B, U+FF3D), `MASK_BOUNDARY_SUBSTRINGS` (`narrow-nbsp-split` — U+202F, `thin-space-split` — U+2009; всего 11 строк), `MASK_JUDGMENT_BUDGET` (64). Корпус сверки — `.pytest_cache/r11diff/` для ревьюера и верификатора.
 
+## Self-Check: PASSED
+
+- Файлы: `app/services/log_masking.py`, `app/logging_config.py`, `tests/test_services/test_log_masking.py`, `tests/test_logging_config.py`, эта сводка, `.pytest_cache/r11diff/mask_corpus.py` и `.out` — FOUND.
+- Коммиты `c86bdda1`, `8e06c203`, `51358926`, `20dc5717`, `e606439d`, `5f3cb073`, `2189a1e5`, `f95da65e`, `443be2b8`, `0f67597e`, `442aec1b` и коммит сводки `0df36a8e` — предки HEAD.
+- Счёт `commits: 11` измерен `git rev-list --count 14b8cfbe..442aec1b` до коммита сводки.
+
 ---
 *Phase: 16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel*
 *Completed: 2026-10-26*
