@@ -4108,6 +4108,185 @@ def test_a_round_ten_form_is_red_as_a_banned_construct(tmp_path, form: RoundTenB
     )
 
 
+class RawSqlForm(NamedTuple):
+    """Форма записи номера сырым SQL — строка измеренной границы статического гейта (план 16-62; CR-08 смежно).
+
+    `source` судится на синтетическом `scripts/x.py`; `predicate` — измеренное число находок `judged_offences`,
+    `channel` — измеренное число находок канала запрета `dynamic_construct_findings` (с `BANNED_GETATTR_NAMES`)
+    после реестра `exempt_dynamic_constructs`. Числа — замер, а не норма.
+    """
+
+    id: str
+    source: str
+    predicate: int
+    channel: int
+
+
+# Десять форм записи колонок номера сырым SQL (план 16-62; решение владельца О-25 (а), свойство 5; О-26 (а); D-13):
+# текст SQL (`text(…)`, `exec_driver_sql`), сырое соединение DBAPI (`get_raw_connection().driver_connection`) и
+# `sqlite3` stdlib. Защита на исполнении текста SQL не судит (таблица `GUARD_BOUNDARY_WRITES` модуля защиты, план
+# 16-61), поэтому для этих путей статический гейт — единственный рубеж; ответ предиката и канала у каждой формы —
+# замер исполнителя плана 16-62 (на `scripts/x.py` и `app/x.py` одинаков). Форма с ответом 0 и 0 не держится ничем и
+# названа в «ГРАНИЦЕ ПРЕДИКАТА» шапки (пункт (6)) с адресатом — ревью фаз 17–20.
+RAW_SQL_BOUNDARY_FORMS: tuple[RawSqlForm, ...] = (
+    # Литерал SQL через сессию: вид 5 (литерал SQL); `text` литералом канал не судит.
+    RawSqlForm(
+        "text-literal-through-the-session",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET phone = :p WHERE id = :i"), {"p": x, "i": i})\n',
+        1,
+        0,
+    ),
+    # Литерал SQL у `exec_driver_sql`: вид 5.
+    RawSqlForm(
+        "exec-driver-sql-literal",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x):\n"
+        "    conn = await s.connection()\n"
+        '    await conn.exec_driver_sql("UPDATE messenger_accounts SET phone = ? WHERE id = ?", (x, i))\n',
+        1,
+        0,
+    ),
+    # Литерал SQL у сырого соединения DBAPI: вид 5 (литерал SQL судится где бы ни стоял).
+    RawSqlForm(
+        "raw-dbapi-literal",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x):\n"
+        "    conn = await s.connection()\n"
+        "    raw = await conn.get_raw_connection()\n"
+        '    await raw.driver_connection.execute("UPDATE messenger_accounts SET phone = ? WHERE id = ?", (x, i))\n',
+        1,
+        0,
+    ),
+    # Константа модуля у `text`: вид 5 на константе и канал («вычисленный текст SQL») на `text(SQL)`.
+    RawSqlForm(
+        "text-of-a-module-constant",
+        "from sqlalchemy import text\n\n\n"
+        'SQL = "UPDATE messenger_accounts SET phone = :p WHERE id = :i"\n\n\n'
+        "async def run(s, i, x):\n"
+        '    await s.execute(text(SQL), {"p": x, "i": i})\n',
+        1,
+        1,
+    ),
+    # Склейка с переменной у `text`: предикат вычислений не исполняет (пункт (2)), канал судит текст.
+    RawSqlForm(
+        "text-of-a-concatenation",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x, col):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET " + col + " = :p WHERE id = :i"), {"p": x, "i": i})\n',
+        0,
+        1,
+    ),
+    # Текст SQL параметром у `text`: поток данных предикат не прослеживает (пункт (1)), канал судит нелитерал.
+    RawSqlForm(
+        "text-of-a-parameter",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x, sql):\n"
+        '    await s.execute(text(sql), {"p": x, "i": i})\n',
+        0,
+        1,
+    ),
+    # Константа модуля у сырого соединения DBAPI: вид 5 на константе; канал соединения DBAPI не судит.
+    RawSqlForm(
+        "raw-dbapi-module-constant",
+        "from sqlalchemy import text\n\n\n"
+        'Q = "UPDATE messenger_accounts SET phone_is_manual = 1 WHERE id = ?"\n\n\n'
+        "async def run(s, i):\n"
+        "    conn = await s.connection()\n"
+        "    raw = await conn.get_raw_connection()\n"
+        "    await raw.driver_connection.execute(Q, (i,))\n",
+        1,
+        0,
+    ),
+    # Текст SQL параметром у сырого соединения DBAPI: не судит ни предикат, ни канал, ни защита — граница, пункт (6).
+    RawSqlForm(
+        "raw-dbapi-sql-from-a-parameter",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x, q):\n"
+        "    conn = await s.connection()\n"
+        "    raw = await conn.get_raw_connection()\n"
+        "    await raw.driver_connection.execute(q, (x, i))\n",
+        0,
+        0,
+    ),
+    # Константа модуля у `exec_driver_sql`: вид 5 на константе и канал на нелитерале у `exec_driver_sql`.
+    RawSqlForm(
+        "exec-driver-sql-module-constant",
+        "from sqlalchemy import text\n\n\n"
+        'Q = "UPDATE messenger_accounts SET phone = ? WHERE id = ?"\n\n\n'
+        "async def run(s, i, x):\n"
+        "    conn = await s.connection()\n"
+        "    await conn.exec_driver_sql(Q, (x, i))\n",
+        1,
+        1,
+    ),
+    # `sqlite3` stdlib мимо движка: вид 5 на литерале SQL.
+    RawSqlForm(
+        "sqlite3-stdlib-literal",
+        "from sqlalchemy import text\n\n\n"
+        "import sqlite3\n\n\n"
+        "def run(path, x):\n"
+        "    c = sqlite3.connect(path)\n"
+        '    c.execute("UPDATE messenger_accounts SET phone = ? WHERE id = 1", (x,))\n'
+        "    c.commit()\n",
+        1,
+        0,
+    ),
+)
+
+
+@pytest.mark.parametrize("form", [pytest.param(form, id=form.id) for form in RAW_SQL_BOUNDARY_FORMS])
+def test_a_raw_sql_form_has_its_measured_static_verdict(form: RawSqlForm):
+    """Ответ предиката и канала на форме сырого SQL — замер строки (план 16-62; О-25 (а), свойство 5; D-13).
+
+    Для текста SQL и сырого соединения DBAPI статический гейт — единственный рубеж: защита на исполнении их не судит
+    (`GUARD_BOUNDARY_WRITES` модуля защиты). Правило держит измеренную границу: если предикат или канал Фаз 17–20
+    начнут ловить строку с ответом 0, правило краснеет — граница сузилась, строку и шапку обновляют; это не поломка.
+    """
+    predicate = judged_offences(form.source, "scripts/x.py")
+    channel = exempt_dynamic_constructs(
+        dynamic_construct_findings(form.source, "scripts/x.py", judged_names=BANNED_GETATTR_NAMES)
+    )
+
+    assert (len(predicate), len(channel)) == (form.predicate, form.channel), (
+        f"граница сырого SQL сдвинулась — обновите строку `RAW_SQL_BOUNDARY_FORMS` и шапку (это не поломка, если "
+        f"рубеж стал строже): `{form.id}` — ожидались предикат {form.predicate} и канал {form.channel}, найдено "
+        f"{len(predicate)} и {len(channel)}: {predicate} {channel}"
+    )
+
+
+def test_the_unjudged_raw_sql_form_is_named_in_the_header():
+    """Форма сырого SQL без рубежа названа в «ГРАНИЦЕ ПРЕДИКАТА» шапки с адресатом (план 16-62; О-26 (а); D-13).
+
+    У каждой строки `RAW_SQL_BOUNDARY_FORMS` с ответом 0 и 0 (её не судит ни предикат, ни канал, а защита на
+    исполнении текста SQL не видит) идентификатор строки стоит в «ГРАНИЦЕ ПРЕДИКАТА» шапки (от «ГРАНИЦА ПРЕДИКАТА»
+    до «Летопись границы»), а рядом с ним — «сырое соединение DBAPI» и адресат «ревью фаз 17–20».
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    start = flat.find("ГРАНИЦА ПРЕДИКАТА")
+    end = flat.find("Летопись границы", start)
+    boundary = flat[start:end] if 0 <= start < end else ""
+    unjudged = [form.id for form in RAW_SQL_BOUNDARY_FORMS if form.predicate == 0 and form.channel == 0]
+    assert unjudged, "в `RAW_SQL_BOUNDARY_FORMS` нет формы без рубежа — обновите правило и шапку"
+    missing: list[str] = []
+    for form_id in unjudged:
+        at = boundary.find(f"`{form_id}`")
+        if at < 0:
+            missing.append(f"нет «`{form_id}`»")
+            continue
+        nearby = boundary[max(0, at - 600) : at + 600]
+        for needle in ("сырое соединение DBAPI", "ревью фаз 17–20"):
+            if needle not in nearby:
+                missing.append(f"рядом с «`{form_id}`» нет «{needle}»")
+
+    assert not missing, (
+        "форма сырого SQL без рубежа не названа в границе шапки:\n" + "\n".join(f"  {entry}" for entry in missing)
+    )
+
+
 def test_a_raw_sql_phone_write_reddens_the_gate(tmp_path):
     """Сырой UPDATE в строковой константе синтетического `app/` краснит гейт."""
     _plant(
