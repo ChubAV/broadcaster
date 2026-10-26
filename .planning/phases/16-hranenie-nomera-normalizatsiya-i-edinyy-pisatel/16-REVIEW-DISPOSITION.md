@@ -5,7 +5,7 @@ titles: json
 findings:
   - id: CR-06
     severity: critical
-    disposition: open
+    disposition: fixed
     title: "В воркерах Celery маски номера нет: Celery после `worker_init` заменяет обработчик корня своим и снимает и процессор `mask_numbers_in_event`, и фильтр `NumberMaskingFilter` — номер печатается целиком"
   - id: CR-07
     severity: critical
@@ -291,7 +291,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 10
+open: 9
 total: 72
 recorded: 2026-10-23T12:38:00.476Z
 ---
@@ -300,7 +300,7 @@ recorded: 2026-10-23T12:38:00.476Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-06 | critical | open | - |
+| CR-06 | critical | fixed | `16-57` задача 1, GREEN `d0c777be` (получатель `setup_celery_logging` сигнала `celery.signals.setup_logging` в `app/worker/celery_app.py`: Celery не захватывает корень, после конструктора `Worker` на корне воркера — обработчик проекта с `NumberMaskingFilter` и `ProcessorFormatter`; правила `test_a_celery_worker_prints_a_mask_not_a_number`, `test_celery_beat_prints_a_mask_not_a_number`, `test_a_prefork_pool_child_keeps_the_mask` над настоящим `Worker` проекта, `Beat.setup_logging()` и дочерним процессом пула prefork в отдельном интерпретаторе — номер печатается маской «+7 *** ***-**-67», `group_id` виден; механизм и контроль-отрицание без получателя — задача 2, коммит теста «377a9b50»: без получателя корень «ColorFormatter» Celery, номер печатается целиком) — решение владельца О-25 (а), 2026-10-26, свойство 1; шапка маски — `16-60` задача 3, GREEN `5f3cb073` (где маска стоит — веб, воркеры Celery, `beat`, пул prefork — и где её нет: `print`, процессы `PROCESSES_WITHOUT_SETUP_LOGGING` — `scripts/`, Alembic, `celery flower`, `max_worker`, `wa_worker`; правило `test_the_processes_without_setup_logging_are_measured_and_named`); шапка приватности — `16-63` задачи 1–2, GREEN `45bd5667`, `fb80ea82` (пункт «Защита на исполнении» сверен правилом `test_the_privacy_gate_header_names_the_measured_mask_boundary` с таблицами модулей маски; летопись CR-06; статический гейт — второй рубеж в процессах с `setup_logging` и единственный в процессах без неё); маска плана 16-52 («535c4f20», «0e74bf6c») в воркерах Celery не стояла — настройку журнала проекта после `worker_init` снимал сам Celery (ветка `worker_hijack_root_logger`), процесс `beat` `setup_logging` не звал вовсе; вердикт раунда 11 — «553933d8» (истины 28, 131, 159, 180); коммиты RED — «f7d53a5e», «e606439d», «1887f5c7», «03e13ab7» |
 | CR-07 | critical | open | - |
 | CR-08 | critical | open | - |
 | WR-36 | warning | open | - |
