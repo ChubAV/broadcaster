@@ -4711,6 +4711,96 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
     )
 
 
+# Модуль таблиц маски (план 16-60): процессы без `setup_logging`, знаки и строки границы, бюджет судов. Шапка
+# приватности называет границу маски по этим таблицам, а не по замыслу (CR-06, WR-39, CR-07; решение владельца
+# О-25 (а), свойство 5; план 16-63): один источник правды о маске — её модули.
+MASK_BOUNDARY_TABLES_MODULE = "tests.test_services.test_log_masking"
+
+
+def test_the_privacy_gate_header_names_the_measured_mask_boundary():
+    """Пункт «Защита на исполнении» называет, где маска стоит и где её нет, по замеру модулей маски (план 16-63).
+
+    Где стоит: веб-процесс, воркеры Celery, `beat` и дочерние процессы пула prefork (получатель
+    `celery.signals.setup_logging`, план 16-57; правила `tests/test_worker/test_celery_log_mask.py`). Граница маски —
+    каждый процесс таблицы `PROCESSES_WITHOUT_SETUP_LOGGING`, каждый знак `MASK_BOUNDARY_CHARACTERS` (в обратных
+    кавычках или кодом `U+XXXX`) и каждая строка `MASK_BOUNDARY_SUBSTRINGS` (так, как её узнаёт правило шапки маски —
+    `_boundary_names`), в том числе U+202F и U+2009; знак свёртки `_FOLDED_SEPARATORS` границей не назван. Стоимость —
+    `MASK_JUDGMENT_BUDGET` с его значением и отказ в закрытую. Держатели «только маски» (`staticmethod`, `lambda`) —
+    по процессам: в процессах с `setup_logging` их держит маска, в процессах без неё — ничто. Лишнее или недостающее
+    имя таблицы краснит: таблицы ввозятся из `MASK_BOUNDARY_TABLES_MODULE` в момент вызова.
+    """
+    import importlib
+
+    from app.services.log_masking import _FOLDED_SEPARATORS
+
+    tables = importlib.import_module(MASK_BOUNDARY_TABLES_MODULE)
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    section = flat.find(BAN_SECTION_HEADING)
+    start = flat.find("Защита на исполнении", section) if section >= 0 else -1
+    ends = [
+        index
+        for marker in ("Летопись", "Статический гейт")
+        if start >= 0 and (index := flat.find(marker, start + 1)) >= 0
+    ]
+    point = flat[start : min(ends)] if ends else ""
+    border = point.find("Граница маски")
+    cost = point.find("Стоимость маски", max(border, 0))
+    stands = point[:border] if border >= 0 else point
+    boundary = point[border : cost if cost > border else len(point)] if border >= 0 else ""
+    missing: list[str] = []
+    if not point:
+        missing.append(f"нет пункта «Защита на исполнении» в разделе «{BAN_SECTION_HEADING}» перед «Статический гейт»")
+    if point and not boundary:
+        missing.append("пункт не называет «Граница маски»")
+    if point and cost < 0:
+        missing.append("пункт не называет «Стоимость маски»")
+    for needle in ("celery.signals.setup_logging", "beat", "prefork", "tests/test_worker/test_celery_log_mask.py"):
+        if point and needle not in stands:
+            missing.append(f"«где стоит» не называет «{needle}»")
+    celery_rules = {
+        node.name
+        for node in ast.parse((PROJECT_ROOT / "tests/test_worker/test_celery_log_mask.py").read_text(encoding="utf-8")).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    for rule in (
+        "test_a_celery_worker_prints_a_mask_not_a_number",
+        "test_celery_beat_prints_a_mask_not_a_number",
+        "test_a_prefork_pool_child_keeps_the_mask",
+    ):
+        if rule not in celery_rules:
+            missing.append(f"правила маски Celery `{rule}` нет — «где стоит» ссылается на снятое правило")
+    for needle in ("PROCESSES_WITHOUT_SETUP_LOGGING", "MASK_BOUNDARY_SUBSTRINGS", "U+202F", "U+2009"):
+        if boundary and needle not in boundary:
+            missing.append(f"граница маски не называет «{needle}»")
+    for name, _measure in tables.PROCESSES_WITHOUT_SETUP_LOGGING:
+        if boundary and name not in boundary:
+            missing.append(f"граница маски не называет процесс без `setup_logging` «{name}»")
+    for character in tables.MASK_BOUNDARY_CHARACTERS:
+        names = (f"U+{ord(character):04X}", *((f"`{character}`",) if character.isascii() else ()))
+        if boundary and not any(name in boundary for name in names):
+            missing.append(f"граница маски не называет знак {' / '.join(names)}")
+    for row in tables.MASK_BOUNDARY_SUBSTRINGS:
+        if boundary and not any(name in boundary for name in tables._boundary_names(row.values[0])):
+            missing.append(f"граница маски не называет строку `{row.id}` таблицы `MASK_BOUNDARY_SUBSTRINGS`")
+    for code in _FOLDED_SEPARATORS:
+        if f"U+{code:04X}" in boundary:
+            missing.append(f"граница маски называет знак свёртки U+{code:04X} — маска его сворачивает")
+    cost_part = point[cost:] if cost >= 0 else ""
+    for needle in ("MASK_JUDGMENT_BUDGET", f"({tables.MASK_JUDGMENT_BUDGET})", "отказ в закрытую"):
+        if cost_part and needle not in cost_part:
+            missing.append(f"стоимость маски не называет «{needle}»")
+    for needle in ("staticmethod", "lambda", "ничто"):
+        if point and needle not in point:
+            missing.append(f"держатели «только маски» не сказаны по процессам: нет «{needle}»")
+
+    assert not missing, (
+        "шапка приватности называет границу маски не по замеру её модулей "
+        f"({len(missing)}):\n" + "\n".join(f"  {item}" for item in missing)
+    )
+
+
 # --- Положительные контроли: ничего не найдено ---------------------------------
 
 POSITIVE_CONTROLS = [
