@@ -79,6 +79,16 @@ MASKED_SUBSTRINGS = [
     pytest.param("{'phone': 79991234567}", "{'phone': " + MASK + "}", id="dict-repr"),
     pytest.param("x 79991234567:12 y", "x " + MASK + ":12 y", id="raw-jid-in-text"),
     pytest.param("id=79991234567", "id=" + MASK, id="assignment"),
+    # Разбивка Юникода, которую нормализатор читает номером (WR-39; О-25 (а), свойство 2): маска
+    # судит копию текста, где эти знаки свёрнуты в знаки грамматики (`_NUMBER_FOLD`).
+    pytest.param("+7\xa0999\xa0123\xa045\xa067", MASK, id="nbsp-split"),
+    pytest.param("+7 999 123‑45‑67", MASK, id="non-breaking-hyphen"),
+    pytest.param("＋７９９９１２３４５６７", MASK, id="fullwidth-plus-and-digits"),
+    pytest.param("+７９９９１２３４５６７", MASK, id="fullwidth-digits"),
+    pytest.param("8\xa0(999)\xa0123-45-67", MASK, id="russian-eight-with-nbsp"),
+    pytest.param("+" + "".join(chr(0x0660 + int(d)) for d in "79991234567"), MASK, id="arabic-indic-digits"),
+    pytest.param("+7–999–123–45–67", MASK, id="en-dash-split"),
+    pytest.param("+7　999　123　45　67", MASK, id="ideographic-space-split"),
 ]
 
 VISIBLE_SUBSTRINGS = [
@@ -272,6 +282,90 @@ def test_beyond_the_budget_a_candidate_is_masked_closed():
     assert masked.count("+7 *** ***-**-") == MASK_JUDGMENT_BUDGET, "в пределах бюджета маска не та"
     assert "999" not in masked and "123" not in masked, f"номер уцелел в поле сверх бюджета: {masked!r}"
     assert mask_numbers(masked) == masked, "повторное наложение маски изменило поле с отказом в закрытую"
+
+
+# --- Знаки, которые нормализатор читает в номере (WR-39; О-25 (а), свойство 2) ------------------
+
+# Знаки, которые нормализатор читает внутри номера, а маска НЕ сворачивает — граница 16-52:
+# `.`, `/`, `[`, `]` (дроби, адреса, пути) и их полноширинные двойники; `*` — знак самой маски
+# (свёртка сломала бы идемпотентность). Замер планирования: перебор U+0021…U+FFFF под прототипом
+# свёртки дал ровно эти девять.
+MASK_BOUNDARY_CHARACTERS = ("*", ".", "/", "[", "]", "．", "／", "［", "］")
+
+_NOT_READ = "нормализатор номером не читает (замер) — по О-24 (а) это не номер"
+_BOUNDARY_SPLIT = "нормализатор читает, маска не сворачивает — граница 16-52 (дроби, адреса, пути)"
+_LETTER_EDGE = "номер, прилегающий к букве, — край `_LEFT` грамматики (ID, хэши, слитный текст)"
+
+MASK_BOUNDARY_SUBSTRINGS = [
+    pytest.param("+7.999.123.45.67", _BOUNDARY_SPLIT, id="full-stop-split"),
+    pytest.param("+7*999*123*45*67", "звезда — знак самой маски; свёртка сломала бы идемпотентность", id="asterisk-split"),
+    pytest.param("+7/999/123/45/67", _BOUNDARY_SPLIT, id="solidus-split"),
+    pytest.param("+7[999]123[45]67", _BOUNDARY_SPLIT, id="square-bracket-split"),
+    pytest.param("+7．999．123．45．67", _BOUNDARY_SPLIT, id="fullwidth-full-stop-split"),
+    pytest.param("+7 999 123 45 67", _NOT_READ, id="narrow-nbsp-split"),
+    pytest.param("+7 999 123 45 67", _NOT_READ, id="thin-space-split"),
+    pytest.param("id79991234567", _LETTER_EDGE, id="number-after-a-letter"),
+    pytest.param("x+79991234567", _LETTER_EDGE, id="plus-after-a-letter"),
+]
+
+
+def _reads_the_number(text: str) -> bool:
+    from app.services.phone import PhoneError, normalize_manual
+
+    try:
+        return normalize_manual(text) == NUMBER
+    except PhoneError:
+        return False
+
+
+@pytest.mark.parametrize(("text", "reason"), MASK_BOUNDARY_SUBSTRINGS)
+def test_a_named_boundary_substring_stays_visible_and_is_named(text, reason):
+    """Строка границы видна как есть; у U+202F и U+2009 утверждается и причина — нормализатор не читает."""
+    from app.services.log_masking import mask_numbers
+
+    assert mask_numbers(text) == text, f"строка границы изменена маской: {text!r} ({reason})"
+    if reason == _NOT_READ:
+        assert not _reads_the_number(text), f"нормализатор читает номером строку, названную нечитаемой: {text!r}"
+
+
+def test_every_character_the_normalizer_reads_in_a_number_is_folded_or_named():
+    """Каждый знак U+0021…U+FFFF и каждый блок цифр `Nd`, которые нормализатор читает в номере, —
+    маскируются или названы в `MASK_BOUNDARY_CHARACTERS` (лишнее имя краснит тоже)."""
+    import unicodedata
+
+    from app.services.log_masking import mask_numbers
+
+    grammar = set("0123456789 -()+")
+    read_unmasked: set[str] = set()
+    problems: list[str] = []
+    for code in range(0x21, 0x10000):
+        if 0xD800 <= code <= 0xDFFF or chr(code) in grammar:
+            continue
+        ch = chr(code)
+        form = f"+7{ch}999{ch}123{ch}45{ch}67"
+        if not _reads_the_number(form):
+            continue
+        masked = mask_numbers(form)
+        if masked == MASK:
+            continue
+        if masked == form:
+            read_unmasked.add(ch)
+        else:
+            problems.append(f"U+{code:04X}: частичная маска")
+    for zero in range(0x110000):
+        ch = chr(zero)
+        if zero == 0x30 or unicodedata.category(ch) != "Nd" or unicodedata.digit(ch) != 0:
+            continue
+        form = "+" + "".join(chr(zero + int(digit)) for digit in "79991234567")
+        if _reads_the_number(form) and mask_numbers(form) != MASK:
+            problems.append(f"блок цифр U+{zero:04X}")
+    unnamed = sorted(f"U+{ord(ch):04X}" for ch in read_unmasked - set(MASK_BOUNDARY_CHARACTERS))
+    extra = sorted(f"U+{ord(ch):04X}" for ch in set(MASK_BOUNDARY_CHARACTERS) - read_unmasked)
+    assert not unnamed and not extra and not problems, (
+        f"знак, который нормализатор читает в номере, маска не маскирует и граница его не называет "
+        f"(WR-39): не названы {unnamed}; лишние имена границы {extra}; {problems[:12]} "
+        f"(всего {len(problems)})"
+    )
 
 
 class _Carrier:

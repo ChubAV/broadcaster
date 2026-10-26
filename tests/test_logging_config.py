@@ -296,6 +296,35 @@ def test_a_long_split_request_path_is_logged_in_bounded_time(restored_logging, r
     )
 
 
+def test_a_dict_message_on_a_handler_set_up_before_the_app_is_masked(restored_logging):
+    """Словарь в `msg` на обработчике uvicorn (обычный `Formatter`) — маска (IN-25).
+
+    На корневом обработчике словарь маскирует процессор форматтера, и событие structlog через
+    корень печатает одну маску; на обработчике, поставленном до `setup_logging`, — фильтр.
+    """
+    _uvicorn_logging_before_the_app()
+    setup_logging(log_level="INFO", log_format="json")
+    root_stream = _root_stream()
+    error_stream = io.StringIO()
+    for handler in logging.getLogger("uvicorn").handlers:
+        handler.setStream(error_stream)
+
+    logging.getLogger("uvicorn.error").error({"detail": NUMBER})
+    structlog.get_logger("uvicorn.error").error("x", phone=NUMBER)
+    structlog.get_logger("app.tracer").info("y", phone=NUMBER)
+
+    uvicorn_output = error_stream.getvalue()
+    root_output = root_stream.getvalue()
+    assert "detail" in uvicorn_output and "phone" in uvicorn_output, "вывод обработчика uvicorn пуст"
+    assert NUMBER_DIGITS not in uvicorn_output and uvicorn_output.count(MASK) == 2, (
+        "словарь в `msg` на обработчике, поставленном до приложения, печатает номер (IN-25)"
+    )
+    (line,) = root_output.strip().splitlines()
+    assert json.loads(line)["phone"] == MASK and NUMBER_DIGITS not in root_output, (
+        "событие structlog через корень печатает не одну маску"
+    )
+
+
 def test_the_console_mode_masks_too(restored_logging):
     setup_logging(log_level="INFO", log_format="console")
     stream = _root_stream()
