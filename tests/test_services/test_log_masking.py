@@ -496,17 +496,55 @@ HEADER_TERMS = (
     "wa_worker",
     "uvicorn",
     "второй рубеж",
+    # План 16-60 (О-25 (а), свойства 1, 3, 5; О-26 (а)): где маска стоит, стоимость, края.
+    "О-25 (а)",
+    "celery.signals.setup_logging",
+    "beat",
+    "prefork",
+    "MASK_JUDGMENT_BUDGET",
+    "отказ в закрытую",
+    "отказ в обслуживании",
+    "CR-07",
+    "WR-39",
+    "IN-25",
+    "flower",
+    "Alembic",
+    "U+00A0",
+    "U+2011",
+    "U+202F",
+    "U+2009",
 )
+
+BOUNDARY_SECTION = "ГРАНИЦА, НАЗВАННАЯ ПРЯМО"
+
+
+def _boundary_section(header: str) -> str:
+    found = header.find(BOUNDARY_SECTION)
+    return "" if found < 0 else header[found:]
+
+
+def _boundary_names(text: str) -> tuple[str, ...]:
+    """Как строка границы может быть названа в шапке: сама строка, имя её знака или знак в кавычках."""
+    if text.startswith("+7") and not text[2].isdigit():
+        separator = text[2]
+        return text, f"U+{ord(separator):04X}", f"`{separator}`"
+    return (text,)
 
 
 def test_the_masking_module_names_what_it_masks_and_its_boundary():
     """Шапка модуля маски называет решение, что маскируется, что видно, цену и границу; докстринг
     `mask_phone` говорит правду о маске в журнале (D-11: место вызова номер не кладёт, маска —
-    последний рубеж процессора)."""
+    последний рубеж процессора). Каждая строка `MASK_BOUNDARY_SUBSTRINGS` названа в «ГРАНИЦЕ»."""
     from app.services import log_masking, phone
 
     header = " ".join((log_masking.__doc__ or "").split())
     missing = [term for term in HEADER_TERMS if term not in header]
+    section = _boundary_section(header)
+    missing += [
+        f"ГРАНИЦА: {row.id}"
+        for row in MASK_BOUNDARY_SUBSTRINGS
+        if not any(name in section for name in _boundary_names(row.values[0]))
+    ]
     mask_doc = " ".join((phone.mask_phone.__doc__ or "").split())
     untrue = [
         problem
@@ -520,3 +558,99 @@ def test_the_masking_module_names_what_it_masks_and_its_boundary():
     assert not missing and not untrue, (
         f"шапка маски не называет, что маскирует и где её граница: нет {missing}; {untrue}"
     )
+
+
+# --- Процессы без `setup_logging` (О-25 (а), свойство 5; О-26 (а)) ------------------------------
+
+
+def _repo_root():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[2]
+
+
+def _calls_or_imports_setup_logging(path) -> bool:
+    import ast
+
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(alias.name == "setup_logging" for alias in node.names):
+            return True
+        if isinstance(node, ast.Name) and node.id == "setup_logging":
+            return True
+        if isinstance(node, ast.Attribute) and node.attr == "setup_logging":
+            return True
+    return False
+
+
+def _measure_scripts() -> str | None:
+    scripts = sorted((_repo_root() / "scripts").glob("*.py"))
+    found = [path.name for path in scripts if _calls_or_imports_setup_logging(path)]
+    return f"скрипты ввозят или зовут `setup_logging`: {found}" if found else None
+
+
+def _measure_alembic() -> str | None:
+    import ast
+
+    path = _repo_root() / "alembic" / "env.py"
+    called = {
+        node.func.id
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    if "fileConfig" not in called or _calls_or_imports_setup_logging(path):
+        return "`alembic/env.py` не зовёт `fileConfig` или зовёт `setup_logging`"
+    return None
+
+
+def _measure_max_worker() -> str | None:
+    sources = sorted((_repo_root() / "max_worker").rglob("*.py"))
+    found = [path.name for path in sources if _calls_or_imports_setup_logging(path)]
+    return f"`max_worker` ввозит `setup_logging`: {found}" if found else None
+
+
+def _measure_flower() -> str | None:
+    import inspect
+
+    import flower.command
+
+    source = inspect.getsource(flower.command)
+    if "def setup_logging" not in source or "log.setup(" in source:
+        return "`flower.command` больше не настраивает журнал сам (свой `setup_logging` tornado)"
+    return None
+
+
+def _measure_wa_worker() -> str | None:
+    found = [
+        str(path)
+        for path in (_repo_root() / "wa_worker").rglob("*.py")
+        if "node_modules" not in path.parts
+    ]
+    return f"в `wa_worker` есть файлы Python: {found}" if found else None
+
+
+# Процессы, где маски на исполнении нет: `setup_logging` в них не вызывается (имя в шапке, замер).
+# Там остаётся только статический гейт приватности (D-17) — единственный рубеж.
+PROCESSES_WITHOUT_SETUP_LOGGING = (
+    ("scripts/", _measure_scripts),
+    ("Alembic", _measure_alembic),
+    ("max_worker", _measure_max_worker),
+    ("flower", _measure_flower),
+    ("wa_worker", _measure_wa_worker),
+)
+
+
+def test_the_processes_without_setup_logging_are_measured_and_named():
+    """Каждый процесс без `setup_logging` — замер держится и процесс назван в «ГРАНИЦЕ» шапки маски."""
+    from app.services import log_masking
+
+    section = _boundary_section(" ".join((log_masking.__doc__ or "").split()))
+    unmeasured = [
+        f"{name}: {problem}" for name, measure in PROCESSES_WITHOUT_SETUP_LOGGING if (problem := measure())
+    ]
+    unnamed = [name for name, _measure in PROCESSES_WITHOUT_SETUP_LOGGING if name not in section]
+    assert not unmeasured, (
+        f"замер процесса без `setup_logging` не держится: {unmeasured} — процесс начал настраивать "
+        "журнал маской; убрать строку из шапки маски и из `PROCESSES_WITHOUT_SETUP_LOGGING` (это не поломка)"
+    )
+    assert not unnamed, f"шапка маски не называет в «ГРАНИЦЕ» процессы без `setup_logging`: {unnamed}"
