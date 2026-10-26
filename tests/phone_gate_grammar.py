@@ -1524,6 +1524,22 @@ DYNAMIC_CONSTRUCT_EXCEPTIONS: dict[str, str] = {
 # Потолок реестра: подъём — решение владельца, а не исполнителя (D-13, D-17; О-23 (а), свойства 1 и 6).
 DYNAMIC_CONSTRUCT_EXCEPTIONS_CEILING = 6
 
+# Закреплённые конструкции записей реестра (ревью WR-38; решение владельца О-25 (а), свойство 6; план 16-59): ключ
+# записи `DYNAMIC_CONSTRUCT_EXCEPTIONS` → тексты (`DynamicConstruct.text`) конструкций, которые запись снимает, и их
+# число — повтор текста в кортеже снимает столько же повторов. Замер плана 16-59 на дереве `19c99ffb`: у каждой из
+# шести записей ровно одна конструкция. Новая конструкция того же вида у владельца (другой текст) или повтор
+# закреплённой сверх числа — находка канала; правка закрепления, как и реестра, — решение владельца (D-13, D-17).
+DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS: dict[str, tuple[str, ...]] = {
+    "app/pages/accounts.py::_connect_status::вычисленное имя атрибута": ("getattr(module, macro)",),
+    "app/pages/common.py::get_user_from_cookie::вычисленное имя атрибута": (
+        "setattr(user, IMPERSONATOR_ATTR, actor)",
+    ),
+    "app/pages/common.py::actor_of::вычисленное имя атрибута": ("getattr(user, IMPERSONATOR_ATTR, None)",),
+    "app/repositories/base.py::BaseRepository.update::вычисленное имя атрибута": ("setattr(entity, field, value)",),
+    "app/routes/schedules.py::update_schedule::вычисленное имя атрибута": ("setattr(schedule, field, value)",),
+    "max_worker/main.py::<module>::вычисленное имя атрибута": ("getattr(logging, LOG_LEVEL, logging.INFO)",),
+}
+
 
 # Объект модуля: атрибут `modules` (у любого получателя — `sys`, псевдоним `sys`, что угодно) и ввоз `modules` из
 # `sys`; ввоз `importlib` в любой форме; имя или атрибут `import_module` и `__import__`.
@@ -1775,8 +1791,29 @@ def dynamic_construct_key(found: DynamicConstruct) -> str:
 
 
 def exempt_dynamic_constructs(found: list[DynamicConstruct]) -> list[DynamicConstruct]:
-    """Находки без тех, чей ключ `<путь>::<владелец>::<вид>` назван в `DYNAMIC_CONSTRUCT_EXCEPTIONS`."""
-    return [construct for construct in found if dynamic_construct_key(construct) not in DYNAMIC_CONSTRUCT_EXCEPTIONS]
+    """Находки без закреплённых за записями реестра: ключ в `DYNAMIC_CONSTRUCT_EXCEPTIONS`, текст и число — по
+    `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS`.
+
+    Находка снимается, только если её ключ `<путь>::<владелец>::<вид>` назван в реестре и её текст
+    (`DynamicConstruct.text`) ещё не израсходован счётчиком закреплённых текстов этого ключа; счётчик ведётся на один
+    вызов, снимаются первые по порядку находки. Прочие находки остаются в исходном порядке: новая конструкция того же
+    вида у исключённого владельца и повтор закреплённой сверх числа — находки канала (ревью WR-38, план 16-59).
+    Правдивость закрепления в обе стороны (лишняя и недостающая конструкция) сверяет правило-паритет реестра
+    `test_every_dynamic_construct_exception_pins_its_construct_texts`.
+    """
+    remaining: dict[str, list[str]] = {
+        key: list(texts)
+        for key, texts in DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS.items()
+        if key in DYNAMIC_CONSTRUCT_EXCEPTIONS
+    }
+    kept: list[DynamicConstruct] = []
+    for construct in found:
+        pinned = remaining.get(dynamic_construct_key(construct), [])
+        if construct.text in pinned:
+            pinned.remove(construct.text)
+        else:
+            kept.append(construct)
+    return kept
 
 
 def format_dynamic_construct(found: DynamicConstruct) -> str:
