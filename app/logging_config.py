@@ -11,9 +11,13 @@ def setup_logging(log_level: str = "INFO", log_format: str = "json") -> None:
 
     Номер, дошедший до вывода журнала, маскируется на исполнении: процессор
     `mask_numbers_in_event` стоит в цепочке корневого обработчика, фильтр
-    `NumberMaskingFilter` — на нём и на обработчиках журналов, существующих к вызову
-    (uvicorn). Что маскируется, что остаётся видным и где граница — шапка
-    `app/services/log_masking.py` (решение владельца О-23 (а), свойство 2; О-24 (а)).
+    `NumberMaskingFilter` — на нём (с `formatter_masks_event_dicts=True`: словарь события там
+    маскирует процессор форматтера) и на обработчиках журналов, существующих к вызову
+    (uvicorn: там словарь в `msg` маскирует фильтр). Зовут функцию веб-процесс (`create_app`) и,
+    в воркерах и `beat` Celery, получатель `setup_celery_logging` сигнала
+    `celery.signals.setup_logging` (план 16-57). Что маскируется, что остаётся видным, сколько
+    это стоит и где граница — шапка `app/services/log_masking.py` (решения владельца О-23 (а),
+    свойство 2; О-24 (а); О-25 (а)).
 
     Args:
         log_level: Root log level (DEBUG, INFO, WARNING, ERROR).
