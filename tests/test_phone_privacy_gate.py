@@ -575,21 +575,85 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
   - `app/repositories/base.py::BaseRepository.update` — обобщённая запись полей; запись колонок номера отказывает на исполнении (`app/models/phone_guard.py`);
   - `app/routes/schedules.py::update_schedule` — поля `Schedule` из `model_dump`, номера у расписания нет;
   - `max_worker/main.py::<module>` — уровень журнала по имени из `LOG_LEVEL`, значение не вызывается.
-* Защита на исполнении (свойство 2; решение владельца О-24 (а)) — `app/services/log_masking.py`
-  (план 16-52): процессор structlog в цепочке корневого обработчика и фильтр stdlib на корне и на
-  обработчиках, существующих к вызову `setup_logging`, маскируют формой `mask_phone` (D-10) любую
-  подстроку, которую нормализатор фазы признаёт номером, в любом поле события. Видны ID групп
-  Telegram `-100…`, JID групп WhatsApp, метки времени в миллисекундах; цена — лишняя маска на числе
-  из 7–10 цифр, которое автопуть читает номером (`5123456789` → `+51 ******89`). Граница маски:
-  `print` и запись в `sys.stdout` мимо журнала, `max_worker` (свой журнал), `wa_worker` (Node),
-  процессы без `setup_logging` (скрипты `scripts/`), обработчики, поставленные после настройки,
-  край грамматики (`+7.999.123.45.67`) — там остаётся только этот гейт. Чтобы маска не выключалась
+  Запись реестра снимает только закреплённые за ней текст и число конструкций — таблица
+  `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS` общего модуля (план 16-59, ревью WR-38; О-25 (а), свойство 6):
+  новая конструкция того же вида у исключённого владельца и повтор закреплённой сверх числа —
+  находки канала у обоих гейтов; правило реестра краснит лишнюю и недостающую конструкцию.
+  Закрепление синтаксическое — его измеренная граница названа в шапке канала общего модуля.
+* Защита на исполнении (свойство 2; решение владельца О-24 (а); по замеру — О-25 (а), свойства 1–3,
+  5, планы 16-57, 16-60, 16-63) — `app/services/log_masking.py` (план 16-52): процессор structlog в
+  цепочке корневого обработчика и фильтр stdlib на корне и на обработчиках, существующих к вызову
+  `setup_logging`, маскируют формой `mask_phone` (D-10) любую подстроку, которую нормализатор фазы
+  признаёт номером, в любом поле события. Видны ID групп Telegram `-100…`, JID групп WhatsApp, метки
+  времени в миллисекундах; цена — лишняя маска на числе из 7–10 цифр, которое автопуть читает номером
+  (`5123456789` → `+51 ******89`). Таблицы и правила маски — `tests/test_services/test_log_masking.py`;
+  правило `test_the_privacy_gate_header_names_the_measured_mask_boundary` сверяет этот пункт с ними
+  (`MASK_BOUNDARY_TABLES_MODULE`): недостающее имя таблицы краснит, и шапка следует модулям маски.
+  Где стоит маска: веб-процесс (`create_app` → `setup_logging`, `app/logging_config.py`); воркеры
+  Celery, `celery beat` и дочерние процессы пула prefork — получатель `setup_celery_logging` сигнала
+  `celery.signals.setup_logging` (план 16-57) зовёт `setup_logging`, Celery при нём корень не
+  захватывает, а дочерний процесс пула наследует обработчик корня с маской; правила
+  `tests/test_worker/test_celery_log_mask.py` (воркер, `beat`, дочерний процесс пула и контроль без
+  получателя). Знаки, которые нормализатор читает внутри номера, а грамматика маски нет, — пробел NBSP
+  U+00A0, неразрывный дефис U+2011, тире, полноширинные скобки и плюс (таблица `_FOLDED_SEPARATORS`
+  модуля маски) и цифры блоков `Nd` (полноширинные, арабские и прочие), — судятся свёрнутыми (план
+  16-60, WR-39).
+  Граница маски — там остаётся только этот гейт: `print` и запись в `sys.stdout` мимо журнала (в
+  воркере Celery тоже: при получателе `setup_logging` Celery `stdout` в журнал не перенаправляет);
+  обработчики, поставленные после настройки, и журналы, настроенные мимо неё; процессы без
+  `setup_logging` — таблица `PROCESSES_WITHOUT_SETUP_LOGGING` модуля маски, замер у каждого: скрипты
+  `scripts/`, Alembic (`alembic/env.py` — свой `fileConfig`), `celery flower` (свой журнал tornado),
+  контейнер `max_worker` (свой журнал), `wa_worker` (Node); строки `MASK_BOUNDARY_SUBSTRINGS` — номер,
+  разбитый `.`, `/`, `[`, `]` (`+7.999.123.45.67`; граница 16-52: дроби, адреса, пути) или их
+  полноширинными двойниками U+FF0E, U+FF0F, U+FF3B, U+FF3D (знаки `MASK_BOUNDARY_CHARACTERS`
+  нормализатор читает, маска не сворачивает), и номер, разбитый звёздами `*` (знак самой маски —
+  свёртка сломала бы идемпотентность); номер, разбитый узким неразрывным пробелом U+202F или тонким
+  пробелом U+2009, — нормализатор номером его не читает, по О-24 (а) это не номер; номер, прилегающий
+  к букве (`id79991234567`, `x+79991234567`), — край `_LEFT` грамматики; разбивка с началом вне
+  грамматики маски — `8` перед `)` (`8)999)123)45)67`) и шесть цифр в скобках начала
+  (`(999123) 45 67`): нормализатор такие формы читает, а маска не маскировала их и до плана 16-60
+  (замер его сверки «база ↔ HEAD», семейство (b)).
+  Стоимость маски ограничена (CR-07; план 16-60): кандидат — от 7 до 15 цифр, работа на поле линейна по
+  его длине, судов нормализатора на вызов — не больше `MASK_JUDGMENT_BUDGET` (64); сверх бюджета —
+  отказ в закрытую: оставшиеся кандидаты получают `*` вместо цифр — цена в наблюдаемости
+  патологического поля, а не утечка номера. Так закрыта угроза отказа в обслуживании веб-процесса без
+  входа: путь запроса уходит в событие `request` на каждом запросе, и путь из 1 801 знака стоит 5–8 мс
+  (замер 16-60) вместо 2,45 с.
+  Держатели «только маски» — `setattr(self, "f", logger.info)` с литеральным именем,
+  `staticmethod(logger.info)`, `lambda`, контейнер (пункт «ГРАНИЦЫ СРЕДСТВА» с плана 16-29): в процессах
+  с `setup_logging` — веб, воркеры Celery, `beat`, пул prefork — их держит маска; в процессах без неё
+  (`PROCESSES_WITHOUT_SETUP_LOGGING`) их не ловит ничто — это граница. Чтобы маска не выключалась
   молча, журнал перенастраивает только `LOGGING_CONFIG_MODULE` (`app/logging_config.py`): правило
   `test_no_logging_reconfiguration_outside_the_logging_config` (план 16-54) краснит в `app/` и
   `scripts/` `structlog.configure`, `logging.basicConfig`, `dictConfig`, `.addHandler`,
   `.removeFilter`, `.setFormatter`, присваивание `.handlers` / `.filters` / `.propagate` и правку
   этих списков на месте; `max_worker/` правило не судит.
-* Статический гейт — второй рубеж. Место вызова номер не кладёт даже маской (D-11), поимённые формы
+  Летопись CR-06: до плана 16-57 граница маски в этом пункте называлась так: «`print` и запись в
+  `sys.stdout` мимо журнала, `max_worker` (свой журнал), `wa_worker` (Node), процессы без
+  `setup_logging` (скрипты `scripts/`), обработчики, поставленные после настройки, край грамматики
+  (`+7.999.123.45.67`) — там остаётся только этот гейт». Воркеров Celery она не называла: они
+  `setup_logging` зовут (`worker_init`), а маску в них снимал Celery — конструктор `Worker()` ставил
+  на корень свой обработчик (`ColorFormatter`), и номер печатался целиком; `celery beat`
+  `setup_logging` не звал вовсе. Держатели «только маски» (`setattr`-литерал, `staticmethod`,
+  `lambda`) в задачах Celery не ловило ничто (верификация раунда 11 `553933d8`, истины 28, 131, 159,
+  180). Решение владельца О-25 (а), свойство 1: получатель `setup_celery_logging` (план 16-57);
+  граница по замеру модулей маски — план 16-63.
+  Летопись WR-39: до плана 16-60 краем грамматики маски здесь назван только `+7.999.123.45.67`;
+  разбивку неразрывным пробелом NBSP U+00A0, неразрывным дефисом U+2011 и полноширинными цифрами
+  нормализатор читал номером, а маска — нет, и граница этого не называла; узкий неразрывный пробел
+  U+202F и тонкий U+2009 (нормализатор их номером не читает) не назывались вовсе. Решение владельца
+  О-25 (а), свойство 2: свёртка вторым проходом (план 16-60) и граница таблицами
+  `MASK_BOUNDARY_CHARACTERS` и `MASK_BOUNDARY_SUBSTRINGS`; формы с началом вне грамматики
+  (`8)999)123)45)67`, `(999123) 45 67`) маска не маскировала и до плана 16-60 — их назвал его замер.
+  Летопись CR-07: `535c4f20` (план 16-52) внёс маску с кубической стоимостью — кандидат без верхней
+  границы и пересчёт цифр каждого префикса: путь запроса из 1 801 знака (`"/" + "(1)%20" * 300`) стоил
+  2,45 с в цикле событий единственного uvicorn, без входа (событие `request` пишется и на 404), а
+  пункт стоимость маски не называл. Решение владельца О-25 (а), свойство 3: кандидат ограничен 7…15
+  цифрами, бюджет `MASK_JUDGMENT_BUDGET` и отказ в закрытую (план 16-60).
+* Статический гейт — второй рубеж в процессах с `setup_logging` (веб, воркеры Celery, `beat`, пул
+  prefork) и единственный рубеж в процессах без неё (таблица `PROCESSES_WITHOUT_SETUP_LOGGING`:
+  `scripts/`, Alembic, `celery flower`, `max_worker`, `wa_worker`; план 16-63). Место вызова номер
+  не кладёт даже маской (D-11), поимённые формы
   прежних раундов красны прежними предикатами распознавания, которые партия раунда 10 не правит
   (свойство 6), а написание динамики вне них — запрещённая конструкция канала, а не обещание
   предиката.
@@ -673,7 +737,9 @@ JS-ПОЛОВИНА (`wa_worker/`, без `node_modules` на любой глу�
     имени»); пункт объясняет, почему предикат её не судит. `setattr(self, "f", …)` с литеральным
     именем, `staticmethod(…)`, контейнер и `lambda` конструкциями канала не являются (замер плана
     16-54) и остаются границей предиката — их ловит только маска на исполнении, если вывод идёт
-    через журнал;
+    через журнал процесса с `setup_logging` (веб, воркеры Celery, `beat`, пул prefork — план 16-57);
+    в процессах без неё (`PROCESSES_WITHOUT_SETUP_LOGGING`: `scripts/`, Alembic, `celery flower`,
+    `max_worker`) их не ловит ничто (план 16-63; держатели — в разделе запрета динамики выше);
 * аргументы ссылки на журнал, пришедшие нелитералом (`args=row`, `kwargs=opts`,
   распаковка `*rows` и `**opts`), — поток данных, который предикат не прослеживает: что
   лежит в кортеже или словаре, известно только во время исполнения; судится само выражение
@@ -4633,6 +4699,12 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
     О-23 (а); вступление D-11 — маску «последним рубежом»; прежние обещания полноты написаний — с оговоркой о
     запрещённых конструкциях; докстринг `ModuleLogNames` — два написания объекта модуля и запрет остальных; «Живые
     числа» — замер плана 16-52 и прежние «225 / 68 / 93» летописью.
+    С плана 16-63 (решение владельца О-25 (а), свойства 5, 7; D-30, D-32): раздел называет закрепление реестра
+    `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS` (план 16-59), статический гейт вторым рубежом в процессах с `setup_logging` и
+    единственным рубежом без неё, маску в Celery (`celery.signals.setup_logging`, план 16-57); летописи CR-06 (граница
+    маски до плана 16-57 и верификация раунда 11 `553933d8`), WR-39 (край грамматики до плана 16-60) и CR-07
+    (кубическая стоимость `535c4f20`) называют прежнее с причиной. Границу маски по замеру сверяет правило
+    `test_the_privacy_gate_header_names_the_measured_mask_boundary`.
     """
     doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
     assert doc is not None, "у модуля гейта нет шапки"
@@ -4657,6 +4729,10 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
         "LOGGING_CONFIG_MODULE",
         "test_no_dynamic_construct_in_the_python_trees",
         "WR-35",
+        # План 16-63 (О-25 (а), свойства 5, 7; D-30, D-32): закрепление реестра, рубеж по процессам, маска в Celery.
+        "DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS",
+        "единственный рубеж",
+        "celery.signals.setup_logging",
     ):
         if section and needle not in section:
             missing.append(f"раздел «{BAN_SECTION_HEADING}» не называет «{needle}»")
@@ -4671,8 +4747,12 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
         ("Летопись CR-05", ("16573223", "d31d86db", "16-53", "16-52", "О-23 (а)")),
         ("Летопись WR-32", ("16-53", "16-52", "О-23 (а)")),
         ("Летопись WR-33", ("16-53", "16-52", "О-23 (а)")),
+        ("Летопись CR-06", ("16-57", "553933d8", "О-25 (а)")),
+        ("Летопись WR-39", ("16-60", "U+00A0", "О-25 (а)", "+7.999.123.45.67")),
+        ("Летопись CR-07", ("16-60", "535c4f20", "О-25 (а)", "2,45 с")),
     ):
-        chronicle = _chronicle_segment(flat, heading)
+        # Летописи плана 16-63 стоят внутри раздела запрета, перед пунктом «Статический гейт»: абзац кончается там.
+        chronicle = _chronicle_segment(flat, heading).split("Статический гейт", 1)[0]
         if not chronicle:
             missing.append(f"нет «{heading}»")
         for needle in needles:
@@ -4707,6 +4787,96 @@ def test_the_privacy_gate_header_names_the_ban_and_the_runtime_mask():
 
     assert not missing, (
         "шапка гейта приватности не называет запрет динамики и защиту на исполнении "
+        f"({len(missing)}):\n" + "\n".join(f"  {item}" for item in missing)
+    )
+
+
+# Модуль таблиц маски (план 16-60): процессы без `setup_logging`, знаки и строки границы, бюджет судов. Шапка
+# приватности называет границу маски по этим таблицам, а не по замыслу (CR-06, WR-39, CR-07; решение владельца
+# О-25 (а), свойство 5; план 16-63): один источник правды о маске — её модули.
+MASK_BOUNDARY_TABLES_MODULE = "tests.test_services.test_log_masking"
+
+
+def test_the_privacy_gate_header_names_the_measured_mask_boundary():
+    """Пункт «Защита на исполнении» называет, где маска стоит и где её нет, по замеру модулей маски (план 16-63).
+
+    Где стоит: веб-процесс, воркеры Celery, `beat` и дочерние процессы пула prefork (получатель
+    `celery.signals.setup_logging`, план 16-57; правила `tests/test_worker/test_celery_log_mask.py`). Граница маски —
+    каждый процесс таблицы `PROCESSES_WITHOUT_SETUP_LOGGING`, каждый знак `MASK_BOUNDARY_CHARACTERS` (в обратных
+    кавычках или кодом `U+XXXX`) и каждая строка `MASK_BOUNDARY_SUBSTRINGS` (так, как её узнаёт правило шапки маски —
+    `_boundary_names`), в том числе U+202F и U+2009; знак свёртки `_FOLDED_SEPARATORS` границей не назван. Стоимость —
+    `MASK_JUDGMENT_BUDGET` с его значением и отказ в закрытую. Держатели «только маски» (`staticmethod`, `lambda`) —
+    по процессам: в процессах с `setup_logging` их держит маска, в процессах без неё — ничто. Лишнее или недостающее
+    имя таблицы краснит: таблицы ввозятся из `MASK_BOUNDARY_TABLES_MODULE` в момент вызова.
+    """
+    import importlib
+
+    from app.services.log_masking import _FOLDED_SEPARATORS
+
+    tables = importlib.import_module(MASK_BOUNDARY_TABLES_MODULE)
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    section = flat.find(BAN_SECTION_HEADING)
+    start = flat.find("Защита на исполнении", section) if section >= 0 else -1
+    ends = [
+        index
+        for marker in ("Летопись", "Статический гейт")
+        if start >= 0 and (index := flat.find(marker, start + 1)) >= 0
+    ]
+    point = flat[start : min(ends)] if ends else ""
+    border = point.find("Граница маски")
+    cost = point.find("Стоимость маски", max(border, 0))
+    stands = point[:border] if border >= 0 else point
+    boundary = point[border : cost if cost > border else len(point)] if border >= 0 else ""
+    missing: list[str] = []
+    if not point:
+        missing.append(f"нет пункта «Защита на исполнении» в разделе «{BAN_SECTION_HEADING}» перед «Статический гейт»")
+    if point and not boundary:
+        missing.append("пункт не называет «Граница маски»")
+    if point and cost < 0:
+        missing.append("пункт не называет «Стоимость маски»")
+    for needle in ("celery.signals.setup_logging", "beat", "prefork", "tests/test_worker/test_celery_log_mask.py"):
+        if point and needle not in stands:
+            missing.append(f"«где стоит» не называет «{needle}»")
+    celery_rules = {
+        node.name
+        for node in ast.parse((PROJECT_ROOT / "tests/test_worker/test_celery_log_mask.py").read_text(encoding="utf-8")).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    for rule in (
+        "test_a_celery_worker_prints_a_mask_not_a_number",
+        "test_celery_beat_prints_a_mask_not_a_number",
+        "test_a_prefork_pool_child_keeps_the_mask",
+    ):
+        if rule not in celery_rules:
+            missing.append(f"правила маски Celery `{rule}` нет — «где стоит» ссылается на снятое правило")
+    for needle in ("PROCESSES_WITHOUT_SETUP_LOGGING", "MASK_BOUNDARY_SUBSTRINGS", "U+202F", "U+2009"):
+        if boundary and needle not in boundary:
+            missing.append(f"граница маски не называет «{needle}»")
+    for name, _measure in tables.PROCESSES_WITHOUT_SETUP_LOGGING:
+        if boundary and name not in boundary:
+            missing.append(f"граница маски не называет процесс без `setup_logging` «{name}»")
+    for character in tables.MASK_BOUNDARY_CHARACTERS:
+        names = (f"U+{ord(character):04X}", *((f"`{character}`",) if character.isascii() else ()))
+        if boundary and not any(name in boundary for name in names):
+            missing.append(f"граница маски не называет знак {' / '.join(names)}")
+    for row in tables.MASK_BOUNDARY_SUBSTRINGS:
+        if boundary and not any(name in boundary for name in tables._boundary_names(row.values[0])):
+            missing.append(f"граница маски не называет строку `{row.id}` таблицы `MASK_BOUNDARY_SUBSTRINGS`")
+    for code in _FOLDED_SEPARATORS:
+        if f"U+{code:04X}" in boundary:
+            missing.append(f"граница маски называет знак свёртки U+{code:04X} — маска его сворачивает")
+    cost_part = point[cost:] if cost >= 0 else ""
+    for needle in ("MASK_JUDGMENT_BUDGET", f"({tables.MASK_JUDGMENT_BUDGET})", "отказ в закрытую"):
+        if cost_part and needle not in cost_part:
+            missing.append(f"стоимость маски не называет «{needle}»")
+    for needle in ("staticmethod", "lambda", "ничто"):
+        if point and needle not in point:
+            missing.append(f"держатели «только маски» не сказаны по процессам: нет «{needle}»")
+
+    assert not missing, (
+        "шапка приватности называет границу маски не по замеру её модулей "
         f"({len(missing)}):\n" + "\n".join(f"  {item}" for item in missing)
     )
 
