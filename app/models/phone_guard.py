@@ -136,10 +136,19 @@ def _refuse_unscoped_flush(
     """Слушатель `before_flush`: значение колонки номера сбрасывается без разрешения.
 
     Вторая линия после событий атрибута: значение, поставленное под
-    `writer_scope()`, а сброшенное вне его, тоже отказывает.
+    `writer_scope()`, а сброшенное вне его, тоже отказывает. Новый объект
+    (`session.new`) судится по ЗНАЧЕНИЯМ, а не только по истории: INSERT ORM
+    собирает из `state.dict`, а `set_committed_value` истории не оставляет
+    (WR-36) — номер или поднятый признак «ручной» у нового объекта отказывает.
     """
     if _WRITER_ACTIVE.get():
         return
+    for instance in session.new:
+        if not isinstance(instance, MessengerAccount):
+            continue
+        values = sa_inspect(instance).dict
+        if values.get("phone") is not None or values.get("phone_is_manual"):
+            raise PhoneWriteOutsideWriter(PHONE_WRITE_OUTSIDE_WRITER)
     for instance in (*session.new, *session.dirty):
         if not isinstance(instance, MessengerAccount):
             continue
