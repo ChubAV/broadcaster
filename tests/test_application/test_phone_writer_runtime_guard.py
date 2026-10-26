@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import contextlib
 import functools
 import operator
@@ -29,11 +30,17 @@ import types
 
 import pytest
 import sqlalchemy
-from sqlalchemy import delete, event, func, insert, literal, select, update
+from sqlalchemy import delete, event, func, insert, literal, select, text, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm.attributes import flag_modified, set_attribute, set_committed_value
+from sqlalchemy.orm.attributes import (
+    flag_modified,
+    instance_dict,
+    instance_state,
+    set_attribute,
+    set_committed_value,
+)
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
 from app.database import Base
@@ -1296,3 +1303,132 @@ def test_the_guard_module_names_what_it_refuses_and_its_boundary():
         missing.append("комментарий колонки phone: app/models/phone_guard.py")
 
     assert not missing, f"{HEADER_RED}: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# План 16-61: автосброс под разрешением писателя (IN-23) и измеренная граница
+# защиты (IN-24; О-25 (а), свойства 5, 6).
+# ---------------------------------------------------------------------------
+
+# Причинный литерал RED правила автосброса (задача 2 плана 16-61).
+PENDING_RED = "чужое отложенное изменение номера сброшено под разрешением писателя (IN-23)"
+FOREIGN_PENDING_NUMBER = "+79990000001"
+
+
+async def _fill_then_commit(session, account_id: int) -> None:
+    assert await fill_reported_phone(session, account_id, RAW) is PhoneWrite.WRITTEN
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_pending_change_is_not_flushed_under_the_writer_scope(db_session):
+    """Отложенное изменение колонок номера чужого кода не сбрасывается писателем.
+
+    История помечена мимо события атрибута (приватный API — публичного пути
+    нет: `flag_modified` отказывает событием `modified`). Оператор писателя
+    исполняется с `autoflush=False`, поэтому чужое изменение сбрасывается
+    позже, на коммите вне `writer_scope()`, и отказывает второй линией.
+    """
+    first_id = await _seed(db_session)
+    first = await db_session.get(MessengerAccount, first_id)
+    second = MessengerAccount(
+        user_id=first.user_id, type="wa", credentials="cred", status="active"
+    )
+    db_session.add(second)
+    await db_session.commit()
+    second_id = second.id
+
+    state, values = instance_state(first), instance_dict(first)
+    for column, value in (("phone", FOREIGN_PENDING_NUMBER), ("phone_is_manual", True)):
+        state._modified_event(values, state.manager[column].impl, values.get(column))
+        values[column] = value
+
+    refusal = await _refusal_of(_fill_then_commit(db_session, second_id))
+
+    assert _is_guard_refusal(refusal), f"{PENDING_RED}; исход: {type(refusal).__name__}"
+    assert DIGITS not in str(refusal)
+    await db_session.rollback()
+    assert await _columns(db_session, first_id) == (None, False), PENDING_RED
+    assert await _columns(db_session, second_id) == (None, False)
+
+
+# --- измеренная граница защиты: каждая строка исполнением ПИШЕТ номер ----------
+#
+# Это мера границы для шапки, а не норма поведения (урок «тесты фазы закрепляют
+# старые дефекты»): если строка однажды начнёт отказывать, граница закрылась —
+# строку убирают из таблицы и из шапки, а не чинят тест.
+
+GUARD_BOUNDARY_RED = (
+    "граница закрылась: строка отказывает — уберите её из `GUARD_BOUNDARY_WRITES` "
+    "и из шапки защиты (это не поломка)"
+)
+BOUNDARY_HEADER_RED = "шапка защиты не называет измеренную границу"
+_RAW_UPDATE = "UPDATE messenger_accounts SET phone = ? WHERE id = ?"
+
+
+async def _text_update_through_the_session(session, account):
+    await session.execute(
+        text("UPDATE messenger_accounts SET phone = :phone WHERE id = :id"),
+        {"phone": NUMBER, "id": account.id},
+    )
+
+
+async def _exec_driver_sql_update(session, account):
+    conn = await session.connection()
+    await conn.exec_driver_sql(_RAW_UPDATE, (NUMBER, account.id))
+
+
+async def _raw_dbapi_driver_connection_update(session, account):
+    raw = await (await session.connection()).get_raw_connection()
+    await raw.driver_connection.execute(_RAW_UPDATE, (NUMBER, account.id))
+
+
+async def _task_spawned_inside_the_writer_scope(session, account):
+    """Задача, порождённая внутри разрешения, исполняет UPDATE после выхода из него."""
+
+    async def late_write():
+        await session.execute(
+            update(MessengerAccount)
+            .where(MessengerAccount.id == account.id)
+            .values(phone=NUMBER)
+            .execution_options(synchronize_session=False)
+        )
+
+    with _guard().writer_scope():
+        task = asyncio.create_task(late_write())
+    await task
+
+
+# (запись, фраза шапки защиты, называющая строку)
+GUARD_BOUNDARY_WRITES = [
+    pytest.param(_text_update_through_the_session, "text(", id="text-update-through-the-session"),
+    pytest.param(_exec_driver_sql_update, "exec_driver_sql", id="exec-driver-sql-update"),
+    pytest.param(
+        _raw_dbapi_driver_connection_update,
+        "сырое соединение DBAPI",
+        id="raw-dbapi-driver-connection-update",
+    ),
+    pytest.param(
+        _task_spawned_inside_the_writer_scope,
+        "create_task",
+        id="task-spawned-inside-the-writer-scope",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write,header_phrase", GUARD_BOUNDARY_WRITES)
+async def test_a_named_boundary_of_the_guard_is_measured_and_named(
+    db_session, write, header_phrase
+):
+    """Строка границы исполнением пишет номер, и шапка защиты её называет."""
+    account_id = await _seed(db_session)
+    account = await db_session.get(MessengerAccount, account_id)
+
+    refusal = await _refusal_of(write(db_session, account))
+
+    assert refusal is None, f"{GUARD_BOUNDARY_RED}; исход: {type(refusal).__name__}"
+    await db_session.commit()
+    assert await _columns(db_session, account_id) == (NUMBER, False), GUARD_BOUNDARY_RED
+    guard = " ".join(_docstring(GUARD_PATH).split())
+    assert header_phrase in guard, f"{BOUNDARY_HEADER_RED}: «{header_phrase}»"
