@@ -60,6 +60,7 @@ structlog и запись stdlib с подставленными аргумен�
   печатает словарь события как есть: фильтр запись structlog не трогает.
 """
 
+import bisect
 import logging
 import re
 
@@ -80,17 +81,44 @@ _RIGHT = r"(?![^\W_]|-|\.\d)"
 # Цепочка цифр с необязательным `+`: от `REPORTED_MIN_DIGITS` (7) до `E164_MAX_DIGITS` (15) цифр.
 _DIGIT_RUN = re.compile(_LEFT + r"\+?[0-9]{7,15}" + _RIGHT)
 
-# Разбивка: начинается с `+цифры`, `(цифры)` или `8` перед разделителем; дальше цифры и
-# разделители (пробел, `-`, скобки); кончается цифрой.
-_SPACED_NUMBER = re.compile(_LEFT + r"(?:\+[0-9]|\([0-9]{1,5}\)|8(?=[ \-(]))[0-9 \-()]*[0-9]" + _RIGHT)
+# Разбивка: начинается с `+цифры`, `(цифры)` или `8` перед разделителем (`_SPACED_NUMBER_START`);
+# дальше — цепочка цифр и разделителей (пробел, `-`, скобки), кончается цифрой с краем `_RIGHT`.
+#
+# СТОИМОСТЬ (CR-07; решение владельца О-25 (а), свойство 3). До плана 16-60 кандидат был
+# регулярным выражением без верхней границы (`[0-9 \-()]*[0-9]`): на `"(1) " * k` каждое начало
+# тянуло кандидата до конца поля, а префиксы пересчитывали цифры заново — куб по длине поля
+# (`535c4f20`: путь запроса из 1 801 знака — 2,45 с в цикле событий uvicorn). Теперь кандидат
+# ограничен длиной номера: судятся только префиксы от `REPORTED_MIN_DIGITS` до `E164_MAX_DIGITS`
+# цифр (длиннее судья не признаёт никогда — `_recognised`), конец цепочки и её последний
+# допустимый край считаются один раз на поле, цифры префикса — нарастающим итогом по позициям
+# цифр. Разделителей подряд — сколько угодно, как и до плана: нормализатор читает
+# `+7    999    123    45    67`, и маска базы его маскировала (замер исполнения 16-60;
+# предел «три разделителя» потерял бы эти номера). Работа на поле линейна по длине.
+_SPACED_NUMBER_START = re.compile(_LEFT + r"(?:\+[0-9]|\([0-9]{1,5}\)|8(?=[ \-(]))")
+_RIGHT_EDGE = re.compile(_RIGHT)
 
 _SEPARATORS = " -()"
+_SPLIT_CHARACTERS = frozenset("0123456789" + _SEPARATORS)
+_CLOSED_EDGES = frozenset(" ()")
 _CONTAINER_DEPTH = 16
 _MASK_ERROR = "[number-mask-error]"
+
+# Бюджет судов нормализатора на один вызов `mask_numbers` (CR-07; О-25 (а), свойство 3). Суд —
+# разбор `phonenumbers` (до 0,3 мс с `mask_phone`); сверх бюджета новый кандидат маскируется без
+# суда — каждая цифра `*` (`_closed_mask`, отказ в закрытую): номер не утекает, цена — звёзды на
+# числах патологического поля с больше чем 64 разными кандидатами.
+MASK_JUDGMENT_BUDGET: int = 64
+
+_CLOSED_DIGITS = str.maketrans("0123456789", "**********")
 
 
 def _digit_count(text: str) -> int:
     return sum(1 for ch in text if "0" <= ch <= "9")
+
+
+def _closed_mask(text: str) -> str:
+    """Отказ в закрытую сверх бюджета: каждая цифра ASCII — `*`, прочие знаки прежние."""
+    return text.translate(_CLOSED_DIGITS)
 
 
 def _recognised(text: str) -> str | None:
@@ -126,50 +154,127 @@ def _mask_of(text: str) -> str | None:
         return "+***"
 
 
-def _group_ends(text: str) -> list[int]:
-    """Концы групп цифр разбивки, от самого длинного префикса к короткому."""
-    ends = [index + 1 for index in range(len(text)) if "0" <= text[index] <= "9" and (
-        index + 1 == len(text) or text[index + 1] in _SEPARATORS
-    )]
-    return ends[::-1]
+class _Judgments:
+    """Суды одного вызова `mask_numbers`: память «кандидат → маска или `None`» и бюджет.
+
+    Суд (`_mask_of` → `_recognised`) вызывается только для нового кандидата и, пока бюджет не
+    исчерпан, уменьшает его; сверх бюджета новый кандидат получает `_closed_mask` — отказ в
+    закрытую. Память и бюджет общие у разбивки и у цепочки цифр одного вызова.
+    """
+
+    __slots__ = ("left", "seen")
+
+    def __init__(self) -> None:
+        self.seen: dict[str, str | None] = {}
+        self.left = MASK_JUDGMENT_BUDGET
+
+    def mask(self, candidate: str) -> str | None:
+        if candidate in self.seen:
+            return self.seen[candidate]
+        if self.left > 0:
+            self.left -= 1
+            verdict = _mask_of(candidate)
+        else:
+            verdict = _closed_mask(candidate)
+        self.seen[candidate] = verdict
+        return verdict
 
 
-def _mask_spaced(text: str) -> str:
+def _last_edges(text: str) -> list[int]:
+    """Для каждой позиции цепочки разбивки — последний допустимый конец кандидата в ней (или -1).
+
+    Цепочка — непрерывный ряд цифр ASCII, пробелов, `-` и скобок. Допустимый конец — цифра,
+    за которой пробел или скобка, либо последняя цифра цепочки, за которой выполняется `_RIGHT`.
+    Жадный кандидат базы кончался ровно здесь; считается один раз на поле.
+    """
+    size = len(text)
+    edges = [-1] * size
+    index = 0
+    while index < size:
+        if text[index] not in _SPLIT_CHARACTERS:
+            index += 1
+            continue
+        end = index
+        while end < size and text[end] in _SPLIT_CHARACTERS:
+            end += 1
+        last = -1
+        for position in range(end - 1, index - 1, -1):
+            if not "0" <= text[position] <= "9":
+                continue
+            if position == end - 1:
+                if _RIGHT_EDGE.match(text, end) is not None:
+                    last = position
+                    break
+            elif text[position + 1] in _CLOSED_EDGES:
+                last = position
+                break
+        for position in range(index, end):
+            edges[position] = last
+        index = end
+    return edges
+
+
+def _spaced_spans(text: str, judgments: _Judgments) -> list[tuple[int, int, str]]:
+    """Спаны (начало, конец, маска) разбивок, признанных номером; поиск линеен по длине поля."""
+    spans: list[tuple[int, int, str]] = []
+    start = _SPACED_NUMBER_START.search(text)
+    if start is None:
+        return spans
+    edges = _last_edges(text)
+    digits = [index for index, ch in enumerate(text) if "0" <= ch <= "9"]
+    while start is not None:
+        begin, token_end = start.span()
+        last = edges[token_end - 1]
+        replaced_to = None
+        if last >= token_end:
+            # Цифры префикса — нарастающим итогом: `first` — первая цифра кандидата, префикс до
+            # цифры `digits[k]` несёт `k - first + 1` цифр; от длинного к короткому, не длиннее
+            # `E164_MAX_DIGITS` и не короче `REPORTED_MIN_DIGITS`.
+            first = bisect.bisect_left(digits, begin)
+            top = min(first + E164_MAX_DIGITS, bisect.bisect_right(digits, last)) - 1
+            for k in range(top, first + REPORTED_MIN_DIGITS - 2, -1):
+                position = digits[k]
+                if position != last and text[position + 1] not in _SEPARATORS:
+                    continue
+                mask = judgments.mask(text[begin:position + 1])
+                if mask is not None:
+                    spans.append((begin, position + 1, mask))
+                    replaced_to = position + 1
+                    break
+        start = _SPACED_NUMBER_START.search(text, begin + 1 if replaced_to is None else replaced_to)
+    return spans
+
+
+def _run_spans(text: str, judgments: _Judgments) -> list[tuple[int, int, str]]:
+    """Спаны цепочек цифр (`_DIGIT_RUN`), признанных номером."""
+    spans: list[tuple[int, int, str]] = []
+    for match in _DIGIT_RUN.finditer(text):
+        mask = judgments.mask(match.group())
+        if mask is not None:
+            spans.append((match.start(), match.end(), mask))
+    return spans
+
+
+def _apply_spans(text: str, spans: list[tuple[int, int, str]]) -> str:
     parts: list[str] = []
     position = 0
-    search_from = 0
-    while True:
-        match = _SPACED_NUMBER.search(text, search_from)
-        if match is None:
-            break
-        candidate = match.group()
-        replaced = False
-        for end in _group_ends(candidate):
-            prefix = candidate[:end]
-            if _digit_count(prefix) < REPORTED_MIN_DIGITS:
-                break
-            mask = _mask_of(prefix)
-            if mask is not None:
-                parts.append(text[position:match.start()])
-                parts.append(mask)
-                position = match.start() + end
-                search_from = position
-                replaced = True
-                break
-        if not replaced:
-            search_from = match.start() + 1
+    for begin, end, mask in spans:
+        parts.append(text[position:begin])
+        parts.append(mask)
+        position = end
     parts.append(text[position:])
     return "".join(parts)
 
 
-def _mask_run(match: re.Match[str]) -> str:
-    mask = _mask_of(match.group())
-    return match.group() if mask is None else mask
-
-
 def mask_numbers(text: str) -> str:
-    """Текст, где каждая подстрока, признанная номером, заменена маской `mask_phone` (D-10)."""
-    return _DIGIT_RUN.sub(_mask_run, _mask_spaced(text))
+    """Текст, где каждая подстрока, признанная номером, заменена маской `mask_phone` (D-10).
+
+    Порядок прежний: сначала разбивка, затем цепочки цифр на тексте после первой стадии. Судов
+    нормализатора на вызов — не больше `MASK_JUDGMENT_BUDGET`, сверх — отказ в закрытую.
+    """
+    judgments = _Judgments()
+    spaced = _apply_spans(text, _spaced_spans(text, judgments))
+    return _apply_spans(spaced, _run_spans(spaced, judgments))
 
 
 def _masked_text(value: object) -> str | None:

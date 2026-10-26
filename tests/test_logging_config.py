@@ -248,6 +248,7 @@ def test_uvicorn_handlers_set_up_before_the_app_are_masked(restored_logging):
 # 1 801 знака стоил 2,45 с синхронной маски в цикле событий единственного uvicorn.
 LONG_SPLIT_REQUEST_PATHS = [
     pytest.param("/" + "(1)%20" * 300, id="1801-chars"),
+    pytest.param("/" + "(1)%20" * 1333, id="7999-chars"),
 ]
 
 

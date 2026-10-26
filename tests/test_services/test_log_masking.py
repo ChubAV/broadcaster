@@ -227,6 +227,53 @@ def test_the_mask_judges_at_most_the_budget_per_field(monkeypatch):
     )
 
 
+# Входы правила стоимости: повторы замера ревью CR-07 и пять случайных разбитых входов по 8 000
+# знаков (8 КБ — предел строки запроса nginx). Замер исполнения 16-60 (2026-10-26, лучшее из трёх):
+# 11,5 / 3,6 / 3,1 мс у повторов и 3,4…6,3 мс у случайных; на базе `"(1) " * 2000` шёл бы минутами.
+MASK_COST_INPUTS = [
+    pytest.param("(1) " * 2000, id="bracket-one-x2000"),
+    pytest.param("8 " * 4000, id="eight-x4000"),
+    pytest.param("(12)" * 2000, id="bracket-twelve-x2000"),
+    *(pytest.param(text, id=f"random-{name.strip()}") for name, text in _random_split_inputs(8000).items()),
+]
+
+
+@pytest.mark.parametrize("text", MASK_COST_INPUTS)
+def test_a_long_split_field_is_masked_in_bounded_time(monkeypatch, text):
+    """Поле из 8 000 знаков разбитого входа — в предел времени и в бюджет судов; номера не остаётся."""
+    from app.services import log_masking
+
+    calls = _counting_judge(monkeypatch)
+    started = time.perf_counter()
+    masked = log_masking.mask_numbers(text)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed <= MASK_FIELD_TIME_BOUND_SECONDS, (
+        f"поле из {len(text)} знаков маскируется {elapsed:.3f} с — дольше названного предела "
+        f"{MASK_FIELD_TIME_BOUND_SECONDS} с (CR-07)"
+    )
+    assert calls[0] <= MASK_JUDGMENT_BUDGET, f"судов {calls[0]} — больше бюджета {MASK_JUDGMENT_BUDGET} (CR-07)"
+    assert log_masking.mask_numbers(masked) == masked, (
+        "в выводе маски остался кандидат, который маска признаёт номером: замаскировано не всё"
+    )
+
+
+def test_beyond_the_budget_a_candidate_is_masked_closed():
+    """Сверх бюджета судов кандидат получает `*` вместо цифр — номер не утекает (отказ в закрытую)."""
+    from app.services.log_masking import mask_numbers
+
+    numbers = [f"+7 999 123-45-{index:02d}" for index in range(70)]
+    masked = mask_numbers(", ".join(numbers))
+
+    closed = "+* *** ***-**-**"
+    assert masked.count(closed) == 70 - MASK_JUDGMENT_BUDGET, (
+        f"сверх бюджета {MASK_JUDGMENT_BUDGET} судов кандидат не замаскирован в закрытую: {masked[-120:]!r}"
+    )
+    assert masked.count("+7 *** ***-**-") == MASK_JUDGMENT_BUDGET, "в пределах бюджета маска не та"
+    assert "999" not in masked and "123" not in masked, f"номер уцелел в поле сверх бюджета: {masked!r}"
+    assert mask_numbers(masked) == masked, "повторное наложение маски изменило поле с отказом в закрытую"
+
+
 class _Carrier:
     """Объект, чей `repr` несёт номер."""
 
