@@ -438,27 +438,64 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
   репозитория, запись колонок номера через неё отказывает на исполнении, а вызов `update(…,
   phone=…)` ловит вид 2; `app/routes/schedules.py::update_schedule` — поля расписания из
   `model_dump`, колонок номера нет. Шестая запись реестра (`max_worker/main.py`) — дерево гейта
-  приватности; потолок реестра 6, подъём и новая запись — решение владельца.
-- Защита на исполнении (план 16-51; свойство 3). `app/models/phone_guard.py`: запись колонок
-  номера вне модуля-писателя отказывает `PhoneWriteOutsideWriter` — события атрибута `set` /
-  `remove` / `modified` обеих колонок, `before_flush` и `do_orm_execute` (UPDATE / INSERT по
-  таблице аккаунтов). Разрешение `writer_scope()` — только у писателя: правило
+  приватности; потолок реестра 6, подъём и новая запись — решение владельца. Запись реестра снимает
+  только закреплённые за ней текст и число конструкций — таблица `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS`
+  общего модуля (план 16-59, ревью WR-38): новая конструкция того же вида в теле исключённого владельца
+  или повтор закреплённой сверх числа — находка канала.
+- Защита на исполнении (планы 16-51, 16-58, 16-61; свойство 3; О-25 (а), свойство 4).
+  `app/models/phone_guard.py`: запись колонок номера вне модуля-писателя отказывает
+  `PhoneWriteOutsideWriter` — четыре линии: события атрибута `set` (со сравнением с уже загруженным
+  значением, план 16-61) / `remove` / `modified` обеих колонок; `before_flush` (новый объект судится и
+  по значениям, план 16-58); `do_orm_execute` (UPDATE / INSERT по таблице аккаунтов); слушатель
+  `before_cursor_execute` класса `Engine` — линия движка (план 16-58): скомпилированный UPDATE /
+  INSERT / upsert таблицы `messenger_accounts`, задающий колонку номера, судится на курсоре.
+  Разрешение `writer_scope()` — только у писателя: правило
   `test_the_runtime_guard_is_entered_only_by_the_writer` (план 16-55) с контролем
   `test_a_planted_guard_bypass_reddens_the_rule` — ссылка на модуль защиты, `writer_scope` или
   `_WRITER_ACTIVE` законна только в `PHONE_WRITER_MODULE`, `RUNTIME_GUARD_MODULE` и
-  `RUNTIME_GUARD_REGISTRATION`, а снятие слушателя `event.remove(…)` не законно нигде. Граница
-  защиты (шапка модуля защиты): `set_committed_value` меняет только объект в памяти;
-  `bulk_update_mappings` / `bulk_insert_mappings` / `bulk_save_objects` событий не дают; оператор
-  через `session.connection()` / движок и сырой SQL через соединение, текст `text("UPDATE …")` и
-  через `Session.execute`; ветка `ON CONFLICT DO UPDATE SET …`; процесс, не ввозящий
-  `app.models`. Для этих путей статический гейт остаётся первым рубежом (виды 2–6 и запрет
-  конструкции), для путей ORM — вторым. Вычисленное имя колонки в операторе сессии
-  (`values(**{…})`) отказывает на исполнении, хотя статически это пункт (1) границы ниже.
-- Исключение из обещания, найденное замером исполнителя плана 16-55 и вынесенное владельцу:
-  связывание держателя вызовом `setattr(self, "f", api)` с литеральным именем — не конструкция
-  канала, и с API за границей защиты (`bulk_update_mappings`, исполнение через соединение) такая
-  запись не судится ни одним рубежом (пункт (1) границы ниже). Это открытая находка, а не
-  принятая граница.
+  `RUNTIME_GUARD_REGISTRATION`, а снятие слушателя `event.remove(…)` не законно нигде. Рубежи по
+  путям записи — по замеру, а не по замыслу:
+  (а) пути DML через движок — ORM (присваивание, конструктор, `setattr`, `merge`),
+  `bulk_update_mappings` / `bulk_insert_mappings` / `bulk_save_objects`, оператор через
+  `session.connection()` или движок, Core `insert` / `update` с параметрами исполнения, upsert
+  (`on_conflict_do_update`), лёгкая таблица `sqlalchemy.table("messenger_accounts", …)`: первый рубеж
+  — защита на исполнении (со значениями из литерала, переменной, параметра или цикла одинаково),
+  второй — статический гейт (поимённые формы видов 2–6 и канал запрета). `set_committed_value` на
+  сохранённом объекте оператора не порождает (меняет только объект в памяти), на новом — отказывает
+  второй и четвёртой линией;
+  (б) текст SQL — `text("UPDATE …")` через сессию и через соединение, `exec_driver_sql` — и сырое
+  соединение DBAPI (`get_raw_connection().driver_connection`): защита их не судит, и статический гейт
+  для них — единственный рубеж (вид 5 — литерал SQL, канал — текст SQL из имени или вычисленный;
+  пункт (6) «ГРАНИЦЫ ПРЕДИКАТА», таблица `RAW_SQL_BOUNDARY_FORMS`); запись через сырое соединение
+  DBAPI с текстом SQL из параметра (`raw-dbapi-sql-from-a-parameter`) не держит ни один рубеж —
+  названная граница, адресат — ревью фаз 17–20;
+  (в) процесс, не ввозящий `app.models`, — слушателей в нём нет, рубеж один: статический гейт со своей
+  границей; задача, порождённая внутри `writer_scope()`, несёт копию разрешения — её держит правило
+  входа в разрешение (план 16-55): писатель задач не порождает.
+  Измеренная граница защиты — таблица `GUARD_BOUNDARY_WRITES` модуля
+  `tests/test_application/test_phone_writer_runtime_guard.py` (план 16-61): `text(…)` через сессию,
+  `exec_driver_sql`, сырое соединение DBAPI и задача, порождённая внутри `writer_scope()`, исполнением
+  пишут номер. Вычисленное имя колонки в операторе сессии (`values(**{…})`) отказывает на исполнении,
+  хотя статически это пункт (1) границы ниже.
+  Летопись CR-08: до плана 16-58 этот пункт называл три линии защиты и относил к её границе
+  `set_committed_value`, `bulk_update_mappings` / `bulk_insert_mappings` / `bulk_save_objects`, оператор
+  через `session.connection()` / движок, сырой SQL через соединение и `Session.execute`, ветку
+  `ON CONFLICT DO UPDATE SET …` и процесс без `app.models`, а затем утверждал: «Для этих путей
+  статический гейт остаётся первым рубежом (виды 2–6 и запрет конструкции), для путей ORM — вторым».
+  Ревью раунда 10 (CR-08) и верификация раунда 11 (`553933d8`, истины 18 и 168, формы B1–B6) показали:
+  запись `bulk_*`, через соединение и upsert с данными из переменной не судит ни предикат (0), ни
+  канал (0), запись прошла, а правило шапки закрепляло эту фразу. Решение владельца О-25 (а),
+  свойство 4, закрыло такие пути линией движка (план 16-58), свойство 5 — назвать рубежи по замеру;
+  план 16-62 снял фразу с утверждения и оставил её здесь с причиной.
+- Находка плана 16-55 о держателе, закрытая линией движка. Связывание держателя вызовом
+  `setattr(self, "f", api)` с литеральным именем по-прежнему не конструкция канала, но запись через
+  такой держатель с `bulk_update_mappings` / `bulk_insert_mappings` или с исполнением через соединение
+  с плана 16-58 отказывает линией движка — так же держатели `staticmethod` и `lambda` из ревью CR-08
+  (замер исполнителя плана 16-62 на SQLite в памяти: пять форм — отказ `_refuse_unscoped_cursor`,
+  строка прежняя). Летопись находки 16-55: исполнитель плана 16-55 нашёл замером, что такая запись не
+  судится ни одним рубежом, и пункт называл её «открытая находка, а не принятая граница», вынесенная
+  владельцу; ревью CR-08 подтвердило её своим корпусом; решение владельца О-25 (а), свойство 4,
+  закрыло её линией движка (план 16-58).
 - Что остаётся от прежнего (свойства 5, 6). Распознавание прежних раундов остаётся для
   поимённых форм: строки `LITERAL_FORM_CASES` (268) и `LEGITIMATE_CASES` (107), матрицы и
   предикаты (`_rename_aliases`, `_referenced_calls`, `_phone_writes` и соседи) прежние, реестр
@@ -485,7 +522,9 @@ session.execute(stmt, rows)` прошёл бы. Поэтому параметр 
   №3).
 - Живое дерево после партии раунда 10 — 106 файлов (с модулями `app/models/phone_guard.py` и
   `app/services/log_masking.py`), 0 находок прежнего правила и канала, 0 обходов защиты, в
-  модуле-писателе 6 сырых (замер исполнителя плана 16-55: `OK 6 106 offences 0`).
+  модуле-писателе 6 сырых (замер исполнителя плана 16-55: `OK 6 106 offences 0`); после партии
+  раунда 11 (планы 16-57…16-61) — те же числа (замер исполнителя плана 16-62: `OK 6 106 offences 0`,
+  канал — 106 файлов, 0 находок).
 
 ГРАНИЦА ПРЕДИКАТА — через механизм, а не через «всё». Ловится всякая запись, в
 которой колонка номера — или таблица аккаунтов во вставке, загрузке и слиянии —
@@ -543,10 +582,12 @@ getattr-строку; ссылка —
     конструкции канала запрета (вид «пространство имён»); `setattr(self, "f", api)` с
     литеральным именем — нет: канал судит `setattr` с нелитеральным именем и `setattr`
     значением, а здесь он вызван и имя — литерал (замер исполнителя плана 16-55). Запись через
-    такой держатель, идущая через события ORM, отказывает на исполнении (план 16-51); путь за
-    границей защиты — держатель с `bulk_update_mappings` или с исполнением через соединение —
-    не судит сегодня ни предикат, ни канал, ни защита: это открытая находка плана 16-55,
-    вынесенная владельцу (сводка плана), а не граница, принятая решением; вычисленное имя
+    такой держатель, идущая через события ORM, отказывает на исполнении (план 16-51); держатель с
+    `bulk_update_mappings` или с исполнением через соединение с плана 16-58 отказывает линией движка
+    защиты (`before_cursor_execute`; замер исполнителя плана 16-62) — летопись: до плана 16-62 здесь
+    стояло, что такой путь «не судит сегодня ни предикат, ни канал, ни защита» и что это открытая
+    находка плана 16-55, вынесенная владельцу (ревью CR-08; закрыта решением О-25 (а), свойство 4);
+    текст SQL из параметра у сырого соединения DBAPI — пункт (6); вычисленное имя
     колонки в операторе сессии (`values(**{"PHONE".lower(): x})`, `{k: v for …}` с вычисленным
     ключом) отказывает на исполнении (`do_orm_execute`), хотя статически это этот пункт;
 (2) имя колонки, API или SQL, вычисленные во время исполнения, — `setattr(obj,
@@ -582,7 +623,23 @@ getattr-строку; ссылка —
     нет и по-прежнему не запись (защита на исполнении его не видит, а `flag_modified` рядом с
     ним отказывает событием `modified`); `del account.phone`, `delattr(account, "phone")`,
     `del_attribute(account, "phone")` с плана 16-51 отказывают на исполнении событием
-    `remove` (замер исполнителя плана 16-55 на объекте модели).
+    `remove` (замер исполнителя плана 16-55 на объекте модели);
+(6) сырой SQL (план 16-62; решение владельца О-25 (а), свойство 5; О-26 (а)) — по замеру таблицы
+    `RAW_SQL_BOUNDARY_FORMS` (десять форм, у каждой измеренный ответ предиката и канала, правило
+    `test_a_raw_sql_form_has_its_measured_static_verdict`). Текст SQL с колонкой номера литералом — в
+    вызове или в строковой константе модуля, у `text`, `exec_driver_sql`, сырого соединения DBAPI и
+    `sqlite3` одинаково — ловит вид 5; текст из имени, константы или вычисления, поданный `text` /
+    `exec_driver_sql`, судит канал запрета (вид «вычисленный текст SQL»; склейка с переменной и текст
+    из параметра — только канал, константа модуля — и вид 5, и канал). Защита на исполнении текста SQL
+    не судит (таблица `GUARD_BOUNDARY_WRITES` модуля защиты, план 16-61): для этих путей статический
+    гейт — единственный рубеж. Запись через сырое соединение DBAPI (`get_raw_connection().driver_connection`)
+    с текстом SQL из параметра или переменной — строка `raw-dbapi-sql-from-a-parameter`, предикат 0,
+    канал 0 — не судит ни предикат, ни канал, ни защита (она идёт мимо движка): это названная граница,
+    адресат — ревью фаз 17–20 (решение владельца О-26 (а)); запрет сырого соединения как вида канала —
+    расширение перечня `DYNAMIC_CONSTRUCT_KINDS`, а расширение перечня решает владелец. Живое дерево
+    сырого соединения не использует (замер исполнителя плана 16-62: `get_raw_connection`,
+    `driver_connection`, `sqlite3` в коде `app/` и `scripts/` — 0; `dbapi_connection` в
+    `app/database.py` — имя параметра слушателя подключения, а не запись).
 Такие формы в коде записи номера сами по себе повод для ревью. Форма, которая
 под механизм подпадает, но предикатом не ловится, — слепота предиката, а не
 граница средства: повод дописать строку `LITERAL_FORM_CASES` и предикат.
@@ -4108,6 +4165,185 @@ def test_a_round_ten_form_is_red_as_a_banned_construct(tmp_path, form: RoundTenB
     )
 
 
+class RawSqlForm(NamedTuple):
+    """Форма записи номера сырым SQL — строка измеренной границы статического гейта (план 16-62; CR-08 смежно).
+
+    `source` судится на синтетическом `scripts/x.py`; `predicate` — измеренное число находок `judged_offences`,
+    `channel` — измеренное число находок канала запрета `dynamic_construct_findings` (с `BANNED_GETATTR_NAMES`)
+    после реестра `exempt_dynamic_constructs`. Числа — замер, а не норма.
+    """
+
+    id: str
+    source: str
+    predicate: int
+    channel: int
+
+
+# Десять форм записи колонок номера сырым SQL (план 16-62; решение владельца О-25 (а), свойство 5; О-26 (а); D-13):
+# текст SQL (`text(…)`, `exec_driver_sql`), сырое соединение DBAPI (`get_raw_connection().driver_connection`) и
+# `sqlite3` stdlib. Защита на исполнении текста SQL не судит (таблица `GUARD_BOUNDARY_WRITES` модуля защиты, план
+# 16-61), поэтому для этих путей статический гейт — единственный рубеж; ответ предиката и канала у каждой формы —
+# замер исполнителя плана 16-62 (на `scripts/x.py` и `app/x.py` одинаков). Форма с ответом 0 и 0 не держится ничем и
+# названа в «ГРАНИЦЕ ПРЕДИКАТА» шапки (пункт (6)) с адресатом — ревью фаз 17–20.
+RAW_SQL_BOUNDARY_FORMS: tuple[RawSqlForm, ...] = (
+    # Литерал SQL через сессию: вид 5 (литерал SQL); `text` литералом канал не судит.
+    RawSqlForm(
+        "text-literal-through-the-session",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET phone = :p WHERE id = :i"), {"p": x, "i": i})\n',
+        1,
+        0,
+    ),
+    # Литерал SQL у `exec_driver_sql`: вид 5.
+    RawSqlForm(
+        "exec-driver-sql-literal",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x):\n"
+        "    conn = await s.connection()\n"
+        '    await conn.exec_driver_sql("UPDATE messenger_accounts SET phone = ? WHERE id = ?", (x, i))\n',
+        1,
+        0,
+    ),
+    # Литерал SQL у сырого соединения DBAPI: вид 5 (литерал SQL судится где бы ни стоял).
+    RawSqlForm(
+        "raw-dbapi-literal",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x):\n"
+        "    conn = await s.connection()\n"
+        "    raw = await conn.get_raw_connection()\n"
+        '    await raw.driver_connection.execute("UPDATE messenger_accounts SET phone = ? WHERE id = ?", (x, i))\n',
+        1,
+        0,
+    ),
+    # Константа модуля у `text`: вид 5 на константе и канал («вычисленный текст SQL») на `text(SQL)`.
+    RawSqlForm(
+        "text-of-a-module-constant",
+        "from sqlalchemy import text\n\n\n"
+        'SQL = "UPDATE messenger_accounts SET phone = :p WHERE id = :i"\n\n\n'
+        "async def run(s, i, x):\n"
+        '    await s.execute(text(SQL), {"p": x, "i": i})\n',
+        1,
+        1,
+    ),
+    # Склейка с переменной у `text`: предикат вычислений не исполняет (пункт (2)), канал судит текст.
+    RawSqlForm(
+        "text-of-a-concatenation",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x, col):\n"
+        '    await s.execute(text("UPDATE messenger_accounts SET " + col + " = :p WHERE id = :i"), {"p": x, "i": i})\n',
+        0,
+        1,
+    ),
+    # Текст SQL параметром у `text`: поток данных предикат не прослеживает (пункт (1)), канал судит нелитерал.
+    RawSqlForm(
+        "text-of-a-parameter",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x, sql):\n"
+        '    await s.execute(text(sql), {"p": x, "i": i})\n',
+        0,
+        1,
+    ),
+    # Константа модуля у сырого соединения DBAPI: вид 5 на константе; канал соединения DBAPI не судит.
+    RawSqlForm(
+        "raw-dbapi-module-constant",
+        "from sqlalchemy import text\n\n\n"
+        'Q = "UPDATE messenger_accounts SET phone_is_manual = 1 WHERE id = ?"\n\n\n'
+        "async def run(s, i):\n"
+        "    conn = await s.connection()\n"
+        "    raw = await conn.get_raw_connection()\n"
+        "    await raw.driver_connection.execute(Q, (i,))\n",
+        1,
+        0,
+    ),
+    # Текст SQL параметром у сырого соединения DBAPI: не судит ни предикат, ни канал, ни защита — граница, пункт (6).
+    RawSqlForm(
+        "raw-dbapi-sql-from-a-parameter",
+        "from sqlalchemy import text\n\n\n"
+        "async def run(s, i, x, q):\n"
+        "    conn = await s.connection()\n"
+        "    raw = await conn.get_raw_connection()\n"
+        "    await raw.driver_connection.execute(q, (x, i))\n",
+        0,
+        0,
+    ),
+    # Константа модуля у `exec_driver_sql`: вид 5 на константе и канал на нелитерале у `exec_driver_sql`.
+    RawSqlForm(
+        "exec-driver-sql-module-constant",
+        "from sqlalchemy import text\n\n\n"
+        'Q = "UPDATE messenger_accounts SET phone = ? WHERE id = ?"\n\n\n'
+        "async def run(s, i, x):\n"
+        "    conn = await s.connection()\n"
+        "    await conn.exec_driver_sql(Q, (x, i))\n",
+        1,
+        1,
+    ),
+    # `sqlite3` stdlib мимо движка: вид 5 на литерале SQL.
+    RawSqlForm(
+        "sqlite3-stdlib-literal",
+        "from sqlalchemy import text\n\n\n"
+        "import sqlite3\n\n\n"
+        "def run(path, x):\n"
+        "    c = sqlite3.connect(path)\n"
+        '    c.execute("UPDATE messenger_accounts SET phone = ? WHERE id = 1", (x,))\n'
+        "    c.commit()\n",
+        1,
+        0,
+    ),
+)
+
+
+@pytest.mark.parametrize("form", [pytest.param(form, id=form.id) for form in RAW_SQL_BOUNDARY_FORMS])
+def test_a_raw_sql_form_has_its_measured_static_verdict(form: RawSqlForm):
+    """Ответ предиката и канала на форме сырого SQL — замер строки (план 16-62; О-25 (а), свойство 5; D-13).
+
+    Для текста SQL и сырого соединения DBAPI статический гейт — единственный рубеж: защита на исполнении их не судит
+    (`GUARD_BOUNDARY_WRITES` модуля защиты). Правило держит измеренную границу: если предикат или канал Фаз 17–20
+    начнут ловить строку с ответом 0, правило краснеет — граница сузилась, строку и шапку обновляют; это не поломка.
+    """
+    predicate = judged_offences(form.source, "scripts/x.py")
+    channel = exempt_dynamic_constructs(
+        dynamic_construct_findings(form.source, "scripts/x.py", judged_names=BANNED_GETATTR_NAMES)
+    )
+
+    assert (len(predicate), len(channel)) == (form.predicate, form.channel), (
+        f"граница сырого SQL сдвинулась — обновите строку `RAW_SQL_BOUNDARY_FORMS` и шапку (это не поломка, если "
+        f"рубеж стал строже): `{form.id}` — ожидались предикат {form.predicate} и канал {form.channel}, найдено "
+        f"{len(predicate)} и {len(channel)}: {predicate} {channel}"
+    )
+
+
+def test_the_unjudged_raw_sql_form_is_named_in_the_header():
+    """Форма сырого SQL без рубежа названа в «ГРАНИЦЕ ПРЕДИКАТА» шапки с адресатом (план 16-62; О-26 (а); D-13).
+
+    У каждой строки `RAW_SQL_BOUNDARY_FORMS` с ответом 0 и 0 (её не судит ни предикат, ни канал, а защита на
+    исполнении текста SQL не видит) идентификатор строки стоит в «ГРАНИЦЕ ПРЕДИКАТА» шапки (от «ГРАНИЦА ПРЕДИКАТА»
+    до «Летопись границы»), а рядом с ним — «сырое соединение DBAPI» и адресат «ревью фаз 17–20».
+    """
+    doc = ast.get_docstring(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+    assert doc is not None, "у модуля гейта нет шапки"
+    flat = " ".join(doc.split())
+    start = flat.find("ГРАНИЦА ПРЕДИКАТА")
+    end = flat.find("Летопись границы", start)
+    boundary = flat[start:end] if 0 <= start < end else ""
+    unjudged = [form.id for form in RAW_SQL_BOUNDARY_FORMS if form.predicate == 0 and form.channel == 0]
+    assert unjudged, "в `RAW_SQL_BOUNDARY_FORMS` нет формы без рубежа — обновите правило и шапку"
+    missing: list[str] = []
+    for form_id in unjudged:
+        at = boundary.find(f"`{form_id}`")
+        if at < 0:
+            missing.append(f"нет «`{form_id}`»")
+            continue
+        nearby = boundary[max(0, at - 600) : at + 600]
+        for needle in ("сырое соединение DBAPI", "ревью фаз 17–20"):
+            if needle not in nearby:
+                missing.append(f"рядом с «`{form_id}`» нет «{needle}»")
+
+    assert not missing, (
+        "форма сырого SQL без рубежа не названа в границе шапки:\n" + "\n".join(f"  {entry}" for entry in missing)
+    )
+
+
 def test_a_raw_sql_phone_write_reddens_the_gate(tmp_path):
     """Сырой UPDATE в строковой константе синтетического `app/` краснит гейт."""
     _plant(
@@ -5465,6 +5701,11 @@ REFUTED_CARRIER_COST_CLAIM = (
     "носители, у которых ссылка не первым аргументом (`run_in_executor`, `Thread`, `Timer`, `enqueue`"
 )
 
+# Прежняя фраза раздела «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» (до плана 16-62) о путях за границей защиты: для
+# записи `bulk_*` / через соединение / upsert с данными из переменной она была ложна (ревью CR-08, верификация раунда 11
+# `553933d8`, истины 18 и 168: предикат 0, канал 0); в шапке она стоит только в «Летописи CR-08».
+REFUTED_FIRST_RUNG_CLAIM = "Для этих путей статический гейт остаётся первым рубежом"
+
 
 def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
     """Шапка правдива об обещании после решения владельца О-23 (а) (свойства 1, 3, 4, 5, 6; план 16-55).
@@ -5472,9 +5713,14 @@ def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
     Раздел «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» перед «ГРАНИЦЕЙ ПРЕДИКАТА» называет обещание («в коде нет
     конструкции, которую гейт не умеет судить»), каждый вид канала `DYNAMIC_CONSTRUCT_KINDS`, ключ каждого исключения
     `DYNAMIC_CONSTRUCT_EXCEPTIONS` деревьев гейта, защиту на исполнении `app/models/phone_guard.py` с разрешением
-    `writer_scope` и правилом `RUNTIME_GUARD_MODULE`, её границу (`set_committed_value`, `bulk_update_mappings`,
-    `session.connection()`) и то, что за ней статический гейт остаётся первым рубежом; согласование прежних запретов
-    (таблица плана 16-56) и живое дерево (106 файлов). Абзац цены называет механизм WR-34 и таблицу
+    `writer_scope` и правилом `RUNTIME_GUARD_MODULE`, её линии и границу (`set_committed_value`, `bulk_update_mappings`,
+    `session.connection()`, линия `before_cursor_execute` плана 16-58, таблица `GUARD_BOUNDARY_WRITES`), рубежи по
+    путям (для текста SQL и сырого соединения DBAPI статический гейт — единственный рубеж, `RAW_SQL_BOUNDARY_FORMS`),
+    закрепление реестра `DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS`; согласование прежних запретов (таблица плана 16-56) и
+    живое дерево (106 файлов). С плана 16-62 (ревью CR-08, верификация раунда 11 `553933d8`, истины 18 и 168; О-25 (а),
+    свойство 5) прежняя фраза `REFUTED_FIRST_RUNG_CLAIM` стоит в шапке только в «Летописи CR-08» раздела, рядом с
+    «CR-08», «О-25 (а)», «16-58» и «553933d8»: правило закрепляет новое утверждение, а снятое — летописью, не стирая
+    его. Абзац цены называет механизм WR-34 и таблицу
     `NAMED_COST_MECHANISM_CASES` и не содержит прежней фразы о носителях без пары; летописи WR-33, V10-1, V10-2 называют
     регрессию `cc7fbce7` против `e61ab80d`, канал (план 16-53), защиту (план 16-51) и решение О-23 (а).
     """
@@ -5501,7 +5747,12 @@ def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
         "set_committed_value",
         "bulk_update_mappings",
         "session.connection()",
-        "первым рубежом",
+        "before_cursor_execute",
+        "план 16-58",
+        "GUARD_BOUNDARY_WRITES",
+        "RAW_SQL_BOUNDARY_FORMS",
+        "DYNAMIC_CONSTRUCT_EXCEPTION_TEXTS",
+        "единственный рубеж",
         "RUNTIME_GUARD_MODULE",
         "16-09 №2",
         "16-12 №2",
@@ -5513,6 +5764,15 @@ def test_the_writer_gate_header_names_the_ban_and_the_runtime_guard():
     ):
         if section and needle not in section:
             missing.append(f"раздел запрета не называет «{needle}»")
+    # Прежняя фраза о путях за границей защиты (CR-08) — только летописью в разделе, рядом с причиной.
+    rung_chronicle = _chronicle_segment(flat, "Летопись CR-08")
+    if not rung_chronicle or not section or "Летопись CR-08" not in section:
+        missing.append("нет «Летопись CR-08» в разделе запрета")
+    if flat.count(REFUTED_FIRST_RUNG_CLAIM) != rung_chronicle.count(REFUTED_FIRST_RUNG_CLAIM):
+        missing.append(f"шапка всё ещё утверждает прежнюю фразу вне летописи: «{REFUTED_FIRST_RUNG_CLAIM}»")
+    for needle in (REFUTED_FIRST_RUNG_CLAIM, "CR-08", "О-25 (а)", "16-58", "553933d8"):
+        if rung_chronicle and needle not in rung_chronicle:
+            missing.append(f"«Летопись CR-08» не называет «{needle}»")
 
     price_start = flat.find("ЦЕНА СТРОГОСТИ ВТОРОГО И ТРЕТЬЕГО ВИДОВ")
     price_end = flat.find("ЦЕНА СТРОГОСТИ ЧЕТВЁРТОГО ВИДА", price_start)
