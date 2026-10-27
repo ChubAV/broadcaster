@@ -5,39 +5,39 @@ titles: json
 findings:
   - id: CR-09
     severity: critical
-    disposition: open
+    disposition: deferred
     title: "DML внутри CTE пишет колонки номера мимо всех четырёх линий защиты — `select(update(MessengerAccount).values(fields).returning(…).cte())` на PostgreSQL ставит номер, а линия движка выходит на признаке `isupdate` внешнего `SELECT`"
   - id: WR-40
     severity: warning
-    disposition: open
+    disposition: deferred
     title: "Линия движка сравнивает имя таблицы и колонок с учётом регистра — `table(\"MESSENGER_ACCOUNTS\", column(\"PHONE\"))` пишет номер на SQLite, а `quoted_name(…, quote=False)` — и на PostgreSQL; статический гейт даёт 0/0 даже с литеральным значением"
   - id: WR-41
     severity: warning
-    disposition: open
+    disposition: deferred
     title: "Второй проход свёртки «краёв первого прохода не меняет» — номер, у которого голова до Юникод-разделителя сама признаётся номером, маскируется наполовину: `+49 30 123 4567` → `+49 ** *23 4567`"
   - id: WR-42
     severity: warning
-    disposition: open
+    disposition: deferred
     title: "Знаки, которые нормализатор читает в одной позиции номера, не свёрнуты и не названы — `+7~999 123 45 67`, `8 999 123～45 67`, `8 999 123x45 67` печатаются целиком; правило «каждый знак свёрнут или назван» меряет только форму со знаком во всех позициях"
   - id: WR-43
     severity: warning
-    disposition: open
+    disposition: fixed
     title: "`autoflush=False` у операторов писателя (IN-23) меняет его исход на строке, ждущей вставки с уже известным `id`: на базе `WRITTEN`, на `HEAD` — `MISSING` или `LookupError`, а номер теряется"
   - id: IN-26
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Шапка маски называет «22 разделителя», а список рядом и `_FOLDED_SEPARATORS` держат 18 (плюс U+FF0B)"
   - id: IN-27
     severity: info
-    disposition: open
+    disposition: fixed
     title: "Названная цена бюджета — «поле с больше чем 64 разными кандидатами-номерами», а по замеру бюджет кончается на 9–19 фразах разбивки"
   - id: IN-28
     severity: info
-    disposition: open
+    disposition: deferred
     title: "Получатель `setup_celery_logging` отбрасывает `loglevel` и `logfile` сигнала — флаг `--loglevel` в `docker-compose.prod.yml` молча перестал действовать"
   - id: IN-29
     severity: info
-    disposition: open
+    disposition: deferred
     title: "SQLite `INSERT OR REPLACE` с законными значениями стирает ручной номер мимо линии движка — префикс оператора линия не читает"
   - id: CR-06
     severity: critical
@@ -327,7 +327,7 @@ findings:
     severity: warning
     disposition: fixed
     title: "Auto writers return `KEPT` when no row was updated at all"
-open: 9
+open: 0
 total: 81
 recorded: 2026-10-26T13:24:41.896Z
 ---
@@ -336,15 +336,15 @@ recorded: 2026-10-26T13:24:41.896Z
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| CR-09 | critical | open | - |
-| WR-40 | warning | open | - |
-| WR-41 | warning | open | - |
-| WR-42 | warning | open | - |
-| WR-43 | warning | open | - |
-| IN-26 | info | open | - |
-| IN-27 | info | open | - |
-| IN-28 | info | open | - |
-| IN-29 | info | open | - |
+| CR-09 | critical | deferred | принятая граница, суд не расширен — решение владельца 2026-10-27 (выход из круга, О-26: раунд 12 финальный); названа в «ГРАНИЦЕ» шапки `app/models/phone_guard.py` (GREEN `3bc64e75`); на SQLite суиты DML в CTE не исполняется — строки `GUARD_BOUNDARY_WRITES` нет; суд вложенного DML и форма `raw-dbapi-sql-from-a-parameter` переданы будущей фазе (адресат — писатели фаз 17–20) |
+| WR-40 | warning | deferred | принятая граница, суд не расширен — решение владельца 2026-10-27 (выход из круга, О-26: раунд 12 финальный); строка `update-through-an-upper-case-table-name` таблицы `GUARD_BOUNDARY_WRITES` (RED `b0c7edf0`) — исполнением пишет номер; названа в «ГРАНИЦЕ» шапки защиты (GREEN `3bc64e75`) |
+| WR-41 | warning | deferred | принятая граница, суд не расширен — решение владельца 2026-10-27 (выход из круга, О-26: раунд 12 финальный); названа в «СВЁРТКЕ» и «ГРАНИЦЕ» шапки `app/services/log_masking.py` и в шапке гейта приватности (GREEN `3bc64e75`) |
+| WR-42 | warning | deferred | принятая граница, суд не расширен — решение владельца 2026-10-27 (выход из круга, О-26: раунд 12 финальный); строки `tilde-in-one-position`, `letter-in-one-position` таблицы `MASK_BOUNDARY_SUBSTRINGS` (RED `b0c7edf0`) — видны маской как есть; названы в «ГРАНИЦЕ» шапки маски и шапки приватности (GREEN `3bc64e75`) |
+| WR-43 | warning | fixed | RED `a3c8027d`, GREEN `73461de8`: писатель сбрасывает сессию ДО `writer_scope()` (`_fill_if_unknown`, `set_manual_phone`), `record_reported_phone` — по `inspect(account).pending`; правило `test_a_row_pending_insert_with_a_known_id_is_written` (три писателя — `WRITTEN`, номер записан); IN-23 по-прежнему закрыта (`test_a_foreign_pending_change_is_not_flushed_under_the_writer_scope` зелёное); шапки — GREEN `3bc64e75` |
+| IN-26 | info | fixed | GREEN `3bc64e75`: «18 разделителей» в абзаце «СВЁРТКА» шапки маски; закреп `HEADER_TERMS` (RED `b0c7edf0`) |
+| IN-27 | info | fixed | GREEN `3bc64e75`: единица бюджета названа — «суд префикса разбивки, до 9 на одно начало», замер «9–19 фраз разбивки или 63 цепочки цифр»; закреп `HEADER_TERMS` (RED `b0c7edf0`) |
+| IN-28 | info | deferred | advisory верификации раунда 12; уровень журнала воркеров — `LOG_LEVEL`, сегодня совпадает с `--loglevel=info` compose; не исправлялось — решение владельца 2026-10-27 (выход из круга, О-26: раунд 12 финальный) |
+| IN-29 | info | deferred | принятая граница, суд не расширен — решение владельца 2026-10-27 (выход из круга, О-26: раунд 12 финальный); только SQLite (у PostgreSQL префикса нет); названа в «ГРАНИЦЕ» шапки защиты (GREEN `3bc64e75`) |
 | CR-06 | critical | fixed | `16-57` задача 1, GREEN `d0c777be` (получатель `setup_celery_logging` сигнала `celery.signals.setup_logging` в `app/worker/celery_app.py`: Celery не захватывает корень, после конструктора `Worker` на корне воркера — обработчик проекта с `NumberMaskingFilter` и `ProcessorFormatter`; правила `test_a_celery_worker_prints_a_mask_not_a_number`, `test_celery_beat_prints_a_mask_not_a_number`, `test_a_prefork_pool_child_keeps_the_mask` над настоящим `Worker` проекта, `Beat.setup_logging()` и дочерним процессом пула prefork в отдельном интерпретаторе — номер печатается маской «+7 *** ***-**-67», `group_id` виден; механизм и контроль-отрицание без получателя — задача 2, коммит теста «377a9b50»: без получателя корень «ColorFormatter» Celery, номер печатается целиком) — решение владельца О-25 (а), 2026-10-26, свойство 1; шапка маски — `16-60` задача 3, GREEN `5f3cb073` (где маска стоит — веб, воркеры Celery, `beat`, пул prefork — и где её нет: `print`, процессы `PROCESSES_WITHOUT_SETUP_LOGGING` — `scripts/`, Alembic, `celery flower`, `max_worker`, `wa_worker`; правило `test_the_processes_without_setup_logging_are_measured_and_named`); шапка приватности — `16-63` задачи 1–2, GREEN `45bd5667`, `fb80ea82` (пункт «Защита на исполнении» сверен правилом `test_the_privacy_gate_header_names_the_measured_mask_boundary` с таблицами модулей маски; летопись CR-06; статический гейт — второй рубеж в процессах с `setup_logging` и единственный в процессах без неё); маска плана 16-52 («535c4f20», «0e74bf6c») в воркерах Celery не стояла — настройку журнала проекта после `worker_init` снимал сам Celery (ветка `worker_hijack_root_logger`), процесс `beat` `setup_logging` не звал вовсе; вердикт раунда 11 — «553933d8» (истины 28, 131, 159, 180); коммиты RED — «f7d53a5e», «e606439d», «1887f5c7», «03e13ab7» (not in the current review) |
 | CR-07 | critical | fixed | `16-60` задача 1, GREEN `8e06c203` (поиск кандидатов маски линеен: кандидат ограничен 7…15 цифрами, цифры префикса — нарастающим счётом по массиву позиций цифр, конец цепочки разбивки и последний допустимый край считаются один раз на поле; память судов на вызов и бюджет `MASK_JUDGMENT_BUDGET` (64) с отказом в закрытую `_closed_mask`; правила `test_a_long_split_request_path_is_logged_in_bounded_time` — путь запроса «1 801» и «7 999» знаков через настоящий `setup_logging` и `RequestIdMiddleware` в предел «0,25 с», `test_a_long_split_field_is_masked_in_bounded_time`, `test_the_mask_judges_at_most_the_budget_per_field`, `test_beyond_the_budget_a_candidate_is_masked_closed`), шапка — задача 3, GREEN `5f3cb073`, и уточнения замером, GREEN `2189a1e5`, `442aec1b` (стоимость, бюджет и вторая цена — отказ в закрытую — по замеру: путь из «1 801» знака «5–8 мс» вместо «2,45 с» базы, поле из «8 000» знаков «3–14 мс») — решение владельца О-25 (а), 2026-10-26, свойство 3; отступ исполнителя от буквы плана: серии разделителей тремя не ограничены — предел «три» напечатал бы «504» номера, которые база маскировала (корпус 16-60), стоимость держат граница по цифрам и бюджет судов; окно правил стоимости — коммит теста «0f67597e»; дефект внесён GREEN «535c4f20» (16-52); летопись CR-07 шапки приватности — 16-63 («fb80ea82»); угроза T-16-137; коммиты RED — «c86bdda1», «e606439d» (not in the current review) |
 | CR-08 | critical | fixed | `16-58` задачи 1–3, GREEN `a75f30be`, `f4ee8a3b`, `db8f0d67` (четвёртая линия защиты — слушатель `before_cursor_execute` `_refuse_unscoped_cursor` на классе `Engine`: UPDATE и upsert колонок номера таблицы `messenger_accounts` судятся по колонкам при любом значении, INSERT — по значениям, несудимое значение — отказ в закрытую, таблица `CLOSED_FAILING_WRITES`; трасер `test_a_planted_backfill_with_a_list_of_rows_is_refused_and_the_writer_writes`; `FOREIGN_WRITES` «16» → «26»: формы ревью — `bulk_update_mappings`, `bulk_insert_mappings`, исполнение через соединение с полями из переменной, лёгкая таблица — отказывают на курсоре; широкий прогон «2762 passed», отказов на законных путях «0»; шапка защиты — четыре линии и граница по замеру: `text(…)`, `exec_driver_sql`, сырое соединение DBAPI, процесс без `app.models`), `16-62` задачи 1–2, GREEN `ab44de1a`, `77fd3de4` (таблица `RAW_SQL_BOUNDARY_FORMS` — «10» форм сырого SQL с измеренным ответом предиката и канала; раздел «ЗАПРЕТ ДИНАМИКИ И ЗАЩИТА НА ИСПОЛНЕНИИ» шапки гейта писателя называет рубежи каждого пути записи; прежняя фраза «первым рубежом» — константа `REFUTED_FIRST_RUNG_CLAIM`, стоит только в «Летописи CR-08»; держатели ревью — `setattr` с литеральным именем, `staticmethod`, `lambda`, «5» форм — отказывают линией движка, замер 16-62; форма `raw-dbapi-sql-from-a-parameter` — предикат «0», канал «0» — названа пунктом (6) границы предиката с адресатом «ревью фаз 17–20») — решение владельца О-25 (а), 2026-10-26, свойства 4, 5; таблица измеренной границы защиты `GUARD_BOUNDARY_WRITES` — 16-61 («39c04a34»); пункт D6 сводки 16-56 — исход по решению владельца О-25 (а), свойство 6: `fixed` у WR-33 верен для собственных форм находки, соседняя дыра — держатель `setattr` с литеральным именем и запись мимо событий ORM — эта находка, закрытая линией движка 16-58; строка WR-33 не меняется; коммиты RED — «1da1b36a», «f4565b38», «52ec6e5d», «8f598ba3», «ff975166» (not in the current review) |
