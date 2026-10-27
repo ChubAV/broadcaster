@@ -501,3 +501,64 @@ async def test_the_writers_do_not_commit(db_session: AsyncSession):
     await db_session.rollback()
 
     assert await _row(db_session, account_id) == UNKNOWN
+
+
+# Причинный литерал RED правила ожидающей строки (ревью WR-43, раунд 12).
+PENDING_ROW_RED = "писатель не видит строку, ждущую вставки с уже известным id (WR-43)"
+
+
+async def _record_pending(session: AsyncSession, account: MessengerAccount) -> tuple:
+    outcome = await record_reported_phone(session, account, "79990000003")
+    return outcome, ("+79990000003", False)
+
+
+async def _fill_pending(session: AsyncSession, account: MessengerAccount) -> tuple:
+    outcome = await fill_reported_phone(session, account.id, "79990000004")
+    return outcome, ("+79990000004", False)
+
+
+async def _set_manual_pending(session: AsyncSession, account: MessengerAccount) -> tuple:
+    try:
+        saved = await set_manual_phone(session, account.id, "+7 999 000-00-05")
+    except LookupError as missing:
+        return f"LookupError: {missing}", ("+79990000005", True)
+    return (PhoneWrite.WRITTEN if saved == "+79990000005" else saved), ("+79990000005", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(_record_pending, id="record-reported-phone"),
+        pytest.param(_fill_pending, id="fill-reported-phone"),
+        pytest.param(_set_manual_pending, id="set-manual-phone"),
+    ],
+)
+async def test_a_row_pending_insert_with_a_known_id_is_written(
+    db_session: AsyncSession, write
+):
+    """ТРАСЕР WR-43: строка ждёт вставки, `id` у неё уже есть — номер записан.
+
+    До плана 16-61 автосброс перед UPDATE вставлял ожидающую строку, и писатель
+    её видел. `autoflush=False` (IN-23) пустил UPDATE мимо отложенной вставки:
+    автоисточник отвечал `MISSING`, ручная запись — `LookupError`, номер
+    терялся. Писатель сбрасывает сессию сам — ДО разрешения, поэтому чужие
+    отложенные изменения номера по-прежнему отказывают вне `writer_scope()`.
+    """
+    seeded = await _seed_account(db_session)
+    account = MessengerAccount(
+        id=seeded.id + 100,
+        user_id=seeded.user_id,
+        type="wa",
+        credentials="creds",
+        status="active",
+    )
+    db_session.add(account)
+    assert inspect(account).pending
+    account_id = account.id
+
+    outcome, expected = await write(db_session, account)
+    await db_session.commit()
+
+    assert outcome is PhoneWrite.WRITTEN, f"{PENDING_ROW_RED}; исход: {outcome}"
+    assert await _row(db_session, account_id) == expected, PENDING_ROW_RED
