@@ -1259,6 +1259,11 @@ GUARD_HEADER_NAMES = (
     "IN-24",
     "WR-37",
     "GUARD_BOUNDARY_WRITES",
+    # Принятые границы раунда 12 (ревью CR-09, WR-40, IN-29; WR-43 — сброс до разрешения).
+    "CR-09",
+    "WR-40",
+    "IN-29",
+    "WR-43",
 )
 # Фраза прежнего обещания: после плана 16-58 — только в летописи, с причиной.
 RETIRED_PROMISE = "каким бы написанием она ни была сделана"
@@ -1426,6 +1431,17 @@ async def _task_spawned_inside_the_writer_scope(session, account):
     await task
 
 
+async def _update_through_an_upper_case_table_name(session, account):
+    """Имя таблицы в другом регистре: СУБД складывает его, линия движка — нет (WR-40)."""
+    upper = sqlalchemy.table(
+        "MESSENGER_ACCOUNTS", sqlalchemy.column("id"), sqlalchemy.column("phone")
+    )
+    conn = await session.connection()
+    await conn.execute(
+        sqlalchemy.update(upper).where(upper.c.id == account.id).values(phone=NUMBER)
+    )
+
+
 # (запись, фраза шапки защиты, называющая строку)
 GUARD_BOUNDARY_WRITES = [
     pytest.param(_text_update_through_the_session, "text(", id="text-update-through-the-session"),
@@ -1439,6 +1455,11 @@ GUARD_BOUNDARY_WRITES = [
         _task_spawned_inside_the_writer_scope,
         "create_task",
         id="task-spawned-inside-the-writer-scope",
+    ),
+    pytest.param(
+        _update_through_an_upper_case_table_name,
+        "MESSENGER_ACCOUNTS",
+        id="update-through-an-upper-case-table-name",
     ),
 ]
 

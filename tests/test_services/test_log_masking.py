@@ -303,6 +303,11 @@ _GRAMMAR_START = (
     "маска не маскировала и до плана 16-60 — замер сверки «база ↔ HEAD», семейство (b)"
 )
 
+_ONE_POSITION = (
+    "знак в одной позиции номера (`~`, `～`, буква): нормализатор отбрасывает, маска не сворачивает — "
+    "принятая граница ревью WR-42 (раунд 12)"
+)
+
 MASK_BOUNDARY_SUBSTRINGS = [
     pytest.param("+7.999.123.45.67", _BOUNDARY_SPLIT, id="full-stop-split"),
     pytest.param("+7*999*123*45*67", "звезда — знак самой маски; свёртка сломала бы идемпотентность", id="asterisk-split"),
@@ -315,6 +320,9 @@ MASK_BOUNDARY_SUBSTRINGS = [
     pytest.param("x+79991234567", _LETTER_EDGE, id="plus-after-a-letter"),
     pytest.param("8)999)123)45)67", _GRAMMAR_START, id="eight-before-closing-bracket"),
     pytest.param("(999123) 45 67", _GRAMMAR_START, id="six-digit-bracket-start"),
+    # Ревью WR-42 (раунд 12): знак в ОДНОЙ позиции номера нормализатор отбрасывает, маска — нет.
+    pytest.param("+7~999 123 45 67", _ONE_POSITION, id="tilde-in-one-position"),
+    pytest.param("8 999 123x45 67", _ONE_POSITION, id="letter-in-one-position"),
 ]
 
 
@@ -522,6 +530,12 @@ HEADER_TERMS = (
     "U+2011",
     "U+202F",
     "U+2009",
+    # Принятые границы раунда 12 (ревью WR-41, WR-42, IN-26, IN-27): названы, не расширены.
+    "WR-41",
+    "WR-42",
+    "IN-27",
+    "18 разделителей",
+    "суд префикса",
 )
 
 BOUNDARY_SECTION = "ГРАНИЦА, НАЗВАННАЯ ПРЯМО"
