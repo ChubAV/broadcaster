@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/account_label.html" import account_label %}
 {% from "components/alert.html" import alert %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/card.html" import card_open, card_close %}
@@ -12,9 +13,8 @@
 {% from "account_groups/includes/sentinel.html" import sentinel %}
 
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
-{% set account_label = MESSENGER_LABELS.get(account.type, account.type) ~ ' #' ~ account.id %}
 
-{% block title %}{{ account_label }} — группы аккаунта — Broadcaster{% endblock %}
+{% block title %}{{ acct_label.plain }} — группы аккаунта — Broadcaster{% endblock %}
 
 {# Контракт «страница → шелл» (План 01-01): заголовок раздела рендерит шапка
    шелла, собственного заголовка у страницы нет.
@@ -24,7 +24,7 @@
    аккаунтом, к которому относится. Дублировать ссылку в шапке шелла нельзя —
    одно действие на экране обязано быть в одном месте. Туда же планом 03-06
    встала «Синхронизировать всё» — главное действие экрана. #}
-{% block page_title %}{{ account_label }}{% endblock %}
+{% block page_title %}{{ account_label(acct_label, show_channel=true) }}{% endblock %}
 {% block page_subtitle %}Группы аккаунта: включение, удаление и повторная синхронизация{% endblock %}
 
 {% block content %}
@@ -50,7 +50,7 @@
   <span class="acct-head__plate">{{ messenger_icon(account.type, size='avatar', show_label=false) }}</span>
   {%- endif %}
   <div class="acct-head__id">
-    <h2 class="acct-head__name">{{ account_label }}</h2>
+    <h2 class="acct-head__name">{{ account_label(acct_label, show_channel=true) }}</h2>
     {{ mono(identity_line) }}
   </div>
   {#- БЕЙДЖ СТАТУСА ПРИХОДИТ ПОДМЕНЯЕМЫМ БЛОКОМ, а не выписан здесь.

@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.accounts.group_resync import parse_sync_result
+from app.application.accounts.labels import load_account_rows
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
@@ -36,6 +37,7 @@ from app.pages.common import (
 from app.pages.htmx import respond
 from app.pages.identifiers import ID_MAX, IdPath, PostIdPath, id_in_column
 from app.repositories.schedule import ScheduleRepository
+from app.services.account_label import label_of, row_of
 
 router = APIRouter(tags=["pages"])
 PAGE_SIZE = 30
@@ -222,6 +224,13 @@ async def account_groups_page(
         # сообщал бы, какие идентификаторы заняты чужими аккаунтами.
         return RedirectResponse(url="/accounts", status_code=302)
 
+    # Подпись аккаунта для `<title>` и обоих заголовков (D-10, D-12, D-14).
+    # Признак двойника считается по ВСЕМ аккаунтам пользователя, а не по этому
+    # одному: шапка и карточка «Аккаунтов» обязаны помечать один аккаунт
+    # одинаково. Порция `groups/partial` и опрос `groups/sync-status` шапку не
+    # рисуют — подпись им не нужна.
+    acct_label = label_of(row_of(account), await load_account_rows(db, user.id))
+
     term = _clean_search(search)
 
     # Приём limit+1: наличие следующей порции определяется одной лишней
@@ -245,6 +254,7 @@ async def account_groups_page(
             "user": user,
             "is_admin": check_is_admin(user, settings),
             "account": account,
+            "acct_label": acct_label,
             # account_id отдельным ключом: разметка сентинела обязана быть
             # ПОСИМВОЛЬНО одинаковой здесь и в порции прокрутки, а у порции
             # объекта аккаунта нет.
