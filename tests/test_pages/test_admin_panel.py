@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.messenger_account import MessengerAccount
 from app.pages import notices
 from app.pages.admin import ADMIN_TABS
+from tests.account_label_support import id_mark_texts
 
 ADMIN_PAGES_SOURCE = Path("app/pages/admin.py")
 TABS_TEMPLATE = Path("app/templates/admin/includes/_tabs.html")
@@ -98,8 +99,12 @@ def _row_markup(html: str, account_id: int) -> str:
     странице два блока и сколько угодно строк, и «в работе» из
     инфраструктурного блока прошло бы за подпись строки аккаунта. Поэтому
     утверждения адресуются ячейке, а не документу.
+
+    Строка находится по АДРЕСУ знака `data-account-id="<id>"` (Фаза 17, D-20),
+    а не по тексту «угловая скобка, решётка, идентификатор»: адрес не зависит
+    от того, как знак оформлен, и кавычки не дают `1` совпасть с `10`.
     """
-    marker = f">#{account_id}<"
+    marker = f'data-account-id="{account_id}"'
     chunks = [chunk for chunk in html.split("<div data-row")[1:] if marker in chunk]
     assert len(chunks) == 1, (
         f"строка аккаунта #{account_id} найдена {len(chunks)} раз — "
@@ -284,7 +289,9 @@ async def test_workers_subsection_shows_idle_account_row(
 
     assert response.status_code == 200
     html = response.text
-    assert f"#{account.id}" in html, "строка аккаунта не отрисовалась"
+    assert id_mark_texts(html)[str(account.id)] == [f"#{account.id}"], (
+        "строка аккаунта не отрисовалась"
+    )
     assert "простаивает" in html
     # Строчная форма приходит ТОЛЬКО из колонки воркера: состояние сессии здесь
     # «Активно», а бейдж сессии пишется с прописной.
@@ -384,7 +391,9 @@ async def test_telegram_row_worker_label_changes_with_the_source_state(
         blind = (await admin_client.get("/admin/workers")).text
 
     for html in (alive, dead, blind):
-        assert f"#{account.id}" in html, "строка telegram-аккаунта не отрисовалась"
+        assert id_mark_texts(html)[str(account.id)] == [f"#{account.id}"], (
+            "строка telegram-аккаунта не отрисовалась"
+        )
 
     tg_alive = _tg_worker_cell(alive, account.id)
     tg_dead = _tg_worker_cell(dead, account.id)
@@ -551,7 +560,7 @@ async def test_lower_block_groups_accounts_by_channel(
     for label in ("Telegram", "WhatsApp", "MAX"):
         assert label in html, label
     positions = {
-        account_type: html.index(f">#{account.id}<")
+        account_type: html.index(f'data-account-id="{account.id}"')
         for account_type, account in (("tg", tg), ("wa", wa), ("max", mx))
     }
     for account_type, group in (("tg", "Telegram"), ("wa", "WhatsApp"), ("max", "MAX")):
@@ -585,7 +594,9 @@ async def test_workers_partial_answers_the_admin_with_the_same_rows(
 
     assert partial.status_code == 200
     # Те же строки, что первичная отрисовка: паршал и есть первичная отрисовка.
-    assert f">#{account.id}<" in partial.text
+    assert id_mark_texts(partial.text)[str(account.id)] == [f"#{account.id}"], (
+        "паршал не принёс знак #id строки воркера"
+    )
     assert _row_markup(page.text, account.id) == _row_markup(partial.text, account.id)
 
 

@@ -5,6 +5,7 @@
 {% from "components/card.html" import card_open, card_close %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
+{% from "components/account_label.html" import account_label, account_id_mark %}
 {% from "components/table.html" import rowhead, row_open, row_close, cell %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 
@@ -115,7 +116,9 @@
         {%- if acc.type in ('tg_user', 'wa', 'max') -%}
           {{ messenger_icon(acc.type, size='avatar', show_label=false) }}
         {%- endif -%}
-        <span data-grow>{{ acc.type }} #{{ acc.id }}</span>
+        {#- Канал из `MESSENGER_LABELS` и номер, `#id` — отдельный элемент, всегда
+            (D-04, D-11, D-17, Фаза 17): вместо сырого типа с решёткой. -#}
+        <span data-grow>{{ account_label(phone_label(acc), show_channel=true, with_twin_id=false) }} {{ account_id_mark(acc.id) }}</span>
       {%- endcall %}
       {#- Подпись берётся ЭЛЕМЕНТОМ ACC_COLUMNS по индексу. Подпись здесь ровно
           одна, и это не недоработка: колонок в таблице две, а первая несёт
