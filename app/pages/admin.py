@@ -46,6 +46,7 @@ from app.application.analytics.send_analytics import (
     send_metrics,
     sliding_window_bounds,
 )
+from app.application.accounts.labels import load_account_rows
 from app.application.admin.incidents import (
     INCIDENT_LIST_CAP,
     WorkerLiveness,
@@ -122,7 +123,7 @@ from app.services.auth_service import (
     IMPERSONATION_EXPIRE_MINUTES,
     create_access_token,
 )
-from app.services.account_label import labels_for
+from app.services.account_label import build_labels, labels_for
 from app.services.billing_cache import invalidate_access_cache
 from app.services.loki_client import (
     LEVEL_CHIP_OPTIONS,
@@ -1546,6 +1547,11 @@ async def admin_user_history_partial(
     result = await db.execute(query)
     rows = list(result.all())
     has_next = len(rows) > limit
+    # Карта номеров — ОДИН запрос на порцию и по ПРОСМАТРИВАЕМОМУ пользователю
+    # из адреса (не по администратору и не по всем пользователям): аккаунт
+    # записи приезжает идентификатором, а признак подписи нужен тот же, что на
+    # странице (D-14, D-18, T-17-21).
+    acct_labels = build_labels(await load_account_rows(db, user_id))
     logs = [
         {
             "id": r.id,
@@ -1560,6 +1566,7 @@ async def admin_user_history_partial(
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
+            "account_label": history_account_label(group, acct_labels),
             "task_id": r.task_id,
             "status": r.status,
             "messenger_type": r.messenger_type,
