@@ -48,7 +48,7 @@ from app.pages.common import (
 # собирается как вызов.
 from app.pages.htmx import respond, respond_field_error
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
-from app.services.account_label import build_labels
+from app.services.account_label import AccountRow, build_labels, label_of
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -1041,12 +1041,21 @@ async def accounts_sync_status(
     if view.status in ("active", "sync_failed", "syncing"):
         stats_map = await _get_account_stats(db, user.id, [account_id]) if view.status == "active" else {}
         stats = stats_map.get(account_id, {}) if view.status == "active" else {}
+        # Подпись номера (Фаза 17, D-14, D-18): номер приносит `view.phone`, признак
+        # двойника — строки пользователя одним `SELECT` на ответ. Подпись уходит
+        # во фрагмент ОБЪЕКТОМ: ключ, которого нет, при мягком `Undefined` печатал
+        # бы пустоту, а обращение к полю отсутствующего объекта падает громко.
+        # Строится только после `view is not None` — владение проверил
+        # `get_sync_status_view`, чужой аккаунт сюда не доходит (T-17-05).
+        rows = await load_account_rows(db, user.id)
+        acct_label = label_of(AccountRow(account_id, view.messenger_type, view.phone), rows)
         html = templates.env.get_template("accounts/partials/sync_status_card.html").render(
             account_id=account_id,
             status=view.status,
             messenger_type=view.messenger_type,
             user=user,
             stats=stats,
+            acct_label=acct_label,
         )
         return HTMLResponse(html)
 
