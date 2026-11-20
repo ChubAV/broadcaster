@@ -53,7 +53,12 @@ from app.pages.common import (
 # кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
 from app.pages.htmx import respond
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
-from app.services.account_label import AccountLabel, build_labels, labels_for
+from app.services.account_label import (
+    AccountLabel,
+    build_labels,
+    labels_for,
+    shown_phone,
+)
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -291,8 +296,17 @@ def export_cell(value: object) -> str:
 
 
 def export_phone_cell(stored: str | None) -> str:
-    """Ячейка «Номер» файла выгрузки (заготовка RED плана 17-06)."""
-    return ""
+    """Ячейка «Номер» файла выгрузки (PHONE-07, D-05, D-09, D-16).
+
+    Номер показывается тем же правилом, что подпись экрана (`shown_phone`):
+    неизвестный номер — пустая ячейка, неразбираемый — как есть. Ведущий «+»
+    снимается ОДНИМ знаком и ДО `export_cell`, а не обходом защиты: ячейка
+    проходит обезвреживание формул без исключений (T-04-16).
+    """
+    shown = shown_phone(stored)
+    if shown is None:
+        return ""
+    return export_cell(shown.removeprefix("+"))
 
 
 def export_row(
@@ -755,6 +769,11 @@ async def history_export(
         params["export"] = EXPORT_TOO_MANY
         return RedirectResponse(url=f"/history?{urlencode(params)}", status_code=302)
 
+    # Карта «аккаунт → номер» читается ОДНИМ запросом по пользователю ДО потока:
+    # вторая инструкция на сессии, у которой уже открыт курсор `db.stream`, на
+    # боевом драйвере рискованна, а внутри генератора курсор уже открыт.
+    phones = {row.id: row.phone for row in await load_account_rows(db, user.id)}
+
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)
@@ -816,7 +835,14 @@ async def history_export(
         try:
             result = await db.stream(query)
             async for log, group in result:
-                writer.writerow(export_row(log, group, user))
+                writer.writerow(
+                    export_row(
+                        log,
+                        group,
+                        user,
+                        phone=phones.get(group.account_id) if group else None,
+                    )
+                )
                 yield flush()
         except Exception:
             logger.error(
