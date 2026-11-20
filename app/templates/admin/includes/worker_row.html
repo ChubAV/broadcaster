@@ -41,6 +41,7 @@
 {%- from "components/table.html" import cell -%}
 {%- from "components/badge.html" import badge -%}
 {%- from "components/mono.html" import mono -%}
+{%- from "components/account_label.html" import account_label, account_id_mark -%}
 {%- from "includes/messenger_icon.html" import messenger_icon -%}
 
 {%- set WORKER_LABELS = {
@@ -60,7 +61,18 @@
 <div data-row style="--cols: {{ cols }}">
   {%- call cell(grow=true, label=columns[0]) %}
     {%- if account.type in MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
-    <span data-grow>{{ MESSENGER_LABELS.get(account.type, account.type) }}</span>
+    {#- ⚠️ В ЯЧЕЙКЕ ТРИ ЭЛЕМЕНТА ПОДРЯД, И ВСЕ — `<span>` (D-04, D-17, Фаза 17):
+        канал, номер (или приглушённое «Номер неизвестен») и ОТДЕЛЬНЫЙ `#id`.
+        Администратор работает по идентификатору — логи, контейнеры, очередь, — а
+        номер ему подсказка, поэтому знак печатается ВСЕГДА, у двойников и у
+        недвойников одинаково: подпись берётся без признака двойника
+        (`phone_label`) и без его `#id` (`with_twin_id=false`), знак ставится
+        отдельно. Глобал виден внутри макроса, хотя контекста вызывающего у
+        макроса нет. Блочных элементов здесь нет: `_row_markup` в
+        test_admin_panel.py режет строку по первому закрывающему `div`. -#}
+    {%- set lbl = phone_label(account) -%}
+    <span data-grow>{{ lbl.channel }}</span>
+    {{ account_label(lbl, with_twin_id=false) }}
     {#- ⚠️ ИДЕНТИФИКАТОР СТРОКИ ВЕДЁТ В ЛОГИ ЭТОГО ВОРКЕРА (D-10). «Живой лог»
         макета в строке не рисуется: он стал бы вторым независимым путём чтения
         логов рядом с подразделом «Логи», а у остановленного по простою
@@ -72,9 +84,9 @@
         вела бы на 200 и на выдачу БЕЗ фильтра, то есть показывала бы логи всех
         служб как логи одного воркера. -#}
     {%- if logs_href -%}
-      <a href="{{ logs_href }}" title="Логи этого воркера за выбранное окно">{{ mono('#' ~ account.id) }}</a>
+      <a href="{{ logs_href }}" title="Логи этого воркера за выбранное окно">{{ account_id_mark(account.id) }}</a>
     {%- else -%}
-      {{- mono('#' ~ account.id) -}}
+      {{- account_id_mark(account.id) -}}
     {%- endif -%}
   {%- endcall %}
   {%- call cell(label=columns[1]) %}
