@@ -132,3 +132,68 @@ async def test_an_unknown_number_in_the_admin_history_is_muted(
     assert id_mark_texts(html)[str(account_id)] == [f"#{account_id}"]
     # Один `#`: `#id` стоит отдельным знаком, а не дописан к подписи.
     assert "#" not in label_texts(html)[str(account_id)][0]
+
+
+# --- порция прокрутки `/admin/users/{id}/history/partial` -------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_admin_history_batch_shows_the_number_and_the_id(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция подписана так же, как страница: фрагмент строит карту отдельно (D-18)."""
+    viewed = await _seed_viewed_user(db_session)
+    account_id = await seed_account(db_session, viewed, "tg_user", phone=PHONE_STORED)
+    group = await seed_group(db_session, account_id, viewed)
+    await _seed_log(db_session, viewed, group.id)
+
+    response = await admin_client.get(f"/admin/users/{viewed}/history/partial?offset=0&limit=5")
+
+    assert response.status_code == 200
+    assert label_texts(response.text)[str(account_id)] == [PHONE_SHOWN]
+    assert id_mark_texts(response.text)[str(account_id)] == [f"#{account_id}"]
+
+
+@pytest.mark.asyncio
+async def test_the_admin_batch_reads_only_the_viewed_users_accounts(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """T-17-21: карта порции — по пользователю из адреса, не по администратору.
+
+    У администратора свой аккаунт со своим номером. В порции чужого пользователя
+    нет ни адреса этого аккаунта, ни его номера; а подпись аккаунта просматриваемого
+    пользователя есть — карту построили по нему.
+    """
+    admin_id = await _admin_user_id(db_session)
+    admin_account = await seed_account(db_session, admin_id, "tg_user", phone="+79990000011")
+    viewed = await _seed_viewed_user(db_session)
+    viewed_account = await seed_account(db_session, viewed, "tg_user", phone=PHONE_STORED)
+    group = await seed_group(db_session, viewed_account, viewed)
+    await _seed_log(db_session, viewed, group.id)
+
+    response = await admin_client.get(f"/admin/users/{viewed}/history/partial?offset=0&limit=5")
+
+    assert response.status_code == 200
+    labels = label_texts(response.text)
+    assert labels[str(viewed_account)] == [PHONE_SHOWN]
+    assert str(admin_account) not in labels
+    assert str(admin_account) not in id_mark_texts(response.text)
+    assert "+7 999 000-00-11" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_a_record_without_a_group_carries_no_admin_label(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """D-15: аккаунта уже нет — карточка без подписи и без `#id`, на странице и в порции."""
+    viewed = await _seed_viewed_user(db_session)
+    await _seed_log(db_session, viewed, None)
+
+    page = await admin_client.get(f"/admin/users/{viewed}/history")
+    batch = await admin_client.get(f"/admin/users/{viewed}/history/partial?offset=0&limit=5")
+
+    for response in (page, batch):
+        assert response.status_code == 200
+        assert "Группа отправки" in response.text  # запись нарисована
+        assert "data-account-label" not in response.text
+        assert "data-account-id" not in response.text
