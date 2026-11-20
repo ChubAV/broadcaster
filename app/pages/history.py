@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.accounts.labels import load_account_rows
 from app.application.analytics.send_analytics import (
     FAILED_STATUSES,
     HISTORY_PERIODS,
@@ -52,7 +53,7 @@ from app.pages.common import (
 # кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
 from app.pages.htmx import respond
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
-from app.services.account_label import AccountLabel, labels_for
+from app.services.account_label import AccountLabel, build_labels, labels_for
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -616,6 +617,12 @@ async def history_partial(
     # вычисленный только в списочном обработчике, потерялся бы на тридцать
     # первой записи — молча, с исправным на вид экраном.
     retry_blockers = await retry_availability(db, rows[:limit], user.id)
+    # Карта подписей — ОТДЕЛЬНЫМ запросом и ПО ПОЛЬЗОВАТЕЛЮ, а не по аккаунтам
+    # порции (D-14, D-18): признак двойника у карточки порции обязан совпадать с
+    # признаком того же аккаунта на странице и на экране «Аккаунты», а аккаунт
+    # второго двойника в порцию может не попасть вовсе. Предпроверка повтора
+    # выше НЕ расширена: она держит потолок в два запроса на порцию.
+    acct_labels = build_labels(await load_account_rows(db, user.id))
     logs = [
         {
             "id": r.id,
@@ -630,6 +637,7 @@ async def history_partial(
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
+            "account_label": history_account_label(group, acct_labels),
             "task_id": r.task_id,
             "status": r.status,
             "messenger_type": r.messenger_type,
