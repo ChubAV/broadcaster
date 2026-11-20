@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/account_label.html" import account_label %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/form_wrapper.html" import form_wrapper %}
@@ -56,6 +57,11 @@
   {%- set stats = account_stats.get(account.id, {}) -%}
   {%- set attempts = stats.get('send_attempts', 0) -%}
   {%- set label = MESSENGER_LABELS.get(account.type, account.type) -%}
+  {#- Подпись номера (Фаза 17): объект из карты по ВСЕМ аккаунтам пользователя,
+      тот же ключ `acct_labels`, что у partial_cards.html. Отсутствующий ключ даёт
+      Undefined, и обращение макроса к его полю падает громко, а не печатает
+      пустоту. -#}
+  {%- set acct_label = acct_labels[account.id] -%}
   {% if account.status == 'syncing' %}
   {#- ЯКОРЬ ПОДМЕНЫ. Идентификатор account-row-<id> сохранён ДОСЛОВНО вместе с
       переверсткой: это точка подмены htmx, а не имя класса. Идентификатор и
@@ -80,7 +86,7 @@
       {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
       <span class="acct-card__ident">
         <span class="acct-card__chan">{{ label }}</span>
-        {{- mono('#' ~ account.id) -}}
+        {{- account_label(acct_label) -}}
       </span>
       {#- Точка состояния — ВТОРОЙ носитель того же смысла, что и значение ключа
           «Состояние» ниже, а не единственный: цветом здесь ничего не сказано
@@ -113,7 +119,7 @@
       {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
       <span class="acct-card__ident">
         <span class="acct-card__chan">{{ label }}</span>
-        {{- mono('#' ~ account.id) -}}
+        {{- account_label(acct_label) -}}
       </span>
       <span class="acct-card__dot acct-card__dot--danger"></span>
     </div>
@@ -152,7 +158,7 @@
       {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
       <span class="acct-card__ident">
         <span class="acct-card__chan">{{ label }}</span>
-        {{- mono('#' ~ account.id) -}}
+        {{- account_label(acct_label) -}}
       </span>
       <span class="acct-card__dot acct-card__dot--{{ state_tone }}"></span>
     </div>
@@ -191,7 +197,7 @@
            title='Удалить аккаунт?',
            action='/accounts/' ~ account.id ~ '/delete',
            confirm_label='Удалить',
-           body=label ~ ' #' ~ account.id) }}
+           body=acct_label.plain) }}
   {% endfor %}
   {# Сентинел бесконечной прокрутки: последний элемент ВНУТРИ контейнера сетки,
      неявная цель подмены, разметка идентична сентинелу в partial_cards.html.

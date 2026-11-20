@@ -14,6 +14,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
+from app.application.accounts.labels import load_account_rows
 from app.application.accounts.group_resync import (
     UNEXPECTED_FAILURE_MESSAGE,
     apply_group_resync,
@@ -47,6 +48,7 @@ from app.pages.common import (
 # собирается как вызов.
 from app.pages.htmx import respond, respond_field_error
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
+from app.services.account_label import build_labels
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -200,6 +202,10 @@ async def accounts_list(
     account_stats = await _get_account_stats(
         db, user.id, [a.id for a in accounts]
     )
+    # Подпись номера (Фаза 17, D-14, D-18): карта по ВСЕМ аккаунтам пользователя,
+    # а не по странице из 30 — иначе двойник, лежащий за её границей, остался бы
+    # без `#id`, и тот же аккаунт читался бы в порции иначе, чем на странице.
+    acct_labels = build_labels(await load_account_rows(db, user.id))
     return templates.TemplateResponse(
         "accounts/list.html",
         {
@@ -208,6 +214,7 @@ async def accounts_list(
             "is_admin": check_is_admin(user, settings),
             "accounts": accounts,
             "account_stats": account_stats,
+            "acct_labels": acct_labels,
             "has_next": has_next,
             "next_offset": PAGE_SIZE,
             # ЛЕТОПИСЬ (DEF-09-03). План 15-09: литерал `limit=30` в разметке заменён
