@@ -5,11 +5,11 @@ milestone_name: Номера аккаунтов
 current_phase: 17
 current_phase_name: Показ номера на всех экранах
 status: planning
-stopped_at: Phase 16 complete, ready to plan Phase 17
-last_updated: "2026-11-20T12:09:57.675Z"
+stopped_at: Phase 17 context gathered
+last_updated: "2026-11-20T12:18:16.094Z"
 last_activity: 2026-11-20
 last_activity_desc: Phase 16 complete, transitioned to Phase 17
-state_head: be9209ab48da86c68af1faa87d598f98ec2b8fe3
+state_head: c855bf3b3af89c8887e2c249160a6f3f12355b55
 progress:
   total_phases: 5
   completed_phases: 1
@@ -867,9 +867,9 @@ GRP-04…GRP-06, то есть тройной повторный счёт одн
 
 ## Session Continuity
 
-Last session: 2026-11-20T12:20:00Z
-Stopped at: Phase 16 complete, ready to plan Phase 17
-Resume file: None
+Last session: 2026-11-20T12:18:15.623Z
+Stopped at: Phase 17 context gathered
+Resume file: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-CONTEXT.md
 
 **Поправка к handoff, установленная проверкой на входе 2026-09-02:** субагент `a217c9b7b59eb5230` НЕ жив — он умер вместе с прошлой сессией. Его worktree цел: 2 коммита (`2f9875f` = RED_SHA, `c237d00` = сводка-останов) и НЕЗАКОММИЧЕННАЯ правка `modal.html` (+68) по ветви `destroy-guard`. `app/static/css/app.css` пункта 2 задачи 3 НЕ тронут. Устаревший `.planning/milestone.lock` (pid 941133 мёртв) снят.
 
