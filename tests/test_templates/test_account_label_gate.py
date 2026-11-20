@@ -13,8 +13,45 @@
   К1 — строковый литерал выражения, оканчивающийся на `#` (`'#' ~ account.id`,
        `'Акк #' ~ …`, `' #' ~ …`), при любом операторе вокруг (`~`, `+`, `format`,
        `join`): `['"][^'"]*#\\s*['"]`.
+  К2 — `#` сразу перед `{{` / `{%` в разметке (`Аккаунт #{{ acc.id }}`):
+       `#\\s*\\{[{%]`. Обе регулярки идут по тексту шаблона ПОСЛЕ вырезания
+       Jinja- и HTML-комментариев.
+  К3 — Python: строковая константа `app/**/*.py`, оканчивающаяся на `#` (в том
+       числе литеральная часть f-строки), — по дереву разбора, не по тексту.
+  Формы-двойники знака в шаблонах (`&#35;`, `&num;`, `＃`, `\\x23`, `\\u0023`)
+  запрещены тем же классом: их ноль.
+
+РЕЕСТР ИСКЛЮЧЕНИЙ АДРЕСУЕТ ВХОЖДЕНИЕ (`путь#порядковый номер`), не файл, и у каждой
+записи — причина и ПРЕДМЕТ (то, что обязано стоять за законным `#`): в
+`history_card.html` рядом стоят идентификатор группы и прежнее место аккаунта,
+исключение на файл пропустило бы возврат `Акк #`. Помощник — единственное названное
+место сборки знака: одно вхождение в разметке (`components/account_label.html#0`,
+макрос `account_id_mark`) и одно в Python (`app/services/account_label.py#0`,
+функция `id_mark`); второе вхождение в любом из двух файлов краснит гейт.
+
+ЛЕТОПИСЬ ЧИСЕЛ (правило: изменение числа — решение, оно пишется СЛЕДУЮЩЕЙ записью,
+а не правкой константы; число ВЫПИСАНО литералом, а не выведено обходом — иначе
+любое новое место узаконило бы себя собственным зелёным цветом):
+  2026-11-20, план 17-08 — `TEMPLATE_HASH_EXCEPTIONS_DECLARED = 3`: два
+  `group_external_id` (`history/detail.html`, `history/includes/history_card.html`)
+  и `account_id_mark`; `PYTHON_HASH_EXCEPTIONS_DECLARED = 2`: `partition` в
+  `app/pages/htmx.py` и `id_mark` сервиса подписи. Измерено обходом живого дерева
+  после планов 17-01…17-07, а не перенесено из ожидания плана (до фазы: К1 — 18,
+  К2 — 3, К3 — 1).
+
+ЧЕГО ГЕЙТ НЕ ВИДИТ (граница названа прямо — урок Фазы 16, О-23: не гнаться за
+написаниями). (а) Идентификатор без `#` (`Акк {{ id }}`, `№{{ id }}`) — у него нет
+признака. (б) Подпись, собранная из частей без литерала `#` (`chr(35)`,
+`'%c' % 35`, `"#"` и `str(id)` порознь в разных выражениях). (в) Значение, пришедшее
+из базы готовой строкой. (г) Текст, вставленный JS на клиенте. (д) Иные написания
+знака сверх пяти перечисленных (например `&#x23;`) — список закрыт намеренно.
+ОСТАТОК ДЕРЖИТ ПРОХОД ПО ОТРИСОВАННЫМ ЭКРАНАМ — `tests/test_pages/test_account_label_sweep.py`
+(план 17-09): он судит РЕЗУЛЬТАТ, а не исходник, и потому ловит любое написание.
+Новых написаний сверх классов гейт не распознаёт и `overrides` ради зелёного не
+просит.
 """
 
+import ast
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -79,6 +116,18 @@ PYTHON_HASH_EXCEPTIONS_DECLARED = 2
 # Класс К1: литерал, оканчивающийся на `#`.
 STRING_ENDING_IN_HASH = re.compile(r"""['"][^'"]*#\s*['"]""")
 
+# Класс К2: `#` сразу перед `{{` / `{%` в разметке (`Аккаунт #{{ acc.id }}`).
+HASH_BEFORE_SUBSTITUTION = re.compile(r"#\s*\{[{%]")
+# Сколько знаков разметки за `#` попадает в описание находки (до конца строки):
+# записи реестра нужен предмет, стоящий за знаком (`account_id`).
+MARKUP_FRAGMENT_LENGTH = 60
+
+# Формы-двойники знака: числовая и именованная сущность, полноширинный `＃`
+# (U+FF03), экранированные формы внутри литерала Jinja. Запрещены КЛАССОМ — их
+# нет ни в одном шаблоне, и появиться им незачем. Список закрыт: ещё одну форму
+# дописывать сюда не нужно — остаток держит проход по результату (шапка).
+HASH_LOOKALIKES = re.compile(r"&#35;|&num;|＃|\\x23|\\u0023")
+
 
 def _template_sources() -> dict[str, str]:
     """Все шаблоны проекта: путь относительно `app/templates` → исходник.
@@ -116,6 +165,12 @@ def hash_id_findings(sources: dict[str, str]) -> dict[str, str]:
             tail = EXPRESSION_TAIL.match(body, match.end())
             fragment = (match.group(0) + (tail.group(0) if tail else "")).strip()
             hits.append((match.start(), f"К1, литерал на `#`: {fragment!r}"))
+        for match in HASH_BEFORE_SUBSTITUTION.finditer(body):
+            fragment = body[match.start() : match.start() + MARKUP_FRAGMENT_LENGTH]
+            fragment = fragment.split("\n", 1)[0].strip()
+            hits.append((match.start(), f"К2, `#` перед подстановкой: {fragment!r}"))
+        for match in HASH_LOOKALIKES.finditer(body):
+            hits.append((match.start(), f"двойник знака: {match.group(0)!r}"))
         for ordinal, (_position, description) in enumerate(sorted(hits)):
             found[f"{rel}#{ordinal}"] = description
     return found
@@ -134,8 +189,40 @@ def _python_sources() -> dict[str, str]:
 
 
 def python_hash_findings(sources: dict[str, str]) -> dict[str, str]:
-    """Места сборки `#` в Python: ключ `путь#порядковый номер` → описание."""
-    return {}
+    """Места сборки `#` в Python: ключ `путь#порядковый номер` → описание (К3).
+
+    Читает ДЕРЕВО РАЗБОРА, а не текст: текстовый поиск считал бы `#` в
+    комментариях и докстрингах, а их здесь много. Ищется строковая константа,
+    оканчивающаяся на `#` (`ast.Constant`), в том числе литеральная часть
+    f-строки (`f"#{account_id}"` — `JoinedStr` держит её отдельной константой).
+    Описание — `[имя объемлющей функции] строка исходника`: записи реестра нужен
+    предмет (`partition`, `[id_mark]`). Нумерация — по положению в модуле.
+    """
+    found: dict[str, str] = {}
+    for rel, source in sorted(sources.items()):
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as exc:
+            found[f"{rel}#unparsed"] = f"модуль не разобран: {exc}"
+            continue
+        lines = source.splitlines()
+        hits: list[tuple[int, int, str]] = []
+        pending: list[tuple[ast.AST, str]] = [(tree, "<module>")]
+        while pending:
+            node, function = pending.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                function = node.name
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and node.value.rstrip().endswith("#")
+            ):
+                line = lines[node.lineno - 1].strip()
+                hits.append((node.lineno, node.col_offset, f"[{function}] {line}"))
+            pending.extend((child, function) for child in ast.iter_child_nodes(node))
+        for ordinal, (_line, _column, description) in enumerate(sorted(hits)):
+            found[f"{rel}#{ordinal}"] = description
+    return found
 
 
 def registry_violations(
