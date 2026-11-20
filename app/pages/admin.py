@@ -86,6 +86,7 @@ from app.pages.history import (
     PERIOD_VALUES,
     STATUS_VALUES,
     clean_choice,
+    history_account_label,
     parse_account_id,
 )
 from app.models.user import User
@@ -121,6 +122,7 @@ from app.services.auth_service import (
     IMPERSONATION_EXPIRE_MINUTES,
     create_access_token,
 )
+from app.services.account_label import labels_for
 from app.services.billing_cache import invalidate_access_cache
 from app.services.loki_client import (
     LEVEL_CHIP_OPTIONS,
@@ -1441,6 +1443,15 @@ async def admin_user_history(
     has_next = len(rows) > page_size
     rows = rows[:page_size]
 
+    # Аккаунты ПРОСМАТРИВАЕМОГО пользователя (а не администратора) читаются
+    # ДО сборки записей: подписи записей и `<option>` фильтра строятся по одной
+    # и той же карте, и нового запроса она не стоит (D-14, D-18, T-17-21).
+    accounts_result = await db.execute(
+        select(MessengerAccount).where(MessengerAccount.user_id == user_id)
+    )
+    all_accounts = accounts_result.scalars().all()
+    acct_labels = labels_for(all_accounts)
+
     logs = [
         {
             "id": r.id,
@@ -1455,6 +1466,9 @@ async def admin_user_history(
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
+            # Подпись аккаунта записи — той же функцией, что у пользовательской
+            # истории; запись без группы остаётся без подписи (D-15).
+            "account_label": history_account_label(group, acct_labels),
             "task_id": r.task_id,
             "status": r.status,
             "messenger_type": r.messenger_type,
@@ -1463,10 +1477,6 @@ async def admin_user_history(
         }
         for r, group in rows
     ]
-    accounts_result = await db.execute(
-        select(MessengerAccount).where(MessengerAccount.user_id == user_id)
-    )
-    all_accounts = accounts_result.scalars().all()
     filter_params = history_filter_params(status, messenger, account_id_int, period)
 
     return templates.TemplateResponse(
@@ -1479,6 +1489,7 @@ async def admin_user_history(
             "target_user": target_user,
             "logs": logs,
             "all_accounts": all_accounts,
+            "acct_labels": acct_labels,
             "status_filter": status,
             "filter_messenger": messenger,
             "filter_account_id": account_id_int,
