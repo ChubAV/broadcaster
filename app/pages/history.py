@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.accounts.labels import load_account_rows
 from app.application.analytics.send_analytics import (
     FAILED_STATUSES,
     HISTORY_PERIODS,
@@ -52,6 +53,7 @@ from app.pages.common import (
 # кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
 from app.pages.htmx import respond
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
+from app.services.account_label import AccountLabel, build_labels, labels_for
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -160,6 +162,31 @@ def parse_account_id(v: str | None) -> int | None:
         return int(v)
     except ValueError:
         return None
+
+
+def history_account_label(group: Group | None, labels: dict[int, AccountLabel]) -> AccountLabel | None:
+    """Подпись аккаунта записи журнала — ОДНА функция на четыре сборщика словаря.
+
+    Словарь записи собирают четыре места: список и порция прокрутки истории
+    пользователя и их двойники в админке (`app/pages/admin.py`). Подпись,
+    выведенная в каждом по-своему, разошлась бы молча: на одном экране аккаунт
+    был бы двойником, на другом — нет. Поэтому правило здесь одно, а админский
+    модуль ввозит его отсюда так же, как `parse_account_id`.
+
+    АККАУНТ ЗАПИСИ ВЫВОДИТСЯ ЧЕРЕЗ ГРУППУ (`group.account_id`), а не из самой
+    записи журнала. `None` возвращается в двух случаях: группы нет (запись
+    пережила её удаление) или у группы нет аккаунта (D-15). «Номер неизвестен» —
+    состояние ЖИВОГО аккаунта; приписать его удалённому значило бы соврать, и
+    карточка показывает запись, как показывала всегда, — без подписи аккаунта.
+
+    Карта `labels` строится по ВСЕМ аккаунтам пользователя (D-14), а не по
+    аккаунтам порции: признак двойника у карточки и у экрана «Аккаунты»
+    обязан совпадать. Аккаунт вне карты (чужой, исчезнувший между запросами)
+    тоже остаётся без подписи — чужой номер сюда не попадёт (T-17-12).
+    """
+    if group is None or group.account_id is None:
+        return None
+    return labels.get(group.account_id)
 
 
 # --- Выгрузка истории в файл --------------------------------------------------
@@ -590,6 +617,12 @@ async def history_partial(
     # вычисленный только в списочном обработчике, потерялся бы на тридцать
     # первой записи — молча, с исправным на вид экраном.
     retry_blockers = await retry_availability(db, rows[:limit], user.id)
+    # Карта подписей — ОТДЕЛЬНЫМ запросом и ПО ПОЛЬЗОВАТЕЛЮ, а не по аккаунтам
+    # порции (D-14, D-18): признак двойника у карточки порции обязан совпадать с
+    # признаком того же аккаунта на странице и на экране «Аккаунты», а аккаунт
+    # второго двойника в порцию может не попасть вовсе. Предпроверка повтора
+    # выше НЕ расширена: она держит потолок в два запроса на порцию.
+    acct_labels = build_labels(await load_account_rows(db, user.id))
     logs = [
         {
             "id": r.id,
@@ -604,6 +637,7 @@ async def history_partial(
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
+            "account_label": history_account_label(group, acct_labels),
             "task_id": r.task_id,
             "status": r.status,
             "messenger_type": r.messenger_type,
@@ -1087,6 +1121,16 @@ async def history_list(
     rows = rows[:PAGE_SIZE]
     retry_blockers = await retry_availability(db, rows, user.id)
 
+    # Аккаунты пользователя читаются ДО сборки записей: из них же строятся
+    # подписи карточек (D-14) — отдельного запроса на карту страница не делает
+    # (D-18). Признак двойника считается по ВСЕМ аккаунтам, а не по аккаунтам
+    # записей этой страницы.
+    accounts_result = await db.execute(
+        select(MessengerAccount).where(MessengerAccount.user_id == user.id)
+    )
+    all_accounts = accounts_result.scalars().all()
+    acct_labels = labels_for(all_accounts)
+
     logs = [
         {
             "id": r.id,
@@ -1101,6 +1145,7 @@ async def history_list(
             "group_name": r.group_name or "—",
             "group_external_id": group.group_external_id if group else None,
             "account_id": group.account_id if group else None,
+            "account_label": history_account_label(group, acct_labels),
             "task_id": r.task_id,
             "status": r.status,
             "messenger_type": r.messenger_type,
@@ -1112,10 +1157,6 @@ async def history_list(
         for r, group in rows
     ]
 
-    accounts_result = await db.execute(
-        select(MessengerAccount).where(MessengerAccount.user_id == user.id)
-    )
-    all_accounts = accounts_result.scalars().all()
     filter_params = history_filter_params(status, messenger, account_id_int, period)
 
     # Точное число найденного ОТДЕЛЬНЫМ запросом с тем же набором фильтров
@@ -1147,6 +1188,8 @@ async def history_list(
             "is_admin": check_is_admin(user, settings),
             "logs": logs,
             "all_accounts": all_accounts,
+            # Подписи аккаунтов по id: ими же строится фильтр (`history/list.html`).
+            "acct_labels": acct_labels,
             "status_filter": status,
             "filter_messenger": messenger,
             "filter_account_id": account_id_int,
