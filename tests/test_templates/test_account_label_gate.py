@@ -72,9 +72,32 @@ def _template_sources() -> dict[str, str]:
     }
 
 
+# Хвост выражения за литералом: до закрывающей скобки или конца строки. Нужен
+# записи реестра — она проверяет, ЧТО стоит за законным `#` (предмет записи).
+EXPRESSION_TAIL = re.compile(r"[^)\n]*")
+
+
 def hash_id_findings(sources: dict[str, str]) -> dict[str, str]:
-    """Места сборки `#` в шаблонах: ключ `путь#порядковый номер` → описание."""
-    return {}
+    """Места сборки `#` в шаблонах: ключ `путь#порядковый номер` → описание.
+
+    Комментарии обоих видов вырезаются ДО счёта: проза комментариев-обоснований
+    свободно содержит и `'#' ~ id`, и `#{{` (довод `_strip_comments`). Ключ —
+    ПУТЬ ПЛЮС ПОРЯДКОВЫЙ НОМЕР ВХОЖДЕНИЯ, нумерация — по положению в исходнике:
+    исключение на файл пропустило бы возврат `#` аккаунта рядом с законным `#`
+    группы. Обходчик принимает СЛОВАРЬ, а не читает дерево сам — контроль подаёт
+    изменённую копию и не трогает файлов проекта.
+    """
+    found: dict[str, str] = {}
+    for rel, source in sorted(sources.items()):
+        body = _strip_comments(source)
+        hits: list[tuple[int, str]] = []
+        for match in STRING_ENDING_IN_HASH.finditer(body):
+            tail = EXPRESSION_TAIL.match(body, match.end())
+            fragment = (match.group(0) + (tail.group(0) if tail else "")).strip()
+            hits.append((match.start(), f"К1, литерал на `#`: {fragment!r}"))
+        for ordinal, (_position, description) in enumerate(sorted(hits)):
+            found[f"{rel}#{ordinal}"] = description
+    return found
 
 
 def test_control_a_planted_concatenation_is_named() -> None:
