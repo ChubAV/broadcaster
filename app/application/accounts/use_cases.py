@@ -55,15 +55,15 @@ async def get_sync_status_view(session: AsyncSession, user_id: int, account_id: 
     # `SELECT` по группам был бы вторым подсчётом того же числа — на каждый
     # ответ опроса, то есть раз в пять секунд на открытую вкладку.
     if account.status == "active":
-        return SyncStatusView(status="active", messenger_type=account.type)
+        return SyncStatusView(status="active", messenger_type=account.type, phone=account.phone)
 
     if account.status == "sync_failed":
-        return SyncStatusView(status="sync_failed", messenger_type=account.type)
+        return SyncStatusView(status="sync_failed", messenger_type=account.type, phone=account.phone)
 
     if account.status == "syncing":
-        return SyncStatusView(status="syncing", messenger_type=account.type)
+        return SyncStatusView(status="syncing", messenger_type=account.type, phone=account.phone)
 
-    return SyncStatusView(status="other", messenger_type=account.type)
+    return SyncStatusView(status="other", messenger_type=account.type, phone=account.phone)
 
 
 async def detach_schedules_from_account(session: AsyncSession, account_id: int) -> int:

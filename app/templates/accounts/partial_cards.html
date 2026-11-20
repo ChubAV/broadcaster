@@ -1,3 +1,4 @@
+{% from "components/account_label.html" import account_label %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/form_wrapper.html" import form_wrapper %}
 {% from "components/mono.html" import mono %}
@@ -23,6 +24,8 @@
 {%- set stats = account_stats.get(account.id, {}) -%}
 {%- set attempts = stats.get('send_attempts', 0) -%}
 {%- set label = MESSENGER_LABELS.get(account.type, account.type) -%}
+{#- Подпись номера (Фаза 17): тот же ключ `acct_labels`, что у list.html. -#}
+{%- set acct_label = acct_labels[account.id] -%}
 {% if account.status == 'syncing' %}
 {#- ЯКОРЬ ПОДМЕНЫ. Идентификатор account-row-<id> сохранён ДОСЛОВНО вместе с
     переверсткой: это точка подмены htmx, а не имя класса. Идентификатор и
@@ -41,7 +44,7 @@
     {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
     <span class="acct-card__ident">
       <span class="acct-card__chan">{{ label }}</span>
-      {{- mono('#' ~ account.id) -}}
+      {{- account_label(acct_label) -}}
     </span>
     <span class="acct-card__dot acct-card__dot--warn acct-card__dot--live"></span>
   </div>
@@ -68,7 +71,7 @@
     {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
     <span class="acct-card__ident">
       <span class="acct-card__chan">{{ label }}</span>
-      {{- mono('#' ~ account.id) -}}
+      {{- account_label(acct_label) -}}
     </span>
     <span class="acct-card__dot acct-card__dot--danger"></span>
   </div>
@@ -102,7 +105,7 @@
     {%- if account.type in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ account.type }}">{{ messenger_icon(account.type, size='', show_label=false) }}</span>{% endif -%}
     <span class="acct-card__ident">
       <span class="acct-card__chan">{{ label }}</span>
-      {{- mono('#' ~ account.id) -}}
+      {{- account_label(acct_label) -}}
     </span>
     <span class="acct-card__dot acct-card__dot--{{ state_tone }}"></span>
   </div>
@@ -140,7 +143,7 @@
          title='Удалить аккаунт?',
          action='/accounts/' ~ account.id ~ '/delete',
          confirm_label='Удалить',
-         body=label ~ ' #' ~ account.id) }}
+         body=acct_label.plain) }}
 {% endfor %}
 {% if has_next %}
 <div hx-get="/accounts/partial?offset={{ next_offset }}" hx-trigger="revealed" hx-swap="outerHTML" class="empty__hint" role="status">Загрузка…</div>

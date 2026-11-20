@@ -28,8 +28,16 @@
    ВНУТРЬ карточки — сделала бы её присутствие обязательным во всех трёх файлах
    и молча потеряла бы кнопку удаления в момент подмены. Расхождение закреплено
    тестом test_accounts_three_files_dispatch_same_modal_event: панель обязана
-   присутствовать в двух файлах и отсутствовать здесь. #}
+   присутствовать в двух файлах и отсутствовать здесь.
 
+   ПОДПИСЬ НОМЕРА (Фаза 17). Ключ контекста `acct_label` — готовый объект
+   `AccountLabel`, который собирает обработчик опроса: номер приносит
+   `SyncStatusView.phone`, признак двойника — строки пользователя. Файл читает
+   поля объекта, а не россыпь переменных: ключ, забытый обработчиком, при мягком
+   `Undefined` печатал бы пустоту, а обращение к полю отсутствующего объекта
+   падает громко. #}
+
+{% from "components/account_label.html" import account_label %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/form_wrapper.html" import form_wrapper %}
 {% from "components/mono.html" import mono %}
@@ -53,7 +61,7 @@
     {%- if mtype in MESSENGER_LABELS %}<span class="acct-card__ch" data-upbadge data-channel="{{ mtype }}">{{ messenger_icon(mtype, size='', show_label=false) }}</span>{% endif -%}
     <span class="acct-card__ident">
       <span class="acct-card__chan">{{ label }}</span>
-      {{- mono('#' ~ account_id) -}}
+      {{- account_label(acct_label) -}}
     </span>
     {#- Точка состояния — ВТОРОЙ носитель того же смысла, что и значение ключа
         «Состояние», а не единственный. Пульсация у синхронизации — существующий
