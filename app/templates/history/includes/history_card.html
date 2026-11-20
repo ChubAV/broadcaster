@@ -35,6 +35,7 @@
    Тем же путём импортируются запуск повтора и его панель подтверждения:
    {% from "history/includes/history_card.html" import retry_trigger, retry_modal %} #}
 
+{% from "components/account_label.html" import account_label, account_id_mark %}
 {% from "components/badge.html" import badge %}
 {% from "components/button.html" import button, link_button %}
 {% from "components/modal.html" import modal %}
@@ -178,7 +179,23 @@
 {%- endif -%}
 {%- endmacro %}
 
-{% macro history_card(log, user=None, detail_base_path='/history') -%}
+{#- ПОДПИСЬ АККАУНТА И АУДИТОРИЯ (Фаза 17, D-01, D-03, D-10, D-17). Макрос общий
+    для истории пользователя и админской истории, поэтому аудитория — ЯВНЫЙ
+    параметр `audience` (`'user'` по умолчанию | `'admin'`), а не вывод из
+    `detail_base_path`: третий параметр различает экраны, но как признак роли
+    хрупок — смена адреса молча сменила бы подпись.
+
+    ПОЛЬЗОВАТЕЛЮ — номер на месте прежнего «Акк #id» и `#id` ТОЛЬКО у двойника
+    (значок канала уже стоит в шапке отдельным элементом, поэтому имя
+    мессенджера в подписи не повторяется). АДМИНУ — номер И отдельный `#id`
+    всегда: он работает по идентификатору (логи, контейнеры, очередь).
+
+    Подпись приходит ГОТОВОЙ ключом `log.account_label` (`AccountLabel`), который
+    кладёт сборщик словаря записи (`history_account_label` в app/pages/history.py).
+    У записи без аккаунта (группа удалена вместе с ним, D-15) ключа нет или он
+    пуст — шапка остаётся без подписи, «Номер неизвестен» не приписывается.
+    Строка с `group_external_id` ниже — идентификатор ГРУППЫ, не аккаунта. -#}
+{% macro history_card(log, user=None, detail_base_path='/history', audience='user') -%}
 <article data-hrow{% if log.status %} data-status="{{ log.status }}"{% endif %} id="history-row-{{ log.id }}">
   <div data-area="head">
     {#- Ветка «неизвестный мессенджер» в messenger_icon несёт utility-класс, а
@@ -192,7 +209,10 @@
     {%- elif log.status == 'fail' -%}{{ badge('Ошибка', 'danger') }}
     {%- elif log.status == 'account_disconnected' -%}{{ badge('Отключён', 'warning') }}
     {%- else -%}{{ badge(log.status, 'neutral') }}{%- endif -%}
-    {%- if log.account_id %}{{ mono('Акк #' ~ log.account_id, 'muted') }}{% endif -%}
+    {%- if log.account_label -%}
+      {{- account_label(log.account_label, with_twin_id=(audience != 'admin')) -}}
+      {%- if audience == 'admin' %}{{ account_id_mark(log.account_label.account_id) }}{% endif -%}
+    {%- endif -%}
     {%- if log.group_external_id %}{{ mono('#' ~ log.group_external_id, 'muted') }}{% endif -%}
   </div>
   <div data-area="body">
