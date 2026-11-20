@@ -56,9 +56,85 @@ PHONE_STORED = "+79991234567"
 PHONE_SHOWN = "+7 999 123-45-67"
 
 
+_VOID_TAGS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+)
+# Содержимое этих элементов человек не читает: проход его не судит.
+_UNREAD_TAGS = frozenset({"script", "style"})
+
+
+class Address:
+    """Объявленный адрес: элемент, внутри которого идентификатор законен.
+
+    `applies(tag, attrs)` — предикат одного элемента; вхождение законно, если ему
+    удовлетворяет сам элемент (для атрибута — его владелец) или любой из его
+    открытых предков. Адрес — элемент подписи или плоский приёмник того же
+    аккаунта, не контейнер шире подписи (T-17-26).
+    """
+
+    def __init__(self, name: str, applies) -> None:
+        self.name = name
+        self.applies = applies
+
+
+def _id_pattern(account_id: int) -> re.Pattern[str]:
+    # Цифровые границы: `-1007311000001` у группы — не вхождение идентификатора.
+    return re.compile(rf"(?<!\d){account_id}(?!\d)")
+
+
+class _IdSweep(HTMLParser):
+    """Один проход по разметке со стеком открытых элементов."""
+
+    def __init__(self, account_id: int, declared) -> None:
+        super().__init__(convert_charrefs=True)
+        self.pattern = _id_pattern(account_id)
+        self.declared = tuple(declared)
+        self.stack: list[tuple[str, dict[str, str]]] = []
+        self.found: list[str] = []
+
+    def _covered(self, chain: list[tuple[str, dict[str, str]]]) -> bool:
+        return any(a.applies(tag, attrs) for a in self.declared for tag, attrs in chain)
+
+    def _report(self, chain: list[tuple[str, dict[str, str]]], where: str, value: str) -> None:
+        path = ">".join(tag for tag, _attrs in chain)
+        self.found.append(f"{path} {where}: {value.strip()!r}")
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        a = {k: (v if v is not None else "") for k, v in attrs}
+        chain = [*self.stack, (tag, a)]
+        for attr in TEXT_ATTRIBUTES:
+            value = a.get(attr)
+            if value and self.pattern.search(value) and not self._covered(chain):
+                self._report(chain, f"@{attr}", value)
+        if tag not in _VOID_TAGS:
+            self.stack.append((tag, a))
+
+    def handle_data(self, data: str) -> None:
+        if not self.pattern.search(data):
+            return
+        if any(tag in _UNREAD_TAGS for tag, _attrs in self.stack):
+            return
+        if not self._covered(self.stack):
+            self._report(self.stack, "text", data)
+
+    def handle_endtag(self, tag: str) -> None:
+        # Закрыть до ближайшего одноимённого открытого элемента.
+        for pos in range(len(self.stack) - 1, -1, -1):
+            if self.stack[pos][0] == tag:
+                del self.stack[pos:]
+                break
+
+
 def undeclared_id_occurrences(html: str, account_id: int, declared=()) -> list[str]:
-    """Вхождения идентификатора вне объявленных адресов: «путь вид: фрагмент»."""
-    return []
+    """Вхождения идентификатора вне объявленных адресов: «путь вид: фрагмент».
+
+    Судятся текстовые узлы и текстовые атрибуты (`TEXT_ATTRIBUTES`); вид —
+    `text` или `@<атрибут>`, путь — теги от корня разметки до элемента.
+    """
+    sweep = _IdSweep(account_id, declared)
+    sweep.feed(html)
+    sweep.close()
+    return sweep.found
 
 
 # --- Контроль: проход непуст -------------------------------------------------
