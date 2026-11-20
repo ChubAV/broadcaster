@@ -5133,3 +5133,79 @@ def test_dashboard_pairs_upcoming_and_feed_in_two_columns():
     assert "data-dashpair" in page
     assert page.index("data-dashpair") < page.index("Ближайшие отправки")
     assert page.index("/data-dashpair") > page.index('id="dash-feed"')
+
+
+# --- Фаза 17, план 09: подпись аккаунта в однострочных контейнерах --------------
+#
+# ⚠️ ЭТО МАШИННАЯ ПОЛОВИНА КРИТЕРИЯ 5, А НЕ ДОКАЗАТЕЛЬСТВО ШИРИНЫ. Браузера в
+# репозитории нет: правила ниже читают ТЕКСТ app.css и доказывают, что контракт
+# записан. Что на 320 и 375 px `#id` двойника действительно виден на чипе и в
+# `<h2>` экрана групп, суита не знает — это ручная половина (обход
+# `/gsd-verify-work 17`, «Manual-Only» в 17-VALIDATION.md), и чтение CSS её не
+# заменяет.
+
+ONE_LINE_LABEL_CONTAINERS = (".chip__label", ".acct-head__name")
+
+
+def _css_rule(css: str, selector: str) -> str:
+    """Тело правила, в списке селекторов которого стоит ровно `selector`.
+
+    Нет селектора вовсе — `ValueError: substring not found` (так правило красно
+    до правки). Есть, но не как конец элемента списка селекторов (часть другого
+    селектора) — отказ с именем селектора.
+    """
+    hits = [m.start() for m in re.finditer(re.escape(selector) + r"(?=\s*[,{])", css)]
+    start = hits[0] if hits else css.index(selector)
+    assert hits, f"селектор {selector!r} в app.css есть только частью другого селектора"
+    opening = css.index("{", start)
+    return css[opening + 1 : css.index("}", opening)]
+
+
+def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
+    """D-06 (Pitfall 8): в `.chip__label` и `.acct-head__name` усекается ТЕКСТ, а `#id` — нет.
+
+    Контейнеры однострочные: `nowrap` + `ellipsis` самого контейнера обрезал бы
+    ХВОСТ подписи, а хвост у двойника — различитель. Поэтому подпись внутри них —
+    `inline-flex`, канал и номер усекаются сами, а `.acct-label__id` не сжимается
+    (`flex: none`). Остальные контейнеры (карточка аккаунта, карточка истории,
+    строки админки, `<h1>` шелла) переносят строки как раньше.
+    """
+    css = _css_without_comments()
+
+    assert "flex: none" in _css_rule(css, ".acct-label__id"), (
+        "знак #id двойника сжимается: различитель пропадёт на узком экране"
+    )
+    for container in ONE_LINE_LABEL_CONTAINERS:
+        box = _css_rule(css, f"{container} > .acct-label")
+        for declaration in ("display: inline-flex", "max-width: 100%", "min-width: 0"):
+            assert declaration in box, f"{container}: у подписи нет `{declaration}`"
+        for part in ("chan", "text"):
+            body = _css_rule(css, f"{container} .acct-label__{part}")
+            for declaration in (
+                "min-width: 0",
+                "overflow: hidden",
+                "text-overflow: ellipsis",
+                "white-space: nowrap",
+            ):
+                assert declaration in body, f"{container} .acct-label__{part}: нет `{declaration}`"
+
+
+def test_account_label_rules_introduce_no_fixed_width():
+    """Фиксированных ширин у подписи нет: ширину отдаёт контейнер, а не правило подписи."""
+    css = _css_without_comments()
+    rules = [_css_rule(css, ".acct-label__id")]
+    for container in ONE_LINE_LABEL_CONTAINERS:
+        rules.append(_css_rule(css, f"{container} > .acct-label"))
+        rules.extend(_css_rule(css, f"{container} .acct-label__{part}") for part in ("chan", "text"))
+
+    for body in rules:
+        assert re.search(r"(?<![-\w])width\s*:", body) is None, f"фиксированная ширина в правиле: {body!r}"
+
+
+def test_account_label_chip_keeps_the_full_text_in_its_title():
+    """Обрезка чипа не становится потерей: полный текст остаётся в `title=` из плоской подписи."""
+    source = _template_source("ads/includes/sched_card.html")
+
+    assert re.search(r'<label class="chip" title="\{\{[^}]*\.plain\s*\}\}"', source), (
+        "title= чипа расписания перестал нести плоскую подпись аккаунта"
+    )
