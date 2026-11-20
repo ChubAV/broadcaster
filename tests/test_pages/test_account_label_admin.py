@@ -128,3 +128,82 @@ async def test_the_worker_partial_matches_the_page_label(
     assert label_texts(partial)[str(account_id)] == [PHONE_SHOWN]
     assert id_mark_texts(partial)[str(account_id)] == [f"#{account_id}"]
     assert label_texts(partial)[str(account_id)] == label_texts(page)[str(account_id)]
+
+
+# ---- Очередь и карточка пользователя ----
+
+
+def _queue_html_pieces(html: str) -> tuple[str, str]:
+    """(заголовок аккаунта, разметка строки очереди) — тексты режутся по адресу, а не по странице.
+
+    Строка очереди кончается первым закрывающим `</div>`: ячейки строки состоят
+    из `<span>`, вложенных блоков в них нет (та же посылка, что у `_row_markup`).
+    """
+    heading = re.search(r'<h3 class="card__title">(.*?)</h3>', html, flags=re.S)
+    assert heading is not None, "заголовок аккаунта в очереди не найден"
+    rows = html.split("<div data-row data-queue-row")[1:]
+    assert len(rows) == 1, f"строк очереди найдено {len(rows)}, ожидалась одна"
+    return heading.group(1), rows[0][: rows[0].index("</div>")]
+
+
+async def _get_queue(admin_client: AsyncClient, account_id: int) -> str:
+    from tests.test_pages.test_admin_panel import _FakeQueuePageRedis, _queue_task
+
+    client = _FakeQueuePageRedis({f"wa:queue:{account_id}": [_queue_task("task-one")]})
+    with patch("app.services.ops_state._get_redis", return_value=client):
+        response = await admin_client.get("/admin/queue")
+    assert response.status_code == 200
+    return response.text
+
+
+@pytest.mark.asyncio
+async def test_the_queue_row_shows_the_number_and_the_id(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Строка очереди: канал, номер по `data-account-label` и отдельный `#id` (D-17)."""
+    account_id = await seed_account(
+        db_session, await _admin_user_id(db_session), "wa", phone=PHONE_STORED
+    )
+
+    html = await _get_queue(admin_client, account_id)
+    _heading, row = _queue_html_pieces(html)
+
+    assert label_texts(row)[str(account_id)] == [PHONE_SHOWN]
+    assert id_mark_texts(row)[str(account_id)] == [f"#{account_id}"]
+    assert "WhatsApp" in row, "канал в строке очереди не назван"
+
+
+@pytest.mark.asyncio
+async def test_the_queue_heading_keeps_the_id_and_gains_the_number(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Заголовок «Аккаунт #5» сохраняет `#id` и получает номер рядом через « · » (D-17)."""
+    account_id = await seed_account(
+        db_session, await _admin_user_id(db_session), "wa", phone=PHONE_STORED
+    )
+
+    html = await _get_queue(admin_client, account_id)
+    heading, _row = _queue_html_pieces(html)
+
+    assert "Аккаунт" in heading
+    assert id_mark_texts(heading)[str(account_id)] == [f"#{account_id}"]
+    assert label_texts(heading)[str(account_id)] == [f"WhatsApp {PHONE_SHOWN}"]
+    plain = " ".join(re.sub(r"<[^>]+>", " ", heading).split())
+    assert plain == f"Аккаунт #{account_id} · WhatsApp {PHONE_SHOWN}", plain
+
+
+@pytest.mark.asyncio
+async def test_the_user_card_names_the_channel_and_the_number(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Карточка пользователя: «Telegram» вместо сырого `tg_user`, номер и отдельный `#id` (D-11)."""
+    user_id = await _admin_user_id(db_session)
+    account_id = await seed_account(db_session, user_id, "tg_user", phone=PHONE_STORED)
+
+    response = await admin_client.get(f"/admin/users/{user_id}")
+    assert response.status_code == 200
+    html = response.text
+
+    assert label_texts(html)[str(account_id)] == [f"Telegram {PHONE_SHOWN}"]
+    assert id_mark_texts(html)[str(account_id)] == [f"#{account_id}"]
+    assert f"tg_user #{account_id}" not in html, "сырой тип канала остался в карточке"
