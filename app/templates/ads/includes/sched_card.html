@@ -44,6 +44,7 @@
 {% from "components/toggle.html" import toggle %}
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/mono.html" import mono %}
+{% from "components/account_label.html" import account_label %}
 {% from "includes/messenger_icon.html" import messenger_icon %}
 {% from "schedules/includes/schedule_row.html" import DAY_NAMES %}
 
@@ -58,12 +59,6 @@
                    else 'расписаний') -}}
 {%- endmacro %}
 
-{# Подпись аккаунта. Собственного имени у аккаунта в схеме нет: его «имя» на
-   экране — канал и номер, ровно как в разделе «Аккаунты». #}
-{% macro account_label(account) -%}
-{{- {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'}.get(account.type, account.type) }} #{{ account.id -}}
-{%- endmacro %}
-
 {#- ТЕКСТ ЧАСТЕЙ ПОДТВЕРЖДЕНИЯ — ЕДИНСТВЕННЫЙ ИСТОЧНИК (план 11-01). Строка
     печатается ТРИЖДЫ: сводкой в шапке карточки, телом панели подтверждения
     удаления и (задача 2 плана) внеполосным узлом ответа правки. Три копии
@@ -76,7 +71,11 @@
 {%- set day_labels = [] -%}
 {%- for d in (s.days_of_week or [])|sort %}{% set _ = day_labels.append(DAY_NAMES.get(d, d)) %}{% endfor -%}
 {%- set parts = [] -%}
-{%- if account %}{% set _ = parts.append(account_label(account) | trim) %}{% endif -%}
+{#- Звено аккаунта — плоская форма подписи (D-12): сводка идёт в `title=` и в
+    тело панели подтверждения, где разметке места нет; `#id` у двойника
+    приезжает вместе с ней, потому что двойник считается по ВСЕМ аккаунтам. -#}
+{%- set labels = phone_labels(accounts) -%}
+{%- if account %}{% set _ = parts.append(labels[account.id].plain) %}{% endif -%}
 {%- if chosen %}{% set _ = parts.append(chosen | length ~ ' групп') %}{% endif -%}
 {%- if day_labels %}{% set _ = parts.append(day_labels | join(' ')) %}{% endif -%}
 {%- if s.times_of_day %}{% set _ = parts.append(s.times_of_day | join(', ')) %}{% endif -%}
@@ -218,13 +217,17 @@
       <div class="sched-card__block">
         <span class="field__label">Аккаунт</span>
         {%- if accounts %}
+        {#- Подписи считаются ОДИН раз и по ВСЕМ аккаунтам пользователя: двойник
+            (две совпавшие подписи, D-14) определяется по полному списку, а не по
+            одному чипу. Плоская форма — в `title=`, разметка — в самом чипе. -#}
+        {%- set labels = phone_labels(accounts) %}
         <div class="chip-set">
           {%- for acc in accounts %}
-          <label class="chip" title="{{ account_label(acc) | trim }}">
+          <label class="chip" title="{{ labels[acc.id].plain }}">
             <input class="chip__input" type="radio" name="account_id" value="{{ acc.id }}"
                    {% if acc.id == s.account_id %}checked{% endif %}>
             {{ messenger_icon(acc.type, size='avatar', show_label=false) }}
-            <span class="chip__label">{{ account_label(acc) | trim }}</span>
+            <span class="chip__label">{{ account_label(labels[acc.id], show_channel=true) }}</span>
           </label>
           {%- endfor %}
         </div>
