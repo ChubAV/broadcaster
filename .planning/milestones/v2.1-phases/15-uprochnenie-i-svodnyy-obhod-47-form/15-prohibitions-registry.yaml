@@ -81,8 +81,8 @@
 # не меняется; вариант "живой реестр v2.2" владелец отверг. `rows_declared`: 741 (засев
 # 2026-09-25 по планам вехи v2.1) → 754 (засев 2026-10-08).
 
-measured: '2026-10-26'
-rows_declared: 934
+measured: '2026-11-20'
+rows_declared: 953
 class_decisions:
 - {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'планы 15-24…15-32 Фазы 15 — гэп-закрытие критерия 6 (б), решение владельца Г-1, 2026-09-25; прежде: «будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он» — верно на день ответа 2026-09-24'}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: gate-integrity, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 61}
@@ -1033,3 +1033,22 @@ rows:
 - {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-64-PLAN.md, index: 0, phase: '16', statement_digest: 4ef2e54bfcc7, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-64-PLAN.md, index: 1, phase: '16', statement_digest: 56a50a3ceafa, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/16-hranenie-nomera-normalizatsiya-i-edinyy-pisatel/16-64-PLAN.md, index: 2, phase: '16', statement_digest: e64ec4d6604a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-01-PLAN.md, index: 0, phase: '17', statement_digest: 8633bb28d7f9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-01-PLAN.md, index: 1, phase: '17', statement_digest: f1d2e91e88fd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-01-PLAN.md, index: 2, phase: '17', statement_digest: 831c00cf1dbd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-02-PLAN.md, index: 0, phase: '17', statement_digest: 1db866a8827b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-02-PLAN.md, index: 1, phase: '17', statement_digest: 77ea11cdaf7c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-03-PLAN.md, index: 0, phase: '17', statement_digest: fbcdc471ec7c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-03-PLAN.md, index: 1, phase: '17', statement_digest: 38a8e93e2f75, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-04-PLAN.md, index: 0, phase: '17', statement_digest: d551df3b6b8c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-04-PLAN.md, index: 1, phase: '17', statement_digest: be11b0b4c9da, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-05-PLAN.md, index: 0, phase: '17', statement_digest: 4e0941584e82, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-05-PLAN.md, index: 1, phase: '17', statement_digest: a9abb4a02042, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-06-PLAN.md, index: 0, phase: '17', statement_digest: 25eb74e44e08, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-06-PLAN.md, index: 1, phase: '17', statement_digest: 8afa93f94e06, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-07-PLAN.md, index: 0, phase: '17', statement_digest: 792729d43bd8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-07-PLAN.md, index: 1, phase: '17', statement_digest: ae2207d165cd, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-08-PLAN.md, index: 0, phase: '17', statement_digest: 919e9eca843e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-08-PLAN.md, index: 1, phase: '17', statement_digest: 64cc89e529e5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-09-PLAN.md, index: 0, phase: '17', statement_digest: 48c94173cec7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-09-PLAN.md, index: 1, phase: '17', statement_digest: 1ed4b8694b23, class: unclassified, disposition: unresolved}
