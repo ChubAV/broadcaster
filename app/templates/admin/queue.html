@@ -3,6 +3,7 @@
 {% from "components/empty_state.html" import empty_state %}
 {% from "components/modal.html" import modal %}
 {% from "components/mono.html" import mono %}
+{% from "components/account_label.html" import account_label, account_id_mark %}
 {% from "components/table.html" import rowhead %}
 {% from "admin/includes/queue_row.html" import queue_row, queue_drop_modal_id %}
 {#- Величина времени канала брокера приходит ОТТУДА ЖЕ, откуда её берёт «Обзор»:
@@ -81,7 +82,9 @@
   {{ mono('Ни одна очередь канала не занята') }}
   {% else %}
   {% for entry in busy %}
-  <h3 class="card__title">Аккаунт #{{ entry.account.id }}</h3>
+  {#- Заголовок сохраняет `#id` и получает номер рядом (D-17): знак — отдельный элемент,
+      подпись — с именем канала, потому что значка канала рядом нет. -#}
+  <h3 class="card__title">Аккаунт {{ account_id_mark(entry.account.id) }} · {{ account_label(phone_label(entry.account), show_channel=true, with_twin_id=false) }}</h3>
   {{ rowhead(QUEUE_COLUMNS, cols=QUEUE_COLS) }}
   {% for row in entry.rows %}
   {{ queue_row(entry.account, row, QUEUE_COLUMNS, QUEUE_COLS, user, queue_drop_modal_id(entry.account, loop.index0)) }}

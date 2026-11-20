@@ -30,6 +30,7 @@
 {%- from "components/table.html" import cell -%}
 {%- from "components/badge.html" import badge -%}
 {%- from "components/mono.html" import mono -%}
+{%- from "components/account_label.html" import account_label, account_id_mark -%}
 {%- from "includes/messenger_icon.html" import messenger_icon -%}
 
 {%- set QUEUE_MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} -%}
@@ -64,7 +65,15 @@
 <div data-row data-queue-row style="--cols: {{ cols }}">
   {%- call cell(grow=true, label=columns[0]) %}
     {%- if account.type in QUEUE_MESSENGER_LABELS %}{{ messenger_icon(account.type, size='avatar', show_label=false) }}{% endif -%}
-    <span data-grow>{{ QUEUE_MESSENGER_LABELS.get(account.type, account.type) }}</span>{{ mono('#' ~ account.id) }}
+    {#- Канал, номер и ОТДЕЛЬНЫЙ `#id` — три `<span>` подряд, знак всегда (D-17,
+        D-11, Фаза 17): подпись без признака двойника и без его `#id`. Имя канала
+        берётся из подписи (`MESSENGER_LABELS`), а локальный словарь выше остаётся
+        только условием значка. Ключи панелей подтверждения (шапка файла, Alpine)
+        подпись не получают: она недоверенная строка и в выражение не едет. -#}
+    {%- set lbl = phone_label(account) -%}
+    <span data-grow>{{ lbl.channel }}</span>
+    {{ account_label(lbl, with_twin_id=false) }}
+    {{ account_id_mark(account.id) }}
   {%- endcall %}
   {%- call cell(label=columns[1]) %}
     {%- if row.group_name -%}
