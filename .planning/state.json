@@ -11,7 +11,7 @@
     {
       "number": "17",
       "name": "Показ номера на всех экранах",
-      "status": "pending"
+      "status": "in_progress"
     },
     {
       "number": "18",
@@ -34,5 +34,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 2 of 5 · 20% · executing"
   },
-  "updated_at": "2026-11-20T14:43:13.804Z"
+  "updated_at": "2026-11-20T17:09:42.603Z"
 }
