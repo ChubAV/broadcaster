@@ -53,7 +53,12 @@ from app.pages.common import (
 # кодом собирает сам слой, и второй сборки его в этом файле не остаётся.
 from app.pages.htmx import respond
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
-from app.services.account_label import AccountLabel, build_labels, labels_for
+from app.services.account_label import (
+    AccountLabel,
+    build_labels,
+    labels_for,
+    shown_phone,
+)
 from app.services.billing_cache import check_access_cached
 
 logger = structlog.get_logger(__name__)
@@ -202,6 +207,7 @@ EXPORT_HEADER = (
     "Время",
     "Канал",
     "Аккаунт",
+    "Номер",
     "Группа",
     "Заголовок объявления",
     "Статус",
@@ -289,7 +295,27 @@ def export_cell(value: object) -> str:
     return text
 
 
-def export_row(log: SendLog, group: Group | None, user: User | None) -> list[str]:
+def export_phone_cell(stored: str | None) -> str:
+    """Ячейка «Номер» файла выгрузки (PHONE-07, D-05, D-09, D-16).
+
+    Номер показывается тем же правилом, что подпись экрана (`shown_phone`):
+    неизвестный номер — пустая ячейка, неразбираемый — как есть. Ведущий «+»
+    снимается ОДНИМ знаком и ДО `export_cell`, а не обходом защиты: ячейка
+    проходит обезвреживание формул без исключений (T-04-16).
+    """
+    shown = shown_phone(stored)
+    if shown is None:
+        return ""
+    return export_cell(shown.removeprefix("+"))
+
+
+def export_row(
+    log: SendLog,
+    group: Group | None,
+    user: User | None,
+    *,
+    phone: str | None = None,
+) -> list[str]:
     """Строка файла выгрузки для одной записи журнала — ровно по `EXPORT_HEADER`.
 
     ФУНКЦИЯ ЧИСТАЯ: в базу не ходит, `Request` не читает. Всё, что ей нужно,
@@ -306,6 +332,27 @@ def export_row(log: SendLog, group: Group | None, user: User | None) -> list[str
     Время форматируется тем же хелпером, что и разметка записи, — значение в
     файле обязано совпадать с тем, что пользователь видел на экране (D-30).
 
+    НОМЕР АККАУНТА (PHONE-07) стоит сразу после идентификатора и строится тем
+    же правилом показа, что подпись экрана (`shown_phone` → `format_phone`),
+    но отступает от D-30 «файл = экран» ровно в двух местах, каждое — решением
+    владельца:
+
+    * D-09 — ведущий «+» снят. `export_cell` ставит апостроф перед любой
+      ячейкой на «+», а исключения из обезвреживания формул (T-04-16) не
+      делается: владелец выбрал убрать знак, а не видеть в таблице
+      `'+7 999 123-45-67`. Снимается РОВНО ОДИН знак (`removeprefix`), и ДО
+      `export_cell`; значение проходит его всегда.
+    * D-16 — у аккаунта без номера ячейка ПУСТАЯ, а не «Номер неизвестен», и
+      `#id` двойника в неё не дописывается: колонка файла — данные для
+      сортировки и фильтра, подпись интерфейса превратила бы её в смесь
+      номеров и слов, а идентификатор стоит в соседней колонке.
+
+    Нет аккаунта у записи (группа удалена каскадом вместе с ним) — пусты и
+    «Аккаунт», и «Номер» (D-15): «неизвестен» — состояние живого аккаунта.
+    Номер приезжает именованным параметром `phone`; без него ячейка пуста.
+    Правила, сравнивающего ячейку с экраном, нет: отступления держатся этой
+    записью и проверкой её наличия.
+
     Статус и канал печатаются ПОДПИСЯМИ, а незнакомое значение — как есть.
     Пустая ячейка вместо неопознанного значения была бы тем самым молчаливым
     выбрасыванием, которое запрещает прохибиция P-04-01: строка осталась бы в
@@ -315,6 +362,7 @@ def export_row(log: SendLog, group: Group | None, user: User | None) -> list[str
         export_cell(format_datetime_for_user(log.sent_at, user)),
         export_cell(MESSENGER_LABELS.get(log.messenger_type, log.messenger_type)),
         export_cell(group.account_id if group else None),
+        export_phone_cell(phone) if group else "",
         export_cell(log.group_name),
         export_cell(log.ad_title),
         export_cell(STATUS_LABELS.get(log.status, log.status)),
@@ -742,6 +790,11 @@ async def history_export(
         params["export"] = EXPORT_TOO_MANY
         return RedirectResponse(url=f"/history?{urlencode(params)}", status_code=302)
 
+    # Карта «аккаунт → номер» читается ОДНИМ запросом по пользователю ДО потока:
+    # вторая инструкция на сессии, у которой уже открыт курсор `db.stream`, на
+    # боевом драйвере рискованна, а внутри генератора курсор уже открыт.
+    phones = {row.id: row.phone for row in await load_account_rows(db, user.id)}
+
     query = (
         select(SendLog, Group)
         .outerjoin(Group, SendLog.group_id == Group.id)
@@ -803,7 +856,14 @@ async def history_export(
         try:
             result = await db.stream(query)
             async for log, group in result:
-                writer.writerow(export_row(log, group, user))
+                writer.writerow(
+                    export_row(
+                        log,
+                        group,
+                        user,
+                        phone=phones.get(group.account_id) if group else None,
+                    )
+                )
                 yield flush()
         except Exception:
             logger.error(

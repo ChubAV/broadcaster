@@ -38,8 +38,10 @@ from app.pages.history import (
     EXPORT_HEADER,
     EXPORT_ROW_CAP,
     export_cell,
+    export_phone_cell,
     export_row,
 )
+from tests.account_label_support import seed_account
 
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
 
@@ -85,9 +87,17 @@ def _group(account_id: int = 42) -> Group:
 # --- Шапка файла --------------------------------------------------------------
 
 
-def test_export_header_has_eight_columns():
-    """Восемь колонок из D-28 — ни одной сверх и ни одной вместо."""
-    assert len(EXPORT_HEADER) == 8, EXPORT_HEADER
+def test_export_header_has_nine_columns():
+    """Восемь колонок из D-28 и «Номер» (PHONE-07) — ни одной сверх и ни одной вместо.
+
+    «Номер» стоит сразу после «Аккаунт»: колонка идентификатора остаётся на
+    своём месте (индекс 2), внешние таблицы пользователя читают её по номеру
+    (D-05). Сдвигаются только колонки правее «Номера» — «Статус» с пятой
+    позиции на шестую.
+    """
+    assert len(EXPORT_HEADER) == 9, EXPORT_HEADER
+    assert EXPORT_HEADER[2] == "Аккаунт", EXPORT_HEADER
+    assert EXPORT_HEADER[3] == "Номер", EXPORT_HEADER
 
 
 def test_export_header_carries_no_ad_body_column():
@@ -141,6 +151,7 @@ def test_export_cell_defuses_a_formula_in_every_value_bearing_column():
         ),
         _group(),
         _user(),
+        phone="=1+1",
     )
 
     dangerous = [cell for cell in row if cell.startswith(("=", "+", "-", "@"))]
@@ -148,6 +159,9 @@ def test_export_cell_defuses_a_formula_in_every_value_bearing_column():
     assert "'=1+1" in row
     assert "'+cmd|'/c calc'!A1" in row
     assert "'@SUM(1)" in row
+    # Ячейка «Номер» — четвёртая колонка — тоже без исключений (D-05, T-04-16):
+    # `=1+1` совпадает со значением заголовка, поэтому проверка — по месту.
+    assert row[EXPORT_HEADER.index("Номер")] == "'=1+1"
 
 
 def test_export_cell_leaves_a_plain_value_untouched():
@@ -204,11 +218,74 @@ def test_export_row_survives_a_missing_group():
     удаление группы. Исключение здесь оборвало бы уже начатый поток — то есть
     отдало бы пользователю обрезанный файл со статусом успеха.
     """
-    row = export_row(_log(group_id=None, group_name=None), None, _user())
+    # Номер в карту мог попасть, а группы у записи нет — ячейка всё равно пуста
+    # (D-15): «Номер» стоит между «Аккаунтом» и «Группой», и после вставки
+    # `row[3]` перестал стеречь имя группы, поэтому проверяется и `row[4]`.
+    row = export_row(
+        _log(group_id=None, group_name=None), None, _user(), phone="+79991234567"
+    )
 
     assert len(row) == len(EXPORT_HEADER)
     assert row[2] == ""
     assert row[3] == ""
+    assert row[4] == ""
+
+
+# Таблица ячейки «Номер» (D-05, D-09, D-16): хранимое значение → ячейка файла.
+# Строки взяты из таблицы «Что `export_cell` делает с каждым правдоподобным
+# значением» в 17-RESEARCH §6 и из решений D-09 / D-16.
+PHONE_CELLS = [
+    pytest.param(None, "", id="none"),
+    pytest.param("", "", id="empty"),
+    pytest.param("   ", "", id="blank"),
+    pytest.param("+79991234567", "7 999 123-45-67", id="ru-mobile"),
+    pytest.param("+77011234567", "7 701 123 4567", id="kz-mobile"),
+    pytest.param("+88801234567", "888 01234567", id="unknown-code"),
+    pytest.param("+380501234567", "380 50 123 4567", id="ua-mobile"),
+    pytest.param("79991234567", "79991234567", id="no-plus-unparseable"),
+    pytest.param("abc", "abc", id="letters"),
+    pytest.param("=1+1", "'=1+1", id="formula-equals"),
+    pytest.param("+=1", "'=1", id="plus-then-equals"),
+    pytest.param("-5", "'-5", id="minus"),
+    pytest.param("@x", "'@x", id="at"),
+    pytest.param("++5", "'+5", id="two-pluses-one-stripped"),
+    pytest.param("+", "", id="lone-plus"),
+]
+
+
+@pytest.mark.parametrize(("stored", "expected"), PHONE_CELLS)
+def test_export_phone_cell_table(stored: str | None, expected: str):
+    """Ячейка «Номер»: пусто, как есть или без «+»; формулы обезврежены (T-17-18).
+
+    Знак снимается ОДИН (`removeprefix`, а не `lstrip`: на `++5` они расходятся)
+    и ДО обезвреживания, поэтому `+=1` даёт `'=1`, а не `=1`.
+    """
+    assert export_phone_cell(stored) == expected
+
+
+@pytest.mark.parametrize(("stored", "expected"), PHONE_CELLS)
+def test_export_row_puts_the_phone_cell_after_the_account(
+    stored: str | None, expected: str
+):
+    """В строке ячейка стоит сразу после «Аккаунта» — по месту, не по значению."""
+    row = export_row(_log(), _group(account_id=42), _user(), phone=stored)
+
+    assert row[EXPORT_HEADER.index("Аккаунт")] == "42"
+    assert row[EXPORT_HEADER.index("Номер")] == expected
+
+
+def test_the_export_row_docstring_names_both_departures_from_d30():
+    """Отступления от «файл = экран» названы в докстринге строки (D-09, D-16).
+
+    Ни одно исполняемое правило не сравнивает ячейку с экраном, поэтому
+    отступления — без «+» и пусто вместо «Номер неизвестен» — не краснит ничто:
+    единственное место, где решения владельца записаны причинами, — докстринг.
+    """
+    doc = export_row.__doc__ or ""
+
+    for marker in ("D-09", "D-16"):
+        assert marker in doc, f"{marker} не назван в докстринге export_row"
+    assert "D-15" in doc, "запись без аккаунта (D-15) не названа в докстринге"
 
 
 def test_export_row_survives_an_empty_messenger():
@@ -263,7 +340,7 @@ def test_export_row_names_a_disconnected_account_status():
     """
     row = export_row(_log(status=STATUS_ACCOUNT_DISCONNECTED), _group(), _user())
 
-    assert row[5] == "Аккаунт отключён"
+    assert row[6] == "Аккаунт отключён"
 
 
 def test_export_row_keeps_an_unknown_status_visible():
@@ -275,7 +352,7 @@ def test_export_row_keeps_an_unknown_status_visible():
     """
     row = export_row(_log(status="quarantined"), _group(), _user())
 
-    assert row[5] == "quarantined"
+    assert row[6] == "quarantined"
 
 
 # =============================================================================
@@ -350,6 +427,21 @@ async def _seed_account_with_group(db: AsyncSession, user_id: int) -> Group:
         account_id=account.id,
         messenger_type="wa",
         group_external_id="-1005550001",
+        name="Чат покупателей",
+    )
+    db.add(group)
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+async def _seed_group_of(db: AsyncSession, user_id: int, account_id: int) -> Group:
+    """Группа УЖЕ посеянного аккаунта: аккаунт с номером сеет `seed_account`."""
+    group = Group(
+        user_id=user_id,
+        account_id=account_id,
+        messenger_type="tg",
+        group_external_id=f"-100{account_id}",
         name="Чат покупателей",
     )
     db.add(group)
@@ -473,7 +565,7 @@ async def test_export_honours_the_status_filter(
 
     rows = _data_rows(response)
     assert len(rows) == 2
-    assert {row[5] for row in rows} == {"Ошибка"}
+    assert {row[6] for row in rows} == {"Ошибка"}
 
 
 @pytest.mark.asyncio
@@ -538,6 +630,115 @@ async def test_export_carries_the_account_of_the_group(
     response = await authed_client.get("/history/export")
 
     assert _data_rows(response)[0][2] == str(group.account_id)
+
+
+@pytest.mark.asyncio
+async def test_export_carries_the_number_without_the_plus(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРАССЕР PHONE-07: номер аккаунта доезжает до ячейки «Номер» файла.
+
+    Колонка `phone` → карта номеров пользователя → `export_row` → ячейка под
+    заголовком «Номер», без ведущего «+» (D-09); идентификатор аккаунта — в
+    соседней колонке «Аккаунт», на прежнем месте.
+    """
+    user = await _current_user(db_session)
+    account_id = await seed_account(db_session, user.id, "tg_user", phone="+79991234567")
+    group = await _seed_group_of(db_session, user.id, account_id)
+    await _seed_logs(db_session, user.id, 1, group_id=group.id)
+
+    response = await authed_client.get("/history/export")
+
+    header, row = _csv_rows(response)[:2]
+    assert row[header.index("Номер")] == "7 999 123-45-67"
+    assert row[header.index("Аккаунт")] == str(account_id)
+
+
+@pytest.mark.asyncio
+async def test_export_leaves_the_number_cell_empty_for_an_account_without_one(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Аккаунт без номера — ПУСТАЯ ячейка, а не «Номер неизвестен» (D-16)."""
+    user = await _current_user(db_session)
+    account_id = await seed_account(db_session, user.id, "tg_user")
+    group = await _seed_group_of(db_session, user.id, account_id)
+    await _seed_logs(db_session, user.id, 1, group_id=group.id)
+
+    response = await authed_client.get("/history/export")
+
+    header, row = _csv_rows(response)[:2]
+    assert row[header.index("Аккаунт")] == str(account_id)
+    assert row[header.index("Номер")] == ""
+    assert "неизвестен" not in response.content.decode("utf-8-sig")
+
+
+@pytest.mark.asyncio
+async def test_export_does_not_add_the_twin_id_to_the_number_cell(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Два `wa`-двойника без номера: ячейки пусты, без `#` (D-16).
+
+    На экране у двойника рядом стоит `#id`; в файле идентификатор уже лежит в
+    соседней колонке «Аккаунт», а колонка номера остаётся данными.
+    """
+    user = await _current_user(db_session)
+    first = await seed_account(db_session, user.id, "wa")
+    second = await seed_account(db_session, user.id, "wa")
+    for account_id in (first, second):
+        group = await _seed_group_of(db_session, user.id, account_id)
+        await _seed_logs(db_session, user.id, 1, group_id=group.id)
+
+    response = await authed_client.get("/history/export")
+
+    header = _csv_rows(response)[0]
+    rows = _data_rows(response)
+    assert {row[header.index("Аккаунт")] for row in rows} == {str(first), str(second)}
+    assert [row[header.index("Номер")] for row in rows] == ["", ""]
+    assert "#" not in response.content.decode("utf-8-sig")
+
+
+@pytest.mark.asyncio
+async def test_export_leaves_account_and_number_empty_without_a_group(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Запись без группы (аккаунта уже нет): пусты и «Аккаунт», и «Номер» (D-15)."""
+    user = await _current_user(db_session)
+    # Номер у пользователя в карте есть — запись без группы его не получает.
+    await seed_account(db_session, user.id, "tg_user", phone="+79991234567")
+    await _seed_logs(db_session, user.id, 1, group_id=None)
+
+    response = await authed_client.get("/history/export")
+
+    header, row = _csv_rows(response)[:2]
+    assert row[header.index("Аккаунт")] == ""
+    assert row[header.index("Номер")] == ""
+
+
+@pytest.mark.asyncio
+async def test_export_never_carries_another_users_number(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Карта номеров — по пользователю: чужой номер в файл не попадает (T-17-19)."""
+    user = await _current_user(db_session)
+    other = await _seed_other_user(db_session)
+    own = await seed_account(db_session, user.id, "tg_user", phone="+79991234567")
+    foreign = await seed_account(db_session, other.id, "tg_user", phone="+77011234567")
+    await _seed_logs(
+        db_session, user.id, 1, group_id=(await _seed_group_of(db_session, user.id, own)).id
+    )
+    await _seed_logs(
+        db_session,
+        other.id,
+        3,
+        group_id=(await _seed_group_of(db_session, other.id, foreign)).id,
+    )
+
+    response = await authed_client.get("/history/export")
+
+    text = response.content.decode("utf-8-sig")
+    assert "7 999 123-45-67" in text
+    assert "7 701 123 4567" not in text
+    assert len(_data_rows(response)) == 1
 
 
 @pytest.mark.asyncio
