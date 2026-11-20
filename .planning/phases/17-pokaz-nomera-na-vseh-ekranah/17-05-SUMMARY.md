@@ -176,7 +176,7 @@ Plan-vs-measured: литерал `KeyError: '` совпал с планом (`Ke
 | `prohibitions_census.py --check` | exit 0, 953 строки | exit 0, 953 строки |
 | `compileall -q app main.py tests` | rc 0 | rc 0 |
 | Модули, рисующие воркеры / очередь / карточку пользователя (`test_admin`, `test_queue_rows`, `test_blocked_user`, `test_confirm_delete_transport`, `test_history_retry`, `test_hx_location_destinations`, `test_identifier_bounds`, `test_impersonation`, `test_notices_channel`, `test_shell`, `test_responsive_markup`) | — | **704 passed** |
-| `tests/test_planning` | 218 passed, 2 skipped | см. конец сводки |
+| `tests/test_planning` (после коммита сводки) | 218 passed, 2 skipped | **218 passed, 2 skipped** |
 
 Приёмочные greps: `mono('#' ~ account.id)` в `worker_row.html` = 0 (было 2), в `queue_row.html` = 0 (было 1); `account_id_mark(account.id)` в `worker_row.html` = 2; `Аккаунт #{{` в `queue.html` = 0; `acc.type }} #{{` в `user_detail.html` = 0; `account_id_mark` в `queue.html` = 2, в `user_detail.html` = 2. Объявленные числа гейтов не сдвинуты (прогоны зелёные).
 
