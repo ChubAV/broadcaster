@@ -11,9 +11,9 @@
 Незнакомый тип остаётся как есть, как в CSV истории.
 
 РАЗМЕТКУ МОДУЛЬ НЕ ОТДАЁТ. Хранимый номер — недоверенная строка («как есть» у
-неразбираемого, D-07), а готовая разметка из Python — это `markupsafe.Markup`,
-закрытый правилами `MARKUP_BUILDERS = 0` и `UNSAFE_MARKERS`. Поэтому модуль
-отдаёт ДАННЫЕ (`AccountLabel`) и плоские строки (`plain`, `plain_with_id`), а
+неразбираемого, D-07), а готовая разметка из Python — это объект «доверенной
+разметки» шаблонизатора, закрытый правилами `MARKUP_BUILDERS = 0` и
+`UNSAFE_MARKERS`. Поэтому модуль отдаёт ДАННЫЕ (`AccountLabel`) и плоские строки (`plain`, `plain_with_id`), а
 `<span data-account-label>` рисует макрос `components/account_label.html`
 автоэкранированием Jinja.
 
@@ -66,7 +66,8 @@ class AccountLabel:
 
     @property
     def plain_with_id(self) -> str:
-        return ""
+        """Плоская форма админки: `#id` — всегда, независимо от двойников (D-17)."""
+        return f"{self.channel} {self.text} {id_mark(self.account_id)}"
 
 
 def id_mark(account_id: int) -> str:
@@ -75,7 +76,29 @@ def id_mark(account_id: int) -> str:
 
 
 def shown_phone(stored: str | None) -> str | None:
-    return None if stored is None else format_phone(stored)
+    """Хранимый номер → текст для показа; `None` — «Номер неизвестен» (D-02, D-07).
+
+    `None`, пустая и пробельная строка отсекаются ДО `format_phone`:
+    `format_phone(None)` вернул бы `None`, а `format_phone("")` — пустую подпись.
+    Это закрывает «заботу Фазы 17» из докстринга `app/services/phone.format_phone`.
+    Сохранённое, но неразбираемое значение `format_phone` возвращает как есть, и
+    здесь оно как есть и остаётся: спрятать его под «неизвестен» значило бы
+    солгать о состоянии аккаунта.
+    """
+    if stored is None or not stored.strip():
+        return None
+    return format_phone(stored)
+
+
+def _twin_key(row_type: str, shown: str | None) -> tuple[str, str | None]:
+    """Ключ двойника: тип аккаунта и ГОТОВАЯ подпись (D-14).
+
+    Тип входит в ключ: один номер законно живёт в Telegram, WhatsApp и MAX
+    сразу, и такие аккаунты двойниками не считаются. Подпись берётся после
+    `shown_phone`, поэтому `+79991234567` и `+7 999 123-45-67` — один ключ, а
+    `None` и `""` — тоже.
+    """
+    return (row_type, shown)
 
 
 def row_of(account: object) -> AccountRow:
@@ -84,19 +107,31 @@ def row_of(account: object) -> AccountRow:
 
 
 def label_of(subject: AccountRow, rows: Iterable[AccountRow]) -> AccountLabel:
-    return AccountLabel(subject.id, MESSENGER_LABELS.get(subject.type, subject.type), None, False)
+    """Подпись одного аккаунта среди `rows` — тот же результат, что у `build_labels`.
+
+    Двойник — строка с ИНЫМ `id` и тем же ключом; `rows` может содержать сам
+    `subject` или не содержать его. Без соседей (`rows` пуст) двойника нет —
+    так подпись админки считает один объект (`phone_label`).
+    """
+    shown = shown_phone(subject.phone)
+    key = _twin_key(subject.type, shown)
+    twin = any(
+        other.id != subject.id and _twin_key(other.type, shown_phone(other.phone)) == key
+        for other in rows
+    )
+    return AccountLabel(subject.id, MESSENGER_LABELS.get(subject.type, subject.type), shown, twin)
 
 
 def build_labels(rows: Iterable[AccountRow]) -> dict[int, AccountLabel]:
     """Подписи ВСЕХ аккаунтов одного пользователя: двойник — совпала готовая подпись."""
     drafts = [(row.id, row.type, shown_phone(row.phone)) for row in rows]
-    counts = Counter((type_, shown) for _id, type_, shown in drafts)
+    counts = Counter(_twin_key(type_, shown) for _id, type_, shown in drafts)
     return {
         account_id: AccountLabel(
             account_id,
             MESSENGER_LABELS.get(type_, type_),
             shown,
-            counts[(type_, shown)] > 1,
+            counts[_twin_key(type_, shown)] > 1,
         )
         for account_id, type_, shown in drafts
     }

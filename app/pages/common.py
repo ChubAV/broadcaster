@@ -27,7 +27,7 @@ from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages.notices import notice_for
-from app.services.account_label import labels_for
+from app.services.account_label import AccountLabel, label_of, labels_for, row_of
 from app.services.auth_service import actor_id as token_actor_id, decode_access_token
 from app.services.image_keys import THUMB_KEY_PREFIX, media_dom_id, thumb_key
 from app.services.image_upload import UPLOAD_FILE_FIELD
@@ -337,6 +337,18 @@ templates.env.globals["messenger_labels"] = MESSENGER_LABELS
 # (`MARKUP_BUILDERS = 0`): глобал возвращает данные, `<span>` рисует макрос
 # `components/account_label.html`.
 templates.env.globals["phone_labels"] = labels_for
+
+# Подпись ОДНОГО объекта без признака двойника — глобал для экранов, где `#id`
+# печатается всегда отдельным элементом (админка, D-17): там различитель не
+# нужен, а соседей по пользователю страница не загружает. Экраны пользователя
+# берут `phone_labels` по ПОЛНОМУ набору аккаунтов пользователя или словарь,
+# который собрал обработчик: подпись одного объекта у них показала бы двойника
+# без `#id` (D-03). Сессии БД глобал не трогает.
+def _phone_label(account: object) -> AccountLabel:
+    return label_of(row_of(account), ())
+
+
+templates.env.globals["phone_label"] = _phone_label
 
 
 # Состав навигации по D-11. Список выписан ОДИН раз и используется и в
