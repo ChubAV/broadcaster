@@ -122,3 +122,63 @@ async def test_the_delete_modal_names_the_account_by_its_plain_label(
     assert element_text(html, f"acc-del-{second_twin}-text") == f"WhatsApp {UNKNOWN_TEXT} #{second_twin}", (
         "без #id двойники в модалке удаления неразличимы — удалят не тот аккаунт"
     )
+
+
+# --- Порция подгрузки /accounts/partial --------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_partial_batch_shows_the_number_at_its_address(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """PHONE-03: подгруженная карточка подписана номером по тому же адресу, что и страница."""
+    await seed_account(db_session, owner.id, "tg_user", phone="+79001112233")
+    middle = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567")
+    await seed_account(db_session, owner.id, "max", phone="+79005556677")
+
+    html = (await authed_client.get("/accounts/partial?offset=1&limit=1")).text
+    labels = label_texts(html)
+
+    assert labels[str(middle)] == [NUMBER_TEXT], "порция несёт номер второго аккаунта по адресу"
+    assert list(labels) == [str(middle)], "порция offset=1&limit=1 несёт ровно одну подпись"
+
+
+@pytest.mark.asyncio
+async def test_a_twin_split_across_the_page_and_the_batch_is_marked_in_both(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-14: двойник по ту сторону границы страницы из 30 помечен там и здесь.
+
+    Первый `wa` без номера лежит на странице, последний — за её границей (на
+    31-м месте), в порции. Признак считается по ВСЕМ аккаунтам пользователя:
+    будь он по странице или по порции, каждый из двух видел бы только себя и
+    остался бы без `#id`.
+    """
+    first = await seed_account(db_session, owner.id, "wa")
+    for _ in range(29):
+        await seed_account(db_session, owner.id, "max")
+    last = await seed_account(db_session, owner.id, "wa")
+
+    page = label_texts((await authed_client.get("/accounts")).text)
+    batch = label_texts((await authed_client.get("/accounts/partial?offset=30&limit=5")).text)
+
+    assert str(last) not in page, "последний аккаунт лежит за границей страницы из 30"
+    assert page[str(first)] == [f"{UNKNOWN_TEXT} #{first}"], "двойник на странице несёт #id"
+    assert batch[str(last)] == [f"{UNKNOWN_TEXT} #{last}"], "двойник в порции несёт #id"
+
+
+@pytest.mark.asyncio
+async def test_the_batch_delete_modal_carries_the_plain_label(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-13: модалка удаления подгруженной карточки называет аккаунт плоской подписью."""
+    await seed_account(db_session, owner.id, "max")
+    numbered = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567")
+    twin = await seed_account(db_session, owner.id, "wa")
+    other_twin = await seed_account(db_session, owner.id, "wa")
+
+    html = (await authed_client.get("/accounts/partial?offset=1&limit=5")).text
+
+    assert element_text(html, f"acc-del-{numbered}-text") == f"Telegram {NUMBER_TEXT}"
+    assert element_text(html, f"acc-del-{twin}-text") == f"WhatsApp {UNKNOWN_TEXT} #{twin}"
+    assert element_text(html, f"acc-del-{other_twin}-text") == f"WhatsApp {UNKNOWN_TEXT} #{other_twin}"
