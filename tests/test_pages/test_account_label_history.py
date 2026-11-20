@@ -25,6 +25,7 @@ from app.models.user import User
 from tests.account_label_support import (
     label_texts,
     muted_label_ids,
+    option_texts,
     seed_account,
 )
 from tests.conftest import seed_group
@@ -204,3 +205,54 @@ async def test_the_batch_reads_accounts_once(
         s for s in statements if s.lstrip().upper().split(None, 1)[0] in {"INSERT", "UPDATE", "DELETE"}
     ]
     assert not writes, f"порция истории ничего не пишет: {writes}"
+
+
+# --- фильтр «Аккаунт» ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_history_filter_option_carries_the_plain_label(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-11: `<option>` называет аккаунт плоской строкой, а не сырым `tg_user #5`."""
+    user_id = await _current_user_id(db_session)
+    with_number = await seed_account(db_session, user_id, "tg_user", phone="+79991234567")
+    without_number = await seed_account(db_session, user_id, "wa")
+
+    html = (await authed_client.get("/history")).text
+
+    options = option_texts(html, "account_id")
+    assert options[str(with_number)] == "Telegram +7 999 123-45-67"
+    assert options[str(without_number)] == "WhatsApp Номер неизвестен"
+    assert options[""] == "Все аккаунты"
+    assert len(options) == 3
+
+
+@pytest.mark.asyncio
+async def test_twin_filter_options_carry_the_id(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-12: без `#id` двойники в фильтре неразличимы — ради них и введён PHONE-05."""
+    user_id = await _current_user_id(db_session)
+    first = await seed_account(db_session, user_id, "wa")
+    second = await seed_account(db_session, user_id, "wa")
+
+    options = option_texts((await authed_client.get("/history")).text, "account_id")
+
+    assert options[str(first)] == f"WhatsApp Номер неизвестен #{first}"
+    assert options[str(second)] == f"WhatsApp Номер неизвестен #{second}"
+
+
+@pytest.mark.asyncio
+async def test_a_hostile_stored_value_is_escaped_in_the_option(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-17-13: сохранённый номер — недоверенная строка; в `<option>` он только экранируется."""
+    hostile = '"><script>alert(1)</script>'
+    user_id = await _current_user_id(db_session)
+    account_id = await seed_account(db_session, user_id, "tg_user", stored_as_is=hostile)
+
+    response = await authed_client.get("/history")
+
+    assert "<script>alert(1)" not in response.text
+    assert option_texts(response.text, "account_id")[str(account_id)] == "Telegram " + hostile
