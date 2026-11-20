@@ -30,6 +30,7 @@ from app.models.send_log import SendLog
 from app.models.subscription import Subscription
 from app.models.user import User
 from app.pages.common import templates
+from tests.account_label_support import label_texts
 from tests.conftest import a_future_run_moment
 
 TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "app" / "templates"
@@ -1087,9 +1088,12 @@ async def test_accounts_card_renders_data(
     """Строка аккаунта отрисовывает РЕАЛЬНЫЕ данные, а не пустоту.
 
     У аккаунта нет поля с именем: его «имя» на экране — это канал и номер,
-    то есть подпись мессенджера и идентификатор. Если разметка потеряет данные
+    то есть подпись мессенджера и подпись номера. Если разметка потеряет данные
     аккаунта, страница всё равно вернёт 200 — поэтому утверждения идут по
     содержимому, а не по статусу.
+
+    Подпись номера находится по адресу `data-account-label` (Фаза 17, D-20):
+    подстрока по странице засчитала бы подпись не тому элементу.
     """
     account = await _seed_account(db_session, type_="max")
 
@@ -1097,7 +1101,9 @@ async def test_accounts_card_renders_data(
     assert response.status_code == 200
     html = response.text
     assert "MAX" in html, "подпись канала не отрисована"
-    assert f"#{account.id}" in html, "идентификатор аккаунта не отрисован"
+    assert label_texts(html)[str(account.id)] == ["Номер неизвестен"], (
+        "подпись аккаунта по адресу data-account-label не отрисована"
+    )
     assert f"/accounts/{account.id}/delete" in html, "действие удаления потеряно"
 
 
