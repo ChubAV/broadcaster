@@ -40,6 +40,7 @@ from app.pages.history import (
     export_cell,
     export_row,
 )
+from tests.account_label_support import seed_account
 
 HISTORY_PY = Path(__file__).resolve().parents[2] / "app" / "pages" / "history.py"
 
@@ -85,9 +86,17 @@ def _group(account_id: int = 42) -> Group:
 # --- Шапка файла --------------------------------------------------------------
 
 
-def test_export_header_has_eight_columns():
-    """Восемь колонок из D-28 — ни одной сверх и ни одной вместо."""
-    assert len(EXPORT_HEADER) == 8, EXPORT_HEADER
+def test_export_header_has_nine_columns():
+    """Восемь колонок из D-28 и «Номер» (PHONE-07) — ни одной сверх и ни одной вместо.
+
+    «Номер» стоит сразу после «Аккаунт»: колонка идентификатора остаётся на
+    своём месте (индекс 2), внешние таблицы пользователя читают её по номеру
+    (D-05). Сдвигаются только колонки правее «Номера» — «Статус» с пятой
+    позиции на шестую.
+    """
+    assert len(EXPORT_HEADER) == 9, EXPORT_HEADER
+    assert EXPORT_HEADER[2] == "Аккаунт", EXPORT_HEADER
+    assert EXPORT_HEADER[3] == "Номер", EXPORT_HEADER
 
 
 def test_export_header_carries_no_ad_body_column():
@@ -263,7 +272,7 @@ def test_export_row_names_a_disconnected_account_status():
     """
     row = export_row(_log(status=STATUS_ACCOUNT_DISCONNECTED), _group(), _user())
 
-    assert row[5] == "Аккаунт отключён"
+    assert row[6] == "Аккаунт отключён"
 
 
 def test_export_row_keeps_an_unknown_status_visible():
@@ -275,7 +284,7 @@ def test_export_row_keeps_an_unknown_status_visible():
     """
     row = export_row(_log(status="quarantined"), _group(), _user())
 
-    assert row[5] == "quarantined"
+    assert row[6] == "quarantined"
 
 
 # =============================================================================
@@ -350,6 +359,21 @@ async def _seed_account_with_group(db: AsyncSession, user_id: int) -> Group:
         account_id=account.id,
         messenger_type="wa",
         group_external_id="-1005550001",
+        name="Чат покупателей",
+    )
+    db.add(group)
+    await db.commit()
+    await db.refresh(group)
+    return group
+
+
+async def _seed_group_of(db: AsyncSession, user_id: int, account_id: int) -> Group:
+    """Группа УЖЕ посеянного аккаунта: аккаунт с номером сеет `seed_account`."""
+    group = Group(
+        user_id=user_id,
+        account_id=account_id,
+        messenger_type="tg",
+        group_external_id=f"-100{account_id}",
         name="Чат покупателей",
     )
     db.add(group)
@@ -473,7 +497,7 @@ async def test_export_honours_the_status_filter(
 
     rows = _data_rows(response)
     assert len(rows) == 2
-    assert {row[5] for row in rows} == {"Ошибка"}
+    assert {row[6] for row in rows} == {"Ошибка"}
 
 
 @pytest.mark.asyncio
@@ -538,6 +562,28 @@ async def test_export_carries_the_account_of_the_group(
     response = await authed_client.get("/history/export")
 
     assert _data_rows(response)[0][2] == str(group.account_id)
+
+
+@pytest.mark.asyncio
+async def test_export_carries_the_number_without_the_plus(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРАССЕР PHONE-07: номер аккаунта доезжает до ячейки «Номер» файла.
+
+    Колонка `phone` → карта номеров пользователя → `export_row` → ячейка под
+    заголовком «Номер», без ведущего «+» (D-09); идентификатор аккаунта — в
+    соседней колонке «Аккаунт», на прежнем месте.
+    """
+    user = await _current_user(db_session)
+    account_id = await seed_account(db_session, user.id, "tg_user", phone="+79991234567")
+    group = await _seed_group_of(db_session, user.id, account_id)
+    await _seed_logs(db_session, user.id, 1, group_id=group.id)
+
+    response = await authed_client.get("/history/export")
+
+    header, row = _csv_rows(response)[:2]
+    assert row[header.index("Номер")] == "7 999 123-45-67"
+    assert row[header.index("Аккаунт")] == str(account_id)
 
 
 @pytest.mark.asyncio

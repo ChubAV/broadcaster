@@ -202,6 +202,7 @@ EXPORT_HEADER = (
     "Время",
     "Канал",
     "Аккаунт",
+    "Номер",
     "Группа",
     "Заголовок объявления",
     "Статус",
@@ -289,7 +290,18 @@ def export_cell(value: object) -> str:
     return text
 
 
-def export_row(log: SendLog, group: Group | None, user: User | None) -> list[str]:
+def export_phone_cell(stored: str | None) -> str:
+    """Ячейка «Номер» файла выгрузки (заготовка RED плана 17-06)."""
+    return ""
+
+
+def export_row(
+    log: SendLog,
+    group: Group | None,
+    user: User | None,
+    *,
+    phone: str | None = None,
+) -> list[str]:
     """Строка файла выгрузки для одной записи журнала — ровно по `EXPORT_HEADER`.
 
     ФУНКЦИЯ ЧИСТАЯ: в базу не ходит, `Request` не читает. Всё, что ей нужно,
@@ -315,6 +327,7 @@ def export_row(log: SendLog, group: Group | None, user: User | None) -> list[str
         export_cell(format_datetime_for_user(log.sent_at, user)),
         export_cell(MESSENGER_LABELS.get(log.messenger_type, log.messenger_type)),
         export_cell(group.account_id if group else None),
+        export_phone_cell(phone) if group else "",
         export_cell(log.group_name),
         export_cell(log.ad_title),
         export_cell(STATUS_LABELS.get(log.status, log.status)),
