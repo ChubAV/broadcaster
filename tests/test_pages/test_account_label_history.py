@@ -106,3 +106,101 @@ async def test_a_twin_history_card_carries_the_id(
     html = (await authed_client.get("/history")).text
 
     assert label_texts(html)[str(first)] == [f"Номер неизвестен #{first}"]
+
+
+# --- порция прокрутки `/history/partial` ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_history_batch_shows_the_number_at_its_address(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """Порция подписана так же, как страница: фрагмент строит карту отдельно."""
+    user_id = await _current_user_id(db_session)
+    account_id = await seed_account(db_session, user_id, "tg_user", phone="+79991234567")
+    group = await seed_group(db_session, account_id, user_id)
+    await _seed_log(db_session, user_id, group.id)
+
+    response = await authed_client.get("/history/partial?offset=0&limit=5")
+
+    assert response.status_code == 200
+    assert label_texts(response.text)[str(account_id)] == ["+7 999 123-45-67"]
+
+
+@pytest.mark.asyncio
+async def test_the_batch_twin_flag_matches_the_accounts_screen(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-14: признак двойника считается по ВСЕМ аккаунтам, а не по записям порции.
+
+    Второй аккаунт в порцию не попал — записи на нём нет, — но подпись первого
+    несёт `#id`, ровно как на экране «Аккаунты», где тот же `build_labels`
+    считает по списку аккаунтов пользователя.
+    """
+    from app.application.accounts.labels import load_account_rows
+    from app.services.account_label import build_labels
+
+    user_id = await _current_user_id(db_session)
+    first = await seed_account(db_session, user_id, "wa")
+    second = await seed_account(db_session, user_id, "wa")
+    group = await seed_group(db_session, first, user_id)
+    await _seed_log(db_session, user_id, group.id)
+
+    html = (await authed_client.get("/history/partial?offset=0&limit=5")).text
+
+    rule = build_labels(await load_account_rows(db_session, user_id))
+    assert rule[first].twin and rule[second].twin
+    assert label_texts(html)[str(first)] == [f"Номер неизвестен #{first}"]
+    assert str(second) not in label_texts(html), "записи на втором аккаунте нет"
+
+
+@pytest.mark.asyncio
+async def test_a_record_without_a_group_carries_no_account_label(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-15: у записи без группы нет и аккаунта — «Номер неизвестен» ей не приписывается."""
+    user_id = await _current_user_id(db_session)
+    await seed_account(db_session, user_id, "wa")  # живой аккаунт без номера рядом
+    await _seed_log(db_session, user_id, None, name="Группа удалена")
+
+    response = await authed_client.get("/history/partial?offset=0&limit=5")
+
+    assert response.status_code == 200
+    assert 'id="history-row-' in response.text, "запись на месте"
+    assert "data-account-label" not in response.text
+    assert "Номер неизвестен" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_the_batch_reads_accounts_once(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-18: карта аккаунтов на порцию — ОДИН запрос с проекцией `phone`, без записи."""
+    from sqlalchemy import event
+
+    user_id = await _current_user_id(db_session)
+    account_id = await seed_account(db_session, user_id, "tg_user", phone="+79991234567")
+    group = await seed_group(db_session, account_id, user_id)
+    for _ in range(5):
+        await _seed_log(db_session, user_id, group.id)
+
+    statements: list[str] = []
+    sync_engine = db_session.bind.sync_engine
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        response = await authed_client.get("/history/partial?offset=0&limit=5")
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+
+    assert response.status_code == 200
+    assert response.text.count('data-account-label="') == 5, "пять записей — пять подписей"
+    with_phone = [s for s in statements if "messenger_accounts.phone" in s]
+    assert len(with_phone) == 1, f"карта номеров прочитана {len(with_phone)} раз, ожидался один запрос"
+    writes = [
+        s for s in statements if s.lstrip().upper().split(None, 1)[0] in {"INSERT", "UPDATE", "DELETE"}
+    ]
+    assert not writes, f"порция истории ничего не пишет: {writes}"
