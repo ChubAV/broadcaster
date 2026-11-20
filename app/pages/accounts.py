@@ -161,6 +161,10 @@ async def accounts_partial(
     account_stats = await _get_account_stats(
         db, user.id, [a.id for a in accounts]
     )
+    # Тот же ключ и та же карта, что у `accounts_list` (Фаза 17, D-14): порция видит
+    # только свои аккаунты, а признак двойника у неё обязан быть тем же, что на
+    # странице, поэтому карта строится по ВСЕМ аккаунтам пользователя.
+    acct_labels = build_labels(await load_account_rows(db, user.id))
     return templates.TemplateResponse(
         "accounts/partial_cards.html",
         {
@@ -168,6 +172,7 @@ async def accounts_partial(
             "user": user,
             "accounts": accounts,
             "account_stats": account_stats,
+            "acct_labels": acct_labels,
             "has_next": has_next,
             "next_offset": offset + limit,
             # ЛЕТОПИСЬ (DEF-09-03). План 15-09: литерал `limit=30` в разметке заменён
