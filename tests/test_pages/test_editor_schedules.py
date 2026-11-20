@@ -21,6 +21,7 @@ tests/test_pages/test_editor_schedules.py -q` завершается с кодо
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 
 import re
 from pathlib import Path
@@ -42,6 +43,7 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from tests.account_label_support import label_texts, muted_label_ids, seed_account
 from tests.conftest import a_future_run_moment
 from tests.test_schedules_out_of_domain_resume import (
     LEGAL_STORED_FORM,
@@ -1333,11 +1335,153 @@ async def test_editor_card_renders_data(
 
     html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
 
-    assert f"Telegram #{account.id}" in html, "подпись аккаунта не отрисована"
+    # Подпись аккаунта — по АДРЕСУ элемента, а не подстрокой по всей странице
+    # (D-06, D-20): у аккаунта без номера в чипе стоит «Номер неизвестен».
+    assert "Telegram Номер неизвестен" in label_texts(html)[str(account.id)], (
+        "подпись аккаунта не отрисована по адресу data-account-label"
+    )
     assert "09:30" in html and "18:45" in html, "времена не отрисованы"
     assert "Уникальная группа карточки" in html, "имя группы не отрисовано"
     assert f"/schedules/{schedule.id}/edit" in html
     assert f"/schedules/{schedule.id}/toggle" in html
+
+
+async def _editor_html(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, schedule_account: int
+) -> tuple[str, int]:
+    """Редактор с развёрнутой карточкой расписания на указанном аккаунте."""
+    ad = await _seed_ad(db_session, owner.id)
+    schedule = await _seed_schedule(db_session, ad.id, schedule_account)
+    html = (await authed_client.get(f"/ads/{ad.id}/edit?sched={schedule.id}")).text
+    return html, schedule.id
+
+
+@pytest.mark.asyncio
+async def test_the_account_chip_shows_the_number_at_its_address(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """ТРАССЕР (PHONE-03): номер из колонки `phone` доезжает до чипа аккаунта.
+
+    Путь от колонки до экрана — писатель Фазы 16, правило подписи, глобал,
+    макрос компонента — проверяется одним адресом `data-account-label`.
+    """
+    account_id = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567")
+
+    html, _schedule_id = await _editor_html(authed_client, db_session, owner, account_id)
+
+    assert "Telegram +7 999 123-45-67" in label_texts(html)[str(account_id)], (
+        "чип аккаунта должен показывать «{Мессенджер} {номер}» по адресу data-account-label"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_account_without_a_number_reads_as_unknown_on_the_chip(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """PHONE-04: аккаунт без номера — приглушённое «Номер неизвестен»."""
+    account_id = await seed_account(db_session, owner.id, "wa")
+
+    html, _schedule_id = await _editor_html(authed_client, db_session, owner, account_id)
+
+    assert label_texts(html)[str(account_id)] == ["WhatsApp Номер неизвестен"], (
+        "у аккаунта без номера подпись чипа — «WhatsApp Номер неизвестен» без #id"
+    )
+    assert str(account_id) in muted_label_ids(html), (
+        "«Номер неизвестен» должен быть приглушён (mono--muted)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_twin_chips_carry_a_muted_id(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """PHONE-05: у двойников (две подписи совпали) рядом с подписью виден `#id`."""
+    first = await seed_account(db_session, owner.id, "wa")
+    second = await seed_account(db_session, owner.id, "wa")
+    unique = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567")
+
+    html, _schedule_id = await _editor_html(authed_client, db_session, owner, first)
+    labels = label_texts(html)
+
+    assert labels[str(first)] == [f"WhatsApp Номер неизвестен #{first}"], (
+        "двойник «без номера» несёт приглушённый #id"
+    )
+    assert labels[str(second)] == [f"WhatsApp Номер неизвестен #{second}"], (
+        "второй двойник тоже несёт #id"
+    )
+    assert "#" not in labels[str(unique)][0], "у уникальной подписи #id быть не должно"
+
+
+class _SummaryTitles(HTMLParser):
+    """Значения `title=` у потомков `.sched-card__sum` — сводка шапки карточки."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.titles: list[str] = []
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        a = dict(attrs)
+        if self._depth:
+            self._depth += 1
+            if a.get("title"):
+                self.titles.append(a["title"])
+        elif "sched-card__sum" in (a.get("class") or "").split():
+            self._depth = 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._depth:
+            self._depth -= 1
+
+
+class _ChipTitles(HTMLParser):
+    """Значения `title=` у `<label class="chip">`, внутри которых стоит подпись аккаунта."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.by_account: dict[str, str] = {}
+        self._chip_title: str | None = None
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        a = dict(attrs)
+        if self._chip_title is not None:
+            self._depth += 1
+            if "data-account-label" in a:
+                self.by_account[a["data-account-label"] or ""] = self._chip_title
+        elif tag == "label" and "chip" in (a.get("class") or "").split():
+            self._chip_title = a.get("title") or ""
+            self._depth = 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._chip_title is not None:
+            self._depth -= 1
+            if self._depth == 0:
+                self._chip_title = None
+
+
+@pytest.mark.asyncio
+async def test_the_chip_title_and_the_panel_text_carry_the_plain_label(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-12: `title=` чипа и сводка карточки несут плоскую форму подписи (у двойника — с #id)."""
+    twin = await seed_account(db_session, owner.id, "wa")
+    other = await seed_account(db_session, owner.id, "wa")
+    del other
+
+    html, _schedule_id = await _editor_html(authed_client, db_session, owner, twin)
+    plain = f"WhatsApp Номер неизвестен #{twin}"
+
+    chip_titles = _ChipTitles()
+    chip_titles.feed(html)
+    assert chip_titles.by_account.get(str(twin)) == plain, (
+        "title= чипа должен быть плоской формой подписи (у двойника — с #id)"
+    )
+    summary = _SummaryTitles()
+    summary.feed(html)
+    assert any(plain in title for title in summary.titles), (
+        "сводка карточки (sched-card__sum) должна нести плоскую подпись аккаунта"
+    )
 
 
 @pytest.mark.asyncio

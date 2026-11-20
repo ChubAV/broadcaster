@@ -1,0 +1,37 @@
+{# Подпись аккаунта (Фаза 17, D-02, D-03, D-06): «{Мессенджер} {номер}» или
+   приглушённое «Номер неизвестен», у двойника — приглушённый #id рядом.
+   Импорт: {% from "components/account_label.html" import account_label, account_id_mark %}
+
+   ДАННЫЕ ПРИХОДЯТ ГОТОВЫЕ: `label` — это `AccountLabel` из
+   `app/services/account_label.py`, который шаблон получает глобалом
+   `phone_labels(accounts)` или словарём обработчика. Правило подписи здесь не
+   повторяется, а разметка из Python не отдаётся (`MARKUP_BUILDERS = 0`).
+
+   АДРЕС. Внешний элемент несёт `data-account-label="<id>"`, и тесты находят
+   подпись по нему, а не подстрокой по странице (`#1` входит в `#10`).
+
+   ТОЛЬКО `<span>`. Строку воркера админки тест режет по первому `</div>`
+   (`_row_markup` в test_admin_panel.py), поэтому макрос в неё не вносит ни
+   одного блочного элемента.
+
+   ПОДПИСЬ — НЕДОВЕРЕННАЯ СТРОКА (неразбираемый номер показывается как есть,
+   D-07): печатается только автоэкранированием Jinja и в атрибуты `x-*` / `hx-*`
+   не кладётся. #}
+
+{#- Знак и идентификатор аккаунта — РАЗМЕТОЧНАЯ половина помощника: единственное
+    место печати этого знака в шаблонах. Плоская половина — `id_mark` в
+    app/services/account_label.py. -#}
+{% macro account_id_mark(account_id) -%}
+<span class="acct-label__id mono mono--muted" data-account-id="{{ account_id }}">#{{ account_id }}</span>
+{%- endmacro %}
+
+{#- show_channel: имя мессенджера перед номером — там, где рядом нет отдельного
+    значка канала (чип расписания, D-10). with_twin_id: `#id` двойника (D-03);
+    админка печатает `#id` отдельно и всегда, поэтому там он здесь отключён. -#}
+{% macro account_label(label, show_channel=false, with_twin_id=true) -%}
+<span class="acct-label" data-account-label="{{ label.account_id }}">
+{%- if show_channel %}<span class="acct-label__chan">{{ label.channel }}</span> {% endif -%}
+<span class="acct-label__text mono {{ 'mono--muted' if label.phone_text is none else 'mono--bright' }}">{{ label.text }}</span>
+{%- if with_twin_id and label.twin %} {{ account_id_mark(label.account_id) }}{% endif -%}
+</span>
+{%- endmacro %}
