@@ -3189,7 +3189,9 @@ def test_template_inventory():
     # (план 09-01): одно место, раздающее свойства качества сорока семи формам
     # вехи вместо сорока семи собранных на месте копий.
     components = sorted((TEMPLATES_DIR / "components").glob("*.html"))
-    assert len(components) == 16, [p.name for p in components]
+    # Плюс семнадцатый — account_label.html (план 17-01: один макрос подписи аккаунта
+    # для всех экранов фазы 17); до 2026-11-20 здесь стояло 16.
+    assert len(components) == 17, [p.name for p in components]
 
     # Два шелла проекта: основной и auth
     assert (TEMPLATES_DIR / "base.html").exists()
