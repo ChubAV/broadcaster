@@ -79,15 +79,37 @@ _UNREAD_TAGS = frozenset({"script", "style"})
 class Address:
     """Объявленный адрес: элемент, внутри которого идентификатор законен.
 
-    `applies(tag, attrs)` — предикат одного элемента; вхождение законно, если ему
+    `applies(tag, attrs)` — предикат одного элемента; адрес применим, если ему
     удовлетворяет сам элемент (для атрибута — его владелец) или любой из его
     открытых предков. Адрес — элемент подписи или плоский приёмник того же
     аккаунта, не контейнер шире подписи (T-17-26).
+
+    Два рода адреса:
+
+    * ЦЕЛЫЙ (`plains is None`) — элемент подписи или знака аккаунта: всё, что
+      внутри, законно (канал, номер, `#id`).
+    * ПЛОСКИЙ ПРИЁМНИК (`plains` — плоские подписи ЭТОГО аккаунта) — `<option>`,
+      `<title>`, тело модалки, `title=`, сводка расписания: туда подпись
+      приезжает строкой, и вхождение законно, только если ВСЕ его места лежат
+      внутри такой подписи. Остаток текста вокруг подписи проход судит как
+      обычный текст, поэтому приёмник не оправдывает чужой «Акк 7312».
+
+    `kinds` — какие вхождения адрес оправдывает: `"text"` (текстовый узел) и/или
+    имя атрибута; `None` — любые.
     """
 
-    def __init__(self, name: str, applies) -> None:
+    def __init__(
+        self,
+        name: str,
+        applies,
+        *,
+        plains: tuple[str, ...] | None = None,
+        kinds: tuple[str, ...] | None = None,
+    ) -> None:
         self.name = name
         self.applies = applies
+        self.plains = plains
+        self.kinds = kinds
 
 
 def _id_pattern(account_id: int) -> re.Pattern[str]:
@@ -105,8 +127,21 @@ class _IdSweep(HTMLParser):
         self.stack: list[tuple[str, dict[str, str]]] = []
         self.found: list[str] = []
 
-    def _covered(self, chain: list[tuple[str, dict[str, str]]]) -> bool:
-        return any(a.applies(tag, attrs) for a in self.declared for tag, attrs in chain)
+    def _covered(self, chain: list[tuple[str, dict[str, str]]], kind: str, value: str) -> bool:
+        for address in self.declared:
+            if address.kinds is not None and kind not in address.kinds:
+                continue
+            if not any(address.applies(tag, attrs) for tag, attrs in chain):
+                continue
+            if address.plains is None:
+                return True
+            # Плоский приёмник: вырезать плоские подписи — идентификатора остаться не должно.
+            rest = value
+            for plain in sorted(address.plains, key=len, reverse=True):
+                rest = rest.replace(plain, "")
+            if not self.pattern.search(rest):
+                return True
+        return False
 
     def _report(self, chain: list[tuple[str, dict[str, str]]], where: str, value: str) -> None:
         path = ">".join(tag for tag, _attrs in chain)
@@ -117,7 +152,7 @@ class _IdSweep(HTMLParser):
         chain = [*self.stack, (tag, a)]
         for attr in TEXT_ATTRIBUTES:
             value = a.get(attr)
-            if value and self.pattern.search(value) and not self._covered(chain):
+            if value and self.pattern.search(value) and not self._covered(chain, attr, value):
                 self._report(chain, f"@{attr}", value)
         if tag not in _VOID_TAGS:
             self.stack.append((tag, a))
@@ -127,7 +162,7 @@ class _IdSweep(HTMLParser):
             return
         if any(tag in _UNREAD_TAGS for tag, _attrs in self.stack):
             return
-        if not self._covered(self.stack):
+        if not self._covered(self.stack, "text", data):
             self._report(self.stack, "text", data)
 
     def handle_endtag(self, tag: str) -> None:
@@ -151,12 +186,62 @@ def undeclared_id_occurrences(html: str, account_id: int, declared=()) -> list[s
 
 
 # Объявленные адреса: имя → причина, по которой идентификатор законен именно там.
-DECLARED_ADDRESSES: dict[str, str] = {}
+# Каждый — элемент подписи или плоский приёмник ТОГО ЖЕ аккаунта; адреса шире подписи
+# нет (T-17-26). Новый адрес — решение: сюда он попадает вместе с причиной, а не
+# подавлением красного прохода.
+DECLARED_ADDRESSES: dict[str, str] = {
+    "label": "элемент подписи `data-account-label` аккаунта: канал, номер и `#id` двойника (D-03)",
+    "id-mark": "отдельный знак `data-account-id` аккаунта: `#id` двойника и админский `#id` (D-04, D-17)",
+    "option": "`<option value=<id>>` фильтра истории: тег не красится, `#id` идёт простым текстом (D-12)",
+    "title": "`<title>` экрана групп аккаунта: плоская подпись, разметки в нём нет (D-12)",
+    "modal-body": "тело `#acc-del-<id>-text` подтверждения удаления: плоская подпись, у двойника с `#id` (D-13)",
+    "chip-title": "`title=` чипа расписания: полный текст остаётся там, где `.chip__label` обрезан многоточием",
+    "schedule-summary": "сводка `.sched-card__sum` и её `title=`: подпись склеена в строку через « · » (D-12)",
+    "schedule-modal": "тело `#sched-del-<id>-text` панели удаления расписания: та же склеенная строка (D-12)",
+}
 
 
 def declared_for(account_id: int, *, plains: tuple[str, ...] = ()) -> tuple[Address, ...]:
     """Объявленные адреса ОДНОГО аккаунта; `plains` — его плоские подписи (с `#id`)."""
-    return ()
+    sid = str(account_id)
+    flat = tuple(plains)
+    by_name = {
+        "label": Address("label", lambda tag, a: a.get("data-account-label") == sid),
+        "id-mark": Address("id-mark", lambda tag, a: a.get("data-account-id") == sid),
+        "option": Address(
+            "option",
+            lambda tag, a: tag == "option" and a.get("value") == sid,
+            plains=flat,
+            kinds=("text",),
+        ),
+        "title": Address("title", lambda tag, a: tag == "title", plains=flat, kinds=("text",)),
+        "modal-body": Address(
+            "modal-body",
+            lambda tag, a: a.get("id") == f"acc-del-{sid}-text",
+            plains=flat,
+            kinds=("text",),
+        ),
+        "chip-title": Address(
+            "chip-title",
+            lambda tag, a: tag == "label" and "chip" in a.get("class", "").split(),
+            plains=flat,
+            kinds=("title",),
+        ),
+        "schedule-summary": Address(
+            "schedule-summary",
+            lambda tag, a: "sched-card__sum" in a.get("class", "").split(),
+            plains=flat,
+            kinds=("text", "title"),
+        ),
+        "schedule-modal": Address(
+            "schedule-modal",
+            lambda tag, a: re.fullmatch(r"sched-del-\d+-text", a.get("id", "")) is not None,
+            plains=flat,
+            kinds=("text",),
+        ),
+    }
+    assert set(by_name) == set(DECLARED_ADDRESSES), "адрес без причины или причина без адреса"
+    return tuple(by_name.values())
 
 
 @dataclass(frozen=True)
@@ -169,8 +254,31 @@ class SweptPath:
     status: str | None = None  # статус, присваиваемый аккаунту `subject` до открытия
 
 
-SWEPT_USER_CASES: tuple[SweptPath, ...] = ()
-SWEPT_ADMIN_PATHS: tuple[SweptPath, ...] = ()
+# Экраны и фрагменты пользователя. «Места» — номера строк переписи RESEARCH §1
+# (№1–№16); CSV — не HTML, вне прохода. Шесть мест чипов и карточек расписания
+# (№6–№9) рисует один путь редактора: сводка, панель, `title=` и чип.
+SWEPT_USER_CASES: tuple[SweptPath, ...] = (
+    SweptPath("accounts-page", "/accounts", "1, 2"),
+    SweptPath("accounts-partial", "/accounts/partial?offset=0&limit=30", "3"),
+    SweptPath("sync-status-active", "/accounts/{subject}/sync-status", "4", status="active"),
+    SweptPath("sync-status-syncing", "/accounts/{subject}/sync-status", "4", status="syncing"),
+    SweptPath("sync-status-sync-failed", "/accounts/{subject}/sync-status", "4", status="sync_failed"),
+    SweptPath("account-groups", "/accounts/{subject}/groups", "5"),
+    SweptPath("editor-unique-schedule", "/ads/{ad}/edit?sched={sched_unique}", "6, 7, 8, 9"),
+    SweptPath("editor-twin-schedule", "/ads/{ad}/edit?sched={sched_twin}", "6, 7, 8, 9"),
+    SweptPath("history-page", "/history", "10, 11"),
+    SweptPath("history-partial", "/history/partial?offset=0&limit=30", "10"),
+)
+
+# Экраны админки (идентификатор всегда виден, D-04, D-17): воркеры, очередь, карточка и история.
+SWEPT_ADMIN_PATHS: tuple[SweptPath, ...] = (
+    SweptPath("workers-page", "/admin/workers", "12"),
+    SweptPath("workers-partial", "/admin/workers/partial", "12"),
+    SweptPath("queue-page", "/admin/queue", "13, 14"),
+    SweptPath("user-card", "/admin/users/{owner}", "15"),
+    SweptPath("user-history-page", "/admin/users/{owner}/history", "10, 16"),
+    SweptPath("user-history-partial", "/admin/users/{owner}/history/partial?offset=0&limit=30", "10"),
+)
 
 
 # --- Контроль: проход непуст -------------------------------------------------
