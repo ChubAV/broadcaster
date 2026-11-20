@@ -21,6 +21,7 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.accounts.use_cases import get_sync_status_view
 from app.models.user import User
 from tests.account_label_support import (
     element_text,
@@ -182,3 +183,90 @@ async def test_the_batch_delete_modal_carries_the_plain_label(
     assert element_text(html, f"acc-del-{numbered}-text") == f"Telegram {NUMBER_TEXT}"
     assert element_text(html, f"acc-del-{twin}-text") == f"WhatsApp {UNKNOWN_TEXT} #{twin}"
     assert element_text(html, f"acc-del-{other_twin}-text") == f"WhatsApp {UNKNOWN_TEXT} #{other_twin}"
+
+
+# --- Фрагмент опроса /accounts/{id}/sync-status ------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_poll_fragment_shows_the_number_at_its_address(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """PHONE-03, D-18: подменённая опросом карточка не теряет номер.
+
+    Фрагмент рисуется отдельным `.render(...)` без объекта аккаунта: забытый
+    ключ контекста при мягком `Undefined` напечатал бы пустоту, а страница
+    ответила бы 200. Подпись идёт ОБЪЕКТОМ, и тест читает её по адресу.
+    """
+    account_id = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567", status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{account_id}/sync-status")).text
+
+    assert label_texts(html)[str(account_id)] == [NUMBER_TEXT], (
+        "фрагмент опроса должен показывать номер по адресу data-account-label"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["active", "syncing", "sync_failed"])
+async def test_the_poll_fragment_reads_as_unknown_in_every_status(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, status: str
+):
+    """PHONE-04, D-02: «Номер неизвестен» и во фрагменте опроса, а не только на странице."""
+    account_id = await seed_account(db_session, owner.id, "wa", status=status)
+
+    html = (await authed_client.get(f"/accounts/{account_id}/sync-status")).text
+
+    assert label_texts(html)[str(account_id)] == [UNKNOWN_TEXT], (
+        f"статус {status}: подпись фрагмента опроса — «Номер неизвестен» без #id"
+    )
+    assert str(account_id) in muted_label_ids(html), f"статус {status}: «Номер неизвестен» приглушён"
+
+
+@pytest.mark.asyncio
+async def test_the_poll_fragment_marks_a_twin(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """PHONE-05, D-14: двойник помечен и во фрагменте, признак считается по строкам пользователя."""
+    polled = await seed_account(db_session, owner.id, "wa", status="syncing")
+    neighbour = await seed_account(db_session, owner.id, "wa")
+    alone = await seed_account(db_session, owner.id, "max", status="active")
+
+    polled_html = (await authed_client.get(f"/accounts/{polled}/sync-status")).text
+    alone_html = (await authed_client.get(f"/accounts/{alone}/sync-status")).text
+
+    assert label_texts(polled_html)[str(polled)] == [f"{UNKNOWN_TEXT} #{polled}"], (
+        f"двойник (соседний аккаунт {neighbour}) несёт #id и во фрагменте опроса"
+    )
+    assert label_texts(alone_html)[str(alone)] == [UNKNOWN_TEXT], "уникальная подпись — без #id"
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_account_poll_draws_no_label(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """T-17-05: опрос чужого аккаунта не рисует его номер — владение проверяет загрузчик вида."""
+    stranger = await _stranger(db_session)
+    foreign = await seed_account(db_session, stranger, "tg_user", phone="+79991234567", status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{foreign}/sync-status")).text
+
+    assert "Аккаунт не найден" in html
+    assert "data-account-label" not in html, "подпись чужого аккаунта не должна попасть в ответ"
+    assert NUMBER_TEXT not in html, "номер чужого аккаунта не должен попасть в ответ"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["active", "sync_failed", "syncing", "connecting"])
+async def test_the_sync_status_view_carries_the_phone_in_every_branch(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, status: str
+):
+    """D-18: `SyncStatusView.phone` заполняют все четыре конструктора."""
+    numbered = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567", status=status)
+    bare = await seed_account(db_session, owner.id, "wa", status=status)
+
+    numbered_view = await get_sync_status_view(db_session, owner.id, numbered)
+    bare_view = await get_sync_status_view(db_session, owner.id, bare)
+
+    assert numbered_view is not None and numbered_view.phone == "+79991234567"
+    assert bare_view is not None and bare_view.phone is None
