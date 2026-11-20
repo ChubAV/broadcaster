@@ -2521,6 +2521,30 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
 .chip__label {
   min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
+/* Подпись аккаунта в ОДНОСТРОЧНЫХ контейнерах (Фаза 17, D-06, Pitfall 8) --------
+   `.chip__label` и `.acct-head__name` — nowrap + ellipsis: обрезается КОНЕЦ
+   строки. У подписи «WhatsApp Номер неизвестен #12» конец — это `#id`, то есть
+   различитель двойников, и обрезка контейнера убрала бы ровно то, ради чего
+   он введён (PHONE-05). Поэтому подпись внутри таких контейнеров — inline-flex:
+   канал и номер усекаются многоточием каждый сам, а `.acct-label__id` не
+   сжимается. Зазор `gap` заменяет пробелы между элементами подписи — в flex-ряду
+   пустые текстовые узлы не рисуются. Полный текст остаётся в `title=` чипа.
+   Фиксированных ширин нет: ширину отдаёт контейнер. Остальные контейнеры
+   (карточка аккаунта, карточка истории, строки админки, `<h1>` шелла) переносят
+   строки и этих правил не получают. Ширину 320–375 px этот текст не доказывает —
+   её смотрит человек при обходе. */
+.chip__label > .acct-label,
+.acct-head__name > .acct-label {
+  display: inline-flex; align-items: baseline; gap: 0.25em;
+  max-width: 100%; min-width: 0; vertical-align: bottom;
+}
+.chip__label .acct-label__chan,
+.chip__label .acct-label__text,
+.acct-head__name .acct-label__chan,
+.acct-head__name .acct-label__text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acct-label__id { flex: none; }
 .chip:has(.chip__input:checked), .chip--on {
   color: var(--text); border-color: var(--accent);
   background: color-mix(in oklab, var(--accent) 14%, transparent);
