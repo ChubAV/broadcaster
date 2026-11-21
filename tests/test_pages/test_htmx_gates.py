@@ -221,7 +221,14 @@ HX_HEADER_PREFIX = "HX-"
 # о форме ответа опроса принято и записано: ключ внесён в
 # `FRAGMENT_RESPONSE_HANDLERS` ниже. ⚠️ Неподвижность ИЗМЕРЕНА: прогон гейтов
 # после перевода не покраснел правилом числа POST-обработчиков.
-POST_HANDLERS = 37
+#
+# 37 → 38, Фаза 18, план 18-02. ИСТОЧНИК ДВИЖЕНИЯ: РУЧНАЯ ПРАВКА НОМЕРА аккаунта
+# стала тридцать восьмым POST-обработчиком `app/pages` (`account_phone_save`,
+# `POST /accounts/{account_id}/phone`). Решение о форме её ответа принято и
+# записано: успех с JS — фрагмент, без JS — переход, ключ внесён в
+# `FRAGMENT_RESPONSE_HANDLERS` ниже. ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО
+# ПРАВИЛА, дословно: `замер границ обошёл 38 POST-обработчиков, а объявлено 37`.
+POST_HANDLERS = 38
 
 # Денежное объявление, ради которого обход не смотрит на имя роутера.
 MONEY_HANDLER_KEY = "app/pages/billing.py::subscribe_to_plan"
@@ -1962,6 +1969,14 @@ FRAGMENT_RESPONSE_HANDLERS: frozenset[str] = frozenset(
         # ОДНОЙ строки, а экран остаётся — подменяется строка и линейка счётчика.
         # Первый фрагментный путь вехи.
         "app/pages/account_groups.py::account_groups_toggle",
+        # Фаза 18, план 18-02. Ручная правка номера аккаунта: форма остаётся на
+        # экране групп и подменяет саму себя вместе с двумя заголовками и заголовком
+        # вкладки. Исходы вне экрана — «нет сессии», «нет аккаунта», строка исчезла
+        # между проверкой и записью — тот же обработчик отдаёт переходом, поэтому
+        # признак берётся разбором вызова, а не по имени шаблона ответа. Код исхода
+        # едет вместе с фрагментом — второй такой вызов приложения после сохранения
+        # профиля.
+        "app/pages/account_groups.py::account_phone_save",
         # Фаза 9, план 09-02. Удаление группы аккаунта: строка уходит с
         # ОСТАЮЩЕГОСЯ экрана, поэтому ответ несёт внеполосные узлы, а не переход.
         # ⚠️ Соседнее по имени удаление АККАУНТА мессенджера (план 10-03) сюда НЕ
@@ -2327,7 +2342,15 @@ FRAGMENT_RESPONSE_HANDLERS: frozenset[str] = frozenset(
 #   `test_the_number_of_fragment_response_handlers_is_the_declared_one` после
 #   перевода, дословно: `обработчиков, отдающих фрагмент, найдено 25,
 #   объявлено 23` / `assert 25 == 23`.
-FRAGMENT_RESPONSE_HANDLERS_DECLARED = 25
+#
+#   25 → 26, Фаза 18, план 18-02. ИСТОЧНИК ДВИЖЕНИЯ: РУЧНАЯ ПРАВКА НОМЕРА аккаунта
+#   стала двадцать шестым обработчиком, отдающим фрагмент (форма, два заголовка и
+#   заголовок вкладки подменяются на остающемся экране). Счётчик отставания не
+#   двинулся: обработчик с рождения живёт на слое ответа. ⚠️ Имя набрано СЛОВАМИ.
+#   ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ ПОКРАСНЕВШЕГО ПРАВИЛА. Вывод
+#   `test_the_number_of_fragment_response_handlers_is_the_declared_one`, дословно:
+#   `обработчиков, отдающих фрагмент, найдено 26, объявлено 25`.
+FRAGMENT_RESPONSE_HANDLERS_DECLARED = 26
 
 
 def _hands_a_fragment(function: ast.AST) -> bool:
@@ -5125,6 +5148,22 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
         decision_state=DECISION_OWNER_D08,
     ),
     _OwnResponseExit(
+        entry="app/pages/account_groups.py::account_phone_save",
+        kind="Response(status_code=403)",
+        reason=(
+            _OWN_RESPONSE_PRICE
+            + ". "
+            + _OWN_RESPONSE_ORIGIN_GUARD
+            + ". ⚠️ СВОЁ У ЭТОГО ВХОДА: маршрут `POST /accounts/{account_id}/phone` "
+            "правки номера аккаунта несёт ту же сверку источника, что и соседние "
+            "изменяющие маршруты экрана групп, и стои́т она ВЫШЕ выборки аккаунта: "
+            "неотличимость чужого, несуществующего и вне колонки аккаунтов собирается "
+            "ниже по порядку проверок и этим отказом не задевается"
+        ),
+        lifting_condition=LIFTING_CONDITION_OWN_RESPONSE,
+        decision_state=DECISION_OWNER_D08,
+    ),
+    _OwnResponseExit(
         entry="app/pages/accounts.py::accounts_delete",
         kind="Response(status_code=403)",
         reason=(
@@ -5525,7 +5564,16 @@ OWN_RESPONSE_EXITS: tuple[_OwnResponseExit, ...] = (
 #   же прогоном покраснел и контроль укороченного перечня
 #   (`test_control_a_shortened_own_response_list_reddens_the_completeness_rule`)
 #   — той же жалобой, протёкшей за границу контроля.
-OWN_RESPONSE_EXITS_DECLARED = 14
+#
+#   14 → 15, Фаза 18, план 18-02. ИСТОЧНИК ДВИЖЕНИЯ: РУЧНАЯ ПРАВКА НОМЕРА получила
+#   сверку источника и тем самым завела свой голый 403 — как соседние изменяющие
+#   маршруты экрана групп. Состояние решения то же, что у них, — `DECISION_OWNER_D08`:
+#   форма отказа одна на проект. ⚠️ Имя набрано СЛОВАМИ. ⚠️ ЧИСЛО ПОСТАВЛЕНО ПРОГОНОМ
+#   ПОКРАСНЕВШЕГО ПРАВИЛА. До записи
+#   `test_every_own_response_exit_of_a_converted_handler_is_declared` сказал дословно:
+#   `НАЙДЕН ЗАМЕРОМ, НО НЕ ОБЪЯВЛЕН: app/pages/account_groups.py::account_phone_save
+#   (вид Response(status_code=403))`.
+OWN_RESPONSE_EXITS_DECLARED = 15
 
 
 def _own_response_completeness_complaints(
@@ -6659,7 +6707,10 @@ TRANSITION_BRANCH_CALLS = frozenset({RESPONSE_CALL, "redirect_internal", "redire
 
 # Обработчиков с переходной веткой. ЛЕТОПИСЬ: 31, Фаза 15, план 15-11 — снято
 # замером: 19 дуальных плюс 12 обработчиков, отвечающих только переходом.
-TRANSITION_BRANCH_HANDLERS_DECLARED = 31
+#   31 → 32, Фаза 18, план 18-02: +1 — `account_phone_save` (дуальный: фрагмент на
+#   успехе, переход на «нет сессии», «нет аккаунта» и `LookupError`). ПОСТАВЛЕНО
+#   ПРОГОНОМ покрасневшего правила.
+TRANSITION_BRANCH_HANDLERS_DECLARED = 32
 
 # ДУАЛЬНЫЕ обработчики: стоят в `FRAGMENT_RESPONSE_HANDLERS` и имеют переходную
 # ветку. Перечень снят замером и сверяется с обходом (`_dual_branch_handlers`).
@@ -6667,6 +6718,7 @@ DUAL_BRANCH_HANDLERS: frozenset[str] = frozenset(
     {
         "app/pages/account_groups.py::account_groups_delete",
         "app/pages/account_groups.py::account_groups_toggle",
+        "app/pages/account_groups.py::account_phone_save",
         "app/pages/accounts.py::accounts_connect_max_start",
         "app/pages/accounts.py::accounts_connect_tg_user_qr_status",
         "app/pages/accounts.py::accounts_connect_tg_user_refresh_qr",
@@ -6688,7 +6740,8 @@ DUAL_BRANCH_HANDLERS: frozenset[str] = frozenset(
 )
 
 # ЛЕТОПИСЬ: 19, Фаза 15, план 15-11 — снято замером по признаку вызова.
-DUAL_BRANCH_HANDLERS_DECLARED = 19
+# 19 → 20, Фаза 18, план 18-02: +1 — `account_phone_save` (фрагмент и переход).
+DUAL_BRANCH_HANDLERS_DECLARED = 20
 
 # Четыре обработчика, чью дуальность обоснования перечня фрагментных называют
 # прямо. Они обязаны быть среди дуальных: без этого признак переходной ветки
@@ -6706,7 +6759,9 @@ DUAL_BRANCH_NAMED_BY_THE_FRAGMENT_RATIONALES: frozenset[str] = frozenset(
 # ЛЕТОПИСЬ: 20, Фаза 15, план 15-11 — снято замером; панель подтверждения
 # входит сюда, потому что два её обработчика (удаление группы и удаление
 # расписания) дуальны.
-DUAL_BRANCH_PLACES_DECLARED = 20
+# 20 → 21, Фаза 18, план 18-02: +1 место письма — форма ручной правки номера,
+# чей обработчик дуален.
+DUAL_BRANCH_PLACES_DECLARED = 21
 
 # Решение владельца по спорным формам (задача 3 плана 15-11). Пока владелец не
 # ответил, КАЖДАЯ дуальная форма помечена ожидающей, а реестр ниже несёт
@@ -6766,6 +6821,12 @@ PUSH_URL_DECISIONS: dict[str, tuple[str, str]] = {
         PUSH_URL_CASE_THREE,
         _DUAL + "строка подменяется на остающемся экране; «нет сессии» — переход "
         "на /login, исходы вне экрана — переход на экран групп",
+    ),
+    "app/pages/account_groups.py::account_phone_save": (
+        PUSH_URL_CASE_THREE,
+        _DUAL + "форма номера, два заголовка и заголовок вкладки подменяются на "
+        "остающемся экране; «нет сессии» — переход на /login, «нет аккаунта» — "
+        "переход на /accounts; записи адреса в историю у формы нет",
     ),
     "app/pages/accounts.py::accounts_connect_max_start": (
         PUSH_URL_CASE_THREE,
@@ -6904,7 +6965,8 @@ PUSH_URL_DECISIONS: dict[str, tuple[str, str]] = {
 }
 
 # ЛЕТОПИСЬ: 37, Фаза 15, план 15-11 — по строке на каждый POST-обработчик.
-PUSH_URL_DECISIONS_DECLARED = 37
+# 37 → 38, Фаза 18, план 18-02: +1 строка — `account_phone_save`.
+PUSH_URL_DECISIONS_DECLARED = 38
 
 # Имя заголовка третьего случая и атрибут первого.
 HX_PUSH_URL_HEADER = "HX-Push-Url"

@@ -573,6 +573,34 @@ async def _arrange_retry_out_of_column(client, db, settings, identity) -> _Arran
 
 
 # =============================================================================
+# Посев: ручная правка номера аккаунта (Фаза 18, план 18-02)
+# =============================================================================
+
+PHONE_SAVE = "app/pages/account_groups.py::account_phone_save"
+MISSING_PHONE_ACCOUNT_ID = 987654
+
+
+async def _arrange_phone_save(client, db, settings, identity) -> _Arranged:
+    """Годный ввод для СВОЕГО аккаунта — форма самодостаточна, посев один аккаунт."""
+    user = await _current_user(db, identity, settings)
+    account = await _seed_groups_account(db, "wa", user_id=user.id)
+    return _Arranged(
+        url=f"/accounts/{account.id}/phone",
+        data={"phone": "8 999 123 45 67"},
+        landing_args={"account_id": account.id},
+    )
+
+
+async def _arrange_phone_missing_account(client, db, settings, identity) -> _Arranged:
+    """Аккаунта с таким идентификатором нет — ответ неотличим от чужого и от вне колонки."""
+    await _current_user(db, identity, settings)
+    return _Arranged(
+        url=f"/accounts/{MISSING_PHONE_ACCOUNT_ID}/phone",
+        data={"phone": "8 999 123 45 67"},
+    )
+
+
+# =============================================================================
 # Посев: сохранение часового пояса в профиле (Фаза 11, план 11-09)
 # =============================================================================
 
@@ -1689,6 +1717,30 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
         landing="/login",
         transport=LOCATION,
     ),
+    # Фаза 18, план 18-02. Ручная правка номера: экран ОСТАЁТСЯ, подменяется
+    # контейнер формы, а два заголовка и заголовок вкладки приезжают тем же ответом;
+    # код исхода уезжает внеполосным блоком. Метка — контейнер формы, стоящий в
+    # ОСНОВНОМ теле. Путь без JS — переход обратно на экран с кодом исхода и якорем
+    # поля (номер в адрес не попадает).
+    _PairCase(
+        key=PHONE_SAVE,
+        name="сохранение номера — успех",
+        identity="user",
+        arrange=_arrange_phone_save,
+        landing="/accounts/{account_id}/groups?notice=" + notices.PHONE_SAVED + "#phone",
+        transport=FRAGMENT,
+        fragment_mark='id="acct-phone"',
+    ),
+    # Исход уводит с экрана: аккаунта нет (чужой, вне колонки и строка, исчезнувшая
+    # между проверкой и записью, идут той же веткой), подменять нечего.
+    _PairCase(
+        key=PHONE_SAVE,
+        name="сохранение номера — аккаунта нет",
+        identity="user",
+        arrange=_arrange_phone_missing_account,
+        landing="/accounts",
+        transport=LOCATION,
+    ),
     # Фаза 11, план 11-12. Блокировка пользователя из его карточки: экран
     # ОСТАЁТСЯ, подменяется содержимое блока действий, а бейдж и плитка доступа
     # приезжают внеполосно (D-02). Метка — адрес формы блокировки: она стоит в
@@ -2413,7 +2465,15 @@ POST_PAIR_CASES: tuple[_PairCase, ...] = (
 #   это утверждает замером, а не перечнем.
 #   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 77, объявлено 76. Поставьте
 #   число ПРОГОНОМ этого отказа`.
-POST_PAIR_CASES_DECLARED = 77
+#
+#   77 → 79, Фаза 18, план 18-02: ДВА случая ручной правки номера аккаунта
+#   (`account_phone_save`) — «успех» (`FRAGMENT`, приземление с кодом исхода и
+#   якорем поля) и «аккаунта нет» (`LOCATION`, приземление на список аккаунтов).
+#   ⚠️ Остальные ветки обработчика — чужой источник (403), 422 с эхом, очистка,
+#   поле без значения — в реестр пар НЕ ВХОДЯТ, и это граница обхода, а не пропуск:
+#   их утверждает `tests/test_pages/test_account_phone_form.py` поимённо.
+#   ПОСТАВЛЕНО ПРОГОНОМ: `случаев пар в реестре 79, объявлено 77`.
+POST_PAIR_CASES_DECLARED = 79
 
 
 def _case_id(case: _PairCase) -> str:
@@ -3415,7 +3475,19 @@ def _number_complaints(
 # число сдвинуто по замеру, а не по прогнозу.
 # ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
 # переведённых обработчиках 191, объявлено 190. Поставьте число ПРОГОНОМ этого отказа`.
-PAIRED_302_ASSERTIONS_DECLARED = 191
+#
+# 191 → 193, Фаза 18, план 18-02: ДВА новых утверждения 302 о переведённой ручной
+# правке номера (`account_phone_save`), по одному в двух тестах модуля
+# `tests/test_pages/test_account_phone_form.py`: сохранение
+# (`test_a_valid_number_is_saved_and_the_redirect_carries_only_the_outcome_code`) и
+# очистка (`test_an_empty_field_clears_the_number_and_never_shows_the_blank_error`).
+# Параметризация лексический счёт не множит: утверждение одно на функцию. Прочие
+# тесты фазы (в том числе `tests/test_pages/test_impersonation.py`) литерала
+# сравнения с 302 НЕ несут — статус там сравнивается между ответами или не
+# утверждается; иначе число было бы больше. Пары — случаи реестра выше.
+# ПОСТАВЛЕНО ПРОГОНОМ покрасневшего правила, дословно: `утверждений 302 о
+# переведённых обработчиках 193, объявлено 191`.
+PAIRED_302_ASSERTIONS_DECLARED = 193
 
 
 def _routes(settings) -> tuple[tuple[str, str], ...]:

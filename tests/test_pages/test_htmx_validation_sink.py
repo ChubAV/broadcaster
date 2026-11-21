@@ -98,12 +98,17 @@ HX_REQUEST_ATTRIBUTES = ("hx-get", "hx-post", "hx-put", "hx-patch", "hx-delete")
 #   страничный слой (`app.pages`) — 27 пар: 10 GET и 17 POST;
 #   JSON-API (`app.routes`)       —  8 пар: 2 GET, 1 POST, 2 PUT, 3 DELETE.
 #
+# 27 → 28 (18 POST), Фаза 18, план 18-02: +1 — `POST /accounts/{account_id}/phone`,
+# ручная правка номера аккаунта (целый параметр пути `account_id`). ПОСТАВЛЕНО
+# ПРОГОНОМ покрасневшего правила, дословно: `пар обхода страничного слоя стало 28,
+# в летописи записано 27`. `JSON_API_BOUNDARY_ROUTES_DECLARED` не двигается.
+#
 # ⚠️ ПРАВИЛО ОТБОРА МЕТОДОВ ОДНО НА ОБА СЛОЯ, И АСИММЕТРИИ ЗДЕСЬ НЕТ. У
 # страничного слоя методов кроме GET и POST не оказалось НИ ОДНОГО, поэтому
 # «все методы» и «GET либо POST» дают для него одно и то же множество; у
 # JSON-API ограничение до GET/POST выбросило бы пять пар из восьми — то есть
 # границу D-07 утверждали бы три маршрута вместо восьми.
-VALIDATION_SINK_ROUTES_DECLARED = 27
+VALIDATION_SINK_ROUTES_DECLARED = 28
 JSON_API_BOUNDARY_ROUTES_DECLARED = 8
 
 # Методы, которые обход не трогает: собственного тела у них нет, а HEAD вдобавок

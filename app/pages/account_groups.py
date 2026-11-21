@@ -14,13 +14,16 @@ tests/test_pages/test_account_groups.py.
 
 from urllib.parse import urlencode
 
+import structlog
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.accounts.group_resync import parse_sync_result
 from app.application.accounts.labels import load_account_rows
+from app.application.accounts.phone import set_manual_phone
 from app.config import Settings
 from app.dependencies import get_db, get_settings
 from app.models.ad import Ad
@@ -28,19 +31,32 @@ from app.models.group import Group
 from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.user import User
+from app.pages import notices
 from app.pages.common import (
     check_is_admin,
     get_user_from_cookie,
     is_same_origin,
     templates,
 )
-from app.pages.htmx import respond
+from app.pages.htmx import respond, respond_field_error
 from app.pages.identifiers import ID_MAX, IdPath, PostIdPath, id_in_column
 from app.repositories.schedule import ScheduleRepository
-from app.services.account_label import label_of, row_of
+from app.services.account_label import AccountLabel, label_of, row_of
+from app.services.phone import EXAMPLE_PHONE, MANUAL_INPUT_MAX_CHARS, PhoneError
 
 router = APIRouter(tags=["pages"])
+logger = structlog.get_logger(__name__)
 PAGE_SIZE = 30
+
+# `maxlength` поля номера — ДВОЙНОЙ ЗАПАС относительно предела сервера, а не сам
+# предел (Фаза 18, план 18-02). Длину ввода судит правило сервера: `len()` в
+# кодовых точках не больше `MANUAL_INPUT_MAX_CHARS`. Браузер же считает
+# `maxlength` в единицах UTF-16, и символ вне базовой плоскости занимает две
+# единицы при одной кодовой точке: предел, равный пределу сервера, молча
+# обрезал бы текст, который сервер принял бы. Вдвое больший предел такого
+# обрезания не делает ни при каком вводе, а всё, что длиннее предела сервера,
+# доходит до него целиком и получает 422 с эхом, а не «годное» после усечения.
+PHONE_FIELD_MAXLENGTH = 2 * MANUAL_INPUT_MAX_CHARS
 
 
 def _clean_search(search: str | None) -> str | None:
@@ -206,6 +222,110 @@ async def _group_counts(
     return active_groups, total_groups
 
 
+def _screen_title(acct_label: AccountLabel) -> str:
+    """Заголовок вкладки экрана групп — ОДИН источник формата (Фаза 18, план 18-02).
+
+    Его печатают страница (`<title>` шаблона), ответ успеха правки номера (узел
+    `<title>` верхнего уровня) и страница 422: форма записи, набранная ещё и в
+    шаблоне, разошлась бы с этой молча, и вкладка после правки номера читалась бы
+    иначе, чем после перезагрузки. Подпись — плоская форма `plain`, без пометки
+    «указан вручную» (D-10).
+    """
+    return f"{acct_label.plain} — группы аккаунта — Broadcaster"
+
+
+async def _screen_context(
+    request: Request,
+    db: AsyncSession,
+    settings: Settings,
+    user: User,
+    account: MessengerAccount,
+    account_id: int,
+    term: str | None,
+) -> dict:
+    """Контекст страницы `list.html` — ОДИН сборщик для страницы и страницы 422.
+
+    ⚠️ ПОМОЩНИК ЖИВЁТ В ЭТОМ ЖЕ МОДУЛЕ по той же причине, что и `_group_counts`:
+    признак пути деградации гейта (tests/test_templates/test_htmx_markup_gates.py)
+    считает достижимость по цепочке функций ВНУТРИ модуля. Контекст прежде был
+    собран в теле `account_groups_page`; вторая копия словаря в обработчике
+    правки номера разошлась бы с первой при первой же правке, и страница с
+    ошибкой поля отличалась бы от страницы после перезагрузки молча.
+
+    Поля формы номера (`phone_value`, `phone_error`, `example_phone`,
+    `phone_maxlength`) ставят УМОЛЧАНИЯ здесь, а включаемый шаблон их не ставит
+    (Pitfall 2): выбор «показать сохранённое или присланное» — решение вызывающего,
+    и страница ошибки перекрывает два ключа поверх этого словаря.
+    """
+    # Подпись аккаунта для `<title>` и обоих заголовков (D-10, D-12, D-14).
+    # Признак двойника считается по ВСЕМ аккаунтам пользователя, а не по этому
+    # одному: шапка и карточка «Аккаунтов» обязаны помечать один аккаунт
+    # одинаково. Порция `groups/partial` и опрос `groups/sync-status` шапку не
+    # рисуют — подпись им не нужна.
+    acct_label = label_of(row_of(account), await load_account_rows(db, user.id))
+
+    # Приём limit+1: наличие следующей порции определяется одной лишней
+    # строкой, а не вторым COUNT.
+    result = await db.execute(
+        _build_groups_query(user.id, account_id, term).limit(PAGE_SIZE + 1)
+    )
+    rows = list(result.scalars().all())
+    has_next = len(rows) > PAGE_SIZE
+    groups = rows[:PAGE_SIZE]
+
+    # Числа линейки приходят ДВУМЯ ВЫДЕЛЕННЫМИ ЗАПРОСАМИ ПОДСЧЁТА (D-04) —
+    # обоснование целиком лежит в докстринге помощника, который зовут и страница,
+    # и оба обработчика экрана.
+    active_groups, total_groups = await _group_counts(db, user.id, account_id)
+
+    context = {
+        "request": request,
+        "user": user,
+        "is_admin": check_is_admin(user, settings),
+        "account": account,
+        "acct_label": acct_label,
+        # account_id отдельным ключом: разметка сентинела обязана быть
+        # ПОСИМВОЛЬНО одинаковой здесь и в порции прокрутки, а у порции
+        # объекта аккаунта нет.
+        "account_id": account_id,
+        "groups": groups,
+        "schedule_counts": await _schedule_counts(
+            db, user.id, [group.id for group in groups]
+        ),
+        "total_groups": total_groups,
+        "active_groups": active_groups,
+        # СВОДКА ПОСЛЕДНЕГО СИНКА читается из АККАУНТА, а не из памяти
+        # запроса (D-09): плашка обязана быть видна и при перезаходе на
+        # экран, а не только сразу после нажатия кнопки. Разбор идёт
+        # защищённым парсером — испорченная строка даёт None, то есть
+        # отсутствие плашки, а не стек-трейс на экране (T-03-08, T-03-27).
+        "sync_result": parse_sync_result(account.last_sync_result),
+        "has_next": has_next,
+        # КЛЮЧ ПОСЛЕДНЕЙ ОТРИСОВАННОЙ СТРОКИ, А НЕ ЕЁ ПОРЯДКОВЫЙ НОМЕР
+        # (план 09-13, решение владельца `keyset`). Курсор перестал быть
+        # величиной, которую можно снять в один момент и применить в
+        # другой: удаление любой уже отрисованной строки оставляет границу
+        # сравнения корректной, поэтому чинить его ответу удаления не нужно.
+        "next_after_id": groups[-1].id if groups else None,
+        # РАЗМЕР СТРАНИЦЫ ДОЕЗЖАЕТ ДО РАЗМЕТКИ ИЗ КОНТЕКСТА, А НЕ
+        # НАБИРАЕТСЯ В НЕЙ ЛИТЕРАЛОМ (WR-05): второй экземпляр величины
+        # разъехался бы с `PAGE_SIZE` молча, а клиент не может поднять её
+        # разметкой (T-09-13-03).
+        "page_size": PAGE_SIZE,
+        "filter_params": _filter_params(term),
+        "filter_search": term or "",
+        # D-02: экран живёт в разделе «Аккаунты», подсветка меню — оттуда.
+        "active_page": "accounts",
+    }
+
+    context["screen_title"] = _screen_title(acct_label)
+    context["phone_value"] = acct_label.phone_text or ""
+    context["phone_error"] = None
+    context["example_phone"] = EXAMPLE_PHONE
+    context["phone_maxlength"] = PHONE_FIELD_MAXLENGTH
+    return context
+
+
 @router.get("/accounts/{account_id}/groups", response_class=HTMLResponse)
 async def account_groups_page(
     request: Request,
@@ -224,70 +344,183 @@ async def account_groups_page(
         # сообщал бы, какие идентификаторы заняты чужими аккаунтами.
         return RedirectResponse(url="/accounts", status_code=302)
 
-    # Подпись аккаунта для `<title>` и обоих заголовков (D-10, D-12, D-14).
-    # Признак двойника считается по ВСЕМ аккаунтам пользователя, а не по этому
-    # одному: шапка и карточка «Аккаунтов» обязаны помечать один аккаунт
-    # одинаково. Порция `groups/partial` и опрос `groups/sync-status` шапку не
-    # рисуют — подпись им не нужна.
-    acct_label = label_of(row_of(account), await load_account_rows(db, user.id))
-
     term = _clean_search(search)
-
-    # Приём limit+1: наличие следующей порции определяется одной лишней
-    # строкой, а не вторым COUNT.
-    result = await db.execute(
-        _build_groups_query(user.id, account_id, term).limit(PAGE_SIZE + 1)
-    )
-    rows = list(result.scalars().all())
-    has_next = len(rows) > PAGE_SIZE
-    groups = rows[:PAGE_SIZE]
-
-    # Числа линейки приходят ДВУМЯ ВЫДЕЛЕННЫМИ ЗАПРОСАМИ ПОДСЧЁТА (D-04) —
-    # обоснование целиком лежит в докстринге помощника, который зовут и страница,
-    # и оба обработчика экрана.
-    active_groups, total_groups = await _group_counts(db, user.id, account_id)
 
     return templates.TemplateResponse(
         "account_groups/list.html",
-        {
-            "request": request,
-            "user": user,
-            "is_admin": check_is_admin(user, settings),
-            "account": account,
-            "acct_label": acct_label,
-            # account_id отдельным ключом: разметка сентинела обязана быть
-            # ПОСИМВОЛЬНО одинаковой здесь и в порции прокрутки, а у порции
-            # объекта аккаунта нет.
-            "account_id": account_id,
-            "groups": groups,
-            "schedule_counts": await _schedule_counts(
-                db, user.id, [group.id for group in groups]
-            ),
-            "total_groups": total_groups,
-            "active_groups": active_groups,
-            # СВОДКА ПОСЛЕДНЕГО СИНКА читается из АККАУНТА, а не из памяти
-            # запроса (D-09): плашка обязана быть видна и при перезаходе на
-            # экран, а не только сразу после нажатия кнопки. Разбор идёт
-            # защищённым парсером — испорченная строка даёт None, то есть
-            # отсутствие плашки, а не стек-трейс на экране (T-03-08, T-03-27).
-            "sync_result": parse_sync_result(account.last_sync_result),
-            "has_next": has_next,
-            # КЛЮЧ ПОСЛЕДНЕЙ ОТРИСОВАННОЙ СТРОКИ, А НЕ ЕЁ ПОРЯДКОВЫЙ НОМЕР
-            # (план 09-13, решение владельца `keyset`). Курсор перестал быть
-            # величиной, которую можно снять в один момент и применить в
-            # другой: удаление любой уже отрисованной строки оставляет границу
-            # сравнения корректной, поэтому чинить его ответу удаления не нужно.
-            "next_after_id": groups[-1].id if groups else None,
-            # РАЗМЕР СТРАНИЦЫ ДОЕЗЖАЕТ ДО РАЗМЕТКИ ИЗ КОНТЕКСТА, А НЕ
-            # НАБИРАЕТСЯ В НЕЙ ЛИТЕРАЛОМ (WR-05): второй экземпляр величины
-            # разъехался бы с `PAGE_SIZE` молча, а клиент не может поднять её
-            # разметкой (T-09-13-03).
-            "page_size": PAGE_SIZE,
-            "filter_params": _filter_params(term),
-            "filter_search": term or "",
-            # D-02: экран живёт в разделе «Аккаунты», подсветка меню — оттуда.
-            "active_page": "accounts",
-        },
+        await _screen_context(request, db, settings, user, account, account_id, term),
+    )
+
+
+@router.post("/accounts/{account_id}/phone")
+async def account_phone_save(
+    request: Request,
+    account_id: PostIdPath,
+    phone: str | None = Form(None),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Ручная правка номера аккаунта — единственный путь, которым человек ставит номер.
+
+    Форма стоит в шапке экрана групп (D-11) и работает на ОБОИХ транспортах: без
+    JS браузер отправляет её сам и получает переход обратно на экран с кодом
+    исхода, с JS слой письма получает фрагмент без перезагрузки (D-04, D-13).
+
+    ⚠️ ВЛАДЕНИЕ ПРОВЕРЯЕТСЯ ЗДЕСЬ, ПОТОМУ ЧТО ПИСАТЕЛЬ ЕГО НЕ ПРОВЕРЯЕТ (T-16-19,
+    D-05). `set_manual_phone` принимает только `account_id` и пишет по нему; без
+    проверки на маршруте любой вошедший правил бы номер чужого аккаунта подбором
+    идентификатора. Чужой аккаунт, несуществующий, вне колонки и `LookupError`
+    писателя (строку удалили между проверкой и записью) отвечают ОДИНАКОВО — тем
+    же переходом на список аккаунтов: различимый отказ сообщал бы, какие
+    идентификаторы заняты чужими аккаунтами.
+
+    ⚠️ ПОРЯДОК ПРОВЕРОК НЕСУЩИЙ (D-05): сессия, затем сверка источника (отказ без
+    тела ДО любой выборки — он не имеет права стать признаком существования
+    строки), затем граница величины первым использованием идентификатора, затем
+    владение, затем писатель, коммит, журнал и ответ. Тип пути — `PostIdPath` и
+    `id_in_column`, а не `IdPath`: для изменяющих маршрутов проект принял именно
+    эту форму (Фаза 11, D-07).
+
+    ⚠️ ПУСТОЙ ВВОД НА ЭТОМ ПУТИ — ОЧИСТКА, А НЕ ОШИБКА (D-09 Фазы 18). Человек
+    стирает текст и нажимает «Сохранить»: номер становится «неизвестен», а
+    автоматические источники снова вправе его заполнить (D-07). Поэтому текст
+    пустого ввода форма не показывает НИКОГДА; константа остаётся в
+    `app/services/phone.py` контрактом прямого вызова нормализатора, и её тесты
+    Фазы 16 не тронуты. Строка пробелов длиннее предела ввода — тоже очистка:
+    писатель судит «пусто» раньше длины.
+
+    ⚠️ ОТСУТСТВИЕ ПОЛЯ НЕ ЕСТЬ ПУСТОЕ ПОЛЕ, И НОМЕР НЕ СТИРАЕТСЯ (T-18-08).
+    Пустая строка очищает, а запрос вовсе без поля `phone` — отказ, как отказ
+    разбора фреймворка: молча стирать данные запрос без поля не должен. Браузерная
+    форма поле шлёт всегда (пустое — как пустую строку).
+
+    ⚠️ ОБЯЗАТЕЛЬНОЕ ПОЛЕ ФОРМЫ ЗДЕСЬ НЕ ГОДИТСЯ — ЭТО
+    ИЗМЕРЕНО. Фреймворк (FastAPI 0.129) считает присланную ПУСТУЮ строку
+    отсутствующей для обязательного поля формы и отвечает 422 раньше обработчика:
+    очистка пустым полем, то есть основной путь D-09, стала бы невозможной. Поэтому
+    параметр необязателен, а ОТСУТСТВИЕ отличается от пустоты сверкой присланных
+    полей запроса (разобранная форма запроса кэшируется, второго чтения тела нет);
+    при отсутствии поднимается тот же отказ валидации, какой поднял бы фреймворк,
+    — слой письма отвечает на него пустым отказом смягчения, прочие — стандартным
+    телом. Прежняя формулировка плана («поле объявлено обязательным») описывала
+    поведение, которого у этой версии фреймворка нет.
+
+    ⚠️ ОТКАТА СЕССИИ НА ВЕТКАХ ОТКАЗА НЕТ. Писатель падает до обращения к базе,
+    а откат истёк бы объекты сессии: сборщик ответа прочёл бы `user.id` лениво и
+    уронил ответ пятисотой вместо 422. Идентификатор пользователя берётся ДО
+    вызова писателя.
+
+    ⚠️ ПОДПИСЬ В ОТВЕТЕ — СВЕЖАЯ (D-14). Писатель идёт без синхронизации объектов
+    сессии, и объект аккаунта после записи показал бы прежний номер; сборщик
+    успеха перечитывает аккаунт и строки подписи, прежде чем рисовать ответ.
+
+    ⚠️ ПРИВАТНОСТЬ (D-16, PHONE-21): номер едет только телом запроса. В адресе
+    перехода — код исхода из реестра, в тексте уведомления номера нет, в журнал
+    уходят `account_id` и признак `phone_set`, и только они.
+
+    ⚠️ ЗАВИСИМОСТИ ЗАПРЕТА ИМПЕРСОНАЦИИ У МАРШРУТА НЕТ (D-06): номер — подпись
+    аккаунта, а не учётные данные, и на доставку не влияет. В отличие от
+    сохранения профиля (D-22) администратор под чужой личностью правит номер.
+    Разрешение записано в реестре гейта с причиной.
+
+    ⚠️ СОБСТВЕННОГО ОТВЕТА-ПЕРЕНАПРАВЛЕНИЯ ЗДЕСЬ НЕТ НИ В ОДНОЙ ВЕТКЕ, ВКЛЮЧАЯ
+    «НЕТ СЕССИИ», И ЭТО ТРЕБОВАНИЕ (гейт G-2): форму перехода строит слой ответа.
+    Имена класса ответа и статуса набраны словами, а не литералами.
+    """
+    user = await get_user_from_cookie(request, db, settings)
+    if not user:
+        return await respond(request, redirect="/login")
+
+    if not is_same_origin(request):
+        return Response(status_code=403)
+
+    # ОТСУТСТВИЕ ПОЛЯ — ДО ВЫБОРКИ АККАУНТА: отказ не должен зависеть от владения.
+    # Пустое поле фреймворк отдаёт как `None`, и отличает его от отсутствующего
+    # только сверка присланных полей (см. докстринг).
+    submitted = await request.form()
+    if "phone" not in submitted:
+        raise RequestValidationError(
+            [{"type": "missing", "loc": ("body", "phone"), "msg": "Field required", "input": None}]
+        )
+    phone_text = phone or ""
+
+    account_in_column = id_in_column(account_id)
+    account = (
+        await _load_owned_account(db, user, account_id) if account_in_column else None
+    )
+    if account is None:
+        return await respond(request, redirect="/accounts")
+
+    user_id = user.id
+    try:
+        saved = await set_manual_phone(db, account_id, phone_text)
+    except PhoneError as refusal:
+        refusal_text = str(refusal)
+
+        async def _page() -> HTMLResponse:
+            """Страница экрана с ошибкой поля — путь деградации без JS.
+
+            Присланное значение и текст ошибки ставятся ПОВЕРХ умолчаний
+            `_screen_context`: на ветке ошибки поле возвращает то, что человек
+            прислал, иначе введённое терялось бы на каждой опечатке.
+            """
+            context = await _screen_context(
+                request, db, settings, user, account, account_id, None
+            )
+            context["phone_value"] = phone_text
+            context["phone_error"] = refusal_text
+            return templates.TemplateResponse("account_groups/list.html", context)
+
+        async def _error_fragment() -> HTMLResponse:
+            """Тот же включаемый шаблон формы с присланным значением и ошибкой."""
+            html = templates.env.get_template(
+                "account_groups/includes/phone_form.html"
+            ).render(
+                account_id=account_id,
+                phone_value=phone_text,
+                phone_error=refusal_text,
+                example_phone=EXAMPLE_PHONE,
+                phone_maxlength=PHONE_FIELD_MAXLENGTH,
+            )
+            return HTMLResponse(html)
+
+        return await respond_field_error(
+            request, page=_page, fragment=_error_fragment
+        )
+    except LookupError:
+        return await respond(request, redirect="/accounts")
+
+    await db.commit()
+    logger.info("account_phone_saved", account_id=account_id, phone_set=saved is not None)
+
+    async def _saved() -> HTMLResponse:
+        """Ответ успеха с JS: заголовок вкладки, форма и два внеполосных заголовка.
+
+        ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ: слой ответа делает `await fragment()`.
+        Отложенность несущая — на пути без JS разметка не собирается вовсе, а
+        страница после перехода перечитывает данные новым запросом.
+        """
+        await db.refresh(account)
+        rows = await load_account_rows(db, user_id)
+        acct_label = label_of(row_of(account), rows)
+        html = templates.env.get_template(
+            "account_groups/partials/phone_response.html"
+        ).render(
+            screen_title=_screen_title(acct_label),
+            acct_label=acct_label,
+            account_id=account_id,
+            phone_value=acct_label.phone_text or "",
+            phone_error=None,
+            example_phone=EXAMPLE_PHONE,
+            phone_maxlength=PHONE_FIELD_MAXLENGTH,
+        )
+        return HTMLResponse(html)
+
+    return await respond(
+        request,
+        redirect=f"/accounts/{account_id}/groups#phone",
+        notice=notices.PHONE_SAVED if saved is not None else notices.PHONE_CLEARED,
+        fragment=_saved,
     )
 
 

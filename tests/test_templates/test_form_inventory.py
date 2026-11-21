@@ -163,15 +163,25 @@ from tests.test_templates.test_htmx_markup_gates import (
 # места. Уменьшение допустимо и означает СОЗНАТЕЛЬНОЕ снятие места, записанное
 # следующей записью летописи в докстринге модуля.
 
-WRITE_FORM_PLACES = 49
-WRITE_FORM_FILES = 27
+#
+# ЛЕТОПИСЬ ФАЗЫ 18, ПЛАН 18-02: ручная правка номера аккаунта добавила ровно ОДНО
+# место письма — вызов ``form_wrapper`` во включаемом шаблоне
+# ``account_groups/includes/phone_form.html`` (новый файл). Сдвиги: мест письма
+# 49 → 50, файлов с ними 27 → 28, вызовов ``form_wrapper`` 29 → 30, всех мест
+# формы 51 → 52, файлов со всеми местами 29 → 30. Классы «сырой POST без
+# ``hx-post``» (18) и «сырой POST с ``hx-post``» (2) не двинулись. Числа поставлены
+# ПРОГОНОМ покрасневших правил, а не вычтены в уме; прежние строки летописи выше не
+# стёрты — они описывают дерево своих фаз.
 
-FORM_WRAPPER_CALLS = 29
+WRITE_FORM_PLACES = 50
+WRITE_FORM_FILES = 28
+
+FORM_WRAPPER_CALLS = 30
 RAW_POST_WITHOUT_HX_POST = 18
 RAW_POST_WITH_HX_POST = 2
 
-ALL_FORM_PLACES = 51
-ALL_FORM_FILES = 29
+ALL_FORM_PLACES = 52
+ALL_FORM_FILES = 30
 
 # Провайдер: тело макроса, чьи вызовы и есть места. Ровно один.
 FORM_WRAPPER_PROVIDERS = 1
