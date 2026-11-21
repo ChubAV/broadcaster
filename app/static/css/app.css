@@ -2532,7 +2532,13 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
    Фиксированных ширин нет: ширину отдаёт контейнер. Остальные контейнеры
    (карточка аккаунта, карточка истории, строки админки, `<h1>` шелла) переносят
    строки и этих правил не получают. Ширину 320–375 px этот текст не доказывает —
-   её смотрит человек при обходе. */
+   её смотрит человек при обходе.
+
+   Поколение Фазы 18 (D-10): пометка «указан вручную» стоит ДО `#id`, и при
+   нехватке места усекается ОНА, а не различитель — `flex-shrink: 4` заставляет её
+   уступать место раньше номера (у номера единица), `.acct-label__id` по-прежнему
+   `flex: none`. Приглушение — базовое правило вне контейнеров: там фраза
+   переносится целиком (`nowrap` держит её неразрывной). */
 .chip__label > .acct-label,
 .acct-head__name > .acct-label {
   display: inline-flex; align-items: baseline; gap: 0.25em;
@@ -2543,6 +2549,14 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
 .acct-head__name .acct-label__chan,
 .acct-head__name .acct-label__text {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Пометка «указан вручную» (Фаза 18, D-10): приглушённый текст-слово, а не данные.
+   Базовое правило стоит ДО правила усечения пометки в однострочных контейнерах
+   (ниже): сначала общее, затем усечение там, где строка одна. */
+.acct-label__manual { color: var(--text-muted); white-space: nowrap; }
+.chip__label .acct-label__manual,
+.acct-head__name .acct-label__manual {
+  flex-shrink: 4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .acct-label__id { flex: none; }
 .chip:has(.chip__input:checked), .chip--on {
