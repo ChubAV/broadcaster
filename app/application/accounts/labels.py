@@ -7,9 +7,11 @@
 двух «неизвестных» двойниками, а следующая — нет, и один и тот же аккаунт
 читался бы на экранах по-разному.
 
-ПОЧЕМУ ПРОЕКЦИЯ ТРЁХ КОЛОНОК. `AccountRepository.list_by_user` поднимает
+ПОЧЕМУ ПРОЕКЦИЯ ЧЕТЫРЁХ КОЛОНОК. `AccountRepository.list_by_user` поднимает
 полные ORM-объекты вместе с учётными данными и строкой сессии Telegram — ради
-трёх значений, нужных подписи. Здесь читаются только `id`, `type` и `phone`.
+значений, нужных подписи. Здесь читаются только `id`, `type`, `phone` и
+`phone_is_manual`; четвёртая — признак ручного номера для пометки «указан
+вручную» (Фаза 18, D-10).
 
 ЖИВОЙ АККАУНТ — СТРОКА, КОТОРАЯ СУЩЕСТВУЕТ: флага мягкого удаления в модели
 нет, а строки `connecting` / `disconnected` — видимые карточки и входят в счёт
@@ -29,10 +31,13 @@ from app.services.account_label import AccountRow
 
 
 async def load_account_rows(session: AsyncSession, user_id: int) -> list[AccountRow]:
-    """Все аккаунты пользователя любого статуса — одной инструкцией, тремя колонками."""
+    """Все аккаунты пользователя любого статуса — одной инструкцией, четырьмя колонками."""
     result = await session.execute(
-        select(MessengerAccount.id, MessengerAccount.type, MessengerAccount.phone).where(
-            MessengerAccount.user_id == user_id
-        )
+        select(
+            MessengerAccount.id,
+            MessengerAccount.type,
+            MessengerAccount.phone,
+            MessengerAccount.phone_is_manual,
+        ).where(MessengerAccount.user_id == user_id)
     )
     return [AccountRow(*row) for row in result.all()]

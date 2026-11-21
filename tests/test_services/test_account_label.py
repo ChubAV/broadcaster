@@ -76,7 +76,7 @@ TWINS = [
 
 
 def _rows(table: list[tuple[int, str, str | None]]) -> list[AccountRow]:
-    return [AccountRow(*item) for item in table]
+    return [AccountRow(*item, False) for item in table]
 
 
 @pytest.mark.parametrize("stored,expected", SHOWN)
@@ -87,7 +87,7 @@ def test_shown_phone_table(stored, expected):
 @pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "blank"])
 def test_a_blank_stored_number_reads_as_unknown(blank):
     """D-02: пустая и пробельная строка — «Номер неизвестен», а не пустая подпись."""
-    label = build_labels([AccountRow(1, "wa", blank)])[1]
+    label = build_labels([AccountRow(1, "wa", blank, False)])[1]
 
     assert label.phone_text is None, "пустое значение колонки не должно давать подпись"
     assert label.text == PHONE_UNKNOWN_TEXT == "Номер неизвестен"
@@ -96,7 +96,7 @@ def test_a_blank_stored_number_reads_as_unknown(blank):
 @pytest.mark.parametrize("stored", ["abc", "=1+1", "<b>x</b>"])
 def test_an_unparseable_number_is_shown_as_it_is_not_as_unknown(stored):
     """D-07: сохранённый, но неразбираемый номер — как есть."""
-    label = build_labels([AccountRow(1, "tg_user", stored)])[1]
+    label = build_labels([AccountRow(1, "tg_user", stored, False)])[1]
 
     assert label.phone_text == stored
     assert label.text == stored
@@ -159,10 +159,10 @@ def test_label_of_agrees_with_build_labels(table, _twins):
 
 
 def test_label_of_does_not_need_the_subject_among_the_rows():
-    twin_of_a_stranger = AccountRow(9, "wa", None)
+    twin_of_a_stranger = AccountRow(9, "wa", None, False)
 
-    assert label_of(twin_of_a_stranger, [AccountRow(1, "wa", None)]).twin is True
-    assert label_of(twin_of_a_stranger, [AccountRow(1, "tg_user", None)]).twin is False
+    assert label_of(twin_of_a_stranger, [AccountRow(1, "wa", None, False)]).twin is True
+    assert label_of(twin_of_a_stranger, [AccountRow(1, "tg_user", None, False)]).twin is False
 
 
 def test_a_manual_number_carries_the_flag_and_the_text_stays_the_same():

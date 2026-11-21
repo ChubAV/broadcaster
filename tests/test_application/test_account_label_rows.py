@@ -3,7 +3,7 @@
 Признак двойника обязан совпадать на всех экранах одного пользователя, поэтому
 карта «аккаунты пользователя» читается ПО ПОЛЬЗОВАТЕЛЮ, а не по порции
 идентификаторов. Здесь закреплено: границу владельца держит запрос, строки
-всех статусов входят в счёт, проекция — три колонки (без `credentials` и
+всех статусов входят в счёт, проекция — четыре колонки (без `credentials` и
 строки сессии), а читает загрузчик одной инструкцией.
 """
 
@@ -71,9 +71,9 @@ async def test_rows_cover_every_account_of_the_user_in_one_statement(db_session:
     assert len(rows) == 5, "загрузчик должен отдать все пять аккаунтов пользователя"
     assert {row.id for row in rows} == set(mine)
     by_id = {row.id: row for row in rows}
-    assert by_id[mine[0]] == AccountRow(mine[0], "tg_user", "+79991234567")
+    assert by_id[mine[0]] == AccountRow(mine[0], "tg_user", "+79991234567", False)
     assert by_id[mine[1]].phone is None
-    assert by_id[mine[3]] == AccountRow(mine[3], "max", "abc"), "неразбираемый номер приезжает как есть"
+    assert by_id[mine[3]] == AccountRow(mine[3], "max", "abc", False), "неразбираемый номер приезжает как есть"
     selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
     assert len(selects) == 1, f"загрузчик сделал {len(selects)} запросов, ожидался один"
 
@@ -92,7 +92,7 @@ async def test_rows_never_carry_another_users_account(db_session: AsyncSession):
 
 
 @pytest.mark.asyncio
-async def test_the_statement_reads_only_three_columns(db_session: AsyncSession):
+async def test_the_statement_reads_only_four_columns(db_session: AsyncSession):
     """T-17-03: ни `credentials`, ни строка сессии в памяти страницы не поднимаются."""
     owner, _stranger, _mine, _theirs = await _seed_two_users(db_session)
 
@@ -101,7 +101,7 @@ async def test_the_statement_reads_only_three_columns(db_session: AsyncSession):
     assert len(statements) == 1, "ожидалась ровно одна инструкция"
     text = statements[0]
     assert "credentials" not in text and "session_data" not in text, text
-    for column in ("id", "type", "phone"):
+    for column in ("id", "type", "phone", "phone_is_manual"):
         assert f"messenger_accounts.{column}" in text, f"в проекции нет колонки {column}"
 
 
