@@ -1,7 +1,7 @@
 ---
 phase: 17-pokaz-nomera-na-vseh-ekranah
 verified: 2026-11-20T22:30:00Z
-status: human_needed
+status: passed
 score: 5/6 must-haves verified
 covered_files:
   - .planning/phases/17-pokaz-nomera-na-vseh-ekranah/17-01-PLAN.md
