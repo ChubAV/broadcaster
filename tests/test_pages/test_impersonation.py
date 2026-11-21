@@ -1285,6 +1285,89 @@ async def test_the_group_toggle_is_allowed_under_another_identity(
 
 
 @pytest.mark.asyncio
+async def test_the_phone_edit_is_allowed_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Правка номера аккаунта под чужой личностью РАЗРЕШЕНА (D-06, PHONE-11).
+
+    Номер — подпись аккаунта, а не учётные данные, и на доставку не влияет; в
+    отличие от сохранения профиля (D-22) у маршрута нет зависимости запрета.
+
+    Проверяется СОСТОЯВШАЯСЯ запись: отказ, пришедший перенаправлением, кодом от
+    успеха неотличим. Статус перехода здесь намеренно не утверждается — число
+    утверждений о переходах объявлено гейтом и этим тестом не двигается.
+    """
+    from app.models.messenger_account import MessengerAccount
+    from tests.account_label_support import seed_account
+
+    target_id = await _seed_target(admin_client, db_session)
+    account_id = await seed_account(db_session, target_id, "tg_user")
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": "8 999 123 45 67"},
+        follow_redirects=False,
+    )
+
+    assert IMPERSONATION_REFUSAL_MARK not in _detail_of(response), (
+        "правка номера закрыта под чужой личностью — D-06 называет её разрешённой "
+        "с причиной «номер — подпись, а не учётные данные»"
+    )
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(MessengerAccount.phone, MessengerAccount.phone_is_manual).where(
+                MessengerAccount.id == account_id
+            )
+        )
+    ).one()
+    assert (row.phone, row.phone_is_manual) == ("+79991234567", True), (
+        "правка номера не состоялась: отказ пришёл молча, кодом успеха"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_third_users_account_stays_out_of_reach_under_another_identity(
+    admin_client: AsyncClient, db_session: AsyncSession
+):
+    """Под имперсонацией аккаунт ТРЕТЬЕГО пользователя отвечает как несуществующий (D-05, D-06).
+
+    Разрешение правки не расширяет круг доступных аккаунтов: администратор,
+    вошедший под пользователем, видит и правит только его данные.
+    """
+    from app.models.messenger_account import MessengerAccount
+    from tests.account_label_support import seed_account
+
+    target_id = await _seed_target(admin_client, db_session)
+    third = User(email="third@test.com", password_hash="x", name="Third")
+    db_session.add(third)
+    await db_session.commit()
+    await db_session.refresh(third)
+    foreign_id = await seed_account(db_session, third.id, "tg_user", phone="+79995550000")
+    await _enter(admin_client, target_id)
+
+    response = await admin_client.post(
+        f"/accounts/{foreign_id}/phone",
+        data={"phone": "8 999 123 45 67"},
+        follow_redirects=False,
+    )
+
+    assert response.headers.get("location") == "/accounts", (
+        "аккаунт третьего пользователя ответил иначе, чем несуществующий"
+    )
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(MessengerAccount.phone, MessengerAccount.phone_is_manual).where(
+                MessengerAccount.id == foreign_id
+            )
+        )
+    ).one()
+    assert (row.phone, row.phone_is_manual) == ("+79995550000", False)
+
+
+@pytest.mark.asyncio
 async def test_a_nested_impersonation_is_refused(
     admin_client: AsyncClient, db_session: AsyncSession
 ):

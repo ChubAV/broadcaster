@@ -104,6 +104,9 @@ DECLARED_CODES = frozenset(
         "queue_drop_missing",
         "queue_drop_unavailable",
         "queue_drop_no_queue",
+        # Фаза 18, план 18-02, D-13: исходы ручной правки номера аккаунта.
+        "phone_saved",
+        "phone_cleared",
     }
 )
 
@@ -271,11 +274,14 @@ def test_every_code_is_distinct_and_the_index_loses_nothing() -> None:
       очереди переехали в реестр из частного словаря подраздела. Число
       поставлено прогоном покрасневшего правила — «записей в реестре 19,
       ожидалось 15», — а не вычитанием.
+      19 → 21, Фаза 18, план 18-02: +2 — `phone_saved` и `phone_cleared`, исходы
+      маршрута ручной правки номера `account_phone_save`; тексты новые и без
+      номера (D-16).
     """
     codes = [record.code for record in notices.NOTICES]
 
-    assert len(codes) == 19, f"записей в реестре {len(codes)}, ожидалось 19"
-    assert len(set(codes)) == 19, (
+    assert len(codes) == 21, f"записей в реестре {len(codes)}, ожидалось 21"
+    assert len(set(codes)) == 21, (
         "коды записей не различны: "
         + ", ".join(sorted({code for code in codes if codes.count(code) > 1}))
     )
