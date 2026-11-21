@@ -1048,7 +1048,7 @@ async def accounts_sync_status(
         # Строится только после `view is not None` — владение проверил
         # `get_sync_status_view`, чужой аккаунт сюда не доходит (T-17-05).
         rows = await load_account_rows(db, user.id)
-        acct_label = label_of(AccountRow(account_id, view.messenger_type, view.phone), rows)
+        acct_label = label_of(AccountRow(account_id, view.messenger_type, view.phone, view.phone_is_manual), rows)
         html = templates.env.get_template("accounts/partials/sync_status_card.html").render(
             account_id=account_id,
             status=view.status,
