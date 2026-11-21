@@ -116,3 +116,19 @@ async def test_twins_come_from_the_whole_set(db_session: AsyncSession):
     assert labels[mine[1]].twin and labels[mine[2]].twin, "оба WhatsApp без номера — двойники"
     assert not labels[mine[0]].twin, "Telegram с номером двойником не является"
     assert not labels[mine[3]].twin, "MAX с неразбираемым номером двойником не является"
+
+
+@pytest.mark.asyncio
+async def test_rows_carry_the_manual_flag(db_session: AsyncSession):
+    """D-10: четвёртая колонка — признак ручного номера: ручной, автоматический, без номера."""
+    owner = await _user(db_session, "rows-manual@test.com")
+    manual = await seed_account(db_session, owner, "tg_user", manual_phone="8 999 123 45 67")
+    automatic = await seed_account(db_session, owner, "tg_user", phone="+79991234567")
+    without = await seed_account(db_session, owner, "wa")
+
+    rows, _ = await _loaded(db_session, owner)
+
+    by_id = {row.id: row for row in rows}
+    assert by_id[manual] == AccountRow(manual, "tg_user", "+79991234567", True)
+    assert by_id[automatic] == AccountRow(automatic, "tg_user", "+79991234567", False)
+    assert by_id[without] == AccountRow(without, "wa", None, False)
