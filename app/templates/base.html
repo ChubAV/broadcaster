@@ -228,7 +228,7 @@
                Блок title для <title> остаётся отдельным и не смешивается. #}
             <header data-head>
                 <div class="head-titles">
-                    <h1 class="head-title">{% block page_title %}{{ nav_label(active_page) }}{% endblock %}</h1>
+                    <h1 class="head-title" id="page-title">{% block page_title %}{{ nav_label(active_page) }}{% endblock %}</h1>
                     <p class="head-subtitle">{% block page_subtitle %}{% endblock %}</p>
                 </div>
                 <div class="head-actions">

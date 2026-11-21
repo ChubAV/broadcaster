@@ -14,7 +14,11 @@
 
 {% set MESSENGER_LABELS = {'tg_user': 'Telegram', 'wa': 'WhatsApp', 'max': 'MAX'} %}
 
-{% block title %}{{ acct_label.plain }} — группы аккаунта — Broadcaster{% endblock %}
+{#- Текст заголовка вкладки собирает ОДИН помощник обработчика (`_screen_title`) и
+    отдаёт ключом `screen_title`: тот же текст нужен ответу правки номера и
+    странице с ошибкой поля, и формат, набранный ещё и здесь, разошёлся бы с ними
+    молча. -#}
+{% block title %}{{ screen_title }}{% endblock %}
 
 {# Контракт «страница → шелл» (План 01-01): заголовок раздела рендерит шапка
    шелла, собственного заголовка у страницы нет.
@@ -52,7 +56,7 @@
   <span class="acct-head__plate">{{ messenger_icon(account.type, size='avatar', show_label=false) }}</span>
   {%- endif %}
   <div class="acct-head__id">
-    <h2 class="acct-head__name">{{ account_label(acct_label, show_channel=true) }}</h2>
+    <h2 class="acct-head__name" id="acct-head-name">{{ account_label(acct_label, show_channel=true) }}</h2>
     {{ mono(identity_line) }}
   </div>
   {#- БЕЙДЖ СТАТУСА ПРИХОДИТ ПОДМЕНЯЕМЫМ БЛОКОМ, а не выписан здесь.
@@ -113,6 +117,14 @@
     </div>
     {{- link_button('К аккаунтам', '/accounts', variant='ghost') -}}
   </div>
+  {#- ФОРМА НОМЕРА стоит последним ребёнком шапки, на собственной строке (D-11,
+      Фаза 18). Видна всегда, без раскрытия: без JS ничего прятать и раскрывать
+      не нужно. Голое включение, БЕЗ `with`: ключи формы (`phone_value`,
+      `phone_error` и остальные) ставит контекст экрана, а страница ошибки
+      перекрывает два из них, и включение с собственными значениями затёрло бы
+      эхо введённого (Pitfall 2). Акцентного цвета у формы нет: перечень мест
+      акцента экрана исчерпывающий, поэтому кнопка — второстепенная. -#}
+  {% include "account_groups/includes/phone_form.html" %}
 </div>
 
 {#- ПЛАШКА РЕЗУЛЬТАТА ПОСЛЕДНЕЙ ЗАВЕРШЁННОЙ СИНХРОНИЗАЦИИ (D-09).
