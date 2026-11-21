@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -189,3 +190,106 @@ async def test_the_phone_link_carries_no_number(
     for href in hrefs:
         assert NUMBER_DIGITS not in href, "номер не должен попасть в адрес ссылки"
         assert "%2B7" not in href.upper(), "номер не должен попасть в адрес и в закодированной форме"
+
+
+# --- Порция подгрузки /accounts/partial --------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", STATUSES)
+@pytest.mark.parametrize(
+    ("phone", "word"),
+    [(NUMBER, WORD_WITH_NUMBER), (None, WORD_WITHOUT_NUMBER)],
+    ids=["with_number", "without_number"],
+)
+async def test_every_partial_card_links_to_the_phone_field_with_the_right_word(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    status: str,
+    phone: str | None,
+    word: str,
+):
+    """D-01, D-12: подгруженная карточка несёт ту же ссылку, что и страница, в каждой ветке статуса."""
+    account_id = await seed_account(db_session, owner.id, "wa", phone=phone, status=status)
+
+    html = (await authed_client.get("/accounts/partial?offset=0&limit=30")).text
+
+    assert phone_link_texts(html, account_id) == [word], (
+        f"порция, ветка {status}: карточка аккаунта {account_id} несёт одну ссылку «{word}»"
+    )
+
+
+# --- Фрагмент опроса /accounts/{id}/sync-status ------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", STATUSES)
+@pytest.mark.parametrize(
+    ("phone", "word"),
+    [(NUMBER, WORD_WITH_NUMBER), (None, WORD_WITHOUT_NUMBER)],
+    ids=["with_number", "without_number"],
+)
+async def test_every_poll_fragment_links_to_the_phone_field_with_the_right_word(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    status: str,
+    phone: str | None,
+    word: str,
+):
+    """D-01, D-12: карточка, пришедшая опросом, не теряет вход к номеру ни в одной ветке статуса.
+
+    Объекта аккаунта у фрагмента нет: адрес собирается из `account_id`, слово —
+    из подписи. Потеря ссылки проявилась бы только ПОСЛЕ первого опроса.
+    """
+    account_id = await seed_account(db_session, owner.id, "wa", phone=phone, status=status)
+
+    html = (await authed_client.get(f"/accounts/{account_id}/sync-status")).text
+
+    assert phone_link_texts(html, account_id) == [word], (
+        f"фрагмент опроса, статус {status}: аккаунт {account_id} несёт одну ссылку «{word}»"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_account_poll_draws_no_phone_link(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """T-18-16: опрос чужого аккаунта — «Аккаунт не найден» и никакой ссылки к его номеру."""
+    stranger = User(email="stranger-18-03@test.com", password_hash="x", name="stranger")
+    db_session.add(stranger)
+    await db_session.commit()
+    foreign = await seed_account(db_session, stranger.id, "tg_user", phone=NUMBER, status="syncing")
+
+    html = (await authed_client.get(f"/accounts/{foreign}/sync-status")).text
+
+    assert "Аккаунт не найден" in html
+    assert phone_link_texts(html, foreign) == [], "чужому аккаунту ссылка к номеру не рисуется"
+    assert _hrefs_worded(html) == [], "во фрагменте отказа нет ни одной ссылки к правке номера"
+
+
+# --- Синхронность трёх копий карточки ----------------------------------------
+
+CARD_SOURCES = (
+    "app/templates/accounts/list.html",
+    "app/templates/accounts/partial_cards.html",
+    "app/templates/accounts/partials/sync_status_card.html",
+)
+
+
+@pytest.mark.parametrize("source", CARD_SOURCES)
+def test_three_card_sources_carry_the_phone_link_three_times_each(source: str):
+    """Три копии карточки обязаны меняться вместе: по ссылке на каждую из трёх веток статуса.
+
+    Существующие правила `test_accounts_three_files_*` сверяют ключи и событие
+    модалки и ссылок не видят: потерянная в одной копии ссылка проявилась бы
+    только у человека, который долистал до второй порции или дождался опроса.
+    Прозу шаблонов этот счёт тоже читает, поэтому в комментариях шаблонов адрес
+    ссылки и её слова дословно не повторяются.
+    """
+    text = (Path(__file__).resolve().parents[2] / source).read_text(encoding="utf-8")
+
+    assert text.count("/groups#phone") == 3, f"{source}: ссылок на поле номера должно быть три"
+    assert text.count(WORD_WITHOUT_NUMBER) == 3, f"{source}: слово «{WORD_WITHOUT_NUMBER}» должно стоять трижды"
+    assert text.count(WORD_WITH_NUMBER) == 3, f"{source}: слово «{WORD_WITH_NUMBER}» должно стоять трижды"
