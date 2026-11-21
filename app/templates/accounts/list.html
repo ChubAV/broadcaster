@@ -106,8 +106,17 @@
       {#- Вход на экран групп аккаунта (D-02). Стоит во ВСЕХ ТРЁХ ветках статуса
           и во всех трёх синхронных копиях карточки: условная ветка, скрывающая
           вход, оставила бы группы синхронизирующегося аккаунта недостижимыми
-          (UI-SPEC E8 partial). -#}
+          (UI-SPEC E8 partial).
+          Вход к номеру (Фаза 18, D-01, D-12) стоит РЯДОМ со входом в группы и по
+          тому же правилу — во всех трёх ветках и во всех трёх синхронных копиях
+          карточки: оба входа ведут на один экран, а у синхронизирующегося
+          аккаунта номер без входа остался бы недоступным. Слово ссылки выбирает
+          наличие номера в подписи (`acct_label.phone_text`, пусто — номер
+          неизвестен). Это ссылка, а не форма: якорь стоит на поле номера экрана
+          групп, записи и новых адресов у карточки нет. В адрес идёт только
+          идентификатор аккаунта и якорь, номер туда не кладётся (D-16). -#}
       {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
+      {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account.id ~ '/groups#phone', variant='ghost') -}}
       <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
         {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
       </form>
@@ -133,6 +142,7 @@
     </div>
     <div class="acct-card__actions">
       {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
+      {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account.id ~ '/groups#phone', variant='ghost') -}}
       {#- Фаза 11, план 11-16 (D-02, D-12(в)): повторная синхронизация уводит на
           экран групп — ответ всегда переход, поэтому обёртка без цели подмены.
           Копия правится в месте, в макрос карточки не сводится. -#}
@@ -172,6 +182,7 @@
     </div>
     <div class="acct-card__actions">
       {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
+      {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account.id ~ '/groups#phone', variant='ghost') -}}
       <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
         {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
       </form>
