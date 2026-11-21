@@ -49,7 +49,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
-from tests.account_label_support import label_texts, seed_account
+from tests.account_label_support import (
+    MANUAL_MARK,
+    element_text,
+    label_texts,
+    option_texts,
+    seed_account,
+    title_text,
+)
 from tests.conftest import seed_group
 from tests.test_pages.test_account_label_admin_history import _seed_viewed_user
 from tests.test_pages.test_account_label_history import _seed_log
@@ -430,10 +437,20 @@ async def _owner_id(db: AsyncSession) -> int:
     ).scalar_one()
 
 
-async def _seed_world(db: AsyncSession, owner_id: int, *, unique_type: str = "tg_user") -> World:
-    """Три аккаунта с группой и записью журнала у каждого; номер ставит только писатель."""
+async def _seed_world(
+    db: AsyncSession, owner_id: int, *, unique_type: str = "tg_user", manual: bool = False
+) -> World:
+    """Три аккаунта с группой и записью журнала у каждого; номер ставит только писатель.
+
+    `manual=True` (Фаза 18, D-10): номер уникального аккаунта поставлен «вручную»
+    (`set_manual_phone`), двойники `wa` остаются без номера, как прежде.
+    """
     unique = await seed_account(
-        db, owner_id, unique_type, phone=PHONE_STORED, account_id=SWEEP_ACCOUNT_ID
+        db,
+        owner_id,
+        unique_type,
+        **({"manual_phone": PHONE_STORED} if manual else {"phone": PHONE_STORED}),
+        account_id=SWEEP_ACCOUNT_ID,
     )
     twin_a = await seed_account(db, owner_id, "wa", account_id=TWIN_A_ID)
     twin_b = await seed_account(db, owner_id, "wa", account_id=TWIN_B_ID)
@@ -584,6 +601,70 @@ async def test_every_admin_screen_shows_the_id_only_at_declared_addresses(
         assert undeclared_id_occurrences(html, account_id, declared) == [], (
             f"{case.name}: {account_id}"
         )
+
+
+# --- Пометка «указан вручную» у каждого адреса подписи (Фаза 18, D-10) ---------------
+
+
+def _assert_every_label_marked(html: str, name: str) -> None:
+    """Каждое вхождение подписи уникального аккаунта несёт пометку после номера."""
+    texts = label_texts(html).get(str(SWEEP_ACCOUNT_ID))
+    assert texts, f"{name}: подписи аккаунта на экране нет — проверка вакуумна"
+    for text in texts:
+        assert PHONE_SHOWN in text and MANUAL_MARK in text, f"{name}: подпись без пометки: {text!r}"
+        assert text.index(PHONE_SHOWN) < text.index(MANUAL_MARK), f"{name}: порядок «номер → пометка»: {text!r}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", SWEPT_USER_CASES, ids=lambda c: c.name)
+async def test_every_user_screen_marks_a_manual_number_at_its_label(
+    authed_client: AsyncClient, db_session: AsyncSession, case: SweptPath
+):
+    """D-10: пометка стоит у КАЖДОГО адреса подписи ручного номера на экранах пользователя."""
+    world = await _seed_world(db_session, await _owner_id(db_session), manual=True)
+
+    html = await _open_user(authed_client, db_session, world, case, world.unique)
+
+    _assert_every_label_marked(html, case.name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", SWEPT_ADMIN_PATHS, ids=lambda c: c.name)
+async def test_every_admin_screen_marks_a_manual_number_at_its_label(
+    admin_client: AsyncClient, db_session: AsyncSession, case: SweptPath
+):
+    """D-10: то же в админке («Воркеры», «Очередь», карточка пользователя, его история)."""
+    viewed = await _seed_viewed_user(db_session)
+    world = await _seed_world(db_session, viewed, unique_type="wa", manual=True)
+
+    html = await _open_admin(admin_client, world, case)
+
+    _assert_every_label_marked(html, case.name)
+
+
+@pytest.mark.asyncio
+async def test_flat_forms_of_a_manual_number_carry_no_mark(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """D-10: `<title>`, `<option>` фильтра, тело модалки удаления и CSV — только простой текст."""
+    world = await _seed_world(db_session, await _owner_id(db_session), manual=True)
+    sid = str(world.unique)
+
+    groups = (await authed_client.get(f"/accounts/{world.unique}/groups")).text
+    history = (await authed_client.get("/history")).text
+    accounts = (await authed_client.get("/accounts")).text
+    export = await authed_client.get("/history/export")
+
+    # Контроль: мир действительно ручной — разметочная подпись пометку несёт.
+    _assert_every_label_marked(accounts, "accounts-control")
+    title = title_text(groups)
+    option = option_texts(history, "account_id")[sid]
+    modal = element_text(accounts, f"acc-del-{sid}-text")
+    assert PHONE_SHOWN in title and PHONE_SHOWN in option, "плоские формы несут номер"
+    assert modal is not None and PHONE_SHOWN in modal
+    assert export.status_code == 200 and PHONE_SHOWN.lstrip("+") in export.text
+    for name, flat in (("<title>", title), ("<option>", option), ("модалка", modal), ("CSV", export.text)):
+        assert MANUAL_MARK not in flat, f"{name}: плоская форма несёт пометку: {flat[:120]!r}"
 
 
 # --- Наихудшая длина --------------------------------------------------------------
