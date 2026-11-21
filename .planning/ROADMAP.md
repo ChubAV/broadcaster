@@ -357,7 +357,7 @@ Plans:
 
 **Plans**: TBD
 **UI hint**: yes
-**Research**: не требуется — по образцу `profile_post` и контракта формы v2.1 (`form_wrapper`, `respond()`); риск — бюджет сквозных гейтов, а не техника, поэтому каждый план называет их поимённо в `<automated>`. Ровно один новый POST (`/accounts/{id}/phone` в `account_groups.py` рядом с `_load_owned_account`) и одна форма.
+**Research**: проведена 2026-11-21 по решению владельца (прогон `/gsd-plan-phase 18`, `18-RESEARCH.md`); UI-SPEC не делается — решение владельца того же прогона; прежняя запись роадмапа (до 2026-11-21): не требуется — по образцу `profile_post` и контракта формы v2.1 (`form_wrapper`, `respond()`); риск — бюджет сквозных гейтов, а не техника, поэтому каждый план называет их поимённо в `<automated>`. Ровно один новый POST (`/accounts/{id}/phone` в `account_groups.py` рядом с `_load_owned_account`) и одна форма.
 
 ### Phase 19: Захват номера при подключении
 
