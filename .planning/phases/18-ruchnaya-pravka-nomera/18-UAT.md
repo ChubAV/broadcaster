@@ -1,9 +1,9 @@
 ---
-status: complete
+status: diagnosed
 phase: 18-ruchnaya-pravka-nomera
 source: [18-VERIFICATION.md, 18-VALIDATION.md, 18-02-SUMMARY.md, 18-03-SUMMARY.md]
 started: 2026-11-21T00:00:00Z
-updated: 2026-11-21T18:47:40.657Z
+updated: 2026-11-21T19:10:00Z
 checks_declared: 7
 # ⚠️ ФОРМА ТЕКУЩЕЙ ЭПОХИ, А НЕ ТОЛЬКО ШАБЛОН GSD. Разделы `Current Test`/`Tests`/`Summary`/`Gaps`
 # ведёт `/gsd-verify-work`; разделы «Проверка N» с таблицами отметок ставят артефакт ПОД
@@ -201,8 +201,21 @@ blocked: 0
   severity: major
   test: 4
   evidence: "Машинная улика обхода, тест 4: поле 0…45 под шапкой 0…86 (1280×800), 79…124 под 0…172 (320×800), 0…45 под 0…172 (375×812); elementFromPoint центра поля → шапка; scroll-margin-top 0px (код-ревью WR-02)"
-  artifacts: []
-  missing: []
+  root_cause: "Липкой шапке `<header data-head>` (base.html:229; app.css:656-657 `position: sticky; top: 0; z-index: 5`) не противопоставлен никакой отступ прокрутки: в app.css нет ни одного правила scroll-padding/scroll-margin и нет токена высоты шапки. Переход по фрагменту `#phone` (9 ссылок карточек + no-JS редирект сохранения account_groups.py:521) ставит верх `<input id=\"phone\">` на y=0 и фокусирует его — поле и подпись «Номер телефона» (~20 px над ним) оказываются под шапкой. Высота шапки зависит от ширины и содержимого: 86 px на десктопе, 172 px при ≤860 px (перенос <h1>/подзаголовка, плашка сессии отдельной строкой). Совет WR-02 и 18-UI-REVIEW.md:101 (`[data-acct-phone] { scroll-margin-top }`) инертен: браузер читает scroll-margin только у самой цели, а `--head-h` не существует."
+  artifacts:
+    - path: "app/static/css/app.css"
+      issue: "нет scroll-padding-top на html (или scroll-margin-top на #phone) рядом с [data-head] :654-662 и в @media (max-width: 860px) :472-496"
+    - path: "app/templates/base.html"
+      issue: "<header data-head> :229 — липкая шапка переменной высоты (h1 без nowrap, подзаголовок, .head-actions переносятся при ≤860 px)"
+    - path: "app/templates/account_groups/includes/phone_form.html"
+      issue: "цель якоря — <input id=phone>, подпись поля стоит ~20 px выше — отступ обязан покрыть и её"
+    - path: "tests/test_pages/test_account_phone_links.py"
+      issue: ":154 «Якорь #phone браузер прокручивает сам» — отступ прокрутки ничем не стережётся"
+  missing:
+    - "Отступ прокрутки для липкой шапки на прокручиваемом документе (`html { scroll-padding-top }`) или на цели `#phone`, не на контейнере [data-acct-phone]; не меньше высоты шапки + ~20 px подписи + зазор, отдельно для ≤860 px (наихудшая высота шапки) — либо сделать высоту шапки предсказуемой (h1 в одну строку / --head-h скриптом), либо (решение владельца) отклеить шапку при ≤860 px, как уже отклеены [data-side] и [data-editor-side]"
+    - "Проверка в настоящем браузере на 1280/375/320: elementFromPoint центра поля не внутри [data-head], верх подписи ниже низа шапки; текстовая проверка CSS доказывает только наличие правила"
+    - "Та же скрытая беда, вероятно, у якорей #sched-{id} (upcoming_row.html:35, sched_card.html:189) — одно правило на html закрывает и их"
+  debug_session: ".planning/debug/phone-anchor-under-sticky-head.md"
 
 - gap_id: G-18-6
   truth: "На 320 и 375 px шапка экрана групп с ручным номером показывает номер целиком — усекается пометка «указан вручную», а не номер; шапка с формой не ломает раскладку"
@@ -211,5 +224,20 @@ blocked: 0
   severity: major
   test: 6
   evidence: "Машинная улика обхода, тест 6: `<h2>` номер 105/116 px на 320 и 115/116 px на 375 («67» → «…»), пометка 78/124 и 118/124 — flex-shrink 4 против 1 ужимает обе части одновременно; на 320 `.acct-head__actions` до 351 px при родителе 288 px («К аккаунтам» за карточкой, по коду предсуществует с bef29322). Чип расписания, `#id` двойника и `sync_failed` не наблюдались"
-  artifacts: []
-  missing: []
+  root_cause: "План 18-01 (77d2d812) применил `flex-shrink: 4` у `.acct-label__manual` как ПРИОРИТЕТ усечения, а flex-shrink — пропорциональный ВЕС. В `.acct-head__name > .acct-label` и `.chip__label > .acct-label` (inline-flex) канал, номер и пометка все с `min-width: 0`, поэтому по CSS Flexbox §9.7 любая нехватка делится между всеми тремя сразу по flex-shrink × basis: в <h2> номеру достаётся ~17% (пометке 73%, каналу 10%) — номер получает многоточие, пока у пометки ещё есть ширина (воспроизведено до 0.003 px; даже flex-shrink 1000 оставляет номер на 0.06 px короче). Тот же дефект в чипе расписания (уникальный #75 на 375: номер 99/116 при пометке 44 px). `#id` двойника не задет (`flex: none`). Тест фазы test_responsive_markup.py:5195-5198 закрепляет литерал `flex-shrink: 4` как договор. Отдельно и ДО фазы 18: `.acct-head__actions { flex: none }` (bef29322, фаза 3) держит ряд действий на max-content 318.5 px, его `flex-wrap` не срабатывает — перелив на 320 тождествен на master 41e2396f; в 17-UAT.md:25 владелец решил не заводить старые переливы находками."
+  artifacts:
+    - path: "app/static/css/app.css"
+      issue: ":2537-2561 правило пометки с flex-shrink: 4 для <h2> и чипа; комментарий утверждает ложный порядок усечения"
+    - path: "tests/test_pages/test_responsive_markup.py"
+      issue: ":5164-5198 test_account_label_keeps_the_twin_id_visible_in_a_one_line_container закрепляет литерал `flex-shrink: 4` — правильная починка его покраснит; переписывать тест, а не считать регрессией"
+    - path: ".planning/phases/18-ruchnaya-pravka-nomera/18-01-SUMMARY.md"
+      issue: "строки 17, 147 повторяют ложное утверждение о порядке"
+    - path: "app/static/css/app.css"
+      issue: ":2824-2827 `.acct-head__actions { flex: none }` — предсуществующий перелив на 320 (не фаза 18)"
+  missing:
+    - "Настоящий приоритет вместо веса: пометке `flex: 1 1 0; max-width: max-content` (с сохранением min-width: 0 и многоточия) в обоих контейнерах — в контрфакте номер целиком в <h2> на 320/375, пометка 61/116 px, #id 36/36, новых переливов нет"
+    - "НЕ делать номер нерастяжимым (`flex-shrink: 0`): в чипе содержимое 221 px в коробке 152 px — обрезается конец подписи, где стоит #id двойника (ломает PHONE-05 фазы 17)"
+    - "Переписать закрепляющий тест на проверку механизма приоритета вместо литерала; поправить комментарий app.css и 18-01-SUMMARY.md"
+    - "Чип на 320: целый номер геометрически невозможен (178 px против ~150) — решение владельца: канал уступает раньше номера или усечённый номер с полным текстом в title= остаётся допустимым, как в фазе 17"
+    - "Перелив `.acct-head__actions` на 320 — решение владельца, входит ли в G-18-6 (починка: `flex: 0 1 auto; min-width: 0`)"
+  debug_session: ".planning/debug/manual-mark-truncates-phone-in-head.md"
