@@ -5213,6 +5213,32 @@ def test_account_label_rules_introduce_no_fixed_width():
         assert re.search(r"(?<![-\w])width\s*:", body) is None, f"фиксированная ширина в правиле: {body!r}"
 
 
+def test_the_phone_form_takes_its_own_row_in_the_account_head():
+    """Фаза 18, план 18-02 (D-11): форма номера — собственная строка шапки аккаунта.
+
+    Шапка `[data-acct-head]` — flex-ряд с переносом; форма номера стоит в ней
+    последним ребёнком и занимает ВСЮ строку (`flex: 1 1 100%`), а не делит её с
+    подписью и действиями. `min-width: 0` разрешает ей сжиматься уже контейнера,
+    иначе длинное поле раздвинуло бы шапку на 320–375 px. Внутри формы поле и
+    кнопка в строку с переносом: на узкой ширине кнопка уходит под поле сама, без
+    медиазапроса. Фиксированных ширин у правил нет.
+
+    ⚠️ ЭТО МАШИННАЯ ПОЛОВИНА: суита читает ТЕКСТ app.css и доказывает, что контракт
+    записан. Что на 320 и 375 px форма не ломает шапку и ничего не обрезано, она не
+    знает — это ручная половина (обход `/gsd-verify-work 18`, «Manual-Only» в
+    18-VALIDATION.md).
+    """
+    css = _css_without_comments()
+
+    box = _css_rule(css, "[data-acct-phone]")
+    for declaration in ("flex: 1 1 100%", "min-width: 0"):
+        assert declaration in box, f"[data-acct-phone]: нет `{declaration}`"
+    field = _css_rule(css, "[data-acct-phone] .field")
+    assert "min-width: 0" in field, "[data-acct-phone] .field: поле не сжимается уже контейнера"
+    for body in (box, field):
+        assert re.search(r"(?<![-\w])width\s*:", body) is None, f"фиксированная ширина в правиле: {body!r}"
+
+
 def test_the_manual_mark_is_muted():
     """D-10: пометка «указан вручную» приглушена и неразрывна в переносящих контейнерах."""
     body = _css_rule(_css_without_comments(), ".acct-label__manual")
