@@ -18,6 +18,11 @@
    D-07): печатается только автоэкранированием Jinja и в атрибуты `x-*` / `hx-*`
    не кладётся. #}
 
+{#- ПОМЕТКА «указан вручную» (Фаза 18, D-10): приглушённый `<span class="acct-label__manual">`
+    после номера и ДО `#id` двойника. Печатается по `label.phone_is_manual`, правило
+    подписи здесь не повторяется. В плоских формах (`text`, `plain`, `<title>`,
+    `<option>`, CSV) пометки нет. -#}
+
 {#- Знак и идентификатор аккаунта — РАЗМЕТОЧНАЯ половина помощника: единственное
     место печати этого знака в шаблонах. Плоская половина — `id_mark` в
     app/services/account_label.py. -#}
@@ -32,6 +37,7 @@
 <span class="acct-label" data-account-label="{{ label.account_id }}">
 {%- if show_channel %}<span class="acct-label__chan">{{ label.channel }}</span> {% endif -%}
 <span class="acct-label__text mono {{ 'mono--muted' if label.phone_text is none else 'mono--bright' }}">{{ label.text }}</span>
+{%- if label.phone_is_manual %} <span class="acct-label__manual">указан вручную</span>{% endif -%}
 {%- if with_twin_id and label.twin %} {{ account_id_mark(label.account_id) }}{% endif -%}
 </span>
 {%- endmacro %}

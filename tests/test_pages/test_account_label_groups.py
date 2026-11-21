@@ -20,7 +20,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
-from tests.account_label_support import label_texts, muted_label_ids, seed_account, title_text
+from tests.account_label_support import (
+    MANUAL_MARK,
+    label_texts,
+    muted_label_ids,
+    seed_account,
+    title_text,
+)
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "app" / "templates" / "account_groups" / "list.html"
 
@@ -126,6 +132,37 @@ async def test_a_hostile_stored_value_is_escaped_in_every_header_sink(
     assert "<script>alert(1)" not in html, "значение колонки попало в ответ живым <script>"
     assert label_texts(html)[str(account_id)] == [f"Telegram {HOSTILE}"] * 2
     assert HOSTILE in title_text(html), "в <title> значение обязано читаться текстом"
+
+
+@pytest.mark.asyncio
+async def test_a_manual_number_is_marked_in_both_headings_but_not_in_the_title(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """ТРАССЕР (PHONE-08, D-10): ручной номер несёт пометку в `<h1>` и `<h2>`, `<title>` — без неё."""
+    account_id = await seed_account(db_session, owner.id, "tg_user", manual_phone="8 999 123 45 67")
+
+    html = await _groups_html(authed_client, account_id)
+
+    expected = f"Telegram +7 999 123-45-67 {MANUAL_MARK}"
+    assert label_texts(html)[str(account_id)] == [expected, expected], (
+        "оба заголовка экрана групп обязаны нести пометку после номера"
+    )
+    assert MANUAL_MARK not in title_text(html), "в плоской форме (<title>) пометки нет (D-10)"
+
+
+@pytest.mark.asyncio
+async def test_a_manual_twin_reads_number_mark_then_id(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-10, порядок: номер → «указан вручную» → `#id` двойника."""
+    manual_id = await seed_account(db_session, owner.id, "tg_user", manual_phone="8 999 123 45 67")
+    automatic_id = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567")
+
+    html = await _groups_html(authed_client, manual_id)
+
+    expected = f"Telegram +7 999 123-45-67 {MANUAL_MARK} #{manual_id}"
+    assert label_texts(html)[str(manual_id)] == [expected, expected]
+    assert automatic_id != manual_id
 
 
 def test_the_header_prose_no_longer_denies_the_phone_column():

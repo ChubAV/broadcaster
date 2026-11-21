@@ -270,3 +270,19 @@ async def test_the_sync_status_view_carries_the_phone_in_every_branch(
 
     assert numbered_view is not None and numbered_view.phone == "+79991234567"
     assert bare_view is not None and bare_view.phone is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["active", "sync_failed", "syncing", "connecting"])
+async def test_sync_status_view_carries_the_manual_flag_in_all_four_constructors(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, status: str
+):
+    """D-10: `SyncStatusView.phone_is_manual` заполняют все четыре конструктора (ветка `other` — `connecting`)."""
+    manual = await seed_account(db_session, owner.id, "tg_user", manual_phone="8 999 123 45 67", status=status)
+    automatic = await seed_account(db_session, owner.id, "tg_user", phone="+79991234567", status=status)
+
+    manual_view = await get_sync_status_view(db_session, owner.id, manual)
+    automatic_view = await get_sync_status_view(db_session, owner.id, automatic)
+
+    assert manual_view is not None and manual_view.phone_is_manual is True
+    assert automatic_view is not None and automatic_view.phone_is_manual is False

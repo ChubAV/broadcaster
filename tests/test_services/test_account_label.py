@@ -23,6 +23,7 @@ from app.services.account_label import (
     label_of,
     shown_phone,
 )
+from tests.account_label_support import MANUAL_MARK
 
 # Значение колонки → то, что показывает экран (None — «Номер неизвестен», D-02, D-07).
 SHOWN = [
@@ -75,7 +76,7 @@ TWINS = [
 
 
 def _rows(table: list[tuple[int, str, str | None]]) -> list[AccountRow]:
-    return [AccountRow(*item) for item in table]
+    return [AccountRow(*item, False) for item in table]
 
 
 @pytest.mark.parametrize("stored,expected", SHOWN)
@@ -86,7 +87,7 @@ def test_shown_phone_table(stored, expected):
 @pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "blank"])
 def test_a_blank_stored_number_reads_as_unknown(blank):
     """D-02: пустая и пробельная строка — «Номер неизвестен», а не пустая подпись."""
-    label = build_labels([AccountRow(1, "wa", blank)])[1]
+    label = build_labels([AccountRow(1, "wa", blank, False)])[1]
 
     assert label.phone_text is None, "пустое значение колонки не должно давать подпись"
     assert label.text == PHONE_UNKNOWN_TEXT == "Номер неизвестен"
@@ -95,7 +96,7 @@ def test_a_blank_stored_number_reads_as_unknown(blank):
 @pytest.mark.parametrize("stored", ["abc", "=1+1", "<b>x</b>"])
 def test_an_unparseable_number_is_shown_as_it_is_not_as_unknown(stored):
     """D-07: сохранённый, но неразбираемый номер — как есть."""
-    label = build_labels([AccountRow(1, "tg_user", stored)])[1]
+    label = build_labels([AccountRow(1, "tg_user", stored, False)])[1]
 
     assert label.phone_text == stored
     assert label.text == stored
@@ -158,10 +159,61 @@ def test_label_of_agrees_with_build_labels(table, _twins):
 
 
 def test_label_of_does_not_need_the_subject_among_the_rows():
-    twin_of_a_stranger = AccountRow(9, "wa", None)
+    twin_of_a_stranger = AccountRow(9, "wa", None, False)
 
-    assert label_of(twin_of_a_stranger, [AccountRow(1, "wa", None)]).twin is True
-    assert label_of(twin_of_a_stranger, [AccountRow(1, "tg_user", None)]).twin is False
+    assert label_of(twin_of_a_stranger, [AccountRow(1, "wa", None, False)]).twin is True
+    assert label_of(twin_of_a_stranger, [AccountRow(1, "tg_user", None, False)]).twin is False
+
+
+def test_a_manual_number_carries_the_flag_and_the_text_stays_the_same():
+    """D-10: признак приезжает в подпись, а `text` и `plain` остаются прежними."""
+    label = build_labels([AccountRow(1, "tg_user", "+79991234567", True)])[1]
+
+    assert label.phone_is_manual is True
+    assert label.text == "+7 999 123-45-67"
+    assert label.plain == "Telegram +7 999 123-45-67"
+
+
+def test_a_manual_and_an_automatic_number_with_the_same_text_are_still_twins():
+    """D-10: признак вне ключа двойника — ручной и автоматический одинаковые номера двойники."""
+    rows = [
+        AccountRow(1, "tg_user", "+79991234567", True),
+        AccountRow(2, "tg_user", "+7 999 123-45-67", False),
+    ]
+
+    labels = build_labels(rows)
+
+    assert labels[1].twin is True and labels[2].twin is True
+    for row in rows:
+        assert label_of(row, rows).twin is True, "label_of обязан судить двойника так же, как build_labels"
+        assert label_of(row, rows) == labels[row.id]
+    assert labels[1].phone_is_manual is True and labels[2].phone_is_manual is False
+
+
+@pytest.mark.parametrize("twin", [False, True], ids=["unique", "twin"])
+def test_plain_forms_never_carry_the_manual_mark(twin):
+    """D-10: `text`, `plain`, `plain_with_id` — только простой текст подписи."""
+    rows = [AccountRow(1, "tg_user", "+79991234567", True)]
+    if twin:
+        rows.append(AccountRow(2, "tg_user", "+79991234567", False))
+
+    label = build_labels(rows)[1]
+
+    assert label.phone_is_manual is True, "контроль: флаг у подписи есть, иначе проверка вакуумна"
+    for form in (label.text, label.plain, label.plain_with_id):
+        assert MANUAL_MARK not in form, f"плоская форма несёт пометку: {form!r}"
+
+
+@pytest.mark.parametrize("stored", [None, "", "   "], ids=["null", "empty", "blank"])
+def test_a_flag_without_a_number_never_marks_the_unknown_label(stored):
+    """T-18-01: «Номер неизвестен» с пометкой был бы ложью — флаг без номера не доезжает."""
+    rows = [AccountRow(1, "wa", stored, True)]
+
+    label = build_labels(rows)[1]
+
+    assert label.phone_is_manual is False
+    assert label.text == PHONE_UNKNOWN_TEXT
+    assert label_of(rows[0], rows).phone_is_manual is False
 
 
 def test_the_module_is_pure():

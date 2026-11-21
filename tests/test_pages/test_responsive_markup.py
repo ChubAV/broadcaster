@@ -5169,6 +5169,10 @@ def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
     `inline-flex`, канал и номер усекаются сами, а `.acct-label__id` не сжимается
     (`flex: none`). Остальные контейнеры (карточка аккаунта, карточка истории,
     строки админки, `<h1>` шелла) переносят строки как раньше.
+
+    Фаза 18 (D-10, Pitfall 8): пометка «указан вручную» — третья усекаемая часть
+    и уступает место ПЕРВОЙ (`flex-shrink: 4` против единицы у номера), а не
+    различитель `#id`, который стоит после неё.
     """
     css = _css_without_comments()
 
@@ -5179,7 +5183,7 @@ def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
         box = _css_rule(css, f"{container} > .acct-label")
         for declaration in ("display: inline-flex", "max-width: 100%", "min-width: 0"):
             assert declaration in box, f"{container}: у подписи нет `{declaration}`"
-        for part in ("chan", "text"):
+        for part in ("chan", "text", "manual"):
             body = _css_rule(css, f"{container} .acct-label__{part}")
             for declaration in (
                 "min-width: 0",
@@ -5188,6 +5192,10 @@ def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
                 "white-space: nowrap",
             ):
                 assert declaration in body, f"{container} .acct-label__{part}: нет `{declaration}`"
+            if part == "manual":
+                assert "flex-shrink: 4" in body, (
+                    f"{container}: пометка не уступает место раньше номера (нет `flex-shrink: 4`)"
+                )
 
 
 def test_account_label_rules_introduce_no_fixed_width():
@@ -5196,10 +5204,21 @@ def test_account_label_rules_introduce_no_fixed_width():
     rules = [_css_rule(css, ".acct-label__id")]
     for container in ONE_LINE_LABEL_CONTAINERS:
         rules.append(_css_rule(css, f"{container} > .acct-label"))
-        rules.extend(_css_rule(css, f"{container} .acct-label__{part}") for part in ("chan", "text"))
+        rules.extend(
+            _css_rule(css, f"{container} .acct-label__{part}") for part in ("chan", "text", "manual")
+        )
+    rules.append(_css_rule(css, ".acct-label__manual"))
 
     for body in rules:
         assert re.search(r"(?<![-\w])width\s*:", body) is None, f"фиксированная ширина в правиле: {body!r}"
+
+
+def test_the_manual_mark_is_muted():
+    """D-10: пометка «указан вручную» приглушена и неразрывна в переносящих контейнерах."""
+    body = _css_rule(_css_without_comments(), ".acct-label__manual")
+
+    assert "color: var(--text-muted)" in body, "пометка не приглушена переменной --text-muted"
+    assert "white-space: nowrap" in body, "фраза пометки может разорваться посреди слов"
 
 
 def test_account_label_chip_keeps_the_full_text_in_its_title():

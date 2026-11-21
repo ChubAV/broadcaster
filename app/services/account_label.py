@@ -1,7 +1,7 @@
 """Подпись аккаунта на экранах пользователя и администратора (Фаза 17, D-06).
 
 Модуль нейтрален, как `app/services/schedule_rules.py`: чистое правило без БД
-и без Jinja. На вход — строки `(id, type, phone)`, на выход — готовые подписи.
+и без Jinja. На вход — строки `(id, type, phone, phone_is_manual)`, на выход — готовые подписи.
 Страницы, глобалы шаблонов и загрузчик строк
 (`app/application/accounts/labels.py`) зовут ЭТО правило и больше нигде его не
 повторяют: второе написание разошлось бы с первым молча, и один и тот же
@@ -16,6 +16,12 @@
 `UNSAFE_MARKERS`. Поэтому модуль отдаёт ДАННЫЕ (`AccountLabel`) и плоские строки (`plain`, `plain_with_id`), а
 `<span data-account-label>` рисует макрос `components/account_label.html`
 автоэкранированием Jinja.
+
+ПОМЕТКА «УКАЗАН ВРУЧНУЮ» (Фаза 18, D-10). Признак ручного номера `phone_is_manual`
+доезжает до `AccountLabel`, а печатает пометку только макрос; плоские формы
+(`text`, `plain`, `plain_with_id`) её не несут. Признак вне ключа двойника:
+ручной и автоматический одинаковые номера — по-прежнему двойники. У аккаунта без
+номера пометки нет никогда («Номер неизвестен» с пометкой был бы ложью).
 
 ЗНАК `#` ПЕРЕД ИДЕНТИФИКАТОРОМ собирается в одном месте — функция `id_mark`.
 Это единственная строковая константа модуля, оканчивающаяся на этот знак:
@@ -37,11 +43,16 @@ PHONE_UNKNOWN_TEXT = "Номер неизвестен"
 
 
 class AccountRow(NamedTuple):
-    """Три колонки аккаунта, из которых строится подпись (D-18)."""
+    """Четыре колонки аккаунта, из которых строится подпись (D-18, Фаза 18 D-10).
+
+    `phone_is_manual` — обязательное поле без умолчания: забытый конструктор
+    падает `TypeError` громко, а не теряет пометку молча.
+    """
 
     id: int
     type: str
     phone: str | None
+    phone_is_manual: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +63,7 @@ class AccountLabel:
     channel: str
     phone_text: str | None
     twin: bool
+    phone_is_manual: bool
 
     @property
     def text(self) -> str:
@@ -102,8 +114,17 @@ def _twin_key(row_type: str, shown: str | None) -> tuple[str, str | None]:
 
 
 def row_of(account: object) -> AccountRow:
-    """Строка подписи из ORM-объекта или DTO с полями `id`, `type`, `phone`."""
-    return AccountRow(account.id, account.type, account.phone)  # type: ignore[attr-defined]
+    """Строка подписи из ORM-объекта аккаунта с полями `id`, `type`, `phone`, `phone_is_manual`.
+
+    Признак читается атрибутом, без умолчания: объект без него падает
+    `AttributeError` громко, а не молча теряет пометку (Фаза 18, D-10).
+    """
+    return AccountRow(
+        account.id,  # type: ignore[attr-defined]
+        account.type,  # type: ignore[attr-defined]
+        account.phone,  # type: ignore[attr-defined]
+        account.phone_is_manual,  # type: ignore[attr-defined]
+    )
 
 
 def label_of(subject: AccountRow, rows: Iterable[AccountRow]) -> AccountLabel:
@@ -119,24 +140,35 @@ def label_of(subject: AccountRow, rows: Iterable[AccountRow]) -> AccountLabel:
         other.id != subject.id and _twin_key(other.type, shown_phone(other.phone)) == key
         for other in rows
     )
-    return AccountLabel(subject.id, MESSENGER_LABELS.get(subject.type, subject.type), shown, twin)
+    return AccountLabel(
+        subject.id,
+        MESSENGER_LABELS.get(subject.type, subject.type),
+        shown,
+        twin,
+        subject.phone_is_manual and shown is not None,
+    )
 
 
 def build_labels(rows: Iterable[AccountRow]) -> dict[int, AccountLabel]:
     """Подписи ВСЕХ аккаунтов одного пользователя: двойник — совпала готовая подпись."""
-    drafts = [(row.id, row.type, shown_phone(row.phone)) for row in rows]
-    counts = Counter(_twin_key(type_, shown) for _id, type_, shown in drafts)
+    drafts = [(row.id, row.type, shown_phone(row.phone), row.phone_is_manual) for row in rows]
+    counts = Counter(_twin_key(type_, shown) for _id, type_, shown, _manual in drafts)
     return {
         account_id: AccountLabel(
             account_id,
             MESSENGER_LABELS.get(type_, type_),
             shown,
             counts[_twin_key(type_, shown)] > 1,
+            manual and shown is not None,
         )
-        for account_id, type_, shown in drafts
+        for account_id, type_, shown, manual in drafts
     }
 
 
 def labels_for(accounts: Iterable[object]) -> dict[int, AccountLabel]:
-    """Подписи по списку ORM-объектов или DTO — глобал `phone_labels` шаблонов."""
+    """Подписи по списку ORM-объектов аккаунтов — глобал `phone_labels` шаблонов.
+
+    Объекты — `MessengerAccount` с полями `id`, `type`, `phone`, `phone_is_manual`;
+    объект без признака падает `AttributeError` громко (`row_of`).
+    """
     return build_labels(row_of(account) for account in accounts)

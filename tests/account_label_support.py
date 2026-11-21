@@ -17,7 +17,9 @@
 
 НОМЕР СТАВИТ ТОЛЬКО ПИСАТЕЛЬ ФАЗЫ 16. Конструктор и присваивание атрибуту
 отказывают (`PhoneWriteOutsideWriter`), и это правильно: гейты единственного
-писателя краснят запись мимо `app/application/accounts/phone.py`. «Как есть»
+писателя краснят запись мимо `app/application/accounts/phone.py`. Ручной номер
+(Фаза 18, `manual_phone=`) ставит тот же единственный писатель — `set_manual_phone`,
+тот же, которым пользуется форма; признак `phone_is_manual` он выставляет сам. «Как есть»
 (значение, которое писатель не произвёл бы) ставит только тест и только внутри
 `writer_scope()` — он моделирует писателя с ошибкой, а не обходит защиту
 (шапка `app/models/phone_guard.py`).
@@ -29,9 +31,13 @@ from html.parser import HTMLParser
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.accounts.phone import PhoneWrite, fill_reported_phone
+from app.application.accounts.phone import PhoneWrite, fill_reported_phone, set_manual_phone
 from app.models.messenger_account import MessengerAccount
 from app.models.phone_guard import writer_scope
+
+# Текст пометки у номера, указанного вручную (Фаза 18, D-10): тесты сверяют его
+# одной константой, а не литералом в каждом файле.
+MANUAL_MARK = "указан вручную"
 
 # Элементы без закрывающего тега: счётчик вложенности их не открывает.
 _VOID = frozenset(
@@ -45,6 +51,7 @@ async def seed_account(
     type_: str = "tg_user",
     *,
     phone: str | None = None,
+    manual_phone: str | None = None,
     stored_as_is: str | None = None,
     status: str = "active",
     account_id: int | None = None,
@@ -52,8 +59,10 @@ async def seed_account(
     """Аккаунт пользователя; возвращает его id (объект после `commit` устаревает).
 
     `phone` — номер от автоисточника, записанный писателем Фазы 16 (разбор и
-    приведение к E.164 делает он). `stored_as_is` — значение, которое писатель
-    не произвёл бы (неразбираемое), записывается внутри `writer_scope()`.
+    приведение к E.164 делает он). `manual_phone` — ввод человека («как в форме»):
+    его нормализует и пишет `set_manual_phone`, он же ставит `phone_is_manual`
+    (Фаза 18). `stored_as_is` — значение, которое писатель не произвёл бы
+    (неразбираемое), записывается внутри `writer_scope()`.
     """
     account = MessengerAccount(user_id=user_id, type=type_, credentials="creds", status=status)
     if account_id is not None:
@@ -64,6 +73,10 @@ async def seed_account(
     if phone is not None:
         written = await fill_reported_phone(session, new_id, phone)
         assert written is PhoneWrite.WRITTEN, f"писатель не записал номер {phone!r}: {written}"
+        await session.commit()
+    if manual_phone is not None:
+        saved = await set_manual_phone(session, new_id, manual_phone)
+        assert saved is not None, f"писатель не сохранил ручной номер {manual_phone!r}"
         await session.commit()
     if stored_as_is is not None:
         row = await session.get(MessengerAccount, new_id)
