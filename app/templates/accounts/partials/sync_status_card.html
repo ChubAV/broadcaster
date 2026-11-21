@@ -92,8 +92,14 @@
         переменной account_id, а не account.id: файл подмены получает контекст
         от обработчика опроса, а не строку списка. Потеря входа именно тут
         проявится только ПОСЛЕ первого опроса — на первичной отрисовке разметки
-        этого файла нет вовсе (WR-04). -#}
+        этого файла нет вовсе (WR-04).
+        Вход к номеру (Фаза 18, D-01, D-12) стоит рядом по тому же правилу, что
+        в двух соседних копиях, и по той же причине берёт адрес из account_id.
+        Слово ссылки выбирает `acct_label.phone_text` — ключ, который обработчик
+        опроса передаёт в файл всегда; в адрес идёт только идентификатор и якорь
+        (D-16). -#}
     {{- link_button('Настроить группы', '/accounts/' ~ account_id ~ '/groups', variant='ghost') -}}
+    {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account_id ~ '/groups#phone', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account_id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account_id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
@@ -110,6 +116,7 @@
   </div>
   <div class="acct-card__actions">
     {{- link_button('Настроить группы', '/accounts/' ~ account_id ~ '/groups', variant='ghost') -}}
+    {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account_id ~ '/groups#phone', variant='ghost') -}}
     {#- Фаза 11, план 11-16 (D-02, D-12(в)): обёртка без цели подмены — ответ
         всегда переход на экран групп. Форма стоит ВНУТРИ узла, который подменяет
         опрос статуса, но это не новая цель свопа: подменяет его опрос, а не
@@ -133,6 +140,7 @@
   </div>
   <div class="acct-card__actions">
     {{- link_button('Настроить группы', '/accounts/' ~ account_id ~ '/groups', variant='ghost') -}}
+    {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account_id ~ '/groups#phone', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account_id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account_id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>

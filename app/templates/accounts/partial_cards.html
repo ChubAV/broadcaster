@@ -58,8 +58,13 @@
   </div>
   <div class="acct-card__actions">
     {#- Вход на экран групп аккаунта (D-02) — во всех трёх ветках статуса и во
-        всех трёх синхронных копиях карточки (UI-SPEC E8 partial). -#}
+        всех трёх синхронных копиях карточки (UI-SPEC E8 partial). Вход к номеру
+        (Фаза 18, D-01, D-12) стоит рядом по тому же правилу и посимвольно
+        совпадает с копией в accounts/list.html: слово ссылки выбирает
+        `acct_label.phone_text`, а в адрес идёт только идентификатор аккаунта и
+        якорь (D-16). -#}
     {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
+    {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account.id ~ '/groups#phone', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
@@ -85,6 +90,7 @@
   </div>
   <div class="acct-card__actions">
     {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
+    {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account.id ~ '/groups#phone', variant='ghost') -}}
     {#- Фаза 11, план 11-16 (D-02, D-12(в)): обёртка без цели подмены — ответ
         всегда переход на экран групп; копия правится в месте. -#}
     {% call form_wrapper(action='/accounts/' ~ account.id ~ '/retry-sync') %}
@@ -119,6 +125,7 @@
   </div>
   <div class="acct-card__actions">
     {{- link_button('Настроить группы', '/accounts/' ~ account.id ~ '/groups', variant='ghost') -}}
+    {{- link_button('Изменить' if acct_label.phone_text else 'Указать номер', '/accounts/' ~ account.id ~ '/groups#phone', variant='ghost') -}}
     <form method="POST" action="/accounts/{{ account.id }}/delete" x-data x-on:submit.prevent="$dispatch('modal-open-acc-del-{{ account.id }}')">
       {{- button('Удалить', variant='ghost', icon='trash', title='Удалить аккаунт') -}}
     </form>
