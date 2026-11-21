@@ -500,3 +500,88 @@ async def test_the_number_reaches_neither_the_address_nor_the_notice_nor_the_log
     landed = await authed_client.get(location.split("#")[0])
     notice = element_text(landed.text, "notice") or ""
     assert notice and not any(ch.isdigit() for ch in notice), notice
+
+
+# --- Закрепляющие: свежая подпись, дубликат, без правки, критерий 3 ----------
+
+
+@pytest.mark.asyncio
+async def test_the_answer_shows_the_saved_number_not_the_stale_object(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-14: подпись ответа строится из перечитанных данных, а не из устаревшего объекта."""
+    account_id = await seed_account(db_session, owner.id, "tg_user", phone="+79990000000")
+
+    response = await authed_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": DISPLAY_FORM},
+        headers=HTMX,
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    labels = label_texts(response.text)[str(account_id)]
+    assert labels and all(text == f"Telegram {DISPLAY_FORM} {MANUAL_MARK}" for text in labels), labels
+    assert "+7 999 000-00-00" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_the_same_number_on_two_accounts_makes_them_twins_without_a_refusal(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-15: номер, совпавший с номером другого аккаунта, принимается молча; оба — двойники."""
+    first = await seed_account(db_session, owner.id, "tg_user", phone=STORED_FORM)
+    second = await seed_account(db_session, owner.id, "tg_user")
+
+    response = await authed_client.post(
+        f"/accounts/{second}/phone", data={"phone": DISPLAY_FORM}, follow_redirects=False
+    )
+
+    assert response.headers["location"] == f"/accounts/{second}/groups?notice=phone_saved#phone"
+    listing = await authed_client.get("/accounts")
+    texts = label_texts(listing.text)
+    assert texts[str(first)] and all(text.endswith(f"#{first}") for text in texts[str(first)])
+    assert texts[str(second)] and all(text.endswith(f"#{second}") for text in texts[str(second)])
+
+
+@pytest.mark.asyncio
+async def test_saving_an_automatic_number_unchanged_makes_it_manual(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Решение владельца 2026-11-21: «Сохранить» без правки делает автономер ручным."""
+    account_id = await seed_account(db_session, owner.id, "tg_user", phone=STORED_FORM)
+    assert await _stored(db_session, account_id) == (STORED_FORM, False)
+
+    await authed_client.post(
+        f"/accounts/{account_id}/phone", data={"phone": DISPLAY_FORM}, follow_redirects=False
+    )
+
+    assert await _stored(db_session, account_id) == (STORED_FORM, True)
+    page = await authed_client.get(f"/accounts/{account_id}/groups")
+    assert any(MANUAL_MARK in text for text in label_texts(page.text)[str(account_id)])
+
+
+@pytest.mark.asyncio
+async def test_after_the_clearing_an_automatic_source_may_fill_the_number_again(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-07, критерий 3: ручной номер — `KEPT`; после очистки — `WRITTEN`, пометки нет."""
+    account_id = await seed_account(db_session, owner.id, "tg_user")
+
+    await authed_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": "8 999 123 45 67"},
+        follow_redirects=False,
+    )
+    assert await fill_reported_phone(db_session, account_id, "+79995556677") is PhoneWrite.KEPT
+    await db_session.commit()
+
+    await authed_client.post(
+        f"/accounts/{account_id}/phone", data={"phone": ""}, follow_redirects=False
+    )
+    assert await fill_reported_phone(db_session, account_id, "+79995556677") is PhoneWrite.WRITTEN
+    await db_session.commit()
+
+    page = await authed_client.get(f"/accounts/{account_id}/groups")
+    labels = label_texts(page.text)[str(account_id)]
+    assert labels and all(text == "Telegram +7 999 555-66-77" for text in labels), labels
