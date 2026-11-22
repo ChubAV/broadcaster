@@ -20,7 +20,9 @@ from app.messengers.telegram_user import (
     _wait_for_qr,
     QR_SESSION_TTL,
     QRAuthState,
+    QrAuthResult,
     refresh_qr,
+    reported_phone_of,
 )
 
 
@@ -722,6 +724,65 @@ async def test_concurrent_completes_yield_one_session_string():
         )
     finally:
         _qr_sessions.pop("sid-race", None)
+
+
+class _RaisingPhone:
+    """Пользователь, чей атрибут `phone` поднимает исключение при чтении."""
+
+    @property
+    def phone(self):
+        raise RuntimeError("phone is not readable")
+
+
+def test_reported_phone_of_takes_only_a_non_empty_string():
+    """Тотальный захват (D-05): номер — только непустая строка, всё прочее — `None`."""
+    assert reported_phone_of(SimpleNamespace(phone="79990001122")) == "79990001122"
+    assert reported_phone_of(SimpleNamespace(phone="+79990001122")) == "+79990001122"
+    for junk in (
+        None,
+        SimpleNamespace(phone=None),
+        SimpleNamespace(phone=""),
+        SimpleNamespace(phone="   "),
+        SimpleNamespace(phone=MagicMock()),
+        SimpleNamespace(phone=79990001122),
+        object(),
+        _RaisingPhone(),
+    ):
+        assert reported_phone_of(junk) is None, f"{junk!r} дал номер вместо «неизвестен»"
+    assert reported_phone_of(MagicMock()) is None, "мок пользователя дал номер"
+
+
+def test_the_number_stays_out_of_the_state_and_result_repr():
+    """Номер не печатается отладочным `repr` состояния и результата (D-07, T-19-02)."""
+    state = QRAuthState(client=MagicMock(), user_id=OWNER, own_phone="79990001122")
+    assert "9990001122" not in repr(state), "repr состояния мастера вывел номер"
+    assert "9990001122" not in repr(QrAuthResult("s", "79990001122")), "repr результата вывел номер"
+
+
+@pytest.mark.asyncio
+async def test_complete_auth_hands_over_the_number_from_the_same_pop():
+    """Номер едет тем же снятием состояния, что и строка сессии (D-02, T-19-03)."""
+    client = MagicMock()
+    client.disconnect = AsyncMock()
+    _qr_sessions["sid-number"] = QRAuthState(
+        client=client,
+        user_id=OWNER,
+        status="success",
+        session_string="s-with-number",
+        own_phone="79990001122",
+    )
+    try:
+        result = await complete_auth("sid-number", OWNER)
+        assert result is not None and result.phone == "79990001122", (
+            "номер не доехал вместе со строкой сессии"
+        )
+        assert result.session_string == "s-with-number"
+        assert "sid-number" not in _qr_sessions, "сессия осталась после снятия"
+        assert await complete_auth("sid-number", OWNER) is None, (
+            "повторный вызов снова отдал сессию с номером"
+        )
+    finally:
+        _qr_sessions.pop("sid-number", None)
 
 
 def test_a_late_scan_is_still_a_success():

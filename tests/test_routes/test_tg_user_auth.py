@@ -557,6 +557,110 @@ async def test_a_qr_scan_gives_the_new_account_its_number_without_a_second_conne
     )
 
 
+# D-08: «второе подключение» доказывается на МАСТЕРЕ — фабрика клиента, `connect`,
+# `get_me` (тесты выше и ниже), а не проверкой соединения мессенджера: у той
+# дефект отозванной сессии, её починка вне вехи (CONTEXT, Deferred), и тест
+# ответа «пользователь не получен — значит, подключён» закрепил бы этот дефект.
+
+
+async def _verify_2fa_with(
+    client: AsyncClient, session_id: str, owner: int, sign_in: AsyncMock
+) -> tuple:
+    """Верный пароль на пути 2FA с подменённым ответом `sign_in`; ответ и клиент."""
+    tg_client = _seed_2fa_state(session_id, owner=owner, sign_in=sign_in)
+    response = await client.post(
+        VERIFY_URL,
+        data={"session_id": session_id, "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+    return response, tg_client
+
+
+@pytest.mark.asyncio
+async def test_a_right_password_gives_the_new_account_its_number(
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int
+):
+    """Путь 2FA: номер из ответа `sign_in` попадает в новый аккаунт (D-02, PHONE-12)."""
+    response, tg_client = await _verify_2fa_with(
+        authed_client,
+        "sid-phone",
+        owner_id,
+        AsyncMock(return_value=SimpleNamespace(phone=REPORTED_PHONE)),
+    )
+
+    assert response.status_code == 200, f"верный пароль ответил {response.status_code}"
+    assert "Подключено" in response.text, "после верного пароля человек не увидел «Подключено»"
+    assert REPORTED_PHONE not in response.text and SHOWN_PHONE not in response.text, (
+        "шаг «Подключено» показал номер (D-12)"
+    )
+    accounts = await _tg_accounts(db_session)
+    assert len(accounts) == 1, f"верный пароль сохранил {len(accounts)} аккаунтов вместо одного"
+    assert accounts[0].phone == STORED_PHONE, (
+        f"аккаунт Telegram после пароля 2FA сохранён без номера: phone={accounts[0].phone!r}"
+    )
+    assert accounts[0].phone_is_manual is False, "номер из ответа входа помечен как указанный вручную"
+    assert accounts[0].status == "active", f"аккаунт сохранён в статусе {accounts[0].status!r}"
+    tg_client.get_me.assert_not_called()
+    tg_client.connect.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [SimpleNamespace(phone=None), SimpleNamespace(phone="garbage"), MagicMock()],
+    ids=["no-phone", "garbage-phone", "mock-user"],
+)
+async def test_an_unparseable_phone_still_connects_the_account(
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int, answer
+):
+    """Мусор вместо номера — «Подключено» и активный аккаунт без номера (D-05, T-19-05)."""
+    response, _client = await _verify_2fa_with(
+        authed_client, "sid-garbage", owner_id, AsyncMock(return_value=answer)
+    )
+
+    assert response.status_code == 200, f"верный пароль ответил {response.status_code}"
+    assert "Подключено" in response.text, "мусорный номер сорвал подключение"
+    accounts = await _tg_accounts(db_session)
+    assert len(accounts) == 1, f"сохранено {len(accounts)} аккаунтов вместо одного"
+    assert accounts[0].status == "active", f"аккаунт сохранён в статусе {accounts[0].status!r}"
+    assert accounts[0].phone is None, f"мусор стал номером: {accounts[0].phone!r}"
+    assert accounts[0].phone_is_manual is False, "мусор пометил номер как указанный вручную"
+
+
+@pytest.mark.asyncio
+async def test_the_capture_log_carries_no_number(
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int, caplog
+):
+    """Журнал захвата — `account_id` и `outcome`, номера нет нигде (D-07, PHONE-21, T-19-01)."""
+    with caplog.at_level("INFO"):
+        response, _client = await _verify_2fa_with(
+            authed_client,
+            "sid-log",
+            owner_id,
+            AsyncMock(return_value=SimpleNamespace(phone=REPORTED_PHONE)),
+        )
+    assert response.status_code == 200, f"верный пароль ответил {response.status_code}"
+
+    entries = [
+        record
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("event") == "tg_phone_captured"
+    ]
+    assert len(entries) == 1, f"событий захвата номера должно быть одно: {len(entries)}"
+    entry = entries[0].msg
+    assert entries[0].name == "app.pages.accounts", f"событие пришло из {entries[0].name}"
+    assert set(entry) - {"event", "level", "timestamp", "logger", "_record", "_from_structlog"} == {
+        "account_id",
+        "outcome",
+    }, f"ключи события захвата: {sorted(entry)}"
+    accounts = await _tg_accounts(db_session)
+    assert entry["account_id"] == accounts[0].id
+    assert entry["outcome"] == "written", f"исход захвата {entry['outcome']!r}"
+    for record in caplog.records:
+        assert LOGGED_DIGITS not in str(record.msg), "номер попал в журнал"
+        assert LOGGED_DIGITS not in record.getMessage(), "номер попал в журнал"
+
+
 @pytest.mark.asyncio
 async def test_the_waiting_fragment_polls_into_the_persistent_anchor(
     authed_client: AsyncClient,
