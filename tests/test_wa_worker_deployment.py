@@ -59,3 +59,24 @@ def test_wa_worker_build_hands_its_arguments_to_docker_build_with_the_manager_ta
         in output
     )
     assert f"-t {WA_WORKER_IMAGE} ./wa_worker" in output
+
+
+def test_prod_hard_deploy_rebuilds_the_wa_image_without_cache_before_teardown():
+    output = dry_run("prod-hard-deploy")
+
+    assert "just wa-worker-build --no-cache" in output, (
+        "prod-hard-deploy не пересобирает образ WA-воркера без кэша"
+    )
+    assert_wa_build_precedes_wa_worker_teardown(
+        output, "just wa-worker-build --no-cache"
+    )
+    assert "docker compose -f docker-compose.prod.yml build --no-cache" in output
+
+
+def test_prod_build_builds_the_wa_image_after_compose_next_to_max():
+    output = dry_run("prod-build")
+
+    assert output.index("docker compose -f docker-compose.prod.yml build") < output.index(
+        "just wa-worker-build"
+    )
+    assert "just max-worker-build" in output
