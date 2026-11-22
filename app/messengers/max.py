@@ -4,7 +4,7 @@ import httpx
 import structlog
 import structlog.contextvars
 
-from app.messengers.base import BaseMessenger, MessengerFetchError
+from app.messengers.base import BaseMessenger, MessengerFetchError, reported_phone_from_status
 
 logger = structlog.get_logger(__name__)
 
@@ -131,6 +131,27 @@ class MaxMessenger(BaseMessenger):
         except Exception as e:
             self.log.warning("check_connection_failed", error=str(e))
             return False
+
+    async def get_own_phone(self) -> str | None:
+        """Номер подключённой сессии из поля `phone` ответа `/status` (D-14, D-15).
+
+        Один дополнительный GET на подключение: зовётся только после
+        `check_connection()` с `connected: true`, повторного опроса ради номера
+        нет. Любой отказ — не-200, не-JSON, нет поля (воркер старого образа),
+        мусор, сбой транспорта — даёт `None`: подключение аккаунта он не ломает,
+        а запасной номер формы берёт опросчик. В журнал уходит только тип
+        исключения: ни значение номера, ни текст исключения (оно может нести
+        тело ответа) туда не попадают (PHONE-21).
+        """
+        client = get_http_client()
+        try:
+            response = await client.get(self._url("status"))
+            if response.status_code != 200:
+                return None
+            return reported_phone_from_status(response.json())
+        except Exception as exc:
+            self.log.warning("get_own_phone_failed", error_type=type(exc).__name__)
+            return None
 
     async def get_sync_status(self) -> dict:
         """Get group sync status from bridge.
