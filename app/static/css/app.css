@@ -2562,8 +2562,18 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
 }
 /* Пометка «указан вручную» (Фаза 18, D-10): приглушённый текст-слово, а не данные.
    Базовое правило стоит ДО правила усечения пометки в однострочных контейнерах
-   (ниже): сначала общее, затем усечение там, где строка одна. */
-.acct-label__manual { color: var(--text-muted); white-space: nowrap; }
+   (ниже): сначала общее, затем усечение там, где строка одна.
+
+   Поколение плана 18-04 (UI-P2): прежний `--text-muted` давал 3,61:1 на
+   `--surface` (ниже AA для текста меньше 18,66 px полужирного). Выбран
+   существующий `--text-secondary`: по токенам 5,65 / 5,88 / 5,47 / 5,61 на
+   `--surface` / `--bg` / `--surface-input` / `--surface-pill`; `--text-tertiary`
+   отвергнут — 4,41 на фоне чипа. Значение общего `--text-muted` НЕ меняется:
+   радиус правки — одно это правило, а `.mono--muted` («Номер неизвестен», `#id`
+   двойника) остаётся прежним (отложено до решения владельца). Кегль `--fs-xs` —
+   как у номера (`.mono`): прежде пометка наследовала 16 px заголовка и была
+   крупнее номера. Новых токенов и размеров нет. */
+.acct-label__manual { color: var(--text-secondary); font-size: var(--fs-xs); white-space: nowrap; }
 .chip__label .acct-label__manual,
 .acct-head__name .acct-label__manual {
   flex: 1 1 0; max-width: max-content;
