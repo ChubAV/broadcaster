@@ -5,7 +5,8 @@
 // ============================================================
 
 import express from 'express';
-import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason, Browsers, isPnUser, jidDecode } from '@whiskeysockets/baileys';
+import { ownPhoneFromMe } from './own_phone.js';
 import qrcode from 'qrcode';
 import axios from 'axios';
 import fs from 'fs';
@@ -758,6 +759,9 @@ app.get('/api/sessions/:id/status', (req, res) => {
         connected: session.isConnected,
         exists: true,
         syncState: session.syncState,
+        // D-14: digits without '+' or null; the app normalizes it again. A LID is
+        // cut off here (D-03) by the Baileys functions; the value is never logged.
+        phone: ownPhoneFromMe(session.sock?.user, { isPnUser, jidDecode }),
     });
 });
 
