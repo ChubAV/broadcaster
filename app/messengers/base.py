@@ -13,6 +13,28 @@ class MessengerFetchError(RuntimeError):
     """
 
 
+def reported_phone_from_status(body: object) -> str | None:
+    """Номер из тела `/status` воркера: строка как есть или `None` (D-14, D-05).
+
+    Тело ответа воркера — недоверенный JSON. Поле `phone` — строка цифр E.164
+    без `+` либо `null`; у образа воркера старой формы поля нет вовсе. Принимается
+    только словарь, а в нём непустая строка (возвращается как есть) или целое
+    больше нуля (возвращается строкой, `bool` целым не считается); всё прочее —
+    «неизвестен». Окончательную нормализацию делает `normalize_reported`
+    единственного писателя номера, не эта функция.
+    """
+    if not isinstance(body, dict):
+        return None
+    value = body.get("phone")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value) if value > 0 else None
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
+
+
 class BaseMessenger(ABC):
     @abstractmethod
     async def send_message(self, group_id: str, text: str, images: list[str] | None = None) -> dict:
