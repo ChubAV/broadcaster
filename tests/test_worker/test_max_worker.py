@@ -359,6 +359,37 @@ async def test_create_client_uses_webclient_contract(worker, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_the_own_number_from_client_me_reaches_the_status_answer(worker, monkeypatch):
+    """PHONE-14, D-04: the number MAX itself reports leaves the worker in /status."""
+    clients = install_fake_client(monkeypatch, worker)
+    await worker.create_client("+79990000000")
+    client = clients[0]
+    client.me = SimpleNamespace(contact=SimpleNamespace(phone=79991234567))
+
+    await client.start_handler(client)
+    answer = await worker.get_session_status("42")
+
+    assert answer.get("phone") == "79991234567", "воркер MAX не отдал номер из client.me в /status"
+    assert answer["connected"] is True
+    assert set(answer) == {"connected", "exists", "syncState", "phone"}
+
+
+@pytest.mark.asyncio
+async def test_the_form_number_never_leaks_into_the_status_answer(worker, monkeypatch):
+    """Owner decision OQ1: the number typed into the form is not what MAX reported."""
+    clients = install_fake_client(monkeypatch, worker)
+    state = await worker.create_client("+79990000000")
+    client = clients[0]
+    client.me = SimpleNamespace(contact=SimpleNamespace(phone=None))
+
+    await client.start_handler(client)
+    answer = await worker.get_session_status("42")
+
+    assert state.phone == "+79990000000"
+    assert "phone" in answer and answer["phone"] is None
+
+
+@pytest.mark.asyncio
 async def test_existing_v2_session_reuses_library_store(worker, monkeypatch):
     clients = install_fake_client(monkeypatch, worker)
     directory = worker.session_dir()
