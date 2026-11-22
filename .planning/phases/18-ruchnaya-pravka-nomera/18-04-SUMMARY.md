@@ -212,3 +212,7 @@ None - no external service configuration required.
 ---
 *Phase: 18-ruchnaya-pravka-nomera*
 *Completed: 2026-11-22*
+
+## Self-Check: PASSED
+
+Файлы, шесть коммитов задач и коммит SUMMARY найдены в истории ветки; удалений файлов нет; рабочее дерево чисто.
