@@ -70,16 +70,17 @@ def _verdict(cases_js: str) -> dict:
     return run_node_script(source)
 
 
-def test_the_own_number_is_taken_only_from_a_pn_jid():
-    """Четыре входа D-03: PN с устройством, PN без устройства, LID, пусто."""
-    verdict = _verdict(
-        """
+FOUR_D03_CASES_JS = """
   check('pn_with_device', ownPhoneFromMe({ id: '79991234567:12@s.whatsapp.net' }, deps) === '79991234567');
   check('pn_without_device', ownPhoneFromMe({ id: '79991234567@s.whatsapp.net' }, deps) === '79991234567');
   check('lid_is_not_a_number', ownPhoneFromMe({ id: '123456789012345@lid' }, deps) === null);
   check('empty_id', ownPhoneFromMe({ id: '' }, deps) === null);
 """
-    )
+
+
+def test_the_own_number_is_taken_only_from_a_pn_jid():
+    """Четыре входа D-03: PN с устройством, PN без устройства, LID, пусто."""
+    verdict = _verdict(FOUR_D03_CASES_JS)
     assert all(verdict["results"].values()), (
         "разбор creds.me.id не отличает PN от LID: "
         f"{sorted(k for k, ok in verdict['results'].items() if not ok)}"
@@ -110,3 +111,89 @@ def test_index_wires_the_baileys_functions_into_the_status_answer():
     assert (
         "return res.json({ connected: false, exists, syncState: null });" in handler
     ), "ответ «сессии нет» изменился: поля phone у него быть не должно"
+
+
+# --- Задача 2: тотальность, тишина журнала, пин ----------------------------------
+
+# Случаи задачи 1 и задачи 2 одним исходником: правило тишины гоняет ВСЕ, а не
+# выборку, и два экземпляра списка разошлись бы молча.
+AGENT_SUFFIX_CASE_JS = """
+  check('agent_suffix_is_dropped', ownPhoneFromMe({ id: '79991234567_1:12@s.whatsapp.net' }, deps) === '79991234567');
+"""
+
+GARBAGE_CASES_JS = """
+  const boom = () => { throw new Error('boom'); };
+  const attempt = (me, d) => {
+    try { return { threw: false, value: ownPhoneFromMe(me, d) }; } catch { return { threw: true, value: undefined }; }
+  };
+  const garbage = {
+    me_undefined: [undefined, deps],
+    me_null: [null, deps],
+    me_empty_object: [{}, deps],
+    me_string: ['строка', deps],
+    me_number: [42, deps],
+    id_number: [{ id: 42 }, deps],
+    id_undefined: [{ id: undefined }, deps],
+    is_pn_user_throws: [{ id: '79991234567@s.whatsapp.net' }, { isPnUser: boom, jidDecode }],
+    jid_decode_throws: [{ id: '79991234567@s.whatsapp.net' }, { isPnUser, jidDecode: boom }],
+    jid_decode_returns_nothing: [{ id: '79991234567@s.whatsapp.net' }, { isPnUser, jidDecode: () => undefined }],
+    jid_decode_user_is_a_number: [{ id: '79991234567@s.whatsapp.net' }, { isPnUser, jidDecode: () => ({ user: 42 }) }],
+    hosted_server: [{ id: 'x@hosted' }, deps],
+  };
+  for (const [name, [me, d]] of Object.entries(garbage)) {
+    const r = attempt(me, d);
+    check(name, r.threw === false && r.value === null);
+  }
+"""
+
+
+def test_the_parser_never_throws_and_answers_null_on_garbage():
+    """D-05: разбор никогда не бросает; мусор и сбой внедрённых функций — `null`."""
+    verdict = _verdict(GARBAGE_CASES_JS)
+    assert verdict["results"], "гарнир не вернул ни одного случая — правило вакуумно"
+    assert all(verdict["results"].values()), (
+        "разбор бросил исключение или ответил не `null` на мусор: "
+        f"{sorted(k for k, ok in verdict['results'].items() if not ok)}"
+    )
+
+
+def test_the_agent_suffix_is_dropped_by_jid_decode():
+    """Агентская форма `<цифры>_<агент>:<устройство>@…` даёт чистые цифры."""
+    verdict = _verdict(AGENT_SUFFIX_CASE_JS)
+    assert verdict["results"] == {"agent_suffix_is_dropped": True}, (
+        "суффикс агента не отброшен: номер взят вместе с ним"
+    )
+
+
+def test_the_parser_writes_nothing_to_the_console():
+    """D-07, PHONE-21: ноль вызовов `console.*` на всех случаях; в вердикте нет цифр."""
+    verdict = _verdict(FOUR_D03_CASES_JS + AGENT_SUFFIX_CASE_JS + GARBAGE_CASES_JS)
+    assert verdict["results"], "гарнир не вернул ни одного случая — правило вакуумно"
+    assert verdict["console_calls"] == 0, (
+        f"разбор номера вызвал console.* {verdict['console_calls']} раз: номер "
+        "ушёл бы в журнал контейнера воркера, у которого маски нет"
+    )
+    assert "9991234567" not in json.dumps(verdict), "вердикт гарнира несёт цифры номера"
+
+
+def test_the_stubs_are_honest_only_while_baileys_is_pinned_to_rc14():
+    """Подмены `isPnUser`/`jidDecode` повторяют тело rc14; смена пина их обесценивает."""
+    package = json.loads((WA_WORKER / "package.json").read_text(encoding="utf-8"))
+    pinned = package["dependencies"]["@whiskeysockets/baileys"]
+    assert pinned == "7.0.0-rc14", (
+        f"пин @whiskeysockets/baileys стал {pinned!r}: подмены isPnUser/jidDecode в "
+        "этом файле повторяют lib/WABinary/jid-utils.js:30-58, :65 версии 7.0.0-rc14. "
+        "Смена пина обязывает перечитать jid-utils.js новой версии и поправить "
+        "подмены этого файла, и только потом менять ожидаемое значение здесь"
+    )
+
+
+def test_the_parser_module_imports_nothing():
+    """Модуль без ввозов: Baileys приходит аргументами, `node_modules` не нужен."""
+    source = OWN_PHONE_MODULE.read_text(encoding="utf-8")
+    assert not re.search(r"^\s*import\s", source, re.M), "own_phone.js ввозит модуль"
+    assert "require(" not in source, "own_phone.js зовёт require("
+    assert "@whiskeysockets/baileys" not in source, (
+        "own_phone.js называет @whiskeysockets/baileys: функции Baileys должны "
+        "приходить аргументами, иначе тест не загрузит модуль без node_modules"
+    )
