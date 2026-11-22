@@ -5272,11 +5272,73 @@ def test_the_phone_form_takes_its_own_row_in_the_account_head():
 
 
 def test_the_manual_mark_is_muted():
-    """D-10: пометка «указан вручную» приглушена и неразрывна в переносящих контейнерах."""
+    """D-10, UI-P2: пометка «указан вручную» набрана кеглем номера, приглушена и неразрывна.
+
+    Кегль `--fs-xs` (11 px) — как у номера (`.mono`): без него пометка наследовала
+    16 px заголовка и была крупнее номера. Цвет — токен, но НЕ общий
+    `--text-muted` (3,61:1 на `--surface`, ниже AA): общий токен читают десятки
+    правил на всех экранах, правка плана 18-04 — одно правило пометки.
+    """
     body = _css_rule(_css_without_comments(), ".acct-label__manual")
 
-    assert "color: var(--text-muted)" in body, "пометка не приглушена переменной --text-muted"
+    assert "font-size: var(--fs-xs)" in body, "пометка не набрана кеглем номера (нет `font-size: var(--fs-xs)`)"
     assert "white-space: nowrap" in body, "фраза пометки может разорваться посреди слов"
+    color = re.search(r"(?<![-\w])color\s*:\s*var\(\s*(--[\w-]+)\s*\)", body)
+    assert color, "цвет пометки не задан токеном `color: var(--…)`"
+    assert color.group(1) != "--text-muted", "пометка по-прежнему на общем токене --text-muted (3,61:1)"
+
+
+def _hex_token(root: str, name: str) -> tuple[int, int, int]:
+    """Значение токена `name` из блока `:root` (`#rrggbb`); имя сличается ЦЕЛИКОМ.
+
+    `--surface` не путается с `--surface-input`: после имени обязано идти `:`.
+    """
+    found = re.search(rf"(?<![-\w]){re.escape(name)}\s*:\s*#([0-9a-fA-F]{{6}})\s*;", root)
+    assert found, f"токен {name} не задан шестнадцатеричным #rrggbb в :root"
+    value = found.group(1)
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def _luminance(rgb: tuple[int, int, int]) -> float:
+    """Относительная яркость по WCAG 2.x."""
+
+    def channel(value: int) -> float:
+        scaled = value / 255
+        return scaled / 12.92 if scaled <= 0.03928 else ((scaled + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (channel(value) for value in rgb)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast(foreground: tuple[int, int, int], background: tuple[int, int, int]) -> float:
+    lighter, darker = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+MANUAL_MARK_BACKGROUNDS = ("--surface", "--bg", "--surface-input", "--surface-pill")
+
+
+def test_the_manual_mark_contrast_meets_aa_on_every_background():
+    """D-10, UI-P2: контраст пометки не ниже 4,5:1 на всех фонах подписи и тусклее номера.
+
+    ⚠️ Машинная половина: контраст считается по ЗНАЧЕНИЯМ токенов `:root`, а не по
+    рендеру (полупрозрачная шапка шелла, смесь акцента у включённого чипа). Что на
+    реальной странице он не ниже 4,5:1, измеряет человек инструментом DevTools.
+    """
+    css = _css_without_comments()
+    root = _css_rule(css, ":root")
+    color = re.search(r"(?<![-\w])color\s*:\s*var\(\s*(--[\w-]+)\s*\)", _css_rule(css, ".acct-label__manual"))
+    assert color, "контраст пометки не вычислить: цвет не задан токеном `color: var(--…)`"
+    mark = _hex_token(root, color.group(1))
+
+    for background in MANUAL_MARK_BACKGROUNDS:
+        ratio = _contrast(mark, _hex_token(root, background))
+        assert ratio >= 4.5, f"контраст пометки ниже 4,5:1 на {background}: {ratio:.2f}"
+
+    surface = _hex_token(root, "--surface")
+    assert _contrast(mark, surface) < _contrast(_hex_token(root, "--text"), surface), (
+        "пометка не приглушена относительно номера (--text)"
+    )
 
 
 def test_account_label_chip_keeps_the_full_text_in_its_title():
