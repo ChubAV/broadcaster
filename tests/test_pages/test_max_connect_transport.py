@@ -281,10 +281,10 @@ async def test_a_hostile_phone_never_reaches_the_response_raw(
     )
     shown = [message for message in PHONE_ERROR_MESSAGES if message in response.text]
     assert shown, "в теле 422 нет ни одного текста PhoneError"
-    for message in shown:
-        assert "script" not in message and "onfocus" not in message, (
-            "в текст ошибки подставлено введённое значение"
-        )
+    assert response.text.count(HOSTILE_ESCAPED_MARK) == 1, (
+        "введённое значение встречается в теле 422 не один раз (эхо в поле): "
+        "его подставили в текст ошибки"
+    )
     start_session.assert_not_awaited()
     assert await _max_accounts(db_session) == [], "враждебный номер завёл аккаунт"
 

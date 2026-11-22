@@ -60,10 +60,15 @@
         (`includes/profile_settings.html`).
 
         Эхо номера на ветке ошибки едет ТОЛЬКО автоэкранированием макроса поля
-        (T-11-31). -#}
+        (T-11-31).
+
+        ⚠️ ПОДСКАЗКА ПОД ПОЛЕМ ОБЪЯСНЯЕТ, ЗАЧЕМ СПРАШИВАЕТСЯ НОМЕР (Фаза 19,
+        D-10, D-12): он запасной источник — его покажут в списке аккаунтов, если
+        MAX не сообщит номер сам. Значения номера подсказка не несёт и пример
+        написания не повторяет: пример приезжает в тексте ошибки. -#}
     {% call form_wrapper(action='/accounts/connect/max/start', target='#max-connect-step', swap='innerHTML') %}
     <div class="connect-step__form">
-      {{ field(name="phone", label='Номер телефона', type='tel', value=phone or '', placeholder='+7 999 123-45-67', required=true, autocomplete='tel') }}
+      {{ field(name="phone", label='Номер телефона', type='tel', value=phone or '', placeholder='+7 999 123-45-67', required=true, autocomplete='tel', hint='Покажем его в списке аккаунтов, если MAX не сообщит номер сам') }}
       {{ button('Продолжить', variant='primary', extra_class='btn--block') }}
     </div>
     {% endcall %}
