@@ -248,3 +248,82 @@ async def test_the_number_is_not_asked_before_the_account_connects(
     assert row.status == "connecting"
     assert row.phone is None
     assert send_task.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# MAX (Фаза 19, план 19-07): опросчик `GET /accounts/connect/max/status`.
+# Сначала номер, который сообщил сам MAX; не сообщил — номер из формы подключения
+# (его план 19-06 кладёт в `credentials` строки `connecting` как E.164) записывается
+# как АВТОМАТИЧЕСКИЙ, без пометки «указан вручную» (PHONE-14, D-10).
+# ---------------------------------------------------------------------------
+
+MAX_WORKER = "http://max-worker.test:3000"
+MAX_REPORTED = "79995554433"
+MAX_DISPLAY_REPORTED = "+7 999 555-44-33"
+MAX_CONNECTED_TEXT = "MAX подключён!"
+MAX_SYNC_TASK = "app.worker.tasks.sync_max_groups"
+MAX_STATUS_URL = "/accounts/connect/max/status"
+
+
+@contextlib.contextmanager
+def max_worker_answers(*bodies: dict):
+    """Воркер MAX отвечает 200 телами из `bodies` по порядку запросов; отдаёт `(get, send_task)`."""
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=[httpx.Response(200, json=body) for body in bodies])
+    fake_queue = MagicMock()
+    with patch("app.messengers.max.ensure_max_container", return_value=MAX_WORKER):
+        with patch("app.messengers.max.get_http_client", return_value=client):
+            with patch.dict(sys.modules, {"app.worker.celery_app": fake_queue}):
+                yield client.get, fake_queue.celery.send_task
+
+
+@pytest.mark.asyncio
+async def test_entered_a_scanned_b_shows_b(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Критерий 3, D-10, PHONE-14: ввёл A в форме, отсканировал B — в списке показан B, без пометки «вручную»."""
+    from tests.test_pages.test_confirm_delete_transport import HTMX_HEADERS
+    from tests.test_pages.test_max_connect_transport import START_URL, max_bridge
+
+    with max_bridge():
+        started = await authed_client.post(
+            START_URL, data={"phone": "8 999 123 45 67"}, headers=HTMX_HEADERS, follow_redirects=True
+        )
+    assert started.status_code == 200
+    assert "<img" in started.text
+
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(select(MessengerAccount).where(MessengerAccount.type == "max"))
+    ).scalars().all()
+    assert len(rows) == 1
+    aid = rows[0].id
+    assert rows[0].status == "connecting"
+    assert rows[0].credentials == STORED_FORM
+
+    connected = {"connected": True, "exists": True, "syncState": None, "phone": MAX_REPORTED}
+    with max_worker_answers(connected, connected) as (get_mock, send_task):
+        response = await authed_client.get(MAX_STATUS_URL)
+
+    assert response.status_code == 200
+    assert MAX_CONNECTED_TEXT in response.text, response.text
+    assert MAX_REPORTED not in response.text and MAX_DISPLAY_REPORTED not in response.text, (
+        "шаг «Подключено» показал номер (D-12)"
+    )
+
+    row = await _row(db_session, aid)
+    assert row.phone == "+" + MAX_REPORTED, "опрос подключения MAX не записал номер, сообщённый мессенджером"
+    assert row.phone_is_manual is False
+    assert row.status == "syncing"
+    assert row.credentials == str(aid)
+
+    assert send_task.call_count == 1
+    assert send_task.call_args.args == (MAX_SYNC_TASK,)
+    assert send_task.call_args.kwargs == {"args": [aid]}
+    assert get_mock.await_count == 2
+
+    listing = await authed_client.get("/accounts")
+    labels = label_texts(listing.text)[str(aid)]
+    assert labels and all(MAX_DISPLAY_REPORTED in text for text in labels), labels
+    assert all(MANUAL_MARK not in text for text in labels), labels
+    assert all(DISPLAY_FORM not in text for text in labels), labels
