@@ -3,6 +3,18 @@ phase: 18
 review: 18-REVIEW.md
 titles: json
 findings:
+  - id: WR-04
+    severity: warning
+    disposition: open
+    title: "переворот утверждений в гейте предков плашки привязывает охранное правило к стилевому решению и не получил контроля"
+  - id: WR-05
+    severity: warning
+    disposition: open
+    title: "литералы отступа прокрутки (170 / 236 px) не привязаны к высоте шапки, а границы теста живут в самом тесте"
+  - id: IN-04
+    severity: info
+    disposition: open
+    title: "устаревшие имена и перечни ключей после рефакторинга"
   - id: WR-01
     severity: warning
     disposition: open
@@ -27,21 +39,24 @@ findings:
     severity: info
     disposition: open
     title: "тест закрепляет литерал `maxlength == \"64\"` вместо выведения из константы"
-open: 6
-total: 6
-recorded: 2026-11-21T14:34:25.174Z
+open: 9
+total: 9
+recorded: 2026-11-22T11:23:35.784Z
 ---
 
 # Phase 18: Code Review Disposition
 
 | Finding | Severity | Disposition | Source |
 |---------|----------|-------------|--------|
-| WR-01 | warning | open | - |
-| WR-02 | warning | open | - |
-| WR-03 | warning | open | - |
-| IN-01 | info | open | - |
-| IN-02 | info | open | - |
-| IN-03 | info | open | - |
+| WR-04 | warning | open | - |
+| WR-05 | warning | open | - |
+| IN-04 | info | open | - |
+| WR-01 | warning | open | - (not in the current review) |
+| WR-02 | warning | open | - (not in the current review) |
+| WR-03 | warning | open | - (not in the current review) |
+| IN-01 | info | open | - (not in the current review) |
+| IN-02 | info | open | - (not in the current review) |
+| IN-03 | info | open | - (not in the current review) |
 
 Dispositions: `open` (recorded, not yet triaged), `fixed`, `skipped`, `deferred`.
 Set `deferred` by hand and put the reason in the Source cell; both are preserved. A `|` in the reason is kept as prose and escaped on the next run.
