@@ -41,6 +41,19 @@
    номер» (D-09 Фазы 18): браузер, не пускающий пустую отправку, отнял бы у
    человека этот путь. Подсказка под полем — пример написания, а не требование.
 
+   ⚠️ ПОДСКАЗКА НАЗЫВАЕТ ПОСЛЕДСТВИЕ ОЧИСТКИ (UI-P3): «Чтобы стереть номер,
+   очистите поле и нажмите «Сохранить».» Подтверждения нет — D-09 не
+   пересматривается. D-11 («под полем подсказка с примером») держится в обычном
+   состоянии: подсказка — «Пример: …» и предложение о стирании. На ветке ОШИБКИ
+   пример несёт сам текст ошибки (константа Фазы 16, не меняется), и подсказка
+   его не повторяет — остаётся одно предложение о стирании (OBS-422, решение
+   владельца 2026-11-21 включить наблюдение обхода «пример под полем повторён
+   дважды» в gap-раунд, `18-UAT.md`). Условие — «текст ошибки содержит пример»:
+   будущий текст ошибки без примера не оставит поле вовсе без примера. Слов о
+   пустоте в подсказке нет нарочно — они принадлежат отказу пустого ввода,
+   которого форма не показывает. Номера пользователя подсказка не несёт (D-16):
+   статичный текст и пример написания.
+
    ⚠️ ВОЗВРАТ БРАУЗЕРУ ДАННЫХ — `autocomplete` ВЫКЛЮЧЕН: поле не должно
    подставлять собственный номер пользователя, это номер ЧУЖОГО аккаунта.
    Раскладка клавиатуры телефона — `inputmode`.
@@ -61,11 +74,17 @@
 {% from "components/button.html" import button %}
 {% from "components/field.html" import field %}
 {% from "components/form_wrapper.html" import form_wrapper %}
+{%- set erase_sentence = 'Чтобы стереть номер, очистите поле и нажмите «Сохранить».' -%}
+{%- if phone_error and example_phone in phone_error -%}
+  {%- set phone_hint = erase_sentence -%}
+{%- else -%}
+  {%- set phone_hint = 'Пример: ' ~ example_phone ~ '. ' ~ erase_sentence -%}
+{%- endif %}
 
 <div id="acct-phone" data-acct-phone>
   {%- call form_wrapper(action='/accounts/' ~ account_id ~ '/phone', target='#acct-phone', swap='outerHTML') %}
   {{ field(name='phone', label='Номер телефона', type='tel', value=phone_value, id='phone',
-           hint='Пример: ' ~ example_phone, error=phone_error, autocomplete='off',
+           hint=phone_hint, error=phone_error, autocomplete='off',
            inputmode='tel', maxlength=phone_maxlength, autofocus=phone_focus) }}
   {{ button('Сохранить', variant='ghost') }}
   {%- endcall %}
