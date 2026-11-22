@@ -105,6 +105,7 @@ prod-hard-deploy:
     git pull && \
     docker compose -f docker-compose.prod.yml build --no-cache && \
     just max-worker-build --no-cache && \
+    just wa-worker-build --no-cache && \
     docker ps -q --filter "label=broadcaster.role=wa-worker" | xargs -r docker stop && \
     docker ps -aq --filter "label=broadcaster.role=wa-worker" | xargs -r docker rm; \
     docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop && \
@@ -126,9 +127,11 @@ prod-deploy:
     docker compose -f docker-compose.prod.yml up -d
 
 # Build Docker image for prod environment
+# (образ WA собирается и здесь — решение владельца OQ2, Фаза 19)
 prod-build:
     docker compose -f docker-compose.prod.yml build && \
-    just max-worker-build
+    just max-worker-build && \
+    just wa-worker-build
 
 # Show Docker logs (follow)
 prod-logs *args:
