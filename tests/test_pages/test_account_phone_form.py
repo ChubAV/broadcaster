@@ -37,6 +37,7 @@ from app.models.user import User
 from app.pages.identifiers import ID_MAX
 from app.services.phone import (
     EXAMPLE_PHONE,
+    MANUAL_INPUT_MAX_CHARS,
     PHONE_ERROR_BLANK,
     PHONE_ERROR_NOT_A_NUMBER,
     PHONE_ERROR_TOO_LONG,
@@ -271,7 +272,13 @@ async def test_the_screen_carries_the_phone_form_in_the_account_head(
     assert field["value"] == DISPLAY_FORM
     assert field["autocomplete"] == "off"
     assert field["inputmode"] == "tel"
-    assert field["maxlength"] == "64"
+    # Предел браузера — ДВОЙНОЙ ЗАПАС предела сервера (UTF-16 считает символ вне
+    # базовой плоскости за две единицы), а не литерал числа и не равенство пределу
+    # сервера: равный предел молча обрезал бы текст, который сервер принял бы.
+    # Константа — из `app.services.phone`, а не `PHONE_FIELD_MAXLENGTH` модуля
+    # страницы: иначе утверждение стало бы тавтологией.
+    assert int(field["maxlength"]) == 2 * MANUAL_INPUT_MAX_CHARS
+    assert int(field["maxlength"]) > MANUAL_INPUT_MAX_CHARS
     assert "required" not in field, "пустое поле означает очистку, а не ошибку"
     text = " ".join("".join(screen.container_text).split())
     assert f"Пример: {EXAMPLE_PHONE}" in text
