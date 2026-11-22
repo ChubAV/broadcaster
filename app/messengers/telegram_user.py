@@ -39,7 +39,41 @@ class QRAuthState:
     session_string: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=time.time)
+    # Номер собственного пользователя из ответа входа (Фаза 19, D-02). `repr=False`:
+    # датакласс печатает свои поля, и отладочная печать состояния вывела бы номер
+    # (D-07, PHONE-21).
+    own_phone: str | None = field(default=None, repr=False)
     _wait_task: asyncio.Task | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True)
+class QrAuthResult:
+    """Результат снятия сессии мастера: строка сессии и номер из ответа входа.
+
+    Номер едет тем же `pop`, что и строка сессии (D-02): из двух конкурентных
+    вызовов `complete_auth` результат получает ровно один. `repr=False` у номера —
+    D-07, PHONE-21.
+    """
+
+    session_string: str
+    phone: str | None = field(default=None, repr=False)
+
+
+def reported_phone_of(user: object) -> str | None:
+    """Номер из `User`, который вернул вход Telethon; иначе `None`.
+
+    Тотальна (D-05): на моках тестов (`.phone` — не строка), на `None`, на пустой
+    строке и на объекте, чей атрибут `phone` поднимает исключение, отвечает `None`
+    — подключение аккаунта из-за сбоя источника не падает, номер остаётся
+    неизвестным. Номер не форматирует: нормализует писатель (Фаза 16).
+    """
+    try:
+        phone = getattr(user, "phone", None)
+    except Exception:
+        return None
+    if isinstance(phone, str) and phone.strip():
+        return phone
+    return None
 
 
 _qr_sessions: dict[str, QRAuthState] = {}
@@ -84,8 +118,11 @@ async def _wait_for_qr(session_id: str) -> None:
         return
 
     try:
-        await state.qr_login.wait()
-        # Success — user scanned and authorized
+        user = await state.qr_login.wait()
+        # Success — user scanned and authorized. Номер снимается в одном синхронном
+        # блоке со статусом и РАНЬШЕ него: опрос, увидевший успех, видит и номер
+        # (Фаза 19, D-02).
+        state.own_phone = reported_phone_of(user)
         state.session_string = state.client.session.save()
         state.status = "success"
     except asyncio.CancelledError:
@@ -202,12 +239,16 @@ async def submit_2fa(session_id: str, user_id: int, password: str) -> str:
     return state.session_string
 
 
-async def complete_auth(session_id: str, user_id: int) -> str | None:
+async def complete_auth(session_id: str, user_id: int) -> QrAuthResult | None:
     """Get session string of the caller's own successful session and clean up.
 
-    Returns session_string or None. Чужая сессия и сессия не в `success` — None,
-    и сессия не тронута (D-04; D-01: вызов в ином статусе молча уничтожал бы
-    живую сессию).
+    Returns `QrAuthResult(session_string, phone)` or None. Чужая сессия и сессия
+    не в `success` — None, и сессия не тронута (D-04; D-01: вызов в ином статусе
+    молча уничтожал бы живую сессию).
+
+    Фаза 19 (D-02): до неё функция возвращала строку сессии. Номер из ответа входа
+    снимается тем же синхронным блоком после `pop`, до первого ожидания, поэтому
+    едет с той же сессией, что и строка, и достаётся тому же одному вызову.
 
     ⚠️ МЕЖДУ ПРОВЕРКОЙ И `pop` НЕТ `await` (RESEARCH §Pattern 3): из двух
     конкурентных вызовов владельца состояние снимает ровно один — одно
@@ -221,14 +262,16 @@ async def complete_auth(session_id: str, user_id: int) -> str | None:
     if state._wait_task:
         state._wait_task.cancel()
 
-    session_string = state.session_string
+    result = (
+        QrAuthResult(state.session_string, state.own_phone) if state.session_string else None
+    )
 
     try:
         await state.client.disconnect()
     except Exception:
         pass
 
-    return session_string
+    return result
 
 
 def cleanup_qr_session(session_id: str) -> None:

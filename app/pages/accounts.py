@@ -2,6 +2,7 @@ import base64
 import io
 
 import qrcode
+import structlog
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import case, func, select
@@ -15,6 +16,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.application.accounts.labels import load_account_rows
+from app.application.accounts.phone import record_reported_phone
 from app.application.accounts.group_resync import (
     UNEXPECTED_FAILURE_MESSAGE,
     apply_group_resync,
@@ -26,6 +28,7 @@ from app.application.accounts.use_cases import (
     get_sync_status_view,
 )
 from app.messengers.telegram_user import (
+    QrAuthResult,
     TelegramUserMessenger,
     start_qr_auth,
     get_qr_status,
@@ -63,6 +66,7 @@ def _connect_status(macro: str, *args) -> HTMLResponse:
     return HTMLResponse(str(getattr(module, macro)(*args)))
 
 router = APIRouter(tags=["pages"])
+logger = structlog.get_logger(__name__)
 PAGE_SIZE = 30
 
 
@@ -299,7 +303,7 @@ def _tg_step_markup(
     )
 
 
-async def _save_tg_account(db: AsyncSession, user, session_string: str) -> None:
+async def _save_tg_account(db: AsyncSession, user, result: QrAuthResult) -> None:
     """ЕДИНСТВЕННОЕ место записи аккаунта Telegram, подключённого по QR.
 
     Мест, где мастер сохраняет аккаунт, два: опрос, первым увидевший
@@ -307,16 +311,26 @@ async def _save_tg_account(db: AsyncSession, user, session_string: str) -> None:
     запись двух мест сведена сюда, иначе они разойдутся (CONTEXT §Integration
     Points). Строка сессии берётся из результата `complete_auth`, который снимает
     сессию до первого ожидания, — поэтому одно сканирование даёт один аккаунт.
+
+    Фаза 19. Номер приходит из ответа самого входа (D-02) в том же результате
+    `complete_auth`, что и строка сессии. Пишет его только писатель Фазы 16
+    `record_reported_phone` (D-01): признак «указан вручную» не ставится, а номер
+    и `status="active"` уходят ОДНИМ коммитом. Сейвпоинта нет: мусор писатель
+    отклоняет `UNPARSEABLE` без обращения к базе, а громкий `ValueError` при
+    аккаунте вне сессии обязан остаться громким. В журнал идут только `account_id`
+    и исход, без значения номера (D-07, PHONE-21). Шаг «Подключено» мастера номер
+    не показывает (D-12) — он виден в списке аккаунтов.
     """
-    db.add(
-        MessengerAccount(
-            user_id=user.id,
-            type="tg_user",
-            credentials=session_string,
-            status="active",
-        )
+    account = MessengerAccount(
+        user_id=user.id,
+        type="tg_user",
+        credentials=result.session_string,
+        status="active",
     )
+    db.add(account)
+    outcome = await record_reported_phone(db, account, result.phone)
     await db.commit()
+    logger.info("tg_phone_captured", account_id=account.id, outcome=outcome.value)
 
 
 @router.post("/accounts/connect/tg_user/start-qr", response_class=HTMLResponse)
@@ -434,9 +448,9 @@ async def accounts_connect_tg_user_qr_status(
     step = "error"
     error: str | None = TG_AUTH_FAILED_MESSAGE
     if status == "success":
-        session_string = await complete_auth(session_id, user.id)
-        if session_string:
-            await _save_tg_account(db, user, session_string)
+        result = await complete_auth(session_id, user.id)
+        if result:
+            await _save_tg_account(db, user, result)
             step, error = "connected", None
         else:
             # Проигравший гонку: сессию снял другой запрос того же владельца.
@@ -597,9 +611,9 @@ async def accounts_connect_tg_user_verify_2fa(
                     "tg_verify_2fa_error", error_type=type(e).__name__
                 )
             else:
-                session_string = await complete_auth(session_id, user.id)
-                if session_string:
-                    await _save_tg_account(db, user, session_string)
+                result = await complete_auth(session_id, user.id)
+                if result:
+                    await _save_tg_account(db, user, result)
                     step, error = "connected", None
                 else:
                     # Проигравший гонку: сессию снял другой запрос.

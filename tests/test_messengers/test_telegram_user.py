@@ -395,7 +395,9 @@ async def test_complete_auth():
         client=mock_client, user_id=OWNER, session_string="saved_session_123", status="success"
     )
     result = await complete_auth("complete_test", OWNER)
-    assert result == "saved_session_123"
+    # Фаза 19 (D-02): возврат — `QrAuthResult`, а не строка; строка сессии в нём.
+    assert result.session_string == "saved_session_123"
+    assert result.phone is None
     assert "complete_test" not in _qr_sessions
 
 
@@ -662,7 +664,8 @@ async def test_a_foreign_complete_leaves_the_session_alone():
         assert not wait_task.cancel.called, "чужой вызов отменил ожидание сканирования владельца"
         assert not client.disconnect.await_count, "чужой вызов отключил клиента владельца"
 
-        assert await complete_auth("sid-victim", OWNER) == "owner-session", (
+        owners = await complete_auth("sid-victim", OWNER)
+        assert owners is not None and owners.session_string == "owner-session", (
             "владелец после чужого вызова не получил строку своей сессии"
         )
         assert "sid-victim" not in _qr_sessions, "сессия пережила завершение владельцем"
@@ -713,7 +716,7 @@ async def test_concurrent_completes_yield_one_session_string():
         results = await asyncio.gather(
             complete_auth("sid-race", OWNER), complete_auth("sid-race", OWNER)
         )
-        assert [r for r in results if r] == ["one-scan"], (
+        assert [r.session_string for r in results if r] == ["one-scan"], (
             f"два конкурентных завершения дали {results!r} — одно сканирование, "
             "два аккаунта (D-01)"
         )
