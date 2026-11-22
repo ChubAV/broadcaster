@@ -16,6 +16,7 @@ from app.models.messenger_account import MessengerAccount
 from app.models.schedule import Schedule
 from app.models.send_log import SendLog
 from app.application.accounts.labels import load_account_rows
+from app.application.accounts.connect_phone import capture_connect_phone
 from app.application.accounts.phone import record_reported_phone
 from app.application.accounts.group_resync import (
     UNEXPECTED_FAILURE_MESSAGE,
@@ -762,13 +763,22 @@ async def accounts_connect_wa_status(
     try:
         is_connected = await messenger.check_connection()
         if is_connected:
+            # Номер и `syncing` уходят ОДНИМ коммитом (D-01). Захват — в собственной
+            # обёртке с сейвпоинтом (внутри помощника): сбой в общем `try` ниже дал бы
+            # «Ошибку соединения» и вечный `connecting` (D-05, Pitfall 5). Номер
+            # читается одним дополнительным GET, без повтора (D-15), а шаг
+            # «Подключено» его не показывает (D-12). `account_id` снят заранее: после
+            # отката сейвпоинта чтение атрибута объекта от его загрузки не зависит.
+            account_id = account.id
+            reported_phone = await messenger.get_own_phone()
+            await capture_connect_phone(db, account_id, reported_phone)
             account.credentials = session_id
             account.status = "syncing"
             await db.commit()
 
             # Dispatch background Celery task to poll bridge and save groups
             from app.worker.celery_app import celery
-            celery.send_task("app.worker.tasks.sync_wa_groups", args=[account.id])
+            celery.send_task("app.worker.tasks.sync_wa_groups", args=[account_id])
 
             return _connect_status("connected", "WhatsApp")
 
