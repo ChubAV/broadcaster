@@ -117,11 +117,19 @@ def worker(monkeypatch, tmp_path):
     return module
 
 
-def install_fake_client(monkeypatch, worker):
+class ThrowingMeWebClient(FakeWebClient):
+    """A client whose ``me`` property raises; the message carries a number."""
+
+    @property
+    def me(self):
+        raise RuntimeError("boom 79991234567")
+
+
+def install_fake_client(monkeypatch, worker, client_class=FakeWebClient):
     clients = []
 
     def construct(**kwargs):
-        client = FakeWebClient(**kwargs)
+        client = client_class(**kwargs)
         clients.append(client)
         return client
 
@@ -387,6 +395,98 @@ async def test_the_form_number_never_leaks_into_the_status_answer(worker, monkey
 
     assert state.phone == "+79990000000"
     assert "phone" in answer and answer["phone"] is None
+
+
+@pytest.mark.parametrize(
+    "client",
+    [
+        pytest.param(FakeWebClient(), id="no-me-attribute"),
+        pytest.param(SimpleNamespace(me=None), id="me-none"),
+        pytest.param(SimpleNamespace(me=SimpleNamespace(contact=None)), id="contact-none"),
+        pytest.param(SimpleNamespace(me=SimpleNamespace(contact=SimpleNamespace(phone=None))), id="phone-none"),
+        pytest.param(SimpleNamespace(me=SimpleNamespace(contact=SimpleNamespace(phone=True))), id="bool-true"),
+        pytest.param(SimpleNamespace(me=SimpleNamespace(contact=SimpleNamespace(phone=False))), id="bool-false"),
+        pytest.param(SimpleNamespace(me=SimpleNamespace(contact=SimpleNamespace(phone=0))), id="zero"),
+        pytest.param(SimpleNamespace(me=SimpleNamespace(contact=SimpleNamespace(phone=-79991234567))), id="negative"),
+        pytest.param(SimpleNamespace(me=SimpleNamespace(contact=SimpleNamespace(phone="79991234567"))), id="string"),
+    ],
+)
+def test_own_phone_of_answers_none_at_every_boundary(worker, client):
+    assert worker.own_phone_of(client) is None
+
+
+@pytest.mark.parametrize("number", [79991234567, 999999999999999])
+def test_own_phone_of_converts_an_integer_exactly(worker, number):
+    client = SimpleNamespace(me=SimpleNamespace(contact=SimpleNamespace(phone=number)))
+
+    result = worker.own_phone_of(client)
+
+    assert result == str(number)
+    assert isinstance(result, str)
+    assert "." not in result and "e" not in result.lower()
+    assert result.isdigit()
+
+
+def _break_own_phone_of(worker, monkeypatch):
+    def explode(client):
+        raise RuntimeError("boom 79991234567")
+
+    monkeypatch.setattr(worker, "own_phone_of", explode)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["me-property-raises", "capture-raises"])
+async def test_a_failing_capture_does_not_break_the_connection(worker, monkeypatch, failure):
+    if failure == "me-property-raises":
+        clients = install_fake_client(monkeypatch, worker, ThrowingMeWebClient)
+    else:
+        clients = install_fake_client(monkeypatch, worker)
+        _break_own_phone_of(worker, monkeypatch)
+    state = await worker.create_client("+79990000000")
+    client = clients[0]
+
+    await client.start_handler(client)
+
+    assert state.is_connected is True
+    assert state.ready_event.is_set()
+    assert state.sync_state == "ready"
+    assert state.own_phone is None
+    assert (await worker.get_session_status("42"))["phone"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["number-reported", "me-property-raises", "capture-raises"])
+async def test_the_capture_writes_no_number_to_the_log(worker, monkeypatch, caplog, path):
+    if path == "me-property-raises":
+        clients = install_fake_client(monkeypatch, worker, ThrowingMeWebClient)
+    else:
+        clients = install_fake_client(monkeypatch, worker)
+    if path == "capture-raises":
+        _break_own_phone_of(worker, monkeypatch)
+    await worker.create_client("")
+    client = clients[0]
+    if path == "number-reported":
+        client.me = SimpleNamespace(contact=SimpleNamespace(phone=79991234567))
+
+    with caplog.at_level("DEBUG"):
+        await client.start_handler(client)
+        await worker.get_session_status("42")
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert not [m for m in messages if "9991234567" in m]
+    if path == "capture-raises":
+        failures = [m for m in messages if "own_phone_capture_failed" in m]
+        assert failures and "error_type=RuntimeError" in failures[0]
+        assert "account_id=42" in failures[0]
+
+
+@pytest.mark.asyncio
+async def test_the_no_session_answer_carries_no_phone_field(worker):
+    worker.session = None
+
+    answer = await worker.get_session_status("42")
+
+    assert "phone" not in answer
 
 
 @pytest.mark.asyncio
