@@ -472,9 +472,17 @@ async def account_phone_save(
             return templates.TemplateResponse("account_groups/list.html", context)
 
         async def _error_fragment() -> HTMLResponse:
-            """Тот же включаемый шаблон формы с присланным значением и ошибкой."""
+            """Форма с присланным значением и ошибкой плюс снятие прежней плашки (OBS-422).
+
+            Ответ 422 с JS несёт пустой блок подмены содержимого вежливой области
+            `#notice`: зелёная плашка прошлого сохранения над свежей ошибкой лгала
+            бы об исходе последнего действия (D-13, D-03). Общий слой
+            `respond_field_error` не меняется — его потребители 28 маршрутов
+            приёмника 422, а наблюдение касается только этой формы. Блок пуст:
+            ни номера, ни кода исхода в нём нет (D-16).
+            """
             html = templates.env.get_template(
-                "account_groups/includes/phone_form.html"
+                "account_groups/partials/phone_error_response.html"
             ).render(
                 account_id=account_id,
                 phone_value=phone_text,

@@ -123,6 +123,51 @@ def _screen(html: str) -> _Screen:
     return parser
 
 
+class _OobBlocks(HTMLParser):
+    """Внеполосные блоки ответа: значение признака подмены, внутренний текст и число потомков.
+
+    Считаются только блоки верхнего уровня; вложенный в блок элемент в счёт не идёт,
+    а увеличивает `children` своего блока.
+    """
+
+    _VOID = frozenset({"input", "br", "hr", "img", "link", "meta"})
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[dict[str, object]] = []
+        self._current: dict[str, object] | None = None
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if self._current is not None:
+            self._current["children"] = int(self._current["children"]) + 1  # type: ignore[arg-type]
+            if tag not in self._VOID:
+                self._depth += 1
+            return
+        a = {k: (v if v is not None else "") for k, v in attrs}
+        if "hx-swap-oob" in a:
+            self._current = {"value": a["hx-swap-oob"], "text": "", "children": 0}
+            self.blocks.append(self._current)
+            self._depth = 1
+
+    def handle_data(self, data: str) -> None:
+        if self._current is not None:
+            self._current["text"] = str(self._current["text"]) + data
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._current is not None:
+            self._depth -= 1
+            if self._depth == 0:
+                self._current = None
+
+
+def _oob_blocks(html: str) -> list[dict[str, object]]:
+    parser = _OobBlocks()
+    parser.feed(html)
+    parser.close()
+    return parser.blocks
+
+
 def _echoed_value(html: str) -> str | None:
     """Значение поля `phone` в ответе (единственного)."""
     inputs = _screen(html).phone_inputs
@@ -269,7 +314,10 @@ async def test_an_invalid_number_answers_422_with_the_echo_on_both_transports(
     assert "<!DOCTYPE" not in fragment.text
     assert _echoed_value(fragment.text) == "abc"
     assert PHONE_ERROR_NOT_A_NUMBER in fragment.text
-    assert "hx-swap-oob" not in fragment.text, "на 422 приклейки уведомления нет"
+    fragment_blocks = _oob_blocks(fragment.text)
+    assert [block["value"] for block in fragment_blocks] == ["innerHTML:#notice"], (
+        "единственный внеполосный блок 422 — пустая подмена содержимого `#notice`"
+    )
     assert not [name for name in fragment.headers if name.lower().startswith("hx-")]
 
     too_long = await authed_client.post(
@@ -296,6 +344,50 @@ async def test_an_invalid_number_answers_422_with_the_echo_on_both_transports(
     assert await _stored(db_session, account_id) == (STORED_FORM, True), (
         "неверный ввод не имеет права менять номер в базе"
     )
+
+
+@pytest.mark.asyncio
+async def test_a_422_htmx_answer_clears_the_previous_notice(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """ТРАССЕР (D-13, D-03, D-16, OBS-422): 422 с JS снимает плашку прошлого сохранения.
+
+    После годного сохранения вежливая область несёт «Номер сохранён.»; ответ 422 на
+    следующий неверный ввод обязан опустошить её пустым блоком подмены содержимого
+    `#notice`: ни текста, ни потомков, ни кода исхода, ни цифр номера. Настойчивую
+    область `#notice-alert` ответ не трогает.
+    """
+    account_id = await seed_account(db_session, owner.id, "tg_user")
+
+    saved = await authed_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": "8 999 123 45 67"},
+        headers=HTMX,
+        follow_redirects=False,
+    )
+    assert saved.status_code == 200
+    assert "Номер сохранён." in saved.text
+
+    refused = await authed_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": "abc"},
+        headers=HTMX,
+        follow_redirects=False,
+    )
+    assert refused.status_code == 422
+    blocks = _oob_blocks(refused.text)
+    assert [block["value"] for block in blocks] == ["innerHTML:#notice"], (
+        "422 с JS не снимает прежнюю плашку"
+    )
+    (block,) = blocks
+    assert str(block["text"]).strip() == "" and block["children"] == 0, (
+        "блок, снимающий плашку, обязан быть пустым"
+    )
+    assert "#notice-alert" not in refused.text
+    for leaked in ("phone_saved", "phone_cleared", "Номер сохранён.", "Номер удалён.", "9991234567"):
+        assert leaked not in refused.text, f"в ответе 422 стоит {leaked!r}"
+    assert PHONE_ERROR_NOT_A_NUMBER in refused.text
+    assert _echoed_value(refused.text) == "abc"
 
 
 # --- 5. Очистка ---------------------------------------------------------------
