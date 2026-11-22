@@ -2538,7 +2538,17 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
    нехватке места усекается ОНА, а не различитель — `flex-shrink: 4` заставляет её
    уступать место раньше номера (у номера единица), `.acct-label__id` по-прежнему
    `flex: none`. Приглушение — базовое правило вне контейнеров: там фраза
-   переносится целиком (`nowrap` держит её неразрывной). */
+   переносится целиком (`nowrap` держит её неразрывной).
+
+   ⚠️ ОПРОВЕРГНУТО обходом (G-18-6, 2026-11-21): `flex-shrink` — пропорциональный
+   вес (CSS Flexbox §9.7), он делил нехватку между всеми сжимаемыми частями сразу
+   и резал номер вместе с пометкой; никакое его значение номер целым не оставляет.
+   Поколение плана 18-04: приоритет, а не вес — у пометки основа 0 и рост до
+   собственной ширины (`flex: 1 1 0; max-width: max-content`), поэтому номер
+   сжимается только когда пометка ушла в ноль. Номер и канал нарочно НЕ
+   несжимаемые: в чипе это вытолкнуло бы `#id` двойника за край (PHONE-05 Фазы
+   17). В чипе на 320 px усечённый номер с полным текстом в `title=` допустим —
+   решение владельца; канал раньше номера не уступает. */
 .chip__label > .acct-label,
 .acct-head__name > .acct-label {
   display: inline-flex; align-items: baseline; gap: 0.25em;
@@ -2556,7 +2566,8 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
 .acct-label__manual { color: var(--text-muted); white-space: nowrap; }
 .chip__label .acct-label__manual,
 .acct-head__name .acct-label__manual {
-  flex-shrink: 4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 0; max-width: max-content;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .acct-label__id { flex: none; }
 .chip:has(.chip__input:checked), .chip--on {
@@ -2821,8 +2832,13 @@ a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px
   flex: none; min-width: 0;
   display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px;
 }
+/* Ряд действий шапки экрана групп. Перелив на 320 px существовал с `bef29322`
+   (Фаза 3) и включён в G-18-6 решением владельца 2026-11-21: несжимаемый
+   (`flex: none`) ряд держался на max-content (318,5 px), и его собственный
+   `flex-wrap` не срабатывал — «К аккаунтам» выходила за карточку. Сжимаемый ряд
+   (`flex: 0 1 auto; min-width: 0`) переносит кнопки своей строкой внутри карточки. */
 .acct-head__actions {
-  flex: none; margin-left: auto;
+  flex: 0 1 auto; min-width: 0; margin-left: auto;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
 }
 [data-acct-head] .btn { min-height: 40px; }
