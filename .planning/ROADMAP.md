@@ -394,17 +394,17 @@ Plans:
   4. Воркер WA или MAX старого образа, не отдающий номер в `/status`, подключает аккаунт как раньше: номер остаётся «неизвестен», подключение не падает, и пустое значение никогда не пишется поверх известного (тест на `/status` старой формы).
   5. `just prod-deploy` и `just prod-hard-deploy` пересобирают оба образа воркеров — WA и MAX (сегодня `wa-worker-build` не вызывается ни одним деплой-рецептом), так что правка `wa_worker/index.js` доезжает до боя вместе с кодом (машинно).
 
-**Plans**: 8 планов, из них 1 исполнено (после слияния волны 1 — 19-01 — 2026-11-22, прогон `/gsd-execute-phase 19`; до неё — «8 планов, из них 0 исполнено»: спланировано 2026-11-22, прогон `/gsd-plan-phase 19`; ревизия 1 по проверке планов разделила форму и захват MAX на планы 06 и 07 по бюджету, обход стал планом 08; до планирования — «TBD»). Волна 1 — план 01 (Telegram: номер из ответа входа по QR и 2FA, без второго подключения; отдельно от стенда по D-13); волна 2 — планы 02, 03, 04 и 05 параллельно (воркер WA: номер из `creds.me.id` через `isPnUser`/`jidDecode`, LID → неизвестен; воркер MAX: `client.me.contact.phone` в `/status`; деплой: `wa-worker-build *args` в `prod-deploy`, `prod-hard-deploy` и `prod-build` по решению владельца; приложение WA: захват номера в опросчике статуса с сейвпоинтом и общий помощник захвата — `app/pages/accounts.py` правят 01, затем 05); волна 3 — план 06 (форма MAX: `normalize_manual`, 422 с подсказкой до открытия QR); волна 4 — план 07 (захват MAX: номер мессенджера, иначе номер формы — как автоматический, «ввёл A, отсканировал B → показан B», старый образ по решению владельца); волна 5 — план 08 (ручной обход WA и MAX на бою после выката, чекпойнт владельца).
+**Plans**: 8 планов, из них 5 исполнено (после слияния волны 2 — 19-02, 19-03, 19-04, 19-05 — 2026-11-22, прогон `/gsd-execute-phase 19`; до неё — «8 планов, из них 1 исполнено»: после слияния волны 1 — 19-01 — 2026-11-22, прогон `/gsd-execute-phase 19`; до неё — «8 планов, из них 0 исполнено»: спланировано 2026-11-22, прогон `/gsd-plan-phase 19`; ревизия 1 по проверке планов разделила форму и захват MAX на планы 06 и 07 по бюджету, обход стал планом 08; до планирования — «TBD»). Волна 1 — план 01 (Telegram: номер из ответа входа по QR и 2FA, без второго подключения; отдельно от стенда по D-13); волна 2 — планы 02, 03, 04 и 05 параллельно (воркер WA: номер из `creds.me.id` через `isPnUser`/`jidDecode`, LID → неизвестен; воркер MAX: `client.me.contact.phone` в `/status`; деплой: `wa-worker-build *args` в `prod-deploy`, `prod-hard-deploy` и `prod-build` по решению владельца; приложение WA: захват номера в опросчике статуса с сейвпоинтом и общий помощник захвата — `app/pages/accounts.py` правят 01, затем 05); волна 3 — план 06 (форма MAX: `normalize_manual`, 422 с подсказкой до открытия QR); волна 4 — план 07 (захват MAX: номер мессенджера, иначе номер формы — как автоматический, «ввёл A, отсканировал B → показан B», старый образ по решению владельца); волна 5 — план 08 (ручной обход WA и MAX на бою после выката, чекпойнт владельца).
 
 Plans:
 **Wave 1**
 - [x] 19-01-PLAN.md — TG: `QrAuthResult`, `reported_phone_of`, `QRAuthState.own_phone` (`repr=False`); номер из того же `pop`, что строка сессии, пишет `record_reported_phone` в коммите `status="active"`; без `get_me` (волна 1, tracer — подключение по QR до номера в списке)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 19-02-PLAN.md — Воркер WA: новый `wa_worker/own_phone.js` (`ownPhoneFromMe`), поле `phone` в `/status`; JS-юнит на четырёх входах D-03 через `run_node_script`, пин Baileys `7.0.0-rc14` (волна 2)
-- [ ] 19-03-PLAN.md — Воркер MAX: `own_phone_of`, `SessionState.own_phone`, захват в `on_start` в защитной обёртке, поле `phone` в `/status` (волна 2)
-- [ ] 19-04-PLAN.md — Деплой: `wa-worker-build *args`; образ WA в `prod-deploy`, `prod-hard-deploy` (`--no-cache`) и `prod-build` до остановки контейнеров; тест `tests/test_wa_worker_deployment.py` (волна 2)
-- [ ] 19-05-PLAN.md — Приложение WA: `reported_phone_from_status`, `WhatsAppMessenger.get_own_phone`, `capture_connect_phone` (сейвпоинт над `fill_reported_phone`, сначала номер мессенджера, затем запас) в `accounts_connect_wa_status`; `/status` старой формы — номер неизвестен, подключение идёт (волна 2)
+- [x] 19-02-PLAN.md — Воркер WA: новый `wa_worker/own_phone.js` (`ownPhoneFromMe`), поле `phone` в `/status`; JS-юнит на четырёх входах D-03 через `run_node_script`, пин Baileys `7.0.0-rc14` (волна 2)
+- [x] 19-03-PLAN.md — Воркер MAX: `own_phone_of`, `SessionState.own_phone`, захват в `on_start` в защитной обёртке, поле `phone` в `/status` (волна 2)
+- [x] 19-04-PLAN.md — Деплой: `wa-worker-build *args`; образ WA в `prod-deploy`, `prod-hard-deploy` (`--no-cache`) и `prod-build` до остановки контейнеров; тест `tests/test_wa_worker_deployment.py` (волна 2)
+- [x] 19-05-PLAN.md — Приложение WA: `reported_phone_from_status`, `WhatsAppMessenger.get_own_phone`, `capture_connect_phone` (сейвпоинт над `fill_reported_phone`, сначала номер мессенджера, затем запас) в `accounts_connect_wa_status`; `/status` старой формы — номер неизвестен, подключение идёт (волна 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 19-06-PLAN.md — Форма MAX: `normalize_manual`, 422 через `PhoneError` с эхом в поле, подсказка под полем, `credentials` нормализованным E.164; обработчик старта не пишет колонку номера (волна 3)
@@ -442,7 +442,7 @@ Plans:
 | 16. Хранение номера, нормализация и единый писатель | v2.2 | 64/64 | Complete    | 2026-11-20 |
 | 17. Показ номера на всех экранах | v2.2 | 9/9 | Complete    | 2026-11-21 |
 | 18. Ручная правка номера | v2.2 | 8/8 | Complete    | 2026-11-22 |
-| 19. Захват номера при подключении | v2.2 | 1/8 | In Progress | - |
+| 19. Захват номера при подключении | v2.2 | 5/8 | In Progress | - |
 | 20. Дозаполнение номеров существующих аккаунтов | v2.2 | 0/TBD | Not started | - |
 
 ## Перенесено незакрытым из v2.1
