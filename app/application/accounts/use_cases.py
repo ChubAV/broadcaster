@@ -54,32 +54,13 @@ async def get_sync_status_view(session: AsyncSession, user_id: int, account_id: 
     # остальной статистикой строки, и блок статуса читает именно его. Отдельный
     # `SELECT` по группам был бы вторым подсчётом того же числа — на каждый
     # ответ опроса, то есть раз в пять секунд на открытую вкладку.
-    if account.status == "active":
-        return SyncStatusView(
-            status="active",
-            messenger_type=account.type,
-            phone=account.phone,
-            phone_is_manual=account.phone_is_manual,
-        )
-
-    if account.status == "sync_failed":
-        return SyncStatusView(
-            status="sync_failed",
-            messenger_type=account.type,
-            phone=account.phone,
-            phone_is_manual=account.phone_is_manual,
-        )
-
-    if account.status == "syncing":
-        return SyncStatusView(
-            status="syncing",
-            messenger_type=account.type,
-            phone=account.phone,
-            phone_is_manual=account.phone_is_manual,
-        )
-
+    # Статусы карточки опроса, которые передаются как есть; прочие (`connecting`
+    # и т. п.) читаются как `other`. Каждый новый признак карточки добавляется
+    # здесь, в одном конструкторе, а забытое поле роняет `TypeError` (план 18-06,
+    # WR-03).
+    status = account.status if account.status in {"active", "sync_failed", "syncing"} else "other"
     return SyncStatusView(
-        status="other",
+        status=status,
         messenger_type=account.type,
         phone=account.phone,
         phone_is_manual=account.phone_is_manual,
