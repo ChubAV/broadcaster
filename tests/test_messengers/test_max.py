@@ -137,6 +137,79 @@ async def test_check_connection_exception():
         assert result is False
 
 
+def _status_client(*, status_code=200, body=None, json_raises=None, get_raises=None):
+    """Подмена HTTP-клиента: один ответ `/status` или сбой на нужном шаге."""
+    response = MagicMock()
+    response.status_code = status_code
+    if json_raises is not None:
+        response.json.side_effect = json_raises
+    else:
+        response.json.return_value = body
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=get_raises) if get_raises else AsyncMock(return_value=response)
+    return client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ({"connected": True, "phone": "79991234567"}, "79991234567"),
+        ({"connected": True, "phone": 79991234567}, "79991234567"),
+        ({"connected": True}, None),
+        ({"connected": True, "phone": None}, None),
+        ({"connected": True, "phone": ""}, None),
+        ({"connected": True, "phone": True}, None),
+        ({"connected": True, "phone": 0}, None),
+        ({"connected": True, "phone": []}, None),
+        (["79991234567"], None),
+    ],
+    ids=[
+        "string", "integer", "old-shape", "null", "empty", "bool", "zero", "list", "not-a-dict",
+    ],
+)
+async def test_get_own_phone_reads_only_a_usable_phone_field(body, expected):
+    """D-14: `phone` — непустая строка или целое > 0; всё прочее (и старая форма `/status`) — `None`."""
+    messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="42")
+    client = _status_client(body=body)
+
+    with patch("app.messengers.max.get_http_client", return_value=client):
+        assert await messenger.get_own_phone() == expected
+
+    assert client.get.call_args[0][0] == "http://fake:3000/api/sessions/42/status"
+
+
+@pytest.mark.asyncio
+async def test_get_own_phone_is_none_when_the_worker_answers_with_an_error_status():
+    messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="42")
+    client = _status_client(status_code=500, body={"phone": "79991234567"})
+
+    with patch("app.messengers.max.get_http_client", return_value=client):
+        assert await messenger.get_own_phone() is None
+
+
+@pytest.mark.asyncio
+async def test_get_own_phone_is_none_when_the_body_is_not_json():
+    messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="42")
+    client = _status_client(json_raises=ValueError("not json"))
+
+    with patch("app.messengers.max.get_http_client", return_value=client):
+        assert await messenger.get_own_phone() is None
+
+
+@pytest.mark.asyncio
+async def test_get_own_phone_logs_only_the_error_type_when_the_transport_fails():
+    """PHONE-21: запись `get_own_phone_failed` без текста исключения."""
+    messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="42")
+    client = _status_client(get_raises=ConnectionError("refused 79991234567"))
+
+    with patch("app.messengers.max.get_http_client", return_value=client):
+        with patch.object(messenger, "log") as log:
+            assert await messenger.get_own_phone() is None
+
+    log.warning.assert_called_once_with("get_own_phone_failed", error_type="ConnectionError")
+
+
 @pytest.mark.asyncio
 async def test_get_groups_success():
     messenger = MaxMessenger(bridge_url="http://fake:3000", session_id="1")

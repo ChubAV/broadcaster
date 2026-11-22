@@ -248,3 +248,279 @@ async def test_the_number_is_not_asked_before_the_account_connects(
     assert row.status == "connecting"
     assert row.phone is None
     assert send_task.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# MAX (Фаза 19, план 19-07): опросчик `GET /accounts/connect/max/status`.
+# Сначала номер, который сообщил сам MAX; не сообщил — номер из формы подключения
+# (его план 19-06 кладёт в `credentials` строки `connecting` как E.164) записывается
+# как АВТОМАТИЧЕСКИЙ, без пометки «указан вручную» (PHONE-14, D-10).
+# ---------------------------------------------------------------------------
+
+MAX_WORKER = "http://max-worker.test:3000"
+MAX_REPORTED = "79995554433"
+MAX_DISPLAY_REPORTED = "+7 999 555-44-33"
+MAX_CONNECTED_TEXT = "MAX подключён!"
+MAX_SYNC_TASK = "app.worker.tasks.sync_max_groups"
+MAX_STATUS_URL = "/accounts/connect/max/status"
+
+
+@contextlib.contextmanager
+def max_worker_answers(*bodies: dict):
+    """Воркер MAX отвечает 200 телами из `bodies` по порядку запросов; отдаёт `(get, send_task)`."""
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=[httpx.Response(200, json=body) for body in bodies])
+    fake_queue = MagicMock()
+    with patch("app.messengers.max.ensure_max_container", return_value=MAX_WORKER):
+        with patch("app.messengers.max.get_http_client", return_value=client):
+            with patch.dict(sys.modules, {"app.worker.celery_app": fake_queue}):
+                yield client.get, fake_queue.celery.send_task
+
+
+@pytest.mark.asyncio
+async def test_entered_a_scanned_b_shows_b(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Критерий 3, D-10, PHONE-14: ввёл A в форме, отсканировал B — в списке показан B, без пометки «вручную»."""
+    from tests.test_pages.test_confirm_delete_transport import HTMX_HEADERS
+    from tests.test_pages.test_max_connect_transport import START_URL, max_bridge
+
+    with max_bridge():
+        started = await authed_client.post(
+            START_URL, data={"phone": "8 999 123 45 67"}, headers=HTMX_HEADERS, follow_redirects=True
+        )
+    assert started.status_code == 200
+    assert "<img" in started.text
+
+    db_session.expire_all()
+    rows = (
+        await db_session.execute(select(MessengerAccount).where(MessengerAccount.type == "max"))
+    ).scalars().all()
+    assert len(rows) == 1
+    aid = rows[0].id
+    assert rows[0].status == "connecting"
+    assert rows[0].credentials == STORED_FORM
+
+    connected = {"connected": True, "exists": True, "syncState": None, "phone": MAX_REPORTED}
+    with max_worker_answers(connected, connected) as (get_mock, send_task):
+        response = await authed_client.get(MAX_STATUS_URL)
+
+    assert response.status_code == 200
+    assert MAX_CONNECTED_TEXT in response.text, response.text
+    assert MAX_REPORTED not in response.text and MAX_DISPLAY_REPORTED not in response.text, (
+        "шаг «Подключено» показал номер (D-12)"
+    )
+
+    row = await _row(db_session, aid)
+    assert row.phone == "+" + MAX_REPORTED, "опрос подключения MAX не записал номер, сообщённый мессенджером"
+    assert row.phone_is_manual is False
+    assert row.status == "syncing"
+    assert row.credentials == str(aid)
+
+    assert send_task.call_count == 1
+    assert send_task.call_args.args == (MAX_SYNC_TASK,)
+    assert send_task.call_args.kwargs == {"args": [aid]}
+    assert get_mock.await_count == 2
+
+    listing = await authed_client.get("/accounts")
+    labels = label_texts(listing.text)[str(aid)]
+    assert labels and all(MAX_DISPLAY_REPORTED in text for text in labels), labels
+    assert all(MANUAL_MARK not in text for text in labels), labels
+    assert all(DISPLAY_FORM not in text for text in labels), labels
+
+
+async def _start_max_form(client: AsyncClient, db: AsyncSession, typed: str = DISPLAY_FORM) -> int:
+    """Форма подключения MAX с номером `typed`: возвращает id строки `connecting` (в `credentials` — E.164)."""
+    from tests.test_pages.test_confirm_delete_transport import HTMX_HEADERS
+    from tests.test_pages.test_max_connect_transport import START_URL, max_bridge
+
+    with max_bridge():
+        started = await client.post(START_URL, data={"phone": typed}, headers=HTMX_HEADERS, follow_redirects=True)
+    assert started.status_code == 200
+    db.expire_all()
+    rows = (
+        await db.execute(select(MessengerAccount).where(MessengerAccount.type == "max"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].credentials == STORED_FORM, "форма MAX не положила номер в credentials"
+    return rows[0].id
+
+
+async def _max_poll_and_read(
+    client: AsyncClient, db: AsyncSession, account_id: int, *bodies: dict
+) -> tuple[httpx.Response, MessengerAccount, AsyncMock, MagicMock]:
+    """Один опрос подключения MAX с заданными ответами воркера; строка перечитана из базы."""
+    with max_worker_answers(*bodies) as (get_mock, send_task):
+        response = await client.get(MAX_STATUS_URL)
+    return response, await _row(db, account_id), get_mock, send_task
+
+
+def _assert_max_connected_and_syncing(response, row, send_task, account_id: int) -> None:
+    assert response.status_code == 200
+    assert MAX_CONNECTED_TEXT in response.text, response.text
+    assert row.status == "syncing"
+    assert row.credentials == str(account_id)
+    assert send_task.call_count == 1
+    assert send_task.call_args.args == (MAX_SYNC_TASK,)
+    assert send_task.call_args.kwargs == {"args": [account_id]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [None, "", 0, False], ids=["null", "empty-string", "zero", "false"])
+async def test_max_without_a_reported_number_shows_the_form_number_without_the_manual_mark(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, empty
+):
+    """D-10, PHONE-14: MAX номер не отдал — показан номер из формы, записанный как автоматический."""
+    aid = await _start_max_form(authed_client, db_session)
+    body = {"connected": True, "exists": True, "syncState": None, "phone": empty}
+
+    response, row, _get, send_task = await _max_poll_and_read(authed_client, db_session, aid, body, body)
+
+    _assert_max_connected_and_syncing(response, row, send_task, aid)
+    assert row.phone == STORED_FORM, f"номер формы не стал запасным: {row.phone!r}"
+    assert row.phone_is_manual is False
+    assert DISPLAY_FORM not in response.text, "шаг «Подключено» показал номер (D-12)"
+    listing = await authed_client.get("/accounts")
+    labels = label_texts(listing.text)[str(aid)]
+    assert labels and all(DISPLAY_FORM in text for text in labels), labels
+    assert all(MANUAL_MARK not in text for text in labels), labels
+
+
+@pytest.mark.asyncio
+async def test_an_old_max_worker_status_connects_with_the_form_number(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """Критерий 4 роадмапа, PHONE-15, решение владельца OQ1 (MAX): воркер старого образа подключает аккаунт.
+
+    Критерий 4 для MAX читается так: подключение не падает, воркер ничего не
+    дописал (`/status` без поля `phone`), итоговый номер — из формы подключения.
+    Так решил владелец (OQ1, 2026-11-22; `19-RESEARCH.md`, «Open Questions
+    (RESOLVED)»): форма MAX требует номер, запас живёт в приложении, поэтому MAX
+    со старым образом показывает номер из формы без пометки «указан вручную».
+    Буквальное «номер остаётся «неизвестен»» доказывает не этот тест, а
+    `test_an_old_worker_status_connects_the_wa_account_with_an_unknown_number`:
+    у WA формы ввода нет.
+    """
+    aid = await _start_max_form(authed_client, db_session)
+    old_shape = {"connected": True, "exists": True, "syncState": None}
+
+    response, row, _get, send_task = await _max_poll_and_read(
+        authed_client, db_session, aid, old_shape, old_shape
+    )
+
+    _assert_max_connected_and_syncing(response, row, send_task, aid)
+    assert row.phone == STORED_FORM
+    assert row.phone_is_manual is False
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_raw_form_value_gives_no_fallback(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-10: строка `connecting` с сырым вводом (подключение начато до Фазы 19) — запаса нет, подключение идёт."""
+    aid = await seed_account(db_session, owner.id, "max", status="connecting")
+    row = await _row(db_session, aid)
+    row.credentials = "+7 999 123-45-67"
+    await db_session.commit()
+    old_shape = {"connected": True, "exists": True, "syncState": None}
+
+    response, row, _get, send_task = await _max_poll_and_read(
+        authed_client, db_session, aid, old_shape, old_shape
+    )
+
+    _assert_max_connected_and_syncing(response, row, send_task, aid)
+    assert row.phone is None, f"сырое значение формы стало номером: {row.phone!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_max_capture_still_connects_the_account(
+    authed_client: AsyncClient,
+    db_session: AsyncSession,
+    owner: User,
+    monkeypatch,
+    caplog,
+):
+    """D-05, T-19-21, T-19-27: сбой писателя не ломает подключение MAX; номера формы в журнале нет."""
+    # См. `test_a_failing_capture_still_connects_the_account`: `fileConfig()` миграционных
+    # тестов выключает stdlib-логгер модуля на полной суите, `caplog` тогда пуст.
+    monkeypatch.setattr(
+        logging.getLogger("app.application.accounts.connect_phone"), "disabled", False
+    )
+    aid = await _start_max_form(authed_client, db_session)
+    monkeypatch.setattr(
+        "app.application.accounts.connect_phone.fill_reported_phone",
+        AsyncMock(side_effect=RuntimeError("boom 9991234567")),
+    )
+    body = {"connected": True, "exists": True, "syncState": None, "phone": MAX_REPORTED}
+
+    with caplog.at_level("INFO"):
+        response, row, _get, send_task = await _max_poll_and_read(
+            authed_client, db_session, aid, body, body
+        )
+
+    _assert_max_connected_and_syncing(response, row, send_task, aid)
+    assert row.phone is None
+    failures = [
+        record.msg
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("event") == "connect_phone_capture_failed"
+    ]
+    assert len(failures) == 1, f"событий сбоя захвата: {len(failures)}"
+    assert failures[0]["account_id"] == aid
+    assert failures[0]["error_type"] == "RuntimeError"
+    for record in caplog.records:
+        for needle in ("9991234567", MAX_REPORTED):
+            assert needle not in str(record.msg), "номер попал в журнал"
+            assert needle not in record.getMessage(), "номер попал в журнал"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra",
+    [{"phone": "79995554433"}, {}],
+    ids=["other-number", "no-field"],
+)
+async def test_a_known_max_number_survives_both_sources(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, extra: dict
+):
+    """D-05, критерий 4, T-19-20: известный номер строки MAX не затирается ни сообщённым, ни номером формы."""
+    aid = await seed_account(db_session, owner.id, "max", phone="79990001122", status="connecting")
+    row = await _row(db_session, aid)
+    row.credentials = STORED_FORM
+    await db_session.commit()
+    body = {"connected": True, "exists": True, "syncState": None, **extra}
+
+    response, row, _get, send_task = await _max_poll_and_read(authed_client, db_session, aid, body, body)
+
+    _assert_max_connected_and_syncing(response, row, send_task, aid)
+    assert row.phone == "+79990001122", f"известный номер перезаписан: {row.phone!r}"
+    assert row.phone_is_manual is False
+
+
+@pytest.mark.asyncio
+async def test_the_max_number_is_not_asked_before_the_account_connects(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-15: пока `connected: false`, `/status` читается один раз; номер не запрашивается, `credentials` цел."""
+    aid = await _start_max_form(authed_client, db_session)
+    waiting = {"connected": False, "exists": True, "syncState": None}
+    qr = {"qr": "https://max.example/qr/login"}
+
+    with patch("app.messengers.max.MaxMessenger.get_own_phone", new=AsyncMock(return_value=None)) as asked:
+        response, row, get_mock, send_task = await _max_poll_and_read(
+            authed_client, db_session, aid, waiting, qr
+        )
+
+    assert response.status_code == 200
+    assert "data:image/png;base64," in response.text
+    addresses = [call.args[0] for call in get_mock.await_args_list]
+    assert addresses == [
+        f"{MAX_WORKER}/api/sessions/{aid}/status",
+        f"{MAX_WORKER}/api/sessions/{aid}/qr",
+    ], addresses
+    assert sum(1 for address in addresses if address.endswith("/status")) == 1
+    asked.assert_not_awaited()
+    assert row.status == "connecting"
+    assert row.credentials == STORED_FORM
+    assert row.phone is None
+    assert send_task.call_count == 0

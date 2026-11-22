@@ -1030,13 +1030,26 @@ async def accounts_connect_max_status(
     try:
         is_connected = await messenger.check_connection()
         if is_connected:
+            # Сначала номер, который сообщил сам MAX; не сообщил (воркер старого
+            # образа, `phone: null`) — номер из формы подключения как автоматический
+            # (D-10, решение владельца OQ1). Форма хранит его в `credentials` строки
+            # `connecting` как E.164 (план 19-06), поэтому читается ДО перезаписи
+            # `session_id`. Номер и `syncing` уходят одним коммитом (D-01); захват —
+            # в собственной обёртке с сейвпоинтом (внутри помощника): сбой в общем
+            # `try` ниже дал бы «Ошибку соединения» и вечный `connecting` (D-05).
+            # Номер читается одним дополнительным GET, без повтора (D-15), а шаг
+            # «Подключено» его не показывает (D-12). `account_id` снят заранее.
+            account_id = account.id
+            entered_phone = account.credentials
+            reported_phone = await messenger.get_own_phone()
+            await capture_connect_phone(db, account_id, reported_phone, entered_phone)
             account.credentials = session_id
             account.status = "syncing"
             await db.commit()
 
             # Dispatch background Celery task to sync groups
             from app.worker.celery_app import celery
-            celery.send_task("app.worker.tasks.sync_max_groups", args=[account.id])
+            celery.send_task("app.worker.tasks.sync_max_groups", args=[account_id])
 
             return _connect_status("connected", "MAX")
 
