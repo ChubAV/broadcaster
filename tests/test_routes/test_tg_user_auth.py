@@ -62,6 +62,7 @@ from app.messengers.telegram_user import QR_SESSION_TTL, QRAuthState, _qr_sessio
 from app.models.messenger_account import MessengerAccount
 from app.models.user import User
 from app.pages.accounts import TG_CONNECT_STEP_TEMPLATE, _tg_step_markup, templates
+from tests.account_label_support import MANUAL_MARK, label_texts
 from tests.test_pages.test_confirm_delete_transport import DOCUMENT_MARK, HTMX_HEADERS
 from tests.test_pages.test_impersonation import _enter, _seed_target, _user
 
@@ -118,23 +119,34 @@ async def _no_qr_session_outlives_its_test():
 class _ScannableQRLogin:
     """QR-вход Telethon, чьё «отсканировано» выставляет тест, а не телефон."""
 
-    def __init__(self, scanned: asyncio.Event):
+    def __init__(self, scanned: asyncio.Event, user=None):
         self.url = "tg://login?token=tracer"
         self._scanned = scanned
+        # Ответ входа: `qr_login.wait()` возвращает `User` собственного аккаунта
+        # (Фаза 19, D-02) — из него код снимает номер.
+        self._user = user
 
     async def wait(self, timeout=None):
         await self._scanned.wait()
+        return self._user
 
 
-def _telethon_client_factory(scanned: asyncio.Event):
-    """Фабрика клиента Telethon для НАСТОЯЩЕГО `start_qr_auth`."""
+def _telethon_client_factory(scanned: asyncio.Event, *, user=None, created: list | None = None):
+    """Фабрика клиента Telethon для НАСТОЯЩЕГО `start_qr_auth`.
+
+    `created` (Фаза 19): в него попадает каждый созданный клиент — по нему тест
+    считает подключения к Telegram за весь мастер.
+    """
 
     def factory(*args, **kwargs):
         client = MagicMock()
         client.connect = AsyncMock()
         client.disconnect = AsyncMock()
-        client.qr_login = AsyncMock(return_value=_ScannableQRLogin(scanned))
+        client.get_me = AsyncMock()
+        client.qr_login = AsyncMock(return_value=_ScannableQRLogin(scanned, user=user))
         client.session.save.return_value = EXPORTED_SESSION
+        if created is not None:
+            created.append(client)
         return client
 
     return factory
@@ -459,6 +471,212 @@ async def test_the_wizard_walks_from_start_to_connected(
     assert account.status == "active", f"аккаунт сохранён в статусе {account.status!r}"
     assert account.user_id == user.id, "аккаунт сохранён не на текущего пользователя"
     assert session_id not in _qr_sessions, "сессия мастера пережила сохранение аккаунта"
+
+
+# --- ФАЗА 19: НОМЕР ИЗ ОТВЕТА ВХОДА (PHONE-12; D-01, D-02, D-05, D-07, D-08, D-12) ---
+
+# Номер собственного пользователя, как его отдаёт `User.phone` Telethon: цифры без «+».
+REPORTED_PHONE = "79990001122"
+STORED_PHONE = "+79990001122"
+SHOWN_PHONE = "+7 999 000-11-22"
+LOGGED_DIGITS = "9990001122"
+
+
+@pytest.mark.asyncio
+async def test_a_qr_scan_gives_the_new_account_its_number_without_a_second_connection(
+    authed_client: AsyncClient, db_session: AsyncSession
+):
+    """ТРАСЕР Фазы 19: номер из `qr_login.wait()` доходит до подписи аккаунта в списке.
+
+    Путь как у `test_the_wizard_walks_from_start_to_connected`, но `wait()` отдаёт
+    `User` с номером. «Второго подключения нет» доказывается на мастере: фабрика
+    клиента Telethon вызвана один раз, `connect` ожидался один раз (из старта
+    QR), `get_me` не вызывался (D-02, критерий 1 роадмапа). Проверка соединения
+    мессенджера в тесте не участвует: её дефект отозванной сессии вне вехи (D-08).
+    """
+    scanned = asyncio.Event()
+    created: list = []
+    with patch(
+        "app.messengers.telegram_user.TelegramClient",
+        new=_telethon_client_factory(
+            scanned, user=SimpleNamespace(phone=REPORTED_PHONE), created=created
+        ),
+    ):
+        started = await authed_client.post(START_URL, headers=HTMX_HEADERS)
+    found = SESSION_FIELD.search(started.text)
+    assert found, "во фрагменте ожидания нет скрытого поля session_id — опросу нечего слать"
+    session_id = found.group(1)
+
+    scanned.set()
+    for _ in range(100):
+        if _qr_sessions[session_id].status == "success":
+            break
+        await asyncio.sleep(0)
+    assert _qr_sessions[session_id].status == "success", (
+        "фоновое ожидание сканирования не дошло до успеха — подмена Telethon не сработала"
+    )
+
+    connected = await authed_client.post(
+        POLL_URL, data={"session_id": session_id}, headers=HTMX_HEADERS
+    )
+    assert connected.status_code == 200, (
+        f"опрос, увидевший успех, ответил {connected.status_code} вместо 200"
+    )
+    assert "Подключено" in connected.text, "человек не увидел «Подключено» после сканирования"
+    assert REPORTED_PHONE not in connected.text and SHOWN_PHONE not in connected.text, (
+        "шаг «Подключено» показал номер — номер виден в списке аккаунтов (D-12)"
+    )
+
+    accounts = await _tg_accounts(db_session)
+    assert len(accounts) == 1, (
+        f"после одного сканирования сохранено {len(accounts)} аккаунтов вместо одного"
+    )
+    account = accounts[0]
+    assert account.phone == STORED_PHONE, (
+        f"аккаунт Telegram сохранён без номера из ответа входа: phone={account.phone!r}"
+    )
+    assert account.phone_is_manual is False, "номер из ответа входа помечен как указанный вручную"
+    assert account.status == "active", f"аккаунт сохранён в статусе {account.status!r}"
+    assert account.credentials == EXPORTED_SESSION, "аккаунт сохранён не со строкой сессии Telethon"
+
+    assert len(created) == 1, (
+        f"за мастер создано {len(created)} клиентов Telethon вместо одного — это второе подключение"
+    )
+    assert created[0].connect.await_count == 1, (
+        "клиент подключался не один раз (старт QR) — это второе подключение (D-02)"
+    )
+    created[0].get_me.assert_not_called()
+
+    listing = await authed_client.get("/accounts")
+    label = label_texts(listing.text)[str(account.id)]
+    assert any(SHOWN_PHONE in text for text in label), (
+        f"подпись нового аккаунта в списке без номера: {label!r}"
+    )
+    assert not any(MANUAL_MARK in text for text in label), (
+        f"номер из ответа входа подписан как указанный вручную: {label!r}"
+    )
+
+
+# D-08: «второе подключение» доказывается на МАСТЕРЕ — фабрика клиента, `connect`,
+# `get_me` (тесты выше и ниже), а не проверкой соединения мессенджера: у той
+# дефект отозванной сессии, её починка вне вехи (CONTEXT, Deferred), и тест
+# ответа «пользователь не получен — значит, подключён» закрепил бы этот дефект.
+
+
+async def _verify_2fa_with(
+    client: AsyncClient, session_id: str, owner: int, sign_in: AsyncMock
+) -> tuple:
+    """Верный пароль на пути 2FA с подменённым ответом `sign_in`; ответ и клиент."""
+    tg_client = _seed_2fa_state(session_id, owner=owner, sign_in=sign_in)
+    response = await client.post(
+        VERIFY_URL,
+        data={"session_id": session_id, "password": SUBMITTED_PASSWORD},
+        headers=HTMX_HEADERS,
+    )
+    return response, tg_client
+
+
+@pytest.mark.asyncio
+async def test_a_right_password_gives_the_new_account_its_number(
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int
+):
+    """Путь 2FA: номер из ответа `sign_in` попадает в новый аккаунт (D-02, PHONE-12)."""
+    response, tg_client = await _verify_2fa_with(
+        authed_client,
+        "sid-phone",
+        owner_id,
+        AsyncMock(return_value=SimpleNamespace(phone=REPORTED_PHONE)),
+    )
+
+    assert response.status_code == 200, f"верный пароль ответил {response.status_code}"
+    assert "Подключено" in response.text, "после верного пароля человек не увидел «Подключено»"
+    assert REPORTED_PHONE not in response.text and SHOWN_PHONE not in response.text, (
+        "шаг «Подключено» показал номер (D-12)"
+    )
+    accounts = await _tg_accounts(db_session)
+    assert len(accounts) == 1, f"верный пароль сохранил {len(accounts)} аккаунтов вместо одного"
+    assert accounts[0].phone == STORED_PHONE, (
+        f"аккаунт Telegram после пароля 2FA сохранён без номера: phone={accounts[0].phone!r}"
+    )
+    assert accounts[0].phone_is_manual is False, "номер из ответа входа помечен как указанный вручную"
+    assert accounts[0].status == "active", f"аккаунт сохранён в статусе {accounts[0].status!r}"
+    tg_client.get_me.assert_not_called()
+    tg_client.connect.assert_not_awaited()
+
+
+class _UnreadablePhone:
+    """Пользователь, чей атрибут `phone` поднимает исключение при чтении (D-05)."""
+
+    @property
+    def phone(self):
+        raise RuntimeError("phone is not readable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        SimpleNamespace(phone=None),
+        SimpleNamespace(phone="garbage"),
+        MagicMock(),
+        _UnreadablePhone(),
+    ],
+    ids=["no-phone", "garbage-phone", "mock-user", "unreadable-phone"],
+)
+async def test_an_unparseable_phone_still_connects_the_account(
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int, answer
+):
+    """Мусор вместо номера — «Подключено» и активный аккаунт без номера (D-05, T-19-05)."""
+    response, _client = await _verify_2fa_with(
+        authed_client, "sid-garbage", owner_id, AsyncMock(return_value=answer)
+    )
+
+    assert response.status_code == 200, f"верный пароль ответил {response.status_code}"
+    assert "Подключено" in response.text, "мусорный номер сорвал подключение"
+    accounts = await _tg_accounts(db_session)
+    assert len(accounts) == 1, f"сохранено {len(accounts)} аккаунтов вместо одного"
+    assert accounts[0].status == "active", f"аккаунт сохранён в статусе {accounts[0].status!r}"
+    assert accounts[0].phone is None, f"мусор стал номером: {accounts[0].phone!r}"
+    assert accounts[0].phone_is_manual is False, "мусор пометил номер как указанный вручную"
+
+
+@pytest.mark.asyncio
+async def test_the_capture_log_carries_no_number(
+    authed_client: AsyncClient, db_session: AsyncSession, owner_id: int, caplog
+):
+    """Журнал захвата — `account_id` и `outcome`, номера нет нигде (D-07, PHONE-21, T-19-01)."""
+    with caplog.at_level("INFO"):
+        response, _client = await _verify_2fa_with(
+            authed_client,
+            "sid-log",
+            owner_id,
+            AsyncMock(return_value=SimpleNamespace(phone=REPORTED_PHONE)),
+        )
+    assert response.status_code == 200, f"верный пароль ответил {response.status_code}"
+
+    entries = [
+        record
+        for record in caplog.records
+        if isinstance(record.msg, dict) and record.msg.get("event") == "tg_phone_captured"
+    ]
+    assert len(entries) == 1, f"событий захвата номера должно быть одно: {len(entries)}"
+    entry = entries[0].msg
+    assert entries[0].name == "app.pages.accounts", f"событие пришло из {entries[0].name}"
+    # Служебные ключи structlog и контекста запроса (`request_id`, `method`, `path`)
+    # привязывает промежуточный слой; значимые ключи события — ровно два.
+    service_keys = {
+        "event", "level", "timestamp", "logger", "request_id", "method", "path",
+        "_record", "_from_structlog",
+    }
+    assert set(entry) - service_keys == {"account_id", "outcome"}, (
+        f"ключи события захвата: {sorted(entry)}"
+    )
+    accounts = await _tg_accounts(db_session)
+    assert entry["account_id"] == accounts[0].id
+    assert entry["outcome"] == "written", f"исход захвата {entry['outcome']!r}"
+    for record in caplog.records:
+        assert LOGGED_DIGITS not in str(record.msg), "номер попал в журнал"
+        assert LOGGED_DIGITS not in record.getMessage(), "номер попал в журнал"
 
 
 @pytest.mark.asyncio
