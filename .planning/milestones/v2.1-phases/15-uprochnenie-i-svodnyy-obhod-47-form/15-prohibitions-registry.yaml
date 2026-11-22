@@ -81,8 +81,8 @@
 # не меняется; вариант "живой реестр v2.2" владелец отверг. `rows_declared`: 741 (засев
 # 2026-09-25 по планам вехи v2.1) → 754 (засев 2026-10-08).
 
-measured: '2026-11-21'
-rows_declared: 965
+measured: '2026-11-22'
+rows_declared: 993
 class_decisions:
 - {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'планы 15-24…15-32 Фазы 15 — гэп-закрытие критерия 6 (б), решение владельца Г-1, 2026-09-25; прежде: «будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он» — верно на день ответа 2026-09-24'}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: gate-integrity, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 61}
@@ -1064,3 +1064,31 @@ rows:
 - {plan: .planning/phases/18-ruchnaya-pravka-nomera/18-02-PLAN.md, index: 5, phase: '18', statement_digest: 15c242a3f373, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/18-ruchnaya-pravka-nomera/18-03-PLAN.md, index: 0, phase: '18', statement_digest: 734010403b7f, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/18-ruchnaya-pravka-nomera/18-03-PLAN.md, index: 1, phase: '18', statement_digest: 349dc9ad532d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-01-PLAN.md, index: 0, phase: '19', statement_digest: a403972fc7ce, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-01-PLAN.md, index: 1, phase: '19', statement_digest: 7889fbbd2eaa, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-01-PLAN.md, index: 2, phase: '19', statement_digest: 5df95c6f87c4, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-01-PLAN.md, index: 3, phase: '19', statement_digest: 71a525c67758, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-01-PLAN.md, index: 4, phase: '19', statement_digest: 7ff3d98840da, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-02-PLAN.md, index: 0, phase: '19', statement_digest: 915727e04017, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-02-PLAN.md, index: 1, phase: '19', statement_digest: 50cf736b1952, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-02-PLAN.md, index: 2, phase: '19', statement_digest: 6c5974e4ae57, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-03-PLAN.md, index: 0, phase: '19', statement_digest: 6bc707462319, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-03-PLAN.md, index: 1, phase: '19', statement_digest: 3c8b15a1ef54, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-03-PLAN.md, index: 2, phase: '19', statement_digest: 14a78db54821, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-04-PLAN.md, index: 0, phase: '19', statement_digest: 223daaa32db5, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-04-PLAN.md, index: 1, phase: '19', statement_digest: 06decc163596, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-05-PLAN.md, index: 0, phase: '19', statement_digest: ecfa4c6ebec9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-05-PLAN.md, index: 1, phase: '19', statement_digest: f33946464f6e, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-05-PLAN.md, index: 2, phase: '19', statement_digest: 3bca5a5d6421, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-05-PLAN.md, index: 3, phase: '19', statement_digest: 2b3089cc4fef, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-05-PLAN.md, index: 4, phase: '19', statement_digest: 42c8aa8d5d83, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-06-PLAN.md, index: 0, phase: '19', statement_digest: a5b0f367e0d8, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-06-PLAN.md, index: 1, phase: '19', statement_digest: 12c6a80bd269, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-06-PLAN.md, index: 2, phase: '19', statement_digest: 30bbae44b2a9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-06-PLAN.md, index: 3, phase: '19', statement_digest: 8ea2ead5b652, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-07-PLAN.md, index: 0, phase: '19', statement_digest: 8376a6c28229, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-07-PLAN.md, index: 1, phase: '19', statement_digest: 1ff879cc633f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-07-PLAN.md, index: 2, phase: '19', statement_digest: 8ea2ead5b652, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-08-PLAN.md, index: 0, phase: '19', statement_digest: 42dcacf51731, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-08-PLAN.md, index: 1, phase: '19', statement_digest: bf3f8b1904d7, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-08-PLAN.md, index: 2, phase: '19', statement_digest: 4e09d06ce5f2, class: unclassified, disposition: unresolved}
