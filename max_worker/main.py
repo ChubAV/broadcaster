@@ -209,6 +209,10 @@ class SessionState:
         self.sync_state: str | None = None  # None, 'syncing', 'ready', 'failed'
         self.groups: list[dict] | None = None
         self.phone: str = ""
+        # The number MAX itself reported for the account (client.me.contact.phone).
+        # The form number (self.phone) is never served: the owner decided that a
+        # typed number must not pass for a reported one (OQ1).
+        self.own_phone: str | None = None
         self.ready_event: asyncio.Event = asyncio.Event()
         self.error: str | None = None
         self.connected_at: float = 0.0  # timestamp when session connected
@@ -228,6 +232,24 @@ def session_dir() -> Path:
 
 def session_db_path() -> Path:
     return session_dir() / SESSION_NAME
+
+
+def own_phone_of(client) -> str | None:
+    """Return the account's own number as MAX reports it, or None.
+
+    Source: ``client.me.contact.phone`` of pymax 2.3.1 (``types/domain/user.py``),
+    filled by the LOGIN answer before ``on_start`` runs. ``sessions.phone`` of a
+    ``WebClient`` is always empty and is not a source. Tolerates a client with no
+    ``me`` at all. Only a positive ``int`` counts (``bool`` is an ``int`` subclass
+    and is refused); the digits are not formatted (D-14).
+    """
+    try:
+        value = getattr(getattr(getattr(client, "me", None), "contact", None), "phone", None)
+    except Exception:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return str(value)
 
 
 def session_exists_on_disk() -> bool:
@@ -458,6 +480,17 @@ async def create_client(phone: str = "") -> SessionState:
     @client.on_start()
     async def on_start(connected_client):
         """Called when client is fully connected and ready."""
+        # Capture first and inside try/except: an exception after is_connected
+        # would skip ready_event.set() and the group sync (D-05).
+        try:
+            state.own_phone = own_phone_of(connected_client)
+        except Exception as exc:
+            state.own_phone = None
+            log.warning(
+                "own_phone_capture_failed account_id=%s error_type=%s",
+                ACCOUNT_ID,
+                type(exc).__name__,
+            )
         state.is_connected = True
         state.initializing = False
         state.qr_code = None
@@ -1002,6 +1035,9 @@ async def get_session_status(session_id: str):
         "connected": session.is_connected,
         "exists": True,
         "syncState": session.sync_state,
+        # D-14: only the live-session answer carries the number MAX reported; an
+        # older worker image omits the field and the app reads it as null.
+        "phone": session.own_phone,
     }
 
 
