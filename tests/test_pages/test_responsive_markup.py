@@ -5245,15 +5245,107 @@ def test_account_label_rules_introduce_no_fixed_width():
         assert re.search(r"(?<![-\w])width\s*:", body) is None, f"фиксированная ширина в правиле: {body!r}"
 
 
+PHONE_FORM_SELECTORS = (
+    "[data-acct-phone]",
+    "[data-acct-phone] .form-wrapper",
+    "[data-acct-phone] .field",
+    "[data-acct-phone] .field__label",
+    "[data-acct-phone] .field__input",
+    "[data-acct-phone] .field__hint",
+    "[data-acct-phone] .field__error",
+    "[data-acct-phone] .btn",
+)
+
+
+def _media_block_with(css: str, condition: str, needle: str) -> str:
+    """Тело первого блока `@media (<condition>)`, в котором есть `needle`.
+
+    Скобки считаются, а не ищется первая `}`: внутри блока свои правила. Нет
+    такого блока — отказ с условием (так тест красен, пока блока нет).
+    """
+    for opening in re.finditer(r"@media\s*\(\s*" + re.escape(condition) + r"\s*\)\s*\{", css):
+        depth, cursor = 1, opening.end()
+        while depth and cursor < len(css):
+            depth += {"{": 1, "}": -1}.get(css[cursor], 0)
+            cursor += 1
+        block = css[opening.end() : cursor - 1]
+        if needle in block:
+            return block
+    raise AssertionError(f"в `@media ({condition})` нет правил с {needle!r}")
+
+
+def _area_rows(body: str) -> list[str]:
+    """Строки `grid-template-areas` правила: каждая — слова областей через пробел."""
+    match = re.search(r"grid-template-areas\s*:\s*((?:\"[^\"]*\"\s*)+);", body)
+    assert match, f"у правила нет `grid-template-areas`: {body!r}"
+    return re.findall(r'"([^"]*)"', match.group(1))
+
+
+def test_the_save_button_shares_the_row_of_the_phone_input():
+    """Фаза 18, план 18-07 (D-11, WR-01): кнопка «Сохранить» стоит в ряду поля, а не под подсказкой.
+
+    Прежняя форма — переносящийся flex-ряд с `align-items: flex-end`: первым
+    ребёнком был `<label class="field">` (колонка «подпись, поле, подсказка,
+    ошибка»), и кнопка равнялась на НИЗ всего блока — на подсказку, а после 422
+    на ошибку (замер обхода на 375 px: поле 498…542, подсказка 549…565, кнопка
+    573…613). Теперь подпись поля внутри формы — `display: contents`, а её дети и
+    кнопка — ячейки ОДНОЙ сетки: подпись над рядом «поле | кнопка», подсказка под
+    ним, ошибка ещё ниже на всю ширину. Кнопка растянута по высоте ряда
+    (`align-self: stretch`), то есть по самому полю. На ≤400 px столбец один, и
+    кнопка идёт СРАЗУ за полем, до подсказки и ошибки.
+
+    ⚠️ ЭТО МАШИННАЯ ПОЛОВИНА: суита читает текст CSS без комментариев и не
+    рендерит страницу. Что верх и низ кнопки совпадают с полем, а на 320 и 375 px
+    ничего не обрезано, меряет человек (`getBoundingClientRect`,
+    `/gsd-verify-work 18`).
+    """
+    css = _css_without_comments()
+    refusal = "кнопка «Сохранить» не в ряду поля"
+
+    form = _css_rule(css, "[data-acct-phone] .form-wrapper")
+    assert "display: grid" in form, f"{refusal}: у формы нет `display: grid`"
+    assert "input button" in _area_rows(form), f"{refusal}: нет строки областей `input button`"
+    assert "align-items: flex-end" not in form, f"{refusal}: форма равняет детей по нижнему краю"
+    assert "flex-wrap" not in form, f"{refusal}: форма всё ещё переносящийся flex-ряд"
+
+    for selector, declarations in (
+        ("[data-acct-phone] .field", ("display: contents",)),
+        ("[data-acct-phone] .field__label", ("grid-area: label",)),
+        ("[data-acct-phone] .field__input", ("grid-area: input", "min-width: 0")),
+        ("[data-acct-phone] .btn", ("grid-area: button", "align-self: stretch")),
+        ("[data-acct-phone] .field__hint", ("grid-area: hint",)),
+        ("[data-acct-phone] .field__error", ("grid-column: 1 / -1",)),
+    ):
+        body = _css_rule(css, selector)
+        for declaration in declarations:
+            assert declaration in body, f"{refusal}: у {selector} нет `{declaration}`"
+
+    narrow = _media_block_with(css, "max-width: 400px", "[data-acct-phone] .form-wrapper")
+    narrow_form = _css_rule(narrow, "[data-acct-phone] .form-wrapper")
+    columns = re.search(r"grid-template-columns\s*:\s*([^;]+);", narrow_form)
+    assert columns and "auto" not in columns.group(1), (
+        f"{refusal}: на ≤400 px столбец не один: {columns.group(1) if columns else None!r}"
+    )
+    rows = _area_rows(narrow_form)
+    assert "input" in rows and "button" in rows and rows.index("button") == rows.index("input") + 1, (
+        f"{refusal}: на ≤400 px кнопка не сразу под полем: {rows!r}"
+    )
+
+
 def test_the_phone_form_takes_its_own_row_in_the_account_head():
     """Фаза 18, план 18-02 (D-11): форма номера — собственная строка шапки аккаунта.
 
     Шапка `[data-acct-head]` — flex-ряд с переносом; форма номера стоит в ней
     последним ребёнком и занимает ВСЮ строку (`flex: 1 1 100%`), а не делит её с
     подписью и действиями. `min-width: 0` разрешает ей сжиматься уже контейнера,
-    иначе длинное поле раздвинуло бы шапку на 320–375 px. Внутри формы поле и
-    кнопка в строку с переносом: на узкой ширине кнопка уходит под поле сама, без
-    медиазапроса. Фиксированных ширин у правил нет.
+    иначе длинное поле раздвинуло бы шапку на 320–375 px.
+
+    ⚠️ ПОКОЛЕНИЕ (Фаза 18, план 18-07, WR-01): внутри формы больше не
+    переносящийся flex-ряд. Подпись поля — `display: contents` (её дети и кнопка
+    — ячейки сетки формы), а сжатие поля держит правило `.field__input`
+    (`min-width: 0`). Прежнее утверждение «`[data-acct-phone] .field` с
+    `min-width: 0`» снято вместе с flex-раскладкой, на которой оно держалось.
+    Фиксированных ширин у правил формы номера нет ни у одного.
 
     ⚠️ ЭТО МАШИННАЯ ПОЛОВИНА: суита читает ТЕКСТ app.css и доказывает, что контракт
     записан. Что на 320 и 375 px форма не ломает шапку и ничего не обрезано, она не
@@ -5265,10 +5357,17 @@ def test_the_phone_form_takes_its_own_row_in_the_account_head():
     box = _css_rule(css, "[data-acct-phone]")
     for declaration in ("flex: 1 1 100%", "min-width: 0"):
         assert declaration in box, f"[data-acct-phone]: нет `{declaration}`"
-    field = _css_rule(css, "[data-acct-phone] .field")
-    assert "min-width: 0" in field, "[data-acct-phone] .field: поле не сжимается уже контейнера"
-    for body in (box, field):
-        assert re.search(r"(?<![-\w])width\s*:", body) is None, f"фиксированная ширина в правиле: {body!r}"
+    assert "display: contents" in _css_rule(css, "[data-acct-phone] .field"), (
+        "[data-acct-phone] .field: подпись не растворена в сетке формы"
+    )
+    assert "min-width: 0" in _css_rule(css, "[data-acct-phone] .field__input"), (
+        "[data-acct-phone] .field__input: поле не сжимается уже контейнера"
+    )
+    for selector in PHONE_FORM_SELECTORS:
+        body = _css_rule(css, selector)
+        assert re.search(r"(?<![-\w])width\s*:", body) is None, (
+            f"фиксированная ширина в правиле {selector}: {body!r}"
+        )
 
 
 def test_the_manual_mark_is_muted():

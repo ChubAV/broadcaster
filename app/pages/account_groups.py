@@ -234,16 +234,50 @@ def _screen_title(acct_label: AccountLabel) -> str:
     return f"{acct_label.plain} — группы аккаунта — Broadcaster"
 
 
+def _phone_form_context(
+    account_id: int, *, value: str, error: str | None, focus: bool
+) -> dict:
+    """Ключи включаемой формы номера — ЕДИНСТВЕННОЕ место их постановки (Фаза 18, план 18-07, IN-02).
+
+    Форму (`account_groups/includes/phone_form.html`) рисуют четыре места: страница
+    экрана, страница 422 и оба фрагмента (успех и ошибка). Прежде каждое набирало
+    пять-шесть ключей руками, и расхождение между ними было бы молчаливым: форма
+    после правки без перезагрузки отличалась бы от страничной. Шесть ключей:
+    `account_id` (адрес формы), `phone_value` (значение поля), `phone_error` (текст
+    ошибки или `None`), `example_phone` (пример для подсказки), `phone_maxlength`
+    (предел браузера — двойной запас предела сервера), `phone_focus` (ставить ли
+    полю `autofocus`: истинен только в ответах на отправку формы, UI-P1, IN-01).
+
+    ⚠️ ПОМОЩНИК ЖИВЁТ В ЭТОМ ЖЕ МОДУЛЕ по той же причине, что и `_group_counts`:
+    признак пути деградации гейта (tests/test_templates/test_htmx_markup_gates.py)
+    считает достижимость по цепочке функций ВНУТРИ модуля.
+    """
+    return {
+        "account_id": account_id,
+        "phone_value": value,
+        "phone_error": error,
+        "example_phone": EXAMPLE_PHONE,
+        "phone_maxlength": PHONE_FIELD_MAXLENGTH,
+        "phone_focus": focus,
+    }
+
+
 async def _screen_context(
+    *,
     request: Request,
     db: AsyncSession,
     settings: Settings,
     user: User,
     account: MessengerAccount,
-    account_id: int,
     term: str | None,
 ) -> dict:
     """Контекст страницы `list.html` — ОДИН сборщик для страницы и страницы 422.
+
+    Параметры только именованные (IN-02): семь позиционных параметров, из них пары
+    однотипных (`db`/`settings`, `user`/`account`), перепутывались молча, а
+    позиционный вызов теперь падает `TypeError`. Идентификатор аккаунта берётся из
+    самого аккаунта (`account.id`): расходиться ему с аккаунтом было возможно только
+    по ошибке вызывающего.
 
     ⚠️ ПОМОЩНИК ЖИВЁТ В ЭТОМ ЖЕ МОДУЛЕ по той же причине, что и `_group_counts`:
     признак пути деградации гейта (tests/test_templates/test_htmx_markup_gates.py)
@@ -252,15 +286,14 @@ async def _screen_context(
     правки номера разошлась бы с первой при первой же правке, и страница с
     ошибкой поля отличалась бы от страницы после перезагрузки молча.
 
-    Поля формы номера (`phone_value`, `phone_error`, `example_phone`,
-    `phone_maxlength`) ставят УМОЛЧАНИЯ здесь, а включаемый шаблон их не ставит
-    (Pitfall 2): выбор «показать сохранённое или присланное» — решение вызывающего,
-    и страница ошибки перекрывает два ключа поверх этого словаря.
-
-    Ключ `phone_focus` здесь ЛОЖЕН (UI-P1, IN-01): обычный показ экрана и посадка
-    после перехода без JS полю `autofocus` не ставят и фокус у человека не отнимают;
-    истинным его делают только ответы на отправку формы номера (`_page` ниже).
+    Ключи формы номера ставит `_phone_form_context`. Умолчания — здесь: сохранённое
+    значение, без ошибки, `phone_focus` ЛОЖЕН (UI-P1, IN-01 — обычный показ экрана
+    и посадка после перехода без JS полю `autofocus` не ставят и фокус у человека не
+    отнимают). Включаемый шаблон умолчаний не ставит (Pitfall 2): выбор «показать
+    сохранённое или присланное» — решение вызывающего, и страница ошибки (`_page`
+    ниже) перекрывает значение, ошибку и фокус поверх этого словаря.
     """
+    account_id = account.id
     # Подпись аккаунта для `<title>` и обоих заголовков (D-10, D-12, D-14).
     # Признак двойника считается по ВСЕМ аккаунтам пользователя, а не по этому
     # одному: шапка и карточка «Аккаунтов» обязаны помечать один аккаунт
@@ -288,10 +321,9 @@ async def _screen_context(
         "is_admin": check_is_admin(user, settings),
         "account": account,
         "acct_label": acct_label,
-        # account_id отдельным ключом: разметка сентинела обязана быть
-        # ПОСИМВОЛЬНО одинаковой здесь и в порции прокрутки, а у порции
-        # объекта аккаунта нет.
-        "account_id": account_id,
+        # Ключ `account_id` ставит `_phone_form_context` ниже: отдельным ключом
+        # он нужен затем, что разметка сентинела обязана быть ПОСИМВОЛЬНО
+        # одинаковой здесь и в порции прокрутки, а у порции объекта аккаунта нет.
         "groups": groups,
         "schedule_counts": await _schedule_counts(
             db, user.id, [group.id for group in groups]
@@ -320,14 +352,11 @@ async def _screen_context(
         "filter_search": term or "",
         # D-02: экран живёт в разделе «Аккаунты», подсветка меню — оттуда.
         "active_page": "accounts",
+        "screen_title": _screen_title(acct_label),
+        **_phone_form_context(
+            account_id, value=acct_label.phone_text or "", error=None, focus=False
+        ),
     }
-
-    context["screen_title"] = _screen_title(acct_label)
-    context["phone_value"] = acct_label.phone_text or ""
-    context["phone_error"] = None
-    context["example_phone"] = EXAMPLE_PHONE
-    context["phone_maxlength"] = PHONE_FIELD_MAXLENGTH
-    context["phone_focus"] = False
     return context
 
 
@@ -353,7 +382,9 @@ async def account_groups_page(
 
     return templates.TemplateResponse(
         "account_groups/list.html",
-        await _screen_context(request, db, settings, user, account, account_id, term),
+        await _screen_context(
+            request=request, db=db, settings=settings, user=user, account=account, term=term
+        ),
     )
 
 
@@ -466,16 +497,19 @@ async def account_phone_save(
             """Страница экрана с ошибкой поля — путь деградации без JS.
 
             Присланное значение и текст ошибки ставятся ПОВЕРХ умолчаний
-            `_screen_context`: на ветке ошибки поле возвращает то, что человек
-            прислал, иначе введённое терялось бы на каждой опечатке. Ответ на
-            отправку формы — поэтому поле получает `autofocus` (UI-P1, IN-01).
+            `_screen_context` теми же ключами, что и везде (`_phone_form_context`):
+            на ветке ошибки поле возвращает то, что человек прислал, иначе
+            введённое терялось бы на каждой опечатке. Ответ на отправку формы —
+            поэтому поле получает `autofocus` (UI-P1, IN-01).
             """
             context = await _screen_context(
-                request, db, settings, user, account, account_id, None
+                request=request, db=db, settings=settings, user=user, account=account, term=None
             )
-            context["phone_value"] = phone_text
-            context["phone_error"] = refusal_text
-            context["phone_focus"] = True
+            context.update(
+                _phone_form_context(
+                    account_id, value=phone_text, error=refusal_text, focus=True
+                )
+            )
             return templates.TemplateResponse("account_groups/list.html", context)
 
         async def _error_fragment() -> HTMLResponse:
@@ -493,12 +527,9 @@ async def account_phone_save(
             html = templates.env.get_template(
                 "account_groups/partials/phone_error_response.html"
             ).render(
-                account_id=account_id,
-                phone_value=phone_text,
-                phone_error=refusal_text,
-                example_phone=EXAMPLE_PHONE,
-                phone_maxlength=PHONE_FIELD_MAXLENGTH,
-                phone_focus=True,
+                **_phone_form_context(
+                    account_id, value=phone_text, error=refusal_text, focus=True
+                )
             )
             return HTMLResponse(html)
 
@@ -528,12 +559,12 @@ async def account_phone_save(
         ).render(
             screen_title=_screen_title(acct_label),
             acct_label=acct_label,
-            account_id=account_id,
-            phone_value=acct_label.phone_text or "",
-            phone_error=None,
-            example_phone=EXAMPLE_PHONE,
-            phone_maxlength=PHONE_FIELD_MAXLENGTH,
-            phone_focus=True,
+            **_phone_form_context(
+                account_id,
+                value=acct_label.phone_text or "",
+                error=None,
+                focus=True,
+            ),
         )
         return HTMLResponse(html)
 
