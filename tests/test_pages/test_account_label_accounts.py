@@ -15,12 +15,15 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.application.accounts.dto import SyncStatusView
 from app.application.accounts.use_cases import get_sync_status_view
 from app.models.user import User
 from tests.account_label_support import (
@@ -286,3 +289,19 @@ async def test_sync_status_view_carries_the_manual_flag_in_all_four_constructors
 
     assert manual_view is not None and manual_view.phone_is_manual is True
     assert automatic_view is not None and automatic_view.phone_is_manual is False
+
+
+def test_sync_status_view_has_no_defaults():
+    """D-10 (WR-03): у `SyncStatusView` нет ни одного умолчания — забытое поле падает громко.
+
+    Умолчание `phone_is_manual = False` молча сделало бы ручной номер
+    автоматическим в любом новом конструкторе; тип должен ронять такой вызов
+    `TypeError`, как `AccountRow`, а не ждать теста, который знает только
+    перечисленные статусы.
+    """
+    for field in dataclasses.fields(SyncStatusView):
+        assert field.default is dataclasses.MISSING, f"у поля SyncStatusView есть умолчание: {field.name}"
+        assert field.default_factory is dataclasses.MISSING, f"у поля SyncStatusView есть умолчание: {field.name}"
+
+    with pytest.raises(TypeError):
+        SyncStatusView(status="active", messenger_type="tg_user", phone=None)  # type: ignore[call-arg]
