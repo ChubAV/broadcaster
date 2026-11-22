@@ -123,6 +123,41 @@ async def test_max_start_over_htmx_returns_the_step_container(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("typed", ["8 999 123 45 67", "+7 999 123-45-67"])
+async def test_a_free_form_number_starts_the_session_with_the_normalized_value(
+    authed_client: AsyncClient, db_session: AsyncSession, typed: str
+):
+    """Свободный ввод номера доходит до `credentials` и воркера как E.164 (D-09, D-10).
+
+    Номер формы — ЗАПАСНЫЙ источник опроса статуса (план 19-07 читает его строгим
+    нормализатором писателя, который отвергает даже плейсхолдер поля), поэтому
+    сырой ввод в `credentials` лежать не может. Колонку `phone` старт не пишет:
+    номер, записанный при POST, заблокировал бы номер, сообщённый самим MAX.
+    """
+    start_session = AsyncMock(return_value={"status": "ok"})
+    with max_bridge(start_session=start_session):
+        response = await authed_client.post(
+            START_URL, data={"phone": typed}, headers=HTMX_HEADERS, follow_redirects=True
+        )
+
+    assert response.status_code == 200, (
+        f"старт MAX со свободным вводом ответил {response.status_code} вместо 200"
+    )
+    assert "<img" in response.text, "после свободного ввода QR не открылся"
+
+    accounts = await _max_accounts(db_session)
+    assert len(accounts) == 1, f"ожидалась одна строка MAX, найдено {len(accounts)}"
+    assert accounts[0].status == "connecting"
+    assert accounts[0].credentials == "+79991234567", (
+        "форма MAX положила в credentials ненормализованный номер"
+    )
+    assert accounts[0].phone is None, (
+        "старт записал номер формы в колонку phone: он запас опроса, а не известный номер"
+    )
+    start_session.assert_awaited_once_with(phone="+79991234567")
+
+
+@pytest.mark.asyncio
 async def test_an_empty_phone_answers_422_with_the_echo_on_both_transports(
     authed_client: AsyncClient, db_session: AsyncSession
 ):
