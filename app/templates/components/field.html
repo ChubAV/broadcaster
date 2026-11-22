@@ -2,9 +2,14 @@
    type, name, id, required, autocomplete, placeholder, label, value, а также
    maxlength / minlength / pattern / inputmode кода подтверждения.
    Все параметры — текст, числа и булевы; готовая разметка не принимается.
+   Булев параметр `autofocus`, по умолчанию ложный (Фаза 18, план 18-05): при истинном значении у `<input>`
+   печатается булев атрибут `autofocus`, при умолчании — ничего, и разметка прежних
+   полей не меняется ни на символ. Единственный сегодняшний потребитель — форма номера
+   аккаунта (`account_groups/includes/phone_form.html`) в ответах на её отправку:
+   рантайм htmx фокусирует `[autofocus]` в подменённом содержимом.
    Импорт: {% from "components/field.html" import field %} #}
 
-{% macro field(name, label=None, type='text', value='', required=false, placeholder=None, autocomplete=None, id=None, hint=None, error=None, maxlength=None, minlength=None, pattern=None, inputmode=None, align=None, disabled=false, readonly=false, step=None, min=None, max=None) -%}
+{% macro field(name, label=None, type='text', value='', required=false, placeholder=None, autocomplete=None, id=None, hint=None, error=None, maxlength=None, minlength=None, pattern=None, inputmode=None, align=None, disabled=false, readonly=false, step=None, min=None, max=None, autofocus=false) -%}
 {%- set field_id = id or name -%}
 <label class="field{% if error %} field--invalid{% endif %}" for="{{ field_id }}">
   {%- if label %}<span class="field__label">{{ label }}</span>{% endif -%}
@@ -21,7 +26,8 @@
     {%- if error %} aria-invalid="true"{% endif %}
     {%- if readonly %} readonly{% endif %}
     {%- if disabled %} disabled{% endif %}
-    {%- if required %} required{% endif %}>
+    {%- if required %} required{% endif %}
+    {%- if autofocus %} autofocus{% endif %}>
   {%- if hint %}<span class="field__hint">{{ hint }}</span>{% endif -%}
   {%- if error %}<span class="field__error">{{ error }}</span>{% endif -%}
 </label>
