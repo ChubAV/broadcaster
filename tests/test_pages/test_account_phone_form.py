@@ -738,3 +738,57 @@ async def test_the_plain_screen_never_autofocuses_the_field(
         assert response.status_code == 200
         assert "autofocus" not in response.text, f"{name}: экран отнимает фокус у человека"
         assert _screen(response.text).phone_inputs, f"{name}: поля номера нет"
+
+
+# --- 6. Подсказка о стирании и один пример рядом с ошибкой (план 18-05, UI-P3, OBS-422) ---
+
+ERASE_SENTENCE = "Чтобы стереть номер, очистите поле и нажмите «Сохранить»."
+
+
+def _container_text(html: str) -> str:
+    """Текст контейнера `#acct-phone` со схлопнутыми пробелами."""
+    return " ".join("".join(_screen(html).container_text).split())
+
+
+@pytest.mark.asyncio
+async def test_the_hint_tells_that_a_cleared_field_erases_the_number(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """D-09, D-11, UI-P3: подсказка называет последствие очистки; D-09 — подтверждения нет."""
+    account_id = await seed_account(db_session, owner.id, "tg_user", phone=STORED_FORM)
+
+    page = await authed_client.get(f"/accounts/{account_id}/groups")
+
+    assert page.status_code == 200
+    assert f"Пример: {EXAMPLE_PHONE}. {ERASE_SENTENCE}" in _container_text(page.text), (
+        "подсказка не говорит, что очищенное поле и «Сохранить» стирают номер"
+    )
+    assert PHONE_ERROR_BLANK not in page.text, "форма не показывает отказ пустого ввода (D-09)"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["abc", "9" * 33], ids=["not_a_number", "too_long"])
+async def test_an_error_answer_names_the_example_once(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User, raw: str
+):
+    """D-03, D-11, OBS-422: на ответе с ошибкой пример один — его несёт текст ошибки."""
+    account_id = await seed_account(db_session, owner.id, "tg_user")
+
+    plain = await authed_client.post(
+        f"/accounts/{account_id}/phone", data={"phone": raw}, follow_redirects=False
+    )
+    fragment = await authed_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": raw},
+        headers=HTMX,
+        follow_redirects=False,
+    )
+
+    for name, response in (("страница 422 без JS", plain), ("фрагмент 422 с JS", fragment)):
+        assert response.status_code == 422
+        text = _container_text(response.text)
+        assert text.count(EXAMPLE_PHONE) == 1, f"{name}: пример номера под полем повторён"
+        assert ERASE_SENTENCE in text, f"{name}: нет предложения о стирании"
+        assert any(
+            error in text for error in (PHONE_ERROR_NOT_A_NUMBER, PHONE_ERROR_TOO_LONG)
+        ), f"{name}: текст ошибки не показан"
