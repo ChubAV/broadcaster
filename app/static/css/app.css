@@ -431,6 +431,19 @@
    часть макета, переносится без переосмысления.
    -------------------------------------------------------------------------- */
 * { box-sizing: border-box; }
+/* Отступ прокрутки под липкую шапку (план 18-04, G-18-4 = WR-02). Шапка
+   `[data-head]` (`position: sticky; top: 0`) закрывала цель якоря `#phone` —
+   девять ссылок карточек и переход без JS после сохранения. Браузер учитывает
+   отступ только у прокручиваемого контейнера (`html`) или у самой цели
+   (`scroll-margin`); правило на контейнере формы `[data-acct-phone]` инертно,
+   токена высоты шапки нет. Значение — три слагаемых: худшая шапка (135 px
+   десктопа в полосе 861…~960 px, где пилюля сессий уходит второй строкой) +
+   подпись поля «Номер телефона» 20 px + запас 15 px = 170 px. Это ВЫВОД из CSS,
+   а не замер: литерал поднимается по замеру обхода. То же правило закрывает
+   якоря `#sched-{id}` и прокрутку при фокусе клавиатурой. Шапка остаётся
+   липкой на всех ширинах (решение владельца). Базовое правило стоит ВЫШЕ блока
+   `@media (max-width: 860px)`: более позднее базовое перебило бы мобильное. */
+html { scroll-padding-top: 170px; }
 body { margin: 0; background: var(--bg); }
 a { color: var(--accent-link); text-decoration: none; }
 a:hover { color: var(--accent-link-hover); }
@@ -483,6 +496,11 @@ a:hover { color: var(--accent-link-hover); }
   [data-access], [data-user] { display: none !important; }
   [data-tabs] { display: flex !important; }
   [data-head] { padding: 14px 16px !important; }
+  /* Отступ прокрутки при ≤860 px (см. базовое правило `html` выше): шапка здесь
+     выше — ряд действий своей строкой, подзаголовок в две строки. 201 px (замер
+     172 px + одна строка `<h1>` длинной подписи) + 20 px подпись поля + 15 px
+     запас = 236 px; вывод из CSS, поднимается по замеру обхода. */
+  html { scroll-padding-top: 236px; }
   [data-body] { padding: 18px 16px 90px !important; }
   [data-row] { display: flex !important; flex-wrap: wrap !important; gap: 8px 12px !important; padding: 14px 16px !important; }
   [data-row] > * { flex: none !important; }
