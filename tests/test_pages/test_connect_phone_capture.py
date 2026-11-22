@@ -18,6 +18,7 @@ GET после `connected: true` и пишет номер в том же ком�
 """
 
 import contextlib
+import logging
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -171,6 +172,13 @@ async def test_a_failing_capture_still_connects_the_account(
     caplog,
 ):
     """D-05, T-19-15, T-19-17: сбой писателя откатывает сейвпоинт, но не подключение; номера в журнале нет."""
+    # `alembic/env.py` зовёт `fileConfig(...)` с `disable_existing_loggers=True`: на полной
+    # суите миграционные тесты (`tests/test_migrations/`) выключают stdlib-логгер модуля,
+    # если его уже создал `tests/test_application/test_connect_phone.py`, и `caplog` не видит
+    # ни одной записи (замер оркестратора, волна 2 фазы 19). Включаем приёмник на время теста.
+    monkeypatch.setattr(
+        logging.getLogger("app.application.accounts.connect_phone"), "disabled", False
+    )
     aid = await seed_account(db_session, owner.id, "wa", status="connecting")
     monkeypatch.setattr(
         "app.application.accounts.connect_phone.fill_reported_phone",
