@@ -431,6 +431,19 @@
    часть макета, переносится без переосмысления.
    -------------------------------------------------------------------------- */
 * { box-sizing: border-box; }
+/* Отступ прокрутки под липкую шапку (план 18-04, G-18-4 = WR-02). Шапка
+   `[data-head]` (`position: sticky; top: 0`) закрывала цель якоря `#phone` —
+   девять ссылок карточек и переход без JS после сохранения. Браузер учитывает
+   отступ только у прокручиваемого контейнера (`html`) или у самой цели
+   (`scroll-margin`); правило на контейнере формы `[data-acct-phone]` инертно,
+   токена высоты шапки нет. Значение — три слагаемых: худшая шапка (135 px
+   десктопа в полосе 861…~960 px, где пилюля сессий уходит второй строкой) +
+   подпись поля «Номер телефона» 20 px + запас 15 px = 170 px. Это ВЫВОД из CSS,
+   а не замер: литерал поднимается по замеру обхода. То же правило закрывает
+   якоря `#sched-{id}` и прокрутку при фокусе клавиатурой. Шапка остаётся
+   липкой на всех ширинах (решение владельца). Базовое правило стоит ВЫШЕ блока
+   `@media (max-width: 860px)`: более позднее базовое перебило бы мобильное. */
+html { scroll-padding-top: 170px; }
 body { margin: 0; background: var(--bg); }
 a { color: var(--accent-link); text-decoration: none; }
 a:hover { color: var(--accent-link-hover); }
@@ -483,6 +496,11 @@ a:hover { color: var(--accent-link-hover); }
   [data-access], [data-user] { display: none !important; }
   [data-tabs] { display: flex !important; }
   [data-head] { padding: 14px 16px !important; }
+  /* Отступ прокрутки при ≤860 px (см. базовое правило `html` выше): шапка здесь
+     выше — ряд действий своей строкой, подзаголовок в две строки. 201 px (замер
+     172 px + одна строка `<h1>` длинной подписи) + 20 px подпись поля + 15 px
+     запас = 236 px; вывод из CSS, поднимается по замеру обхода. */
+  html { scroll-padding-top: 236px; }
   [data-body] { padding: 18px 16px 90px !important; }
   [data-row] { display: flex !important; flex-wrap: wrap !important; gap: 8px 12px !important; padding: 14px 16px !important; }
   [data-row] > * { flex: none !important; }
@@ -2538,7 +2556,17 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
    нехватке места усекается ОНА, а не различитель — `flex-shrink: 4` заставляет её
    уступать место раньше номера (у номера единица), `.acct-label__id` по-прежнему
    `flex: none`. Приглушение — базовое правило вне контейнеров: там фраза
-   переносится целиком (`nowrap` держит её неразрывной). */
+   переносится целиком (`nowrap` держит её неразрывной).
+
+   ⚠️ ОПРОВЕРГНУТО обходом (G-18-6, 2026-11-21): `flex-shrink` — пропорциональный
+   вес (CSS Flexbox §9.7), он делил нехватку между всеми сжимаемыми частями сразу
+   и резал номер вместе с пометкой; никакое его значение номер целым не оставляет.
+   Поколение плана 18-04: приоритет, а не вес — у пометки основа 0 и рост до
+   собственной ширины (`flex: 1 1 0; max-width: max-content`), поэтому номер
+   сжимается только когда пометка ушла в ноль. Номер и канал нарочно НЕ
+   несжимаемые: в чипе это вытолкнуло бы `#id` двойника за край (PHONE-05 Фазы
+   17). В чипе на 320 px усечённый номер с полным текстом в `title=` допустим —
+   решение владельца; канал раньше номера не уступает. */
 .chip__label > .acct-label,
 .acct-head__name > .acct-label {
   display: inline-flex; align-items: baseline; gap: 0.25em;
@@ -2552,11 +2580,22 @@ body:has(.media-tile--add[hidden]) .media-file-input { visibility: hidden; }
 }
 /* Пометка «указан вручную» (Фаза 18, D-10): приглушённый текст-слово, а не данные.
    Базовое правило стоит ДО правила усечения пометки в однострочных контейнерах
-   (ниже): сначала общее, затем усечение там, где строка одна. */
-.acct-label__manual { color: var(--text-muted); white-space: nowrap; }
+   (ниже): сначала общее, затем усечение там, где строка одна.
+
+   Поколение плана 18-04 (UI-P2): прежний `--text-muted` давал 3,61:1 на
+   `--surface` (ниже AA для текста меньше 18,66 px полужирного). Выбран
+   существующий `--text-secondary`: по токенам 5,65 / 5,88 / 5,47 / 5,61 на
+   `--surface` / `--bg` / `--surface-input` / `--surface-pill`; `--text-tertiary`
+   отвергнут — 4,41 на фоне чипа. Значение общего `--text-muted` НЕ меняется:
+   радиус правки — одно это правило, а `.mono--muted` («Номер неизвестен», `#id`
+   двойника) остаётся прежним (отложено до решения владельца). Кегль `--fs-xs` —
+   как у номера (`.mono`): прежде пометка наследовала 16 px заголовка и была
+   крупнее номера. Новых токенов и размеров нет. */
+.acct-label__manual { color: var(--text-secondary); font-size: var(--fs-xs); white-space: nowrap; }
 .chip__label .acct-label__manual,
 .acct-head__name .acct-label__manual {
-  flex-shrink: 4; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 1 0; max-width: max-content;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .acct-label__id { flex: none; }
 .chip:has(.chip__input:checked), .chip--on {
@@ -2821,8 +2860,13 @@ a.chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px
   flex: none; min-width: 0;
   display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px;
 }
+/* Ряд действий шапки экрана групп. Перелив на 320 px существовал с `bef29322`
+   (Фаза 3) и включён в G-18-6 решением владельца 2026-11-21: несжимаемый
+   (`flex: none`) ряд держался на max-content (318,5 px), и его собственный
+   `flex-wrap` не срабатывал — «К аккаунтам» выходила за карточку. Сжимаемый ряд
+   (`flex: 0 1 auto; min-width: 0`) переносит кнопки своей строкой внутри карточки. */
 .acct-head__actions {
-  flex: none; margin-left: auto;
+  flex: 0 1 auto; min-width: 0; margin-left: auto;
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
 }
 [data-acct-head] .btn { min-height: 40px; }

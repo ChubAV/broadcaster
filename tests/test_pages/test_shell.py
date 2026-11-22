@@ -6049,8 +6049,12 @@ DOCUMENT_BODY_ANCESTOR = "body"
 _SCROLL_LOCK_SELECTOR = f".{MODAL_SCROLL_LOCK_FLAG}"
 
 FAILURE_BANNER_ANCESTORS = {
-    # Корневой элемент. Литерала имени тега здесь нет по замеру выше.
-    ":root": (":root", _SCROLL_LOCK_SELECTOR),
+    # Корневой элемент. ⚠️ ЗАМЕР ВЫШЕ УСТАРЕЛ (план 18-04, G-18-4, 2026-11-22):
+    # `app.css` теперь адресует корень и именем тега — `html { scroll-padding-top }`
+    # (отступ прокрутки под липкую шапку, базовое правило и ≤860 px). Литерал
+    # `html` внесён сюда, как и требовал отказ правила у конца модуля; прежний
+    # текст замера не стёрт — он был верен на 2026-09-09.
+    ":root": (":root", "html", _SCROLL_LOCK_SELECTOR),
     # Тело документа. ⚠️ ВТОРОЙ СЕЛЕКТОР СЛИЧЕНИЕМ НЕ ПОЛЬЗУЕТСЯ, И ЭТО НАЗВАНО,
     # А НЕ ЗАМОЛЧАНО: `_selector_targets` сличает ПОСЛЕДНЮЮ простую часть, а у
     # `.is-modal-open body` она та же `body`. Кортеж перечисляет ОБА блока
@@ -7881,6 +7885,11 @@ def test_control_a_filter_on_the_document_body_ancestor_reddens(tmp_path):
 def test_the_failure_banner_ancestor_universe_is_addressed_by_stylesheet_selectors():
     """Корневой элемент внесён СЕЛЕКТОРАМИ таблицы, а сличение простой части строгое.
 
+    ⚠️ ЗАМЕР НИЖЕ ПРО ОТСУТСТВИЕ `html` ОПРОВЕРГНУТ ПЛАНОМ 18-04 (2026-11-22): с
+    `html { scroll-padding-top }` в `app/static/css/app.css` имя тега адресует
+    корень, поэтому правило теперь требует литерал `html` у записи `:root` и
+    блок с этим именем в таблице. Прежний текст сохранён — на 2026-09-09 он был верен.
+
     ⚠️ ЭТО ПРАВИЛО СЧИТАЕТ ЗАМЕР, НА КОТОРОМ ДЕРЖИТСЯ СОСТАВ ВСЕЛЕННОЙ, А НЕ
     ПОВТОРЯЕТ ЕГО ПРОЗОЙ. Замер 2026-09-09: селектора `html` в
     `app/static/css/app.css` НЕТ НИ ОДНОГО, корневой элемент адресуют `:root` и
@@ -7912,11 +7921,15 @@ def test_the_failure_banner_ancestor_universe_is_addressed_by_stylesheet_selecto
         "корневой элемент, тело документа и три обёртки"
     )
 
+    # ⚠️ ОПРОВЕРГНУТО ПЛАНОМ 18-04 (G-18-4, 2026-11-22): прежняя половина
+    # утверждала «`html` в кортежи не вносить — таблица его не адресует». Теперь
+    # таблица адресует корень и именем тега (`html { scroll-padding-top }`), и
+    # утверждение перевёрнуто: литерал `html` обязан стоять у записи `:root`, а
+    # у остальных предков его быть не должно.
     for ancestor, selectors in FAILURE_BANNER_ANCESTORS.items():
-        assert "html" not in selectors, (
-            f"предок `{ancestor}` внесён ЛИТЕРАЛОМ имени тега — таблица его так "
-            "не адресует, и антивакуумная половина правила выше упадёт отказом "
-            "«не объявлен ни одним блоком»"
+        assert ("html" in selectors) == (ancestor == ":root"), (
+            f"предок `{ancestor}`: литерал имени тега `html` стоит не там — таблица "
+            "адресует им ТОЛЬКО корневой элемент (запись `:root`)"
         )
 
     simple_parts = {
@@ -7927,10 +7940,10 @@ def test_the_failure_banner_ancestor_universe_is_addressed_by_stylesheet_selecto
         if compounds
         for piece in _compound_simple_selectors(compounds[-1])
     }
-    assert "html" not in simple_parts, (
-        "app.css СТАЛ адресовать корневой элемент именем тега — замер, на "
-        "котором стои́т состав вселенной, устарел: `html` теперь можно (и нужно) "
-        "внести в кортеж селекторов корневого элемента"
+    assert "html" in simple_parts, (
+        "app.css перестал адресовать корневой элемент именем тега (`html { "
+        "scroll-padding-top }`, план 18-04) — литерал `html` в записи `:root` "
+        "вселенной предков повис без блока, который он обязан сличать"
     )
     assert ":root" in simple_parts, (
         "app.css больше не объявляет `:root` — корневой элемент выпал из "

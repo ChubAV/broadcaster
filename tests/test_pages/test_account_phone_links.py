@@ -154,6 +154,12 @@ async def test_the_phone_link_lands_on_the_phone_field_of_the_same_account(
     Якорь `#phone` браузер прокручивает сам; суита проверяет, что на экране есть
     ровно один узел `id="phone"` — поле формы внутри `[data-acct-phone]`, чья
     форма пишет в `/accounts/{id}/phone` ЭТОГО аккаунта.
+
+    Отступ под липкую шапку `[data-head]` задаёт `html { scroll-padding-top }` в
+    app.css и стережёт
+    `tests/test_pages/test_responsive_markup.py::test_the_document_scroll_padding_clears_the_sticky_head`
+    (G-18-4, WR-02); что поле после перехода не под шапкой, суита не знает —
+    геометрию смотрит человек в обходе.
     """
     other = await seed_account(db_session, owner.id, "wa", phone="+79005556677")
     account_id = await seed_account(db_session, owner.id, "tg_user", phone=NUMBER)

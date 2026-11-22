@@ -5170,9 +5170,15 @@ def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
     (`flex: none`). Остальные контейнеры (карточка аккаунта, карточка истории,
     строки админки, `<h1>` шелла) переносят строки как раньше.
 
-    Фаза 18 (D-10, Pitfall 8): пометка «указан вручную» — третья усекаемая часть
-    и уступает место ПЕРВОЙ (`flex-shrink: 4` против единицы у номера), а не
-    различитель `#id`, который стоит после неё.
+    Фаза 18 (D-10, G-18-6): пометка «указан вручную» уступает место ПЕРВОЙ, и
+    механизм — приоритет, а не вес. `flex-shrink` — ПРОПОРЦИОНАЛЬНЫЙ вес
+    (CSS Flexbox §9.7): нехватка делится между всеми сжимаемыми частями сразу, и
+    никакое его значение не оставляет номер целым (прежнее `flex-shrink: 4`
+    резало номер вместе с пометкой — обход 2026-11-21). Приоритет даёт основа 0
+    и рост до собственной ширины (`flex: 1 1 0; max-width: max-content`):
+    номер сжимается только когда пометки не осталось. Номер и канал нарочно НЕ
+    несжимаемые: в чипе это вытолкнуло бы `#id` двойника за край (PHONE-05
+    Фазы 17), поэтому `flex-shrink: 0` и `flex: none` у них запрещены.
     """
     css = _css_without_comments()
 
@@ -5193,9 +5199,35 @@ def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
             ):
                 assert declaration in body, f"{container} .acct-label__{part}: нет `{declaration}`"
             if part == "manual":
-                assert "flex-shrink: 4" in body, (
-                    f"{container}: пометка не уступает место раньше номера (нет `flex-shrink: 4`)"
+                assert "flex: 1 1 0" in body, (
+                    f"{container}: пометка не уступает место первой (нет `flex: 1 1 0`)"
                 )
+                assert "max-width: max-content" in body, (
+                    f"{container}: пометка растёт шире собственного текста (нет `max-width: max-content`)"
+                )
+                assert re.search(r"flex-shrink\s*:", body) is None, (
+                    f"{container}: пометка делит нехватку весом `flex-shrink` (§9.7), а не приоритетом"
+                )
+            else:
+                assert re.search(r"flex-shrink\s*:\s*0\b", body) is None and "flex: none" not in body, (
+                    f"{container} .acct-label__{part}: несжимаемый номер или канал выталкивает #id за край"
+                )
+
+
+def test_the_account_head_actions_can_wrap_inside_the_card():
+    """G-18-6: ряд действий шапки экрана групп сжимаем и переносится внутри карточки.
+
+    `flex: none` держал ряд на max-content (318,5 px), и собственный `flex-wrap`
+    не срабатывал: «К аккаунтам» выходила за карточку на 320 px. `flex: 0 1 auto`
+    с `min-width: 0` разрешает ряду сжаться до ширины карточки, и кнопки уходят
+    следующей строкой. ⚠️ Машинная половина: суита читает текст CSS, геометрию на
+    320 px смотрит человек.
+    """
+    body = _css_rule(_css_without_comments(), ".acct-head__actions")
+
+    for declaration in ("flex: 0 1 auto", "min-width: 0", "flex-wrap: wrap", "margin-left: auto"):
+        assert declaration in body, f".acct-head__actions: нет `{declaration}`"
+    assert "flex: none" not in body, ".acct-head__actions несжимаем: ряд не переносится внутри карточки"
 
 
 def test_account_label_rules_introduce_no_fixed_width():
@@ -5240,11 +5272,142 @@ def test_the_phone_form_takes_its_own_row_in_the_account_head():
 
 
 def test_the_manual_mark_is_muted():
-    """D-10: пометка «указан вручную» приглушена и неразрывна в переносящих контейнерах."""
+    """D-10, UI-P2: пометка «указан вручную» набрана кеглем номера, приглушена и неразрывна.
+
+    Кегль `--fs-xs` (11 px) — как у номера (`.mono`): без него пометка наследовала
+    16 px заголовка и была крупнее номера. Цвет — токен, но НЕ общий
+    `--text-muted` (3,61:1 на `--surface`, ниже AA): общий токен читают десятки
+    правил на всех экранах, правка плана 18-04 — одно правило пометки.
+    """
     body = _css_rule(_css_without_comments(), ".acct-label__manual")
 
-    assert "color: var(--text-muted)" in body, "пометка не приглушена переменной --text-muted"
+    assert "font-size: var(--fs-xs)" in body, "пометка не набрана кеглем номера (нет `font-size: var(--fs-xs)`)"
     assert "white-space: nowrap" in body, "фраза пометки может разорваться посреди слов"
+    color = re.search(r"(?<![-\w])color\s*:\s*var\(\s*(--[\w-]+)\s*\)", body)
+    assert color, "цвет пометки не задан токеном `color: var(--…)`"
+    assert color.group(1) != "--text-muted", "пометка по-прежнему на общем токене --text-muted (3,61:1)"
+
+
+def _hex_token(root: str, name: str) -> tuple[int, int, int]:
+    """Значение токена `name` из блока `:root` (`#rrggbb`); имя сличается ЦЕЛИКОМ.
+
+    `--surface` не путается с `--surface-input`: после имени обязано идти `:`.
+    """
+    found = re.search(rf"(?<![-\w]){re.escape(name)}\s*:\s*#([0-9a-fA-F]{{6}})\s*;", root)
+    assert found, f"токен {name} не задан шестнадцатеричным #rrggbb в :root"
+    value = found.group(1)
+    return int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+
+
+def _luminance(rgb: tuple[int, int, int]) -> float:
+    """Относительная яркость по WCAG 2.x."""
+
+    def channel(value: int) -> float:
+        scaled = value / 255
+        return scaled / 12.92 if scaled <= 0.03928 else ((scaled + 0.055) / 1.055) ** 2.4
+
+    red, green, blue = (channel(value) for value in rgb)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast(foreground: tuple[int, int, int], background: tuple[int, int, int]) -> float:
+    lighter, darker = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+MANUAL_MARK_BACKGROUNDS = ("--surface", "--bg", "--surface-input", "--surface-pill")
+
+
+def test_the_manual_mark_contrast_meets_aa_on_every_background():
+    """D-10, UI-P2: контраст пометки не ниже 4,5:1 на всех фонах подписи и тусклее номера.
+
+    ⚠️ Машинная половина: контраст считается по ЗНАЧЕНИЯМ токенов `:root`, а не по
+    рендеру (полупрозрачная шапка шелла, смесь акцента у включённого чипа). Что на
+    реальной странице он не ниже 4,5:1, измеряет человек инструментом DevTools.
+    """
+    css = _css_without_comments()
+    root = _css_rule(css, ":root")
+    color = re.search(r"(?<![-\w])color\s*:\s*var\(\s*(--[\w-]+)\s*\)", _css_rule(css, ".acct-label__manual"))
+    assert color, "контраст пометки не вычислить: цвет не задан токеном `color: var(--…)`"
+    mark = _hex_token(root, color.group(1))
+
+    for background in MANUAL_MARK_BACKGROUNDS:
+        ratio = _contrast(mark, _hex_token(root, background))
+        assert ratio >= 4.5, f"контраст пометки ниже 4,5:1 на {background}: {ratio:.2f}"
+
+    surface = _hex_token(root, "--surface")
+    assert _contrast(mark, surface) < _contrast(_hex_token(root, "--text"), surface), (
+        "пометка не приглушена относительно номера (--text)"
+    )
+
+
+# --- Фаза 18, план 18-04 (G-18-4, WR-02): отступ прокрутки под липкую шапку -----
+#
+# ⚠️ ЭТО МАШИННАЯ ПОЛОВИНА, А НЕ ЗАМЕР. Нижние границы ниже — ВЫВОД из CSS
+# (scope_note плана 18-04, «Размер отступа»), а не измерение: шапка `[data-head]`
+# липкая (`position: sticky; top: 0`), её высота растёт с длиной подписи аккаунта,
+# а суита не рендерит страницу. Высоту худшей шапки на 320, 375, 860 и 900 px и то,
+# что после перехода по `#phone` поле не под шапкой, измеряет человек в обходе
+# (`/gsd-verify-work 18`); если замер + подпись поля больше литерала в app.css,
+# литерал поднимается, а граница ниже — до «замер + подпись поля» одним коммитом.
+
+# Худшая шапка в полосе десктопа 861…~960 px (пилюля уходит второй строкой), px.
+SCROLL_PADDING_DESKTOP_HEAD = 135
+# Худшая шапка при ≤860 px: замер обхода 172 px + одна строка `<h1>` длинной подписи, px.
+SCROLL_PADDING_MOBILE_HEAD = 201
+# Подпись поля «Номер телефона» над целью якоря: строка ≈ 13 px + зазор `.field` 7 px.
+SCROLL_PADDING_FIELD_LABEL = 20
+
+
+def _scroll_padding_top(rule: str) -> int | None:
+    found = re.search(r"scroll-padding-top\s*:\s*(\d+)px", rule)
+    return int(found.group(1)) if found else None
+
+
+def test_the_document_scroll_padding_clears_the_sticky_head():
+    """G-18-4 (WR-02), D-12: у документа есть отступ прокрутки под липкую шапку.
+
+    Браузер читает отступ только у прокручиваемого контейнера (`html`) или у самой
+    цели (`scroll-margin`); правило на контейнере формы `[data-acct-phone]`
+    инертно. Базовое правило `html` стоит РАНЬШЕ блока `@media (max-width: 860px)`
+    (иначе оно перебило бы мобильное значение), внутри блока — своё, больше.
+    """
+    css = _css_without_comments()
+    message = "у документа нет отступа прокрутки под липкую шапку"
+
+    base = re.search(r"(?m)^html\s*\{([^}]*)\}", css)
+    assert base, f"{message}: нет базового правила `html {{`"
+    desktop = _scroll_padding_top(base.group(1))
+    assert desktop is not None, f"{message}: у базового `html` нет `scroll-padding-top: <N>px`"
+    assert desktop >= SCROLL_PADDING_DESKTOP_HEAD + SCROLL_PADDING_FIELD_LABEL, (
+        f"{message}: десктоп {desktop}px меньше шапки {SCROLL_PADDING_DESKTOP_HEAD}px"
+        f" + подписи поля {SCROLL_PADDING_FIELD_LABEL}px"
+    )
+
+    mobile = None
+    mobile_at = -1
+    for opening in re.finditer(r"@media\s*\(max-width:\s*860px\)\s*\{", css):
+        depth, index = 1, opening.end()
+        while depth and index < len(css):
+            depth += {"{": 1, "}": -1}.get(css[index], 0)
+            index += 1
+        rule = re.search(r"(?<![\w-])html\s*\{([^}]*)\}", css[opening.end() : index])
+        if rule:
+            mobile, mobile_at = _scroll_padding_top(rule.group(1)), opening.start()
+            break
+    assert mobile is not None, f"{message}: в `@media (max-width: 860px)` нет `html {{ scroll-padding-top }}`"
+    assert mobile >= SCROLL_PADDING_MOBILE_HEAD + SCROLL_PADDING_FIELD_LABEL, (
+        f"{message}: ≤860px {mobile}px меньше шапки {SCROLL_PADDING_MOBILE_HEAD}px"
+        f" + подписи поля {SCROLL_PADDING_FIELD_LABEL}px"
+    )
+    assert mobile > desktop, f"{message}: мобильный отступ {mobile}px не больше десктопного {desktop}px"
+    assert base.start() < mobile_at, (
+        f"{message}: базовое правило стоит ПОСЛЕ медиаблока и перебило бы мобильное значение"
+    )
+
+    assert "scroll-margin" not in _css_rule(css, "[data-acct-phone]"), (
+        "scroll-margin на контейнере формы браузер не читает: отступ обязан стоять на `html`"
+    )
 
 
 def test_account_label_chip_keeps_the_full_text_in_its_title():
