@@ -256,6 +256,10 @@ async def _screen_context(
     `phone_maxlength`) ставят УМОЛЧАНИЯ здесь, а включаемый шаблон их не ставит
     (Pitfall 2): выбор «показать сохранённое или присланное» — решение вызывающего,
     и страница ошибки перекрывает два ключа поверх этого словаря.
+
+    Ключ `phone_focus` здесь ЛОЖЕН (UI-P1, IN-01): обычный показ экрана и посадка
+    после перехода без JS полю `autofocus` не ставят и фокус у человека не отнимают;
+    истинным его делают только ответы на отправку формы номера (`_page` ниже).
     """
     # Подпись аккаунта для `<title>` и обоих заголовков (D-10, D-12, D-14).
     # Признак двойника считается по ВСЕМ аккаунтам пользователя, а не по этому
@@ -323,6 +327,7 @@ async def _screen_context(
     context["phone_error"] = None
     context["example_phone"] = EXAMPLE_PHONE
     context["phone_maxlength"] = PHONE_FIELD_MAXLENGTH
+    context["phone_focus"] = False
     return context
 
 
@@ -462,13 +467,15 @@ async def account_phone_save(
 
             Присланное значение и текст ошибки ставятся ПОВЕРХ умолчаний
             `_screen_context`: на ветке ошибки поле возвращает то, что человек
-            прислал, иначе введённое терялось бы на каждой опечатке.
+            прислал, иначе введённое терялось бы на каждой опечатке. Ответ на
+            отправку формы — поэтому поле получает `autofocus` (UI-P1, IN-01).
             """
             context = await _screen_context(
                 request, db, settings, user, account, account_id, None
             )
             context["phone_value"] = phone_text
             context["phone_error"] = refusal_text
+            context["phone_focus"] = True
             return templates.TemplateResponse("account_groups/list.html", context)
 
         async def _error_fragment() -> HTMLResponse:
@@ -479,7 +486,9 @@ async def account_phone_save(
             бы об исходе последнего действия (D-13, D-03). Общий слой
             `respond_field_error` не меняется — его потребители 28 маршрутов
             приёмника 422, а наблюдение касается только этой формы. Блок пуст:
-            ни номера, ни кода исхода в нём нет (D-16).
+            ни номера, ни кода исхода в нём нет (D-16). Поле получает `autofocus`:
+            ответ приходит на отправку формы, и на 422 фокус возвращается в поле
+            вместе с озвучиванием ошибки (UI-P1, IN-01).
             """
             html = templates.env.get_template(
                 "account_groups/partials/phone_error_response.html"
@@ -489,6 +498,7 @@ async def account_phone_save(
                 phone_error=refusal_text,
                 example_phone=EXAMPLE_PHONE,
                 phone_maxlength=PHONE_FIELD_MAXLENGTH,
+                phone_focus=True,
             )
             return HTMLResponse(html)
 
@@ -506,7 +516,9 @@ async def account_phone_save(
 
         ⚠️ ФУНКЦИЯ НУЛЬАРНАЯ И АСИНХРОННАЯ: слой ответа делает `await fragment()`.
         Отложенность несущая — на пути без JS разметка не собирается вовсе, а
-        страница после перехода перечитывает данные новым запросом.
+        страница после перехода перечитывает данные новым запросом. Поле получает
+        `autofocus`: ответ приходит на отправку формы, и фокус возвращается в поле
+        (UI-P1, IN-01).
         """
         await db.refresh(account)
         rows = await load_account_rows(db, user_id)
@@ -521,6 +533,7 @@ async def account_phone_save(
             phone_error=None,
             example_phone=EXAMPLE_PHONE,
             phone_maxlength=PHONE_FIELD_MAXLENGTH,
+            phone_focus=True,
         )
         return HTMLResponse(html)
 
