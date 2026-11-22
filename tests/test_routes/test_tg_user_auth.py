@@ -604,11 +604,24 @@ async def test_a_right_password_gives_the_new_account_its_number(
     tg_client.connect.assert_not_awaited()
 
 
+class _UnreadablePhone:
+    """Пользователь, чей атрибут `phone` поднимает исключение при чтении (D-05)."""
+
+    @property
+    def phone(self):
+        raise RuntimeError("phone is not readable")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "answer",
-    [SimpleNamespace(phone=None), SimpleNamespace(phone="garbage"), MagicMock()],
-    ids=["no-phone", "garbage-phone", "mock-user"],
+    [
+        SimpleNamespace(phone=None),
+        SimpleNamespace(phone="garbage"),
+        MagicMock(),
+        _UnreadablePhone(),
+    ],
+    ids=["no-phone", "garbage-phone", "mock-user", "unreadable-phone"],
 )
 async def test_an_unparseable_phone_still_connects_the_account(
     authed_client: AsyncClient, db_session: AsyncSession, owner_id: int, answer
