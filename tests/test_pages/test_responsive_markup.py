@@ -5341,6 +5341,75 @@ def test_the_manual_mark_contrast_meets_aa_on_every_background():
     )
 
 
+# --- Фаза 18, план 18-04 (G-18-4, WR-02): отступ прокрутки под липкую шапку -----
+#
+# ⚠️ ЭТО МАШИННАЯ ПОЛОВИНА, А НЕ ЗАМЕР. Нижние границы ниже — ВЫВОД из CSS
+# (scope_note плана 18-04, «Размер отступа»), а не измерение: шапка `[data-head]`
+# липкая (`position: sticky; top: 0`), её высота растёт с длиной подписи аккаунта,
+# а суита не рендерит страницу. Высоту худшей шапки на 320, 375, 860 и 900 px и то,
+# что после перехода по `#phone` поле не под шапкой, измеряет человек в обходе
+# (`/gsd-verify-work 18`); если замер + подпись поля больше литерала в app.css,
+# литерал поднимается, а граница ниже — до «замер + подпись поля» одним коммитом.
+
+# Худшая шапка в полосе десктопа 861…~960 px (пилюля уходит второй строкой), px.
+SCROLL_PADDING_DESKTOP_HEAD = 135
+# Худшая шапка при ≤860 px: замер обхода 172 px + одна строка `<h1>` длинной подписи, px.
+SCROLL_PADDING_MOBILE_HEAD = 201
+# Подпись поля «Номер телефона» над целью якоря: строка ≈ 13 px + зазор `.field` 7 px.
+SCROLL_PADDING_FIELD_LABEL = 20
+
+
+def _scroll_padding_top(rule: str) -> int | None:
+    found = re.search(r"scroll-padding-top\s*:\s*(\d+)px", rule)
+    return int(found.group(1)) if found else None
+
+
+def test_the_document_scroll_padding_clears_the_sticky_head():
+    """G-18-4 (WR-02), D-12: у документа есть отступ прокрутки под липкую шапку.
+
+    Браузер читает отступ только у прокручиваемого контейнера (`html`) или у самой
+    цели (`scroll-margin`); правило на контейнере формы `[data-acct-phone]`
+    инертно. Базовое правило `html` стоит РАНЬШЕ блока `@media (max-width: 860px)`
+    (иначе оно перебило бы мобильное значение), внутри блока — своё, больше.
+    """
+    css = _css_without_comments()
+    message = "у документа нет отступа прокрутки под липкую шапку"
+
+    base = re.search(r"(?m)^html\s*\{([^}]*)\}", css)
+    assert base, f"{message}: нет базового правила `html {{`"
+    desktop = _scroll_padding_top(base.group(1))
+    assert desktop is not None, f"{message}: у базового `html` нет `scroll-padding-top: <N>px`"
+    assert desktop >= SCROLL_PADDING_DESKTOP_HEAD + SCROLL_PADDING_FIELD_LABEL, (
+        f"{message}: десктоп {desktop}px меньше шапки {SCROLL_PADDING_DESKTOP_HEAD}px"
+        f" + подписи поля {SCROLL_PADDING_FIELD_LABEL}px"
+    )
+
+    mobile = None
+    mobile_at = -1
+    for opening in re.finditer(r"@media\s*\(max-width:\s*860px\)\s*\{", css):
+        depth, index = 1, opening.end()
+        while depth and index < len(css):
+            depth += {"{": 1, "}": -1}.get(css[index], 0)
+            index += 1
+        rule = re.search(r"(?<![\w-])html\s*\{([^}]*)\}", css[opening.end() : index])
+        if rule:
+            mobile, mobile_at = _scroll_padding_top(rule.group(1)), opening.start()
+            break
+    assert mobile is not None, f"{message}: в `@media (max-width: 860px)` нет `html {{ scroll-padding-top }}`"
+    assert mobile >= SCROLL_PADDING_MOBILE_HEAD + SCROLL_PADDING_FIELD_LABEL, (
+        f"{message}: ≤860px {mobile}px меньше шапки {SCROLL_PADDING_MOBILE_HEAD}px"
+        f" + подписи поля {SCROLL_PADDING_FIELD_LABEL}px"
+    )
+    assert mobile > desktop, f"{message}: мобильный отступ {mobile}px не больше десктопного {desktop}px"
+    assert base.start() < mobile_at, (
+        f"{message}: базовое правило стоит ПОСЛЕ медиаблока и перебило бы мобильное значение"
+    )
+
+    assert "scroll-margin" not in _css_rule(css, "[data-acct-phone]"), (
+        "scroll-margin на контейнере формы браузер не читает: отступ обязан стоять на `html`"
+    )
+
+
 def test_account_label_chip_keeps_the_full_text_in_its_title():
     """Обрезка чипа не становится потерей: полный текст остаётся в `title=` из плоской подписи."""
     source = _template_source("ads/includes/sched_card.html")
