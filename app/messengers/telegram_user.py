@@ -221,7 +221,11 @@ async def refresh_qr(session_id: str, user_id: int) -> str | None:
 
 
 async def submit_2fa(session_id: str, user_id: int, password: str) -> str:
-    """Submit 2FA password for the caller's own session. Returns session_string on success."""
+    """Submit 2FA password for the caller's own session. Returns session_string on success.
+
+    Номер собственного пользователя снимается из ответа `sign_in` в состояние
+    (Фаза 19, D-02); возврат остаётся строкой — запись берёт результат `complete_auth`.
+    """
     # Владелец — ДО `sign_in` (D-04): пароль постороннего в Telegram не уходит.
     state = _owned(session_id, user_id)
     if not state:
@@ -230,10 +234,12 @@ async def submit_2fa(session_id: str, user_id: int, password: str) -> str:
     from telethon.errors import PasswordHashInvalidError
 
     try:
-        await state.client.sign_in(password=password)
+        user = await state.client.sign_in(password=password)
     except PasswordHashInvalidError:
         raise ValueError("Неверный пароль 2FA.")
 
+    # Номер — из ответа `sign_in`, первым в синхронном блоке (Фаза 19, D-02).
+    state.own_phone = reported_phone_of(user)
     state.session_string = state.client.session.save()
     state.status = "success"
     return state.session_string

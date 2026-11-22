@@ -649,10 +649,15 @@ async def test_the_capture_log_carries_no_number(
     assert len(entries) == 1, f"событий захвата номера должно быть одно: {len(entries)}"
     entry = entries[0].msg
     assert entries[0].name == "app.pages.accounts", f"событие пришло из {entries[0].name}"
-    assert set(entry) - {"event", "level", "timestamp", "logger", "_record", "_from_structlog"} == {
-        "account_id",
-        "outcome",
-    }, f"ключи события захвата: {sorted(entry)}"
+    # Служебные ключи structlog и контекста запроса (`request_id`, `method`, `path`)
+    # привязывает промежуточный слой; значимые ключи события — ровно два.
+    service_keys = {
+        "event", "level", "timestamp", "logger", "request_id", "method", "path",
+        "_record", "_from_structlog",
+    }
+    assert set(entry) - service_keys == {"account_id", "outcome"}, (
+        f"ключи события захвата: {sorted(entry)}"
+    )
     accounts = await _tg_accounts(db_session)
     assert entry["account_id"] == accounts[0].id
     assert entry["outcome"] == "written", f"исход захвата {entry['outcome']!r}"
