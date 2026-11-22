@@ -677,3 +677,64 @@ async def test_after_the_clearing_an_automatic_source_may_fill_the_number_again(
     page = await authed_client.get(f"/accounts/{account_id}/groups")
     labels = label_texts(page.text)[str(account_id)]
     assert labels and all(text == "Telegram +7 999 555-66-77" for text in labels), labels
+
+
+# --- 5. Фокус после ответа (Фаза 18, план 18-05, UI-P1 = IN-01) ----------------
+
+
+@pytest.mark.asyncio
+async def test_the_answer_to_a_submission_puts_focus_back_into_the_field(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """ТРАССЕР (UI-P1, IN-01): ответ на отправку несёт `autofocus` у поля номера.
+
+    Три ответа: успех с JS (200), 422 с JS и страница 422 без JS. Рантайм htmx
+    фокусирует `[autofocus]` в подменённом содержимом, поэтому на 422 текст
+    ошибки озвучивается вместе с именем поля.
+    """
+    account_id = await seed_account(db_session, owner.id, "tg_user")
+
+    saved = await authed_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": DISPLAY_FORM},
+        headers=HTMX,
+        follow_redirects=False,
+    )
+    assert saved.status_code == 200
+    refused_fragment = await authed_client.post(
+        f"/accounts/{account_id}/phone",
+        data={"phone": "abc"},
+        headers=HTMX,
+        follow_redirects=False,
+    )
+    assert refused_fragment.status_code == 422
+    refused_page = await authed_client.post(
+        f"/accounts/{account_id}/phone", data={"phone": "abc"}, follow_redirects=False
+    )
+    assert refused_page.status_code == 422
+
+    for name, response in (
+        ("успех с JS", saved),
+        ("422 с JS", refused_fragment),
+        ("422 без JS", refused_page),
+    ):
+        (field, _in_head) = _screen(response.text).phone_inputs[0]
+        assert "autofocus" in field, (
+            f"{name}: после ответа фокус не возвращается в поле номера"
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_plain_screen_never_autofocuses_the_field(
+    authed_client: AsyncClient, db_session: AsyncSession, owner: User
+):
+    """T-18-21: обычный показ экрана и посадка после перехода без JS фокус не отнимают."""
+    account_id = await seed_account(db_session, owner.id, "tg_user", phone=STORED_FORM)
+
+    shown = await authed_client.get(f"/accounts/{account_id}/groups")
+    landed = await authed_client.get(f"/accounts/{account_id}/groups?notice=phone_saved")
+
+    for name, response in (("обычный показ", shown), ("посадка после перехода", landed)):
+        assert response.status_code == 200
+        assert "autofocus" not in response.text, f"{name}: экран отнимает фокус у человека"
+        assert _screen(response.text).phone_inputs, f"{name}: поля номера нет"
