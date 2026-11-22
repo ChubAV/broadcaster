@@ -53,6 +53,7 @@ from app.pages.common import (
 from app.pages.htmx import respond, respond_field_error
 from app.pages.identifiers import IdPath, PostIdPath, id_in_column
 from app.services.account_label import AccountRow, build_labels, label_of
+from app.services.phone import PhoneError, normalize_manual
 
 # Разметка ответов опроса статуса подключения живёт в шаблоне, а не в строках
 # обработчика (План 08). До этого она собиралась конкатенацией и несла
@@ -846,7 +847,6 @@ async def accounts_connect_max_page(
 
 
 MAX_CONNECT_STEP_TEMPLATE = "accounts/includes/max_connect_step.html"
-MAX_EMPTY_PHONE_ERROR = "Введите номер телефона"
 
 
 def _max_step_markup(
@@ -887,13 +887,25 @@ async def accounts_connect_max_start(
     (`#max-connect-step`): шаг QR с узлом опроса статуса либо шаг с ошибкой
     подключения (D-02). «Нет сессии» уходит переходом на `/login`.
 
-    ⚠️ ПУСТОЙ ТЕЛЕФОН — ВТОРОЙ И ПОСЛЕДНИЙ АВТОРСКИЙ 422 ФАЗЫ (FORM-08, D-06).
-    Номер из одних пробелов отвечает 422 на обоих транспортах: без htmx —
-    страницей мастера, на htmx — фрагментом шага телефона; оба несут текст
-    ошибки и ПРИСЛАННОЕ значение в поле. Новых проверок номера не заводится:
-    ошибка ровно та, что была. Поле читается из тела формы самим обработчиком, а
-    не сигнатурой, поэтому и ОТСУТСТВУЮЩЕЕ поле идёт этой же веткой, а не
-    отказом валидации фреймворка.
+    ⚠️ НЕВЕРНЫЙ И ПУСТОЙ ТЕЛЕФОН ОТВЕЧАЮТ 422 ТЕКСТОМ `PhoneError` (Фаза 19,
+    D-09; PHONE-14). Поле разбирает `normalize_manual`: и пустой ввод, и
+    неверный, и слишком длинный дают один из `PHONE_ERROR_MESSAGES` с примером
+    написания. 422 уходит на обоих транспортах: без htmx — страницей мастера,
+    на htmx — фрагментом шага телефона; оба несут текст ошибки и ПРИСЛАННОЕ
+    значение в поле (эхо автоэкранировано макросом поля). Введённое в текст
+    ошибки НЕ подставляется (D-18 Фазы 16, PHONE-21). Поле читается из тела
+    формы самим обработчиком, а не сигнатурой, поэтому и ОТСУТСТВУЮЩЕЕ поле идёт
+    этой же веткой, а не отказом валидации фреймворка. Прежний текст абзаца —
+    «до Фазы 19: пустой телефон — второй и последний авторский 422 фазы 11;
+    номер из одних пробелов отвечал 422 текстом "Введите номер телефона", любой
+    непустой текст шёл дальше к QR, а в `credentials` ложился сырой ввод».
+
+    ⚠️ В `credentials` И ВОРКЕРУ УХОДИТ НОРМАЛИЗОВАННЫЙ E.164 (D-10). Номер
+    формы — ЗАПАСНЫЙ источник опроса статуса (план 19-07): опросчик читает его
+    строгим нормализатором писателя, который отвергает даже плейсхолдер поля,
+    поэтому сырой ввод здесь не хранится. Колонку номера старт НЕ пишет — ни
+    писателем, ни мимо него: номер формы, записанный при POST, заблокировал бы
+    номер, сообщённый самим MAX (писатель пишет только неизвестный номер).
 
     ⚠️ АДРЕС ДЕГРАДАЦИИ УСПЕХА — `/accounts`, И ОН ВЫБРАН ИЗМЕРЕНИЕМ (решение
     планировщика, обратимое). Прежде путь без JavaScript получал страницу QR
@@ -913,10 +925,11 @@ async def accounts_connect_max_start(
         return await respond(request, redirect="/login")
 
     form = await request.form()
-    submitted = form.get("phone") or ""
-    phone = submitted.strip()
-
-    if not phone:
+    submitted = str(form.get("phone") or "")
+    try:
+        phone = normalize_manual(submitted)
+    except PhoneError as exc:
+        field_error = str(exc)
 
         async def _page() -> HTMLResponse:
             """Страница мастера с ошибкой поля — путь деградации ошибки заполнения."""
@@ -928,7 +941,7 @@ async def accounts_connect_max_start(
                     "is_admin": check_is_admin(user, settings),
                     "active_page": "accounts",
                     "step": "phone",
-                    "error": MAX_EMPTY_PHONE_ERROR,
+                    "error": field_error,
                     "phone": submitted,
                 },
             )
@@ -936,7 +949,7 @@ async def accounts_connect_max_start(
         async def _fragment() -> HTMLResponse:
             """Тот же включаемый шаг с тем же контекстом — без шелла."""
             return HTMLResponse(
-                _max_step_markup(step="phone", error=MAX_EMPTY_PHONE_ERROR, phone=submitted)
+                _max_step_markup(step="phone", error=field_error, phone=submitted)
             )
 
         return await respond_field_error(request, page=_page, fragment=_fragment)
