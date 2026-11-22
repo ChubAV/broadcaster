@@ -5170,9 +5170,15 @@ def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
     (`flex: none`). Остальные контейнеры (карточка аккаунта, карточка истории,
     строки админки, `<h1>` шелла) переносят строки как раньше.
 
-    Фаза 18 (D-10, Pitfall 8): пометка «указан вручную» — третья усекаемая часть
-    и уступает место ПЕРВОЙ (`flex-shrink: 4` против единицы у номера), а не
-    различитель `#id`, который стоит после неё.
+    Фаза 18 (D-10, G-18-6): пометка «указан вручную» уступает место ПЕРВОЙ, и
+    механизм — приоритет, а не вес. `flex-shrink` — ПРОПОРЦИОНАЛЬНЫЙ вес
+    (CSS Flexbox §9.7): нехватка делится между всеми сжимаемыми частями сразу, и
+    никакое его значение не оставляет номер целым (прежнее `flex-shrink: 4`
+    резало номер вместе с пометкой — обход 2026-11-21). Приоритет даёт основа 0
+    и рост до собственной ширины (`flex: 1 1 0; max-width: max-content`):
+    номер сжимается только когда пометки не осталось. Номер и канал нарочно НЕ
+    несжимаемые: в чипе это вытолкнуло бы `#id` двойника за край (PHONE-05
+    Фазы 17), поэтому `flex-shrink: 0` и `flex: none` у них запрещены.
     """
     css = _css_without_comments()
 
@@ -5193,9 +5199,35 @@ def test_account_label_keeps_the_twin_id_visible_in_a_one_line_container():
             ):
                 assert declaration in body, f"{container} .acct-label__{part}: нет `{declaration}`"
             if part == "manual":
-                assert "flex-shrink: 4" in body, (
-                    f"{container}: пометка не уступает место раньше номера (нет `flex-shrink: 4`)"
+                assert "flex: 1 1 0" in body, (
+                    f"{container}: пометка не уступает место первой (нет `flex: 1 1 0`)"
                 )
+                assert "max-width: max-content" in body, (
+                    f"{container}: пометка растёт шире собственного текста (нет `max-width: max-content`)"
+                )
+                assert re.search(r"flex-shrink\s*:", body) is None, (
+                    f"{container}: пометка делит нехватку весом `flex-shrink` (§9.7), а не приоритетом"
+                )
+            else:
+                assert re.search(r"flex-shrink\s*:\s*0\b", body) is None and "flex: none" not in body, (
+                    f"{container} .acct-label__{part}: несжимаемый номер или канал выталкивает #id за край"
+                )
+
+
+def test_the_account_head_actions_can_wrap_inside_the_card():
+    """G-18-6: ряд действий шапки экрана групп сжимаем и переносится внутри карточки.
+
+    `flex: none` держал ряд на max-content (318,5 px), и собственный `flex-wrap`
+    не срабатывал: «К аккаунтам» выходила за карточку на 320 px. `flex: 0 1 auto`
+    с `min-width: 0` разрешает ряду сжаться до ширины карточки, и кнопки уходят
+    следующей строкой. ⚠️ Машинная половина: суита читает текст CSS, геометрию на
+    320 px смотрит человек.
+    """
+    body = _css_rule(_css_without_comments(), ".acct-head__actions")
+
+    for declaration in ("flex: 0 1 auto", "min-width: 0", "flex-wrap: wrap", "margin-left: auto"):
+        assert declaration in body, f".acct-head__actions: нет `{declaration}`"
+    assert "flex: none" not in body, ".acct-head__actions несжимаем: ряд не переносится внутри карточки"
 
 
 def test_account_label_rules_introduce_no_fixed_width():
