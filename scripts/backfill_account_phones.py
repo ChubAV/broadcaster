@@ -17,6 +17,7 @@ import asyncio
 import collections
 import dataclasses
 import enum
+import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,6 +71,14 @@ NOTE_NOT_CONNECTED = "не подключён"
 # Пауза после каждого TG-аккаунта, у которого строился клиент: против FloodWait на
 # длинных прогонах, не для защиты ключа авторизации (его защищает строгая очерёдность).
 TELEGRAM_PAUSE = 1.0
+
+# Признак «занят» (D-09): задача отправки TG-сообщения и её очередь — те же, что в
+# `app/worker/celery_app.py` (`task_routes`); `account_id` — третий аргумент задачи
+# (`send_telegram_message(self, ad_id, group_id, account_id, schedule_id)`). Расхождение
+# с боевым путём ловят тесты `test_busy_probe_constants_match_the_send_task`.
+SEND_TASK = "app.worker.tasks.send_telegram_message"
+TELEGRAM_QUEUE = "telegram"
+ACCOUNT_ARG_INDEX = 2
 
 # Ожидание ответов воркеров на `inspect`, секунды (допущение A8 RESEARCH).
 INSPECT_TIMEOUT = 2.0
@@ -462,16 +471,100 @@ class TelegramSource:
         return reply
 
 
+def _account_of(args: object) -> int | None:
+    """`account_id` из аргументов задачи отправки; `None` — аргументы нечитаемы."""
+    if not isinstance(args, (list, tuple)) or len(args) <= ACCOUNT_ARG_INDEX:
+        return None
+    account = args[ACCOUNT_ARG_INDEX]
+    if isinstance(account, bool) or not isinstance(account, int):
+        return None
+    return account
+
+
 class TelegramBusyProbe:
-    """Признак «TG-аккаунт занят рассылкой» (D-09); каркас RED: всегда «не занят»."""
+    """Признак «TG-аккаунт занят рассылкой» (D-09): `True` / `False` / `None`.
+
+    «Занят» — это задача отправки (`SEND_TASK`) аккаунта: выполняемая или
+    предзагруженная воркером (снимок `inspect().active()` и `.reserved()`) либо ещё
+    ждущая в списке Redis очереди `TELEGRAM_QUEUE`. Скрипт только читает: команды
+    `inspect` и `LRANGE`; ничего не извлекает, не отзывает и не чистит.
+
+    Отказ в закрытую: `None` («не определено», вызывающий считает аккаунт занятым)
+    вместо `False` на любой неопределённости — нет ответа инспектора, не ответил ни
+    один воркер очереди `telegram` (пустой снимок от `default` не доказывает
+    «не занят»), отказ Redis, нечитаемое сообщение или аргументы задачи отправки.
+    Цена ошибки «не занят» необратима (ключ авторизации), цена «занят» — повторный
+    прогон. `timeout` — ожидание ответов воркеров; боевая фабрика инспектора
+    (план 20-06) строит `inspect(timeout=...)` с ним.
+    """
 
     def __init__(self, *, inspector_factory, redis_client, timeout: float = INSPECT_TIMEOUT):
         self._inspector_factory = inspector_factory
         self._redis = redis_client
-        self._timeout = timeout
+        self.timeout = timeout
+        # Состав воркеров очереди `telegram` — один раз за прогон; снимок задач — на каждый аккаунт.
+        self._telegram_workers: list[str] | None = None
 
     async def __call__(self, account_id: int) -> bool | None:
-        return False
+        return await asyncio.to_thread(self._check, account_id)
+
+    def _queue_workers(self, inspector) -> list[str] | None:
+        if self._telegram_workers is None:
+            queues = inspector.active_queues()
+            if not isinstance(queues, dict) or not queues:
+                return None
+            workers = [
+                worker
+                for worker, consumed in queues.items()
+                if any(
+                    isinstance(queue, dict) and queue.get("name") == TELEGRAM_QUEUE
+                    for queue in consumed
+                )
+            ]
+            if not workers:
+                return None
+            self._telegram_workers = workers
+        return self._telegram_workers
+
+    def _check(self, account_id: int) -> bool | None:
+        try:
+            inspector = self._inspector_factory()
+            workers = self._queue_workers(inspector)
+            if workers is None:
+                return None
+            active = inspector.active()
+            reserved = inspector.reserved()
+            if not isinstance(active, dict) or not isinstance(reserved, dict):
+                return None
+            if any(worker not in active or worker not in reserved for worker in workers):
+                return None
+            unknown = False
+            for snapshot in (active, reserved):
+                for tasks in snapshot.values():
+                    for task in tasks:
+                        if task.get("name") != SEND_TASK:
+                            continue
+                        owner = _account_of(task.get("args"))
+                        if owner is None:
+                            unknown = True
+                        elif owner == account_id:
+                            return True
+            for item in self._redis.lrange(TELEGRAM_QUEUE, 0, -1):
+                try:
+                    headers = json.loads(item)["headers"]
+                    if headers.get("task") != SEND_TASK:
+                        continue
+                    owner = _account_of(json.loads(headers["argsrepr"]))
+                except Exception:  # noqa: BLE001 — сообщение нечитаемо: чьё оно, неизвестно
+                    unknown = True
+                    continue
+                if owner is None:
+                    unknown = True
+                elif owner == account_id:
+                    return True
+            return None if unknown else False
+        except Exception:  # noqa: BLE001 — любая неопределённость значит «занят» (D-09)
+            return None
 
 
 def classify_status(body: object) -> SourceReply:
