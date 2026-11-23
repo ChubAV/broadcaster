@@ -13,6 +13,7 @@
 Тест не касается ни Docker, ни Telegram, ни сети, ни настоящей базы приложения.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -886,3 +887,450 @@ async def test_running_max_not_connected_is_polled_once(factory, capsys):
     assert _line(capsys.readouterr().out, account_id, "max") == (
         f"#{account_id} max: воркер недоступен (не подключён)"
     )
+
+
+# --- подъём остановленного воркера по флагу (O-1 (а), D-04, D-16) ---------------
+
+
+def _wake_doubles(
+    events,
+    *,
+    kind: str = "wa",
+    queue=0,
+    running_now=None,
+    start_endpoint="default",
+    ready=True,
+    replies=None,
+    sleeps=None,
+):
+    """Двойники подъёма с ОБЩИМ журналом `events`: ни Docker, ни Redis, ни сети.
+
+    Журнал: `("start", id)`, `("wait", id, timeout)`, `("ask", id)`, `("stop", id)`.
+    `queue` — число (всегда), список (очередное чтение; последний элемент
+    повторяется; исключение в списке поднимается) или `None` (подключения к
+    Redis нет). `ready` — `bool` или исключение для `wait_ready`. `replies` —
+    `id -> тело` или `id -> список тел` (очередной запрос; исчерпание — ошибка
+    теста после записи в журнал). `sleeps` — журнал пауз опроса MAX.
+    """
+    reads = iter(range(10**6))
+    sequence = queue if isinstance(queue, list) else [queue]
+
+    def queue_len(account_id):
+        value = sequence[min(next(reads), len(sequence) - 1)]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    def start(account_id):
+        events.append(("start", account_id))
+        if start_endpoint == "default":
+            return f"http://{kind}-worker-{account_id}:3000"
+        return start_endpoint
+
+    def stop(account_id):
+        events.append(("stop", account_id))
+        return True
+
+    def wait_ready(account_id, *, timeout):
+        events.append(("wait", account_id, timeout))
+        if isinstance(ready, BaseException):
+            raise ready
+        return ready
+
+    def endpoint_now(account_id):
+        return running_now
+
+    asked: dict[int, int] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        account_id = int(request.url.path.split("/")[3])
+        events.append(("ask", account_id))
+        spec = (replies or {}).get(account_id, GOOD_BODY)
+        if isinstance(spec, list):
+            index = asked.get(account_id, 0)
+            asked[account_id] = index + 1
+            assert index < len(spec), f"запрос №{index + 1} сверх заданных ответов"
+            spec = spec[index]
+        if isinstance(spec, BaseException):
+            raise spec
+        return httpx.Response(200, json=spec)
+
+    async def sleep(seconds):
+        if sleeps is not None:
+            sleeps.append(seconds)
+
+    return {
+        "start": start,
+        "stop": stop,
+        "wait_ready": wait_ready,
+        "running_now": endpoint_now,
+        "queue_len": None if queue is None else queue_len,
+        "sleep": sleep,
+        "transport": httpx.MockTransport(handler),
+    }
+
+
+@pytest.mark.asyncio
+async def test_tracer_wake_starts_polls_and_stops_a_stopped_worker(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "wa", status="active")
+    events: list[tuple] = []
+    source = script.WorkerStatusSource(
+        "wa",
+        list_containers=_listing([_container("wa", account_id, "exited")]),
+        **_wake_doubles(events, replies={account_id: GOOD_BODY}),
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {"wa": source})
+
+    assert await _columns(factory, account_id) == (STORED, False), (
+        "поднятый по флагу воркер не дал номер"
+    )
+    assert events == [
+        ("start", account_id),
+        ("wait", account_id, 90.0),
+        ("ask", account_id),
+        ("stop", account_id),
+    ]
+    assert f"#{account_id} wa: заполнено {MASKED}" in capsys.readouterr().out
+
+
+READY_WINDOWS = {"wa": 90.0, "max": 30.0}
+
+
+def _chain(steps, account_id: int, kind: str) -> list[tuple]:
+    """Журнал, который даёт цепочка шагов подъёма для одного аккаунта."""
+    named = {
+        "start": ("start", account_id),
+        "wait": ("wait", account_id, READY_WINDOWS[kind]),
+        "ask": ("ask", account_id),
+        "stop": ("stop", account_id),
+    }
+    return [named[step] for step in steps]
+
+
+FULL = ("start", "wait", "ask", "stop")
+WAKE_CASES = [
+    pytest.param("connecting", {}, (), "статус не active", id="status-connecting"),
+    pytest.param("disconnected", {}, (), "статус не active", id="status-disconnected"),
+    pytest.param("sync_failed", {}, (), "статус не active", id="status-sync-failed"),
+    pytest.param("active", {"queue": 1}, (), "в очереди есть задачи", id="queue-one"),
+    pytest.param("active", {"queue": 0}, FULL, MASKED, id="queue-zero-wakes"),
+    pytest.param(
+        "active",
+        {"queue": ConnectionError("redis")},
+        (),
+        "очередь не прочитана",
+        id="queue-unreadable",
+    ),
+    pytest.param("active", {"queue": None}, (), "очередь не прочитана", id="no-redis"),
+    pytest.param(
+        "active",
+        {"running_now": "ENDPOINT"},
+        ("ask",),
+        MASKED,
+        id="already-running-is-asked-not-started",
+    ),
+    pytest.param(
+        "active",
+        {"start_endpoint": None},
+        ("start",),
+        "подъём не удался",
+        id="start-refused-no-stop",
+    ),
+    pytest.param(
+        "active",
+        {"ready": False},
+        ("start", "wait", "stop"),
+        "воркер поднят, но не ответил",
+        id="not-ready-no-ask-but-stop",
+    ),
+]
+
+
+@WORKER_KINDS
+@pytest.mark.parametrize(("status", "spec", "steps", "fragment"), WAKE_CASES)
+@pytest.mark.asyncio
+async def test_wake_conditions_matrix(factory, capsys, kind, status, spec, steps, fragment):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, kind, status=status)
+    spec = dict(spec)
+    if spec.get("running_now") == "ENDPOINT":
+        spec["running_now"] = f"http://{kind}-worker-{account_id}:3000"
+    events: list[tuple] = []
+    source = script.WorkerStatusSource(
+        kind,
+        list_containers=_listing([_container(kind, account_id, "exited")]),
+        **_wake_doubles(events, kind=kind, **spec),
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {kind: source})
+
+    assert events == _chain(steps, account_id, kind), "журнал подъёма не по условиям O-1"
+    assert fragment in _line(capsys.readouterr().out, account_id, kind)
+    expected = (STORED, False) if fragment == MASKED else (None, False)
+    assert await _columns(factory, account_id) == expected
+
+
+@WORKER_KINDS
+@pytest.mark.asyncio
+async def test_wake_never_stops_a_container_it_did_not_start(factory, kind):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, kind)
+    events: list[tuple] = []
+    source = script.WorkerStatusSource(
+        kind,
+        list_containers=_listing([_container(kind, account_id, "running")]),
+        **_wake_doubles(events, kind=kind),
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {kind: source})
+
+    assert events == [("ask", account_id)], "чужой работающий контейнер не гасится и не поднимается"
+
+
+QUEUE_AFTER = [
+    pytest.param([0, 1], "контейнер оставлен", id="tasks-appeared"),
+    pytest.param([0, ConnectionError("redis")], "just wa-workers", id="unreadable-after"),
+]
+
+
+@WORKER_KINDS
+@pytest.mark.parametrize(("queue", "fragment"), QUEUE_AFTER)
+@pytest.mark.asyncio
+async def test_wake_leaves_the_container_when_the_queue_filled(
+    factory, capsys, kind, queue, fragment
+):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, kind)
+    events: list[tuple] = []
+    source = script.WorkerStatusSource(
+        kind,
+        list_containers=_listing([_container(kind, account_id, "exited")]),
+        **_wake_doubles(events, kind=kind, queue=queue),
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {kind: source})
+
+    assert events == _chain(("start", "wait", "ask"), account_id, kind), (
+        "контейнер погашен при непустой или непрочитанной очереди"
+    )
+    assert fragment in _line(capsys.readouterr().out, account_id, kind)
+    assert await _columns(factory, account_id) == (STORED, False)
+
+
+@WORKER_KINDS
+@pytest.mark.asyncio
+async def test_wake_with_dry_run_in_the_core_starts_nothing(factory, capsys, kind):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, kind)
+    events: list[tuple] = []
+    source = script.WorkerStatusSource(
+        kind,
+        list_containers=_listing([_container(kind, account_id, "exited")]),
+        **_wake_doubles(events, kind=kind),
+    )
+    before = await _snapshot(factory)
+
+    await script.run(factory, script.RunOptions(dry_run=True, wake=True), {kind: source})
+
+    assert events == [], "под просмотром поднят, опрошен или погашен контейнер"
+    assert _line(capsys.readouterr().out, account_id, kind) == (
+        f"#{account_id} {kind}: воркер недоступен (воркер не запущен)"
+    )
+    assert await _snapshot(factory) == before
+
+
+@pytest.mark.asyncio
+async def test_wake_one_container_at_a_time(factory):
+    user_id = await _seed_user(factory)
+    first = await _seed(factory, user_id, "wa")
+    second = await _seed(factory, user_id, "wa")
+    containers = [_container("wa", first, "exited"), _container("wa", second, "exited")]
+
+    def sources(events):
+        return {
+            "wa": script.WorkerStatusSource(
+                "wa", list_containers=_listing(containers), **_wake_doubles(events)
+            )
+        }
+
+    # Без флага — первым: аккаунты ещё без номера, то есть кандидаты, и подъёма нет.
+    idle: list[tuple] = []
+    summary = await script.run(factory, script.RunOptions(), sources(idle))
+    assert summary.counts[script.Outcome.UNREACHABLE] == 2, "без флага аккаунты не опрошены"
+    assert idle == [], "без флага поднят контейнер"
+
+    events: list[tuple] = []
+    await script.run(factory, script.RunOptions(wake=True), sources(events))
+
+    assert events == [
+        *_chain(FULL, first, "wa"),
+        *_chain(FULL, second, "wa"),
+    ], "контейнеры подняты не строго по одному"
+
+
+# --- опрос MAX до подключения, окна ожидания, отказы и отмена -------------------
+
+NOT_CONNECTED = {"connected": False, "exists": True}
+DEAD = {"connected": False, "exists": False}
+ATTEMPTS = script.MAX_CONNECT_ATTEMPTS
+
+MAX_POLL_CASES = [
+    pytest.param(
+        [NOT_CONNECTED] * (ATTEMPTS - 1) + [GOOD_BODY],
+        ATTEMPTS,
+        (STORED, False),
+        "заполнено",
+        id="connected-on-45th",
+    ),
+    pytest.param(
+        [NOT_CONNECTED] * ATTEMPTS,
+        ATTEMPTS,
+        (None, False),
+        "воркер недоступен (не подключён)",
+        id="never-connected-45-asks",
+    ),
+    pytest.param(
+        [NOT_CONNECTED, NOT_CONNECTED, DEAD],
+        3,
+        (None, False),
+        "сессия мертва",
+        id="dead-session-ends-the-poll",
+    ),
+]
+
+
+@pytest.mark.parametrize(("replies", "asks", "columns", "fragment"), MAX_POLL_CASES)
+@pytest.mark.asyncio
+async def test_wake_max_polls_until_connected_within_attempts(
+    factory, capsys, replies, asks, columns, fragment
+):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "max")
+    events: list[tuple] = []
+    sleeps: list[float] = []
+    source = script.WorkerStatusSource(
+        "max",
+        list_containers=_listing([_container("max", account_id, "exited")]),
+        **_wake_doubles(events, kind="max", replies={account_id: replies}, sleeps=sleeps),
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {"max": source})
+
+    assert await _columns(factory, account_id) == columns, "MAX не дождался подключения"
+    assert events == [
+        ("start", account_id),
+        ("wait", account_id, 30.0),
+        *[("ask", account_id)] * asks,
+        ("stop", account_id),
+    ], "число запросов опроса MAX не по границе 45"
+    assert sleeps == [script.MAX_POLL_INTERVAL] * (asks - 1)
+    assert fragment in _line(capsys.readouterr().out, account_id, "max")
+
+
+@pytest.mark.asyncio
+async def test_wake_wa_and_max_ready_windows(factory):
+    user_id = await _seed_user(factory)
+    wa_id = await _seed(factory, user_id, "wa")
+    max_id = await _seed(factory, user_id, "max")
+    wa_events: list[tuple] = []
+    max_events: list[tuple] = []
+    sources = {
+        "wa": script.WorkerStatusSource(
+            "wa",
+            list_containers=_listing([_container("wa", wa_id, "exited")]),
+            **_wake_doubles(wa_events, replies={wa_id: [NOT_CONNECTED]}),
+        ),
+        "max": script.WorkerStatusSource(
+            "max",
+            list_containers=_listing([_container("max", max_id, "exited")]),
+            **_wake_doubles(max_events, kind="max", replies={max_id: [GOOD_BODY]}),
+        ),
+    }
+
+    await script.run(factory, script.RunOptions(wake=True), sources)
+
+    # WA: окно 90 с и ровно один запрос, даже если воркер ответил «не подключён».
+    assert wa_events == _chain(FULL, wa_id, "wa")
+    assert ("wait", wa_id, 90.0) in wa_events
+    assert ("wait", max_id, 30.0) in max_events
+    assert max_events == _chain(FULL, max_id, "max")
+
+
+WAKE_FAILURES = [
+    pytest.param(
+        {"replies": "ConnectError"},
+        ("start", "wait", "ask", "stop"),
+        "воркер недоступен (ConnectError)",
+        id="transport-refused",
+    ),
+    pytest.param(
+        {"ready": RuntimeError("boom-79991234567")},
+        ("start", "wait", "stop"),
+        "сбой по аккаунту (RuntimeError)",
+        id="wait-raised",
+    ),
+    pytest.param(
+        {"ready": asyncio.CancelledError()},
+        ("start", "wait", "stop"),
+        None,
+        id="cancelled",
+    ),
+]
+
+
+@WORKER_KINDS
+@pytest.mark.parametrize(("spec", "steps", "line"), WAKE_FAILURES)
+@pytest.mark.asyncio
+async def test_wake_stops_the_container_on_failure_and_cancellation(
+    factory, capsys, kind, spec, steps, line
+):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, kind)
+    spec = dict(spec)
+    if spec.get("replies") == "ConnectError":
+        spec["replies"] = {account_id: httpx.ConnectError("refused")}
+    events: list[tuple] = []
+    source = script.WorkerStatusSource(
+        kind,
+        list_containers=_listing([_container(kind, account_id, "exited")]),
+        **_wake_doubles(events, kind=kind, **spec),
+    )
+
+    if line is None:
+        # Отмена проходит наружу из `run`, но поднятый контейнер всё равно гасится.
+        with pytest.raises(asyncio.CancelledError):
+            await script.run(factory, script.RunOptions(wake=True), {kind: source})
+    else:
+        await script.run(factory, script.RunOptions(wake=True), {kind: source})
+        out = capsys.readouterr().out
+        assert _line(out, account_id, kind) == f"#{account_id} {kind}: {line}"
+        assert "79991234567" not in out
+
+    assert events == _chain(steps, account_id, kind), "поднятый контейнер не погашен"
+    assert await _columns(factory, account_id) == (None, False)
+
+
+@pytest.mark.asyncio
+async def test_wake_stop_failure_keeps_the_number_and_names_the_container(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "wa")
+    events: list[tuple] = []
+    doubles = _wake_doubles(events)
+
+    def stop_refused(account_id):
+        events.append(("stop", account_id))
+        raise RuntimeError("docker-secret-79991234567")
+
+    doubles["stop"] = stop_refused
+    source = script.WorkerStatusSource(
+        "wa", list_containers=_listing([_container("wa", account_id, "exited")]), **doubles
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {"wa": source})
+
+    out = capsys.readouterr().out
+    assert await _columns(factory, account_id) == (STORED, False), "отказ остановки спрятал номер"
+    assert "остановка не удалась (RuntimeError)" in _line(out, account_id, "wa")
+    assert "docker-secret-79991234567" not in out
