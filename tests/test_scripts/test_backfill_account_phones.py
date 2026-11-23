@@ -2070,3 +2070,170 @@ def test_script_help_runs_and_says_it_writes():
         "--telegram-from-container",
     ):
         assert fragment in result.stdout, f"справка не содержит {fragment!r}"
+
+
+# --- отказы аргументов, коды выхода, страж Telegram, сборка боевых источников -------
+
+
+@pytest.mark.asyncio
+async def test_wake_with_dry_run_is_rejected_before_any_source_call(factory):
+    user_id = await _seed_user(factory)
+    await _seed(factory, user_id, "wa")
+    recording = RecordingSource()
+    before = await _snapshot(factory)
+
+    try:
+        code = await script.amain(
+            ["--wake", "--dry-run"], session_factory=factory, sources={"wa": recording}
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(f"--wake принят вместе с --dry-run (код выхода {code})")
+
+    assert recording.calls == [], "источник опрошен до отказа"
+    assert await _snapshot(factory) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--type", "tg"],
+        ["--limit", "0"],
+        ["--limit", "-1"],
+        ["--account-id", "0"],
+        ["--account-id", "x"],
+    ],
+    ids=["unknown-type", "limit-zero", "limit-negative", "account-zero", "account-not-int"],
+)
+async def test_argument_errors_exit_two(factory, argv):
+    user_id = await _seed_user(factory)
+    await _seed(factory, user_id, "wa")
+    recording = RecordingSource()
+
+    with pytest.raises(SystemExit) as exc:
+        await script.amain(argv, session_factory=factory, sources={"wa": recording})
+
+    assert exc.value.code == 2
+    assert recording.calls == [], "источник опрошен при ошибке аргументов"
+
+
+def test_type_filter_can_repeat():
+    parser = script.build_parser()
+
+    repeated = script.options_from(parser.parse_args(["--type", "wa", "--type", "max"]))
+    assert repeated.kinds == ("wa", "max")
+
+    bare = script.options_from(parser.parse_args([]))
+    assert bare.kinds == script.KINDS
+    assert bare.dry_run is False, "запуск без флагов не пишет (D-08)"
+    assert bare.wake is False
+
+
+@pytest.mark.asyncio
+async def test_exit_code_zero_even_when_nothing_was_filled(factory):
+    user_id = await _seed_user(factory)
+    unreachable = await _seed(factory, user_id, "wa")
+    busy = await _seed(factory, user_id, "wa")
+    no_number = await _seed(factory, user_id, "wa")
+    source = RecordingSource(
+        {
+            unreachable: script.SourceReply(script.Outcome.UNREACHABLE),
+            busy: script.SourceReply(script.Outcome.BUSY),
+            no_number: script.SourceReply(script.Outcome.NO_NUMBER),
+        }
+    )
+
+    code = await script.amain([], session_factory=factory, sources={"wa": source})
+
+    assert code == 0
+    assert sorted(source.calls) == sorted([unreachable, busy, no_number])
+    for account_id in (unreachable, busy, no_number):
+        assert await _columns(factory, account_id) == (None, False)
+
+
+@pytest_asyncio.fixture
+async def empty_factory(tmp_path):
+    """Фабрика сессий над файловой базой БЕЗ таблиц: любая выборка отказывает."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'empty.db'}")
+    yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_failure_exits_one_with_the_class_name(empty_factory, capsys):
+    code = await script.amain([], session_factory=empty_factory, sources={"wa": RecordingSource()})
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "Прогон прерван: OperationalError" in out
+    assert "no such table" not in out, "в строку прерывания попал текст исключения"
+
+
+@pytest.mark.asyncio
+async def test_build_sources_guards_telegram_outside_the_container(
+    factory, test_settings, capsys
+):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+
+    sources = script.build_sources(test_settings, telegram_from_container=False)
+
+    assert isinstance(sources["tg_user"], script.TelegramOutsideContainerSource)
+    await script.run(factory, script.RunOptions(), {"tg_user": sources["tg_user"]})
+    out = capsys.readouterr().out
+    line = _line(out, account_id, "tg_user")
+    assert line.startswith(f"#{account_id} tg_user: воркер недоступен"), line
+    assert "just prod-backfill-phones" in line
+    assert await _columns(factory, account_id) == (None, False)
+
+
+@pytest.mark.asyncio
+async def test_build_sources_wires_the_real_sources(test_settings, monkeypatch):
+    from app.config import get_settings
+
+    class RedisSpy:
+        def __init__(self):
+            self.journal: list[str] = []
+
+        def llen(self, key):
+            self.journal.append(key)
+            return 3
+
+    spy = RedisSpy()
+    urls: list[str] = []
+
+    def from_url(url, *args, **kwargs):
+        urls.append(url)
+        return spy
+
+    monkeypatch.setattr(script.redis, "from_url", from_url)
+    # Модуль `celery_app` читает настройки при ввозе; в чистом дереве без `.env` их нет.
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    get_settings.cache_clear()
+    try:
+        sources = script.build_sources(test_settings, telegram_from_container=True)
+    finally:
+        get_settings.cache_clear()
+
+    assert urls == [test_settings.redis_url]
+    assert spy.journal == [], "сборка обратилась к Redis"
+    assert set(sources) == set(script.KINDS)
+    for kind in ("wa", "max"):
+        assert isinstance(sources[kind], script.WorkerStatusSource)
+        assert sources[kind]._queue_len(5) == 3
+        assert spy.journal[-1] == script.queue_key(kind, 5)
+    telegram = sources["tg_user"]
+    assert isinstance(telegram, script.TelegramSource)
+    assert telegram._client_factory is script.TelegramClient
+    assert (telegram._api_id, telegram._api_hash) == (
+        test_settings.telegram_api_id,
+        test_settings.telegram_api_hash,
+    )
+    probe = telegram._busy_probe
+    assert isinstance(probe, script.TelegramBusyProbe)
+    assert probe.timeout == script.INSPECT_TIMEOUT
+    assert probe._redis is spy
+    assert probe._inspector_factory().timeout == script.INSPECT_TIMEOUT
