@@ -15,10 +15,12 @@
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
 import pytest_asyncio
+from docker.errors import DockerException
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -660,3 +662,227 @@ async def test_classify_status_transport_failures_are_unreachable(
     assert _line(out, account_id, kind) == f"#{account_id} {kind}: воркер недоступен ({note})"
     assert SECRET not in out, "в вывод попал текст исключения или тело ответа воркера"
     assert "79991234567" not in out
+
+
+# --- путь по умолчанию не будит воркеры ---------------------------------------
+
+NO_NUMBER_BODY = {"connected": True, "exists": True, "phone": None}
+GOOD_BODY = {"connected": True, "exists": True, "phone": REPORTED}
+
+
+def _patch_wake_paths():
+    """Четыре пути подъёма контейнера: менеджеры обоих типов и помощники адаптеров."""
+    return [
+        patch("app.services.wa_container_manager.start_container"),
+        patch("app.services.max_container_manager.start_container"),
+        patch("app.messengers.whatsapp.ensure_wa_container"),
+        patch("app.messengers.max.ensure_max_container"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_default_polls_only_running_workers(factory, capsys):
+    user_id = await _seed_user(factory)
+    running = await _seed(factory, user_id, "wa")
+    exited = await _seed(factory, user_id, "wa")
+    no_container = await _seed(factory, user_id, "wa")
+    restarting = await _seed(factory, user_id, "max")
+    requests: list[str] = []
+    transport = _status_transport({_status_url("wa", running): NO_NUMBER_BODY}, requests)
+    sources = {
+        "wa": script.WorkerStatusSource(
+            "wa",
+            list_containers=_listing(
+                [_container("wa", running), _container("wa", exited, "exited")]
+            ),
+            transport=transport,
+        ),
+        "max": script.WorkerStatusSource(
+            "max",
+            list_containers=_listing([_container("max", restarting, "restarting")]),
+            transport=transport,
+        ),
+    }
+
+    await script.run(factory, script.RunOptions(), sources)
+
+    assert requests == [_status_url("wa", running)], "опрошен не только работающий воркер"
+    out = capsys.readouterr().out
+    assert f"#{running} wa: номера нет" in out
+    for account_id, kind in ((exited, "wa"), (no_container, "wa"), (restarting, "max")):
+        assert _line(out, account_id, kind) == (
+            f"#{account_id} {kind}: воркер недоступен (воркер не запущен)"
+        )
+
+
+@pytest.mark.asyncio
+async def test_docker_listing_is_read_once_per_kind(factory):
+    user_id = await _seed_user(factory)
+    wa_ids = [await _seed(factory, user_id, "wa") for _ in range(3)]
+    max_ids = [await _seed(factory, user_id, "max") for _ in range(2)]
+    requests: list[str] = []
+    responses = {_status_url("wa", i): NO_NUMBER_BODY for i in wa_ids}
+    responses.update({_status_url("max", i): NO_NUMBER_BODY for i in max_ids})
+    transport = _status_transport(responses, requests)
+    wa_listing: list[str] = []
+    max_listing: list[str] = []
+    sources = {
+        "wa": script.WorkerStatusSource(
+            "wa",
+            list_containers=_listing([_container("wa", i) for i in wa_ids], wa_listing),
+            transport=transport,
+        ),
+        "max": script.WorkerStatusSource(
+            "max",
+            list_containers=_listing([_container("max", i) for i in max_ids], max_listing),
+            transport=transport,
+        ),
+    }
+
+    await script.run(factory, script.RunOptions(), sources)
+
+    assert len(requests) == 5
+    assert wa_listing == ["list"], "список контейнеров wa прочитан не один раз"
+    assert max_listing == ["list"], "список контейнеров max прочитан не один раз"
+
+
+@pytest.mark.asyncio
+async def test_docker_unavailable_is_a_per_account_outcome(factory, capsys):
+    user_id = await _seed_user(factory)
+    wa_ids = [await _seed(factory, user_id, "wa") for _ in range(2)]
+    max_id = await _seed(factory, user_id, "max")
+    requests: list[str] = []
+    transport = _status_transport({_status_url("max", max_id): GOOD_BODY}, requests)
+    sources = {
+        "wa": script.WorkerStatusSource(
+            "wa",
+            list_containers=_listing(DockerException("secret-79991234567")),
+            transport=transport,
+        ),
+        "max": script.WorkerStatusSource(
+            "max", list_containers=_listing([_container("max", max_id)]), transport=transport
+        ),
+    }
+
+    summary = await script.run(factory, script.RunOptions(), sources)
+
+    out = capsys.readouterr().out
+    for account_id in wa_ids:
+        assert _line(out, account_id, "wa") == (
+            f"#{account_id} wa: воркер недоступен (Docker недоступен: DockerException)"
+        )
+        assert await _columns(factory, account_id) == (None, False)
+    assert summary.counts[script.Outcome.UNREACHABLE] == 2
+    assert summary.counts[script.Outcome.FILLED] == 1
+    assert await _columns(factory, max_id) == (STORED, False)
+    assert "secret-79991234567" not in out
+    assert requests == [_status_url("max", max_id)]
+
+
+@pytest.mark.asyncio
+async def test_never_wakes_through_adapters(factory):
+    user_id = await _seed_user(factory)
+    wa_running = await _seed(factory, user_id, "wa")
+    wa_stopped = await _seed(factory, user_id, "wa")
+    max_running = await _seed(factory, user_id, "max")
+    max_stopped = await _seed(factory, user_id, "max")
+    requests: list[str] = []
+    transport = _status_transport(
+        {_status_url("wa", wa_running): GOOD_BODY, _status_url("max", max_running): GOOD_BODY},
+        requests,
+    )
+
+    def sources():
+        return {
+            "wa": script.WorkerStatusSource(
+                "wa",
+                list_containers=_listing(
+                    [_container("wa", wa_running), _container("wa", wa_stopped, "exited")]
+                ),
+                transport=transport,
+            ),
+            "max": script.WorkerStatusSource(
+                "max",
+                list_containers=_listing(
+                    [_container("max", max_running), _container("max", max_stopped, "created")]
+                ),
+                transport=transport,
+            ),
+        }
+
+    patches = _patch_wake_paths()
+    mocks = [p.start() for p in patches]
+    try:
+        # Просмотр идёт первым: он ничего не пишет, и оба прогона видят тех же кандидатов.
+        await script.run(factory, script.RunOptions(dry_run=True), sources())
+        await script.run(factory, script.RunOptions(), sources())
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert len(requests) == 4, "оба прогона обязаны опросить оба работающих воркера"
+    wa_start, max_start, wa_ensure, max_ensure = mocks
+    wa_start.assert_not_called()
+    max_start.assert_not_called()
+    wa_ensure.assert_not_called()
+    max_ensure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dry_run_starts_no_container(factory, capsys):
+    user_id = await _seed_user(factory)
+    wa_running = await _seed(factory, user_id, "wa")
+    max_stopped = await _seed(factory, user_id, "max")
+    requests: list[str] = []
+    transport = _status_transport({_status_url("wa", wa_running): GOOD_BODY}, requests)
+    sources = {
+        "wa": script.WorkerStatusSource(
+            "wa", list_containers=_listing([_container("wa", wa_running)]), transport=transport
+        ),
+        "max": script.WorkerStatusSource(
+            "max",
+            list_containers=_listing([_container("max", max_stopped, "exited")]),
+            transport=transport,
+        ),
+    }
+    before = await _snapshot(factory)
+    patches = _patch_wake_paths()
+    mocks = [p.start() for p in patches]
+    try:
+        await script.run(factory, script.RunOptions(dry_run=True), sources)
+    finally:
+        for p in patches:
+            p.stop()
+
+    out = capsys.readouterr().out
+    assert f"#{wa_running} wa: было бы заполнено {MASKED}" in out
+    assert _line(out, max_stopped, "max") == (
+        f"#{max_stopped} max: воркер недоступен (воркер не запущен)"
+    )
+    assert await _snapshot(factory) == before
+    assert requests == [_status_url("wa", wa_running)]
+    wa_start, max_start, wa_ensure, max_ensure = mocks
+    wa_start.assert_not_called()
+    max_start.assert_not_called()
+    wa_ensure.assert_not_called()
+    max_ensure.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_running_max_not_connected_is_polled_once(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "max")
+    requests: list[str] = []
+    transport = _status_transport(
+        {_status_url("max", account_id): {"connected": False, "exists": True}}, requests
+    )
+    source = script.WorkerStatusSource(
+        "max", list_containers=_listing([_container("max", account_id)]), transport=transport
+    )
+
+    await script.run(factory, script.RunOptions(), {"max": source})
+
+    assert requests == [_status_url("max", account_id)], "долгий опрос на пути по умолчанию"
+    assert _line(capsys.readouterr().out, account_id, "max") == (
+        f"#{account_id} max: воркер недоступен (не подключён)"
+    )
