@@ -15,6 +15,7 @@
 
 import asyncio
 import collections
+import dataclasses
 import enum
 import sys
 from dataclasses import dataclass, field
@@ -52,6 +53,16 @@ KINDS = ("tg_user", "wa", "max")
 CONTAINER_MANAGERS = {"wa": wa_container_manager, "max": max_container_manager}
 
 STATUS_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
+
+# Окна ожидания поднятого по флагу воркера (усмотрение 4 исследования). WA ждёт
+# `/health` до 90 с и спрашивает `/status` один раз; MAX ждёт `/health` до 30 с и затем
+# опрашивает `/status` до `connected: true` — счётом попыток, не часами.
+WA_READY_TIMEOUT = 90.0
+MAX_READY_TIMEOUT = 30.0
+MAX_CONNECT_ATTEMPTS = 45
+MAX_POLL_INTERVAL = 2.0
+
+NOTE_NOT_CONNECTED = "не подключён"
 
 WRITE_OUTCOMES: dict[PhoneWrite, Outcome] = {
     PhoneWrite.WRITTEN: Outcome.FILLED,
@@ -173,6 +184,11 @@ def _preview(reply: SourceReply) -> SourceReply:
     return SourceReply(Outcome.FILLED, reported=reply.reported)
 
 
+def queue_key(kind: str, account_id: int) -> str:
+    """Ключ очереди работы воркера — тот же, что читают `manage_wa_containers` / `manage_max_containers`."""
+    return f"{kind}:queue:{account_id}"
+
+
 class WorkerStatusSource:
     """Источник номера WA / MAX: собственный запрос `/status` работающего воркера.
 
@@ -240,9 +256,81 @@ class WorkerStatusSource:
         if self._docker_error is not None:
             return SourceReply(Outcome.UNREACHABLE, note=f"Docker недоступен: {self._docker_error}")
         name = self._running.get(row.id)
-        if name is None:
+        if name is not None:
+            return await self._ask(f"http://{name}:{self._manager.DEFAULT_PORT}", row.id)
+        if not options.wake or options.dry_run:
+            # D-06: под просмотром подъёма нет при любом флаге.
             return SourceReply(Outcome.UNREACHABLE, note="воркер не запущен")
-        return await self._ask(f"http://{name}:{self._manager.DEFAULT_PORT}", row.id)
+        return await self._wake(row)
+
+    async def _wake(self, row: AccountRow) -> SourceReply:
+        """Условия подъёма (O-1 (а)): статус `active`, очередь прочитана и пуста, не работает.
+
+        Любое неисполненное условие — «воркер недоступен» без подъёма. Сужение D-12
+        по статусу действует только на этом пути: путь по умолчанию статус не смотрит.
+        """
+        if row.status != "active":
+            return SourceReply(Outcome.UNREACHABLE, note="воркер не запущен; статус не active — не будится")
+        try:
+            length = await asyncio.to_thread(self._queue_len, row.id) if self._queue_len else None
+        except Exception:  # noqa: BLE001 — очередь не прочитана: не будить
+            length = None
+        if length is None:
+            return SourceReply(Outcome.UNREACHABLE, note="очередь не прочитана — не будится")
+        if length != 0:
+            return SourceReply(Outcome.UNREACHABLE, note="в очереди есть задачи — не будится")
+        # Контейнер мог подняться чужими руками между списком и подъёмом: такой
+        # опрашивается и не гасится никогда (D-16).
+        endpoint = await asyncio.to_thread(self._running_now, row.id)
+        if endpoint is not None:
+            return await self._ask(endpoint, row.id)
+        return await self._wake_and_ask(row)
+
+    async def _wake_and_ask(self, row: AccountRow) -> SourceReply:
+        """Подъём, ожидание, опрос; поднятый контейнер гасится в `finally` (D-16)."""
+        started = False
+        left = ""
+        try:
+            endpoint = await asyncio.to_thread(self._start, row.id)
+            if endpoint is None:
+                reply = SourceReply(Outcome.UNREACHABLE, note="подъём не удался")
+            else:
+                started = True
+                timeout = WA_READY_TIMEOUT if self._kind == "wa" else MAX_READY_TIMEOUT
+                ready = await asyncio.to_thread(self._wait_ready, row.id, timeout=timeout)
+                if not ready:
+                    reply = SourceReply(Outcome.UNREACHABLE, note="воркер поднят, но не ответил")
+                else:
+                    reply = await self._ask(endpoint, row.id)
+        finally:
+            if started:
+                left = await self._stop_if_idle(row.id)
+        if left:
+            note = f"{reply.note}; {left}" if reply.note else left
+            reply = dataclasses.replace(reply, note=note)
+        return reply
+
+    async def _stop_if_idle(self, account_id: int) -> str:
+        """Погасить поднятый контейнер, если очередь всё ещё пуста; иначе — заметка, почему оставлен."""
+        try:
+            length = await asyncio.to_thread(self._queue_len, account_id) if self._queue_len else None
+        except Exception:  # noqa: BLE001 — очередь не прочитана: не гасить
+            length = None
+        if length is None:
+            return (
+                "контейнер оставлен: очередь не прочитана, "
+                "проверьте just wa-workers / just max-workers"
+            )
+        if length != 0:
+            return "контейнер оставлен: в очереди появились задачи"
+        try:
+            await asyncio.to_thread(self._stop, account_id)
+        except Exception as exc:  # noqa: BLE001 — отказ остановки не прячет ответ воркера
+            return (
+                f"контейнер оставлен: остановка не удалась ({type(exc).__name__}), "
+                "проверьте just wa-workers / just max-workers"
+            )
+        return ""
 
     async def _ask(self, endpoint: str, account_id: int) -> SourceReply:
         """Один запрос `/status`; любой отказ — «воркер недоступен» без текста ответа."""
@@ -273,7 +361,7 @@ def classify_status(body: object) -> SourceReply:
     if body.get("connected") is not True:
         if body.get("exists") is False:
             return SourceReply(Outcome.DEAD_SESSION, note="сессии нет")
-        return SourceReply(Outcome.UNREACHABLE, note="не подключён")
+        return SourceReply(Outcome.UNREACHABLE, note=NOTE_NOT_CONNECTED)
     if "phone" not in body:
         return SourceReply(Outcome.NO_NUMBER, note="образ воркера без поля phone")
     reported = reported_phone_from_status(body)
