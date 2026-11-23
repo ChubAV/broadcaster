@@ -300,14 +300,32 @@ class WorkerStatusSource:
                 ready = await asyncio.to_thread(self._wait_ready, row.id, timeout=timeout)
                 if not ready:
                     reply = SourceReply(Outcome.UNREACHABLE, note="воркер поднят, но не ответил")
-                else:
+                elif self._kind == "wa":
                     reply = await self._ask(endpoint, row.id)
+                else:
+                    reply = await self._ask_until_connected(endpoint, row.id)
         finally:
             if started:
                 left = await self._stop_if_idle(row.id)
         if left:
             note = f"{reply.note}; {left}" if reply.note else left
             reply = dataclasses.replace(reply, note=note)
+        return reply
+
+    async def _ask_until_connected(self, endpoint: str, account_id: int) -> SourceReply:
+        """MAX после готовности `/health`: опрос `/status` до `connected: true`.
+
+        HTTP поднимается сразу, а `connected` остаётся `false` до подключения сессии,
+        поэтому «не подключён» — повод спросить снова. Счёт — по попыткам, без часов:
+        пауза `MAX_POLL_INTERVAL` между попытками и ни одной после последней. Любой
+        другой ответ (номер, «номера нет», «сессия мертва», отказ транспорта) заканчивает опрос.
+        """
+        for attempt in range(MAX_CONNECT_ATTEMPTS):
+            reply = await self._ask(endpoint, account_id)
+            if reply.outcome is not Outcome.UNREACHABLE or reply.note != NOTE_NOT_CONNECTED:
+                return reply
+            if attempt < MAX_CONNECT_ATTEMPTS - 1:
+                await self._sleep(MAX_POLL_INTERVAL)
         return reply
 
     async def _stop_if_idle(self, account_id: int) -> str:
