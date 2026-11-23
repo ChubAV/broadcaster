@@ -173,12 +173,17 @@ async def test_selection_skips_manual_and_filled_and_ignores_status(factory):
     flag_only = await _seed(factory, user_id, "wa")
     async with factory() as session:
         await session.execute(text("PRAGMA ignore_check_constraints = ON"))
-        await session.execute(
-            text("UPDATE messenger_accounts SET phone_is_manual = 1 WHERE id = :id"),
-            {"id": flag_only},
-        )
-        await session.commit()
-        await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
+        try:
+            await session.execute(
+                text("UPDATE messenger_accounts SET phone_is_manual = 1 WHERE id = :id"),
+                {"id": flag_only},
+            )
+            await session.commit()
+        finally:
+            # Запрет `10-55#9`: `rollback()` первой строкой `finally`, иначе отказ
+            # посева маскируется `PendingRollbackError`-ом.
+            await session.rollback()
+            await session.execute(text("PRAGMA ignore_check_constraints = OFF"))
     assert await _columns(factory, flag_only) == (None, True)
     watched = (filled, manual, flag_only)
     before = {i: await _columns(factory, i) for i in watched}
