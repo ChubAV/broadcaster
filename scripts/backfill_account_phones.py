@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
 from sqlalchemy import select
+from telethon import errors as telethon_errors
 from telethon.sessions import StringSession
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
@@ -440,6 +441,14 @@ class TelegramSource:
                         reply = SourceReply(Outcome.NO_NUMBER)
                     else:
                         reply = SourceReply(None, reported=reported)
+        except telethon_errors.AuthKeyError as exc:
+            # В том числе AuthKeyDuplicatedError: сервер уже отозвал этот ключ (D-17).
+            reply = SourceReply(Outcome.DEAD_SESSION, note=type(exc).__name__)
+        except telethon_errors.UnauthorizedError as exc:
+            reply = SourceReply(Outcome.DEAD_SESSION, note=type(exc).__name__)
+        except (telethon_errors.FloodWaitError, OSError, TimeoutError) as exc:
+            # У Telegram воркера нет: «источник недоступен». Текст исключения не кладётся.
+            reply = SourceReply(Outcome.UNREACHABLE, note=type(exc).__name__)
         finally:
             try:
                 await client.disconnect()
