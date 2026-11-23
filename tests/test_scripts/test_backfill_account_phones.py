@@ -15,6 +15,7 @@
 
 import asyncio
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -1984,3 +1985,88 @@ async def test_busy_probe_reads_worker_queues_once_per_run(factory):
     assert inspector.calls.count("active_queues") == 1, "состав воркеров читается не один раз"
     assert inspector.calls.count("active") == 3, "снимок active берётся не на каждый аккаунт"
     assert inspector.calls.count("reserved") == 3, "снимок reserved берётся не на каждый аккаунт"
+
+
+# --- оболочка команды: рецепты `just`, справка, разбор аргументов, коды выхода ------
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _just(*words: str) -> str:
+    """Рецепты проверяются ТОЛЬКО `just --dry-run` / `just --list`: ни один не исполняется."""
+    result = subprocess.run(
+        ["just", *words], cwd=ROOT, capture_output=True, text=True, check=True
+    )
+    return result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+async def test_tracer_amain_parses_runs_and_exits_zero(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "wa")
+    wa = RecordingSource({account_id: script.SourceReply(outcome=None, reported=REPORTED)})
+    tg = RecordingSource()
+
+    code = await script.amain(
+        ["--type", "wa", "--account-id", str(account_id)],
+        session_factory=factory,
+        sources={"wa": wa, "tg_user": tg},
+    )
+
+    assert code == 0
+    assert await _columns(factory, account_id) == (STORED, False), "amain не провёл прогон"
+    assert wa.calls == [account_id]
+    assert tg.calls == [], "источник tg_user опрошен при --type wa"
+    first_line = capsys.readouterr().out.splitlines()[0]
+    assert first_line.startswith("РЕЖИМ ЗАПИСИ"), first_line
+
+
+def test_recipes_prod_uses_exec_t_web_and_local_has_no_docker():
+    prod = _just("--dry-run", "prod-backfill-phones", "--account-id", "7")
+    assert (
+        "docker compose -f docker-compose.prod.yml exec -T web uv run python "
+        "scripts/backfill_account_phones.py --telegram-from-container --account-id 7"
+    ) in prod
+
+    local = _just("--dry-run", "backfill-phones", "--dry-run")
+    assert "uv run python scripts/backfill_account_phones.py --dry-run" in local
+    assert "docker compose" not in local
+    assert "--telegram-from-container" not in local
+
+
+def _recipe_line(listing: str, name: str) -> str:
+    for line in listing.splitlines():
+        if line.strip().startswith(f"{name} "):
+            return line
+    raise AssertionError(f"рецепт {name} не найден в `just --list`")
+
+
+def test_recipes_say_they_write_by_default():
+    listing = _just("--list")
+    for name in ("backfill-phones", "prod-backfill-phones"):
+        assert "WRITES by default" in _recipe_line(listing, name), (
+            f"рецепт {name} не говорит, что запуск без флагов пишет"
+        )
+
+
+def test_script_help_runs_and_says_it_writes():
+    result = subprocess.run(
+        [sys.executable, "scripts/backfill_account_phones.py", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        encoding="utf-8",
+        env={**__import__("os").environ, "COLUMNS": "200", "PYTHONIOENCODING": "utf-8"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    for fragment in (
+        "ПИШЕТ",
+        "--dry-run",
+        "--wake",
+        "401/403/405",
+        "--type",
+        "--account-id",
+        "--limit",
+        "--telegram-from-container",
+    ):
+        assert fragment in result.stdout, f"справка не содержит {fragment!r}"

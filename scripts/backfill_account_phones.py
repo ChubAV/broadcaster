@@ -13,6 +13,7 @@
 (план 20-06).
 """
 
+import argparse
 import asyncio
 import collections
 import dataclasses
@@ -626,3 +627,20 @@ async def run(
         print(f"  {outcome.value}: {summary.counts[outcome]}")
     print(f"Всего: {sum(summary.counts.values())}")
     return summary
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Каркас RED: один флаг; полный разбор аргументов — GREEN."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def options_from(args: argparse.Namespace) -> RunOptions:
+    return RunOptions(dry_run=args.dry_run)
+
+
+async def amain(argv: list[str] | None = None, *, session_factory=None, sources=None) -> int:
+    """Каркас RED: возвращает 0, не проводя прогона."""
+    build_parser().parse_known_args(argv)
+    return 0
