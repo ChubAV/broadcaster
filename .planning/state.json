@@ -21,7 +21,7 @@
     {
       "number": "19",
       "name": "Захват номера при подключении",
-      "status": "pending"
+      "status": "complete"
     },
     {
       "number": "20",
@@ -31,8 +31,8 @@
   ],
   "next": {
     "command": "/gsd-progress --next",
-    "label": "Advance to the next step",
-    "reason": "Phase 4 of 5 · 60% · executing"
+    "label": "Advance to the next step (plan phase 20)",
+    "reason": "Phase 5 of 5 — needs a plan"
   },
-  "updated_at": "2026-11-22T14:41:31.448Z"
+  "updated_at": "2026-11-23T10:56:38.871Z"
 }
