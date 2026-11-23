@@ -23,10 +23,13 @@ from typing import Mapping, Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import httpx
 from sqlalchemy import select
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
+from app.messengers.base import reported_phone_from_status
 from app.models.messenger_account import MessengerAccount
+from app.services import max_container_manager, wa_container_manager
 from app.services.phone import mask_phone, normalize_reported
 
 
@@ -44,6 +47,11 @@ class Outcome(enum.Enum):
 
 
 KINDS = ("tg_user", "wa", "max")
+
+# Менеджеры контейнеров воркеров: читаются только список и порт, подъёма здесь нет.
+CONTAINER_MANAGERS = {"wa": wa_container_manager, "max": max_container_manager}
+
+STATUS_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
 
 WRITE_OUTCOMES: dict[PhoneWrite, Outcome] = {
     PhoneWrite.WRITTEN: Outcome.FILLED,
@@ -162,6 +170,97 @@ def _preview(reply: SourceReply) -> SourceReply:
     if normalize_reported(reply.reported) is None:
         return SourceReply(Outcome.NO_NUMBER)
     return SourceReply(Outcome.FILLED, reported=reply.reported)
+
+
+class WorkerStatusSource:
+    """Источник номера WA / MAX: собственный запрос `/status` работающего воркера.
+
+    «Работает ли воркер» решает ТОЛЬКО Docker: контейнер `<тип>-worker-<id>` со
+    статусом `running`. Адрес строится из имени контейнера, и аккаунт без
+    работающего контейнера получает исход «воркер недоступен» без единого запроса
+    и без подъёма контейнера (D-04). Адаптеры WA/MAX здесь намеренно не
+    используются: без явного адреса они сами будят остановленный воркер, а их
+    метод «свой номер» сливает «недоступен», «сессия мертва» и «номера нет» в одно
+    `None`. Источник номера прежний — поле `phone` ответа `/status`.
+
+    Список контейнеров читается один раз на экземпляр (то есть на тип за прогон);
+    отказ Docker запоминается и становится исходом каждого аккаунта типа.
+    Источник ничего не печатает: в заметки идут только имя класса, код ответа или
+    фраза таблицы (тело ответа и текст исключения номер несли бы в вывод).
+    """
+
+    def __init__(self, kind: str, *, list_containers=None, transport=None) -> None:
+        if kind not in CONTAINER_MANAGERS:
+            raise ValueError(f"неизвестный тип воркера: {kind!r}")
+        self._kind = kind
+        self._manager = CONTAINER_MANAGERS[kind]
+        self._list_containers = list_containers or self._manager.list_worker_containers
+        self._transport = transport
+        self._loaded = False
+        self._running: dict[int, str] = {}
+        self._docker_error: str | None = None
+
+    async def _load(self) -> None:
+        """Один вызов списка контейнеров за прогон; результат или отказ кэшируются."""
+        if self._loaded:
+            return
+        self._loaded = True
+        try:
+            containers = await asyncio.to_thread(self._list_containers)
+        except Exception as exc:  # noqa: BLE001 — отказ Docker — исход аккаунтов, не прогона
+            self._docker_error = type(exc).__name__
+            return
+        self._running = {
+            c["account_id"]: c["name"]
+            for c in containers
+            if c["status"] == "running" and isinstance(c["account_id"], int)
+        }
+
+    async def poll(self, row: AccountRow, options: RunOptions) -> SourceReply:
+        await self._load()
+        if self._docker_error is not None:
+            return SourceReply(Outcome.UNREACHABLE, note=f"Docker недоступен: {self._docker_error}")
+        name = self._running.get(row.id)
+        if name is None:
+            return SourceReply(Outcome.UNREACHABLE, note="воркер не запущен")
+        return await self._ask(f"http://{name}:{self._manager.DEFAULT_PORT}", row.id)
+
+    async def _ask(self, endpoint: str, account_id: int) -> SourceReply:
+        """Один запрос `/status`; любой отказ — «воркер недоступен» без текста ответа."""
+        try:
+            async with httpx.AsyncClient(
+                timeout=STATUS_TIMEOUT, transport=self._transport
+            ) as client:
+                response = await client.get(f"{endpoint}/api/sessions/{account_id}/status")
+        except httpx.HTTPError as exc:
+            return SourceReply(Outcome.UNREACHABLE, note=type(exc).__name__)
+        if response.status_code != 200:
+            return SourceReply(Outcome.UNREACHABLE, note=f"ответ {response.status_code}")
+        try:
+            body = response.json()
+        except ValueError:
+            return SourceReply(Outcome.UNREACHABLE, note="ответ не JSON")
+        return classify_status(body)
+
+
+def classify_status(body: object) -> SourceReply:
+    """Тело `/status` -> ответ источника (таблица A6 исследования фазы).
+
+    `connected` принимается только как настоящее `true`: строка `"true"` или
+    число — это не подключение. Номер берётся лишь у подключённой сессии.
+    """
+    if not isinstance(body, dict):
+        return SourceReply(Outcome.UNREACHABLE, note="ответ не объект")
+    if body.get("connected") is not True:
+        if body.get("exists") is False:
+            return SourceReply(Outcome.DEAD_SESSION, note="сессии нет")
+        return SourceReply(Outcome.UNREACHABLE, note="не подключён")
+    if "phone" not in body:
+        return SourceReply(Outcome.NO_NUMBER, note="образ воркера без поля phone")
+    reported = reported_phone_from_status(body)
+    if reported is None:
+        return SourceReply(Outcome.NO_NUMBER)
+    return SourceReply(None, reported=reported)
 
 
 async def run(
