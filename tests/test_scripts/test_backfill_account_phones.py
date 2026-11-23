@@ -425,6 +425,141 @@ async def test_dry_run_never_calls_the_writer(factory, monkeypatch, capsys):
         assert await _columns(factory, account_id) == (STORED, False)
 
 
+# --- трасер плана 20-07: просмотр предсказывает исход чтением строки (RESEARCH A3) ---
+
+
+@pytest.mark.asyncio
+async def test_dry_run_predicts_kept_and_gone_by_reading(factory, monkeypatch, capsys):
+    from sqlalchemy import delete
+
+    from app.application.accounts.phone import set_manual_phone
+
+    user_id = await _seed_user(factory)
+    manual, removed, garbage = [await _seed(factory, user_id, "wa") for _ in range(3)]
+
+    async def second_session_acts(row):
+        async with factory() as other:
+            if row.id == manual:
+                await set_manual_phone(other, row.id, "+7 999 000-11-22")
+            elif row.id == removed:
+                await other.execute(delete(MessengerAccount).where(MessengerAccount.id == row.id))
+            await other.commit()
+
+    source = RecordingSource(
+        {garbage: script.SourceReply(outcome=None, reported="мусор")},
+        before_reply=second_session_acts,
+    )
+    calls = _count_writer(monkeypatch)
+
+    summary = await script.run(factory, script.RunOptions(dry_run=True), {"wa": source})
+
+    out = capsys.readouterr().out
+    assert f"#{manual} wa: ручной / уже заполнен" in out, "просмотр не предсказал ручной номер"
+    assert f"#{removed} wa: удалён во время прогона" in out, "просмотр не предсказал удаление"
+    assert f"#{garbage} wa: номера нет" in out
+    assert summary.counts[script.Outcome.KEPT] == 1
+    assert summary.counts[script.Outcome.ACCOUNT_GONE] == 1
+    assert summary.counts[script.Outcome.NO_NUMBER] == 1
+    assert summary.counts[script.Outcome.FILLED] == 0
+    assert calls == [], "просмотр вызвал писатель Фазы 16"
+    assert "Итог просмотра (ничего не записано):" in out
+    # Строка, которую просмотр не писал, осталась как её оставила вторая сессия.
+    assert await _columns(factory, manual) == ("+79990001122", True)
+    assert await _columns(factory, garbage) == (None, False)
+
+
+# --- план 20-07, задача 2: закрепление критерия 3 ядра и PHONE-21 ---------------
+
+
+@pytest.mark.asyncio
+async def test_dry_run_writes_nothing_and_predicts(factory, monkeypatch, capsys):
+    user_id = await _seed_user(factory)
+    ids = [await _seed(factory, user_id, "wa") for _ in range(3)]
+    source = RecordingSource()
+    calls = _count_writer(monkeypatch)
+    before = await _snapshot(factory)
+
+    summary = await script.run(factory, script.RunOptions(dry_run=True), {"wa": source})
+
+    assert calls == [], "просмотр вызвал писатель Фазы 16"
+    assert await _snapshot(factory) == before, "просмотр изменил строки аккаунтов"
+    assert summary.counts[script.Outcome.FILLED] == 3
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith("РЕЖИМ ПРОСМОТРА")
+    for account_id in ids:
+        assert f"#{account_id} wa: было бы заполнено {MASKED}" in lines
+    assert "Итог просмотра (ничего не записано):" in lines
+
+
+@pytest.mark.asyncio
+async def test_summary_counts_every_outcome_in_enum_order(factory, capsys):
+    from sqlalchemy import delete
+
+    from app.application.accounts.phone import set_manual_phone
+
+    user_id = await _seed_user(factory)
+    by_outcome = {
+        outcome: await _seed(factory, user_id, "wa") for outcome in script.Outcome
+    }
+
+    async def second_session_acts(row):
+        async with factory() as other:
+            if row.id == by_outcome[script.Outcome.KEPT]:
+                await set_manual_phone(other, row.id, "+7 999 000-11-22")
+            elif row.id == by_outcome[script.Outcome.ACCOUNT_GONE]:
+                await other.execute(delete(MessengerAccount).where(MessengerAccount.id == row.id))
+            await other.commit()
+
+    direct = {
+        outcome: script.SourceReply(outcome=outcome)
+        for outcome in (
+            script.Outcome.NO_NUMBER,
+            script.Outcome.DEAD_SESSION,
+            script.Outcome.UNREACHABLE,
+            script.Outcome.BUSY,
+        )
+    }
+    replies = {by_outcome[outcome]: reply for outcome, reply in direct.items()}
+    replies[by_outcome[script.Outcome.FAILED]] = RuntimeError("boom")
+    source = RecordingSource(replies, before_reply=second_session_acts)
+
+    summary = await script.run(factory, script.RunOptions(), {"wa": source})
+
+    assert [summary.counts[outcome] for outcome in script.Outcome] == [1] * 8
+    lines = capsys.readouterr().out.splitlines()
+    start = lines.index("Итог:")
+    assert lines[start + 1 : start + 9] == [
+        f"  {outcome.value}: 1" for outcome in list(script.Outcome)
+    ]
+    assert lines[start + 9] == "Всего: 8"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dry_run", [False, True], ids=["write", "dry-run"])
+async def test_output_masks_numbers_and_has_a_filled_line(factory, capsys, dry_run):
+    import re
+
+    user_id = await _seed_user(factory)
+    first, second, failing = [await _seed(factory, user_id, "wa") for _ in range(3)]
+    source = RecordingSource(
+        {
+            first: script.SourceReply(outcome=None, reported="79991234567"),
+            second: script.SourceReply(outcome=None, reported="+79990001122"),
+            failing: RuntimeError("secret-79991234567"),
+        }
+    )
+
+    await script.run(factory, script.RunOptions(dry_run=dry_run), {"wa": source})
+
+    out = capsys.readouterr().out
+    assert re.search(r"\d{7,}", out) is None, "в выводе номер целиком"
+    assert f"заполнено {MASKED}" in out, "нет строки «заполнено» с маской (вакуум)"
+    assert "+7 *** ***-**-22" in out
+    assert "creds" not in out, "в вывод попало значение credentials"
+    assert "secret-" not in out, "в вывод попал текст исключения источника"
+    assert f"#{failing} wa: сбой по аккаунту (RuntimeError)" in out
+
+
 # --- источник WA / MAX: Docker только читается, номер — собственный запрос /status ---
 
 

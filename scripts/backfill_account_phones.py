@@ -70,7 +70,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
 import redis
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from telethon import TelegramClient
 from telethon import errors as telethon_errors
 from telethon.sessions import StringSession
@@ -243,11 +243,32 @@ async def _write(session_factory, row: AccountRow, reply: SourceReply) -> Source
     return SourceReply(WRITE_OUTCOMES[written], reported=reply.reported, note=reply.note)
 
 
-def _preview(reply: SourceReply) -> SourceReply:
-    """Режим просмотра: писатель не вызывается ни в каком виде (D-06)."""
+async def _preview(session_factory, row: AccountRow, reply: SourceReply) -> SourceReply:
+    """Режим просмотра: писатель не вызывается ни в каком виде (D-06).
+
+    Исход предсказывается ЧТЕНИЕМ строки в новой сессии (RESEARCH A3), а не вызовом
+    писателя под откатом: он был бы записью в транзакции. Два оператора `exists`:
+    строка всё ещё пуста и не ручная — «заполнено»; иначе строка есть — «ручной /
+    уже заполнен», строки нет — «удалён во время прогона». Окно между просмотром и
+    боевым прогоном не закрывается: просмотр — снимок на момент чтения.
+    """
     if normalize_reported(reply.reported) is None:
         return SourceReply(Outcome.NO_NUMBER, note=reply.note)
-    return SourceReply(Outcome.FILLED, reported=reply.reported, note=reply.note)
+    async with session_factory() as session:
+        fillable = await session.scalar(
+            select(
+                exists().where(
+                    MessengerAccount.id == row.id,
+                    MessengerAccount.phone.is_(None),
+                    MessengerAccount.phone_is_manual.is_(False),
+                )
+            )
+        )
+        if fillable:
+            return SourceReply(Outcome.FILLED, reported=reply.reported, note=reply.note)
+        present = await session.scalar(select(exists().where(MessengerAccount.id == row.id)))
+    outcome = Outcome.KEPT if present else Outcome.ACCOUNT_GONE
+    return SourceReply(outcome, note=reply.note)
 
 
 def queue_key(kind: str, account_id: int) -> str:
@@ -655,7 +676,7 @@ async def run(
         reply = await _poll(sources[row.kind], row, options)
         if reply.outcome is None:
             if options.dry_run:
-                reply = _preview(reply)
+                reply = await _preview(session_factory, row, reply)
             else:
                 reply = await _write(session_factory, row, reply)
         outcome = reply.outcome
