@@ -26,7 +26,7 @@
     {
       "number": "20",
       "name": "Дозаполнение номеров существующих аккаунтов",
-      "status": "pending"
+      "status": "in_progress"
     }
   ],
   "next": {
@@ -34,5 +34,5 @@
     "label": "Advance to the next step",
     "reason": "Phase 5 of 5 · 80% · executing"
   },
-  "updated_at": "2026-11-23T13:20:23.404Z"
+  "updated_at": "2026-11-23T14:25:20.797Z"
 }
