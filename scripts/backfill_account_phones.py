@@ -1,18 +1,61 @@
 """Дозаполнить номер существующих аккаунтов без номера из источника мессенджера.
 
+ФОРМЫ ВЫЗОВА
+    uv run python scripts/backfill_account_phones.py --dry-run
+    uv run python scripts/backfill_account_phones.py --type wa --account-id <id>
+    just backfill-phones --dry-run
+    just prod-backfill-phones --dry-run --account-id <id>
+
+ЗАПУСК БЕЗ ФЛАГОВ ПИШЕТ НОМЕРА В БАЗУ — в отличие от `collect_group_info.py` и
+`recompress_attachments.py`, где запись включается флагом `--apply`. Здесь `--apply`
+нет: посмотреть без записи — `--dry-run` (решение владельца D-08). Рецепты `just`
+помечены `WRITES by default`, справка и первая строка вывода говорят то же.
+
 Скрипт берёт аккаунты, у которых номер неизвестен и не указан вручную, опрашивает
 по одному источник их мессенджера и записывает сообщённый номер ТОЛЬКО через
 единого писателя Фазы 16 (`fill_reported_phone`), коммитя каждый аккаунт отдельно.
+Повторный запуск идемпотентен и ручные номера не трогает.
 
-ЧЕГО СКРИПТ НЕ ДЕЛАЕТ. Статус аккаунта, строку сессии и прочие колонки он не
-меняет. Признак «указан вручную» не ставит: ручной номер для него неприкосновенен.
-Номер в открытом виде не печатает — только маской. Настройку журнала приложения
-не подключает: вывод скрипта идёт через `print` в маскированной форме.
+ЧЕГО СКРИПТ НЕ ДЕЛАЕТ НИКОГДА. Статус аккаунта и прочие колонки он не меняет;
+признак «указан вручную» не ставит; строку сессии назад в базу не пишет; не трогает
+`phone.txt` и тома сессий; не переносит «номер из формы» MAX из `credentials`
+(решения владельца O-2 (а), O-3 (а)). Номер в открытом виде не печатает — только
+маской. Настройку журнала приложения не подключает: вывод идёт через `print` в
+маскированной форме.
 
-Полную шапку с формами вызова и порядком выката допишет оболочка командной строки
-(план 20-06).
+ИСТОЧНИКИ. WhatsApp и MAX: поле `phone` ответа `/status` работающего воркера аккаунта.
+Остановленный воркер скрипт сам не поднимает; только с `--wake` — и тогда только
+аккаунты в статусе `active` с пустой очередью, по одному, после опроса воркер гасится.
+Telegram: короткое подключение изнутри процесса скрипта, строго по одному аккаунту,
+занятые рассылкой пропускаются. Telegram опрашивается ТОЛЬКО из боевого контейнера
+`web` — флаг `--telegram-from-container` передаёт рецепт `prod-backfill-phones`; без
+него аккаунты Telegram получают исход «воркер недоступен», а клиент Telethon не
+строится (иначе локальный `.env`, указывающий на боевую базу, открыл бы второй адрес
+той же сессии).
+
+ПРЕДУПРЕЖДЕНИЕ О `--wake`. Подъём воркера — это вход в WhatsApp / MAX с сохранённой
+сессией. Если мессенджер ответит кодом 401 / 403 / 405, воркер САМ удалит файлы
+сессии аккаунта. `--wake` несовместим с `--dry-run`: просмотр не поднимает контейнеры.
+
+КОДЫ ВЫХОДА. 0 — прогон дошёл до конца (в том числе при исходах «номера нет»,
+«воркер недоступен», «занят»); 1 — отказ базы или сборки источников, строка
+`Прогон прерван: <имя класса>`; 2 — ошибка аргументов.
+
+ПОРЯДОК ВЫКАТА (для владельца; в разработке не исполняется). Образ приложения → образы
+воркеров WA и MAX → перезапуск работающих воркеров → `just prod-backfill-phones
+--dry-run --account-id <id>` по одному аккаунту каждого типа → прогон с записью.
+Запускать порциями (`--type`, `--account-id`, `--limit`). Скрипт попадает в боевой
+`web` только после пересборки образа: код в контейнер не монтируется. После обрыва
+прогона с `--wake` проверить `just wa-workers` и `just max-workers`: поднятый воркер
+мог остаться запущенным.
+
+НОМЕР, ВВЕДЁННЫЙ В ФОРМУ MAX, хранится как автоматический и скриптом не исправляется —
+только ручной правкой (ревью 19, IN-03). Поручение о переносе `credentials` в
+`16-CONTEXT.md` (D-01) и комментарий в `app/models/messenger_account.py` устарели
+(O-3 (а)); в этой фазе они не правятся.
 """
 
+import argparse
 import asyncio
 import collections
 import dataclasses
@@ -26,11 +69,15 @@ from typing import Mapping, Protocol
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
+import redis
 from sqlalchemy import select
+from telethon import TelegramClient
 from telethon import errors as telethon_errors
 from telethon.sessions import StringSession
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
+from app.config import get_settings
+from app.database import get_engine, get_session_factory
 from app.messengers.base import reported_phone_from_status
 from app.messengers.telegram_user import reported_phone_of
 from app.models.messenger_account import MessengerAccount
@@ -626,3 +673,147 @@ async def run(
         print(f"  {outcome.value}: {summary.counts[outcome]}")
     print(f"Всего: {sum(summary.counts.values())}")
     return summary
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Дозаполнить номера аккаунтов без номера. ЗАПУСК БЕЗ ФЛАГОВ ПИШЕТ В БАЗУ; "
+            "посмотреть без записи — --dry-run."
+        ),
+        epilog=(
+            "Порядок: сначала --dry-run --account-id по одному аккаунту каждого типа, "
+            "затем запись порциями (--type, --account-id, --limit). После обрыва "
+            "прогона с --wake проверьте `just wa-workers` и `just max-workers`."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "только показать, что было бы записано: ничего не пишет и не поднимает "
+            "контейнеры; Telegram и работающие воркеры опрашиваются"
+        ),
+    )
+    parser.add_argument(
+        "--wake",
+        action="store_true",
+        help=(
+            "поднять остановленные воркеры WA/MAX аккаунтов active с пустой очередью "
+            "по одному, опросить и погасить; это вход в WhatsApp/MAX: воркер сам удалит "
+            "файлы сессии, если мессенджер ответит 401/403/405; несовместим с --dry-run"
+        ),
+    )
+    parser.add_argument(
+        "--type",
+        action="append",
+        dest="kinds",
+        choices=KINDS,
+        help="только этот тип аккаунтов; флаг можно повторять",
+    )
+    parser.add_argument("--account-id", type=int, help="только аккаунт с этим id")
+    parser.add_argument(
+        "--limit", type=int, help="не больше стольких аккаунтов (после фильтров, по возрастанию id)"
+    )
+    parser.add_argument(
+        "--telegram-from-container",
+        action="store_true",
+        help=(
+            "опрашивать Telegram: флаг передаёт рецепт prod-backfill-phones изнутри "
+            "боевого контейнера web; без него аккаунты Telegram не опрашиваются"
+        ),
+    )
+    return parser
+
+
+def options_from(args: argparse.Namespace) -> RunOptions:
+    return RunOptions(
+        dry_run=args.dry_run,
+        kinds=tuple(args.kinds) if args.kinds else KINDS,
+        account_id=args.account_id,
+        limit=args.limit,
+        wake=args.wake,
+    )
+
+
+class TelegramOutsideContainerSource:
+    """Источник Telegram вне боевого контейнера: не опрашивает и клиента не строит.
+
+    Локальный `.env`, указывающий на боевую базу, иначе дал бы второй адрес той же
+    сессии (допущение A1 исследования): боевой путь открывает только
+    `prod-backfill-phones`, который передаёт `--telegram-from-container`.
+    """
+
+    async def poll(self, row: AccountRow, options: RunOptions) -> SourceReply:
+        return SourceReply(
+            Outcome.UNREACHABLE,
+            note="Telegram опрашивается только из боевого контейнера: just prod-backfill-phones",
+        )
+
+
+def build_sources(settings, *, telegram_from_container: bool) -> dict[str, AccountSource]:
+    """Боевые источники по типам; сборка ни к чему не подключается.
+
+    Клиент Redis ленив — соединение открывается при первом запросе. Приложение
+    Celery ввозится ТОЛЬКО на пути Telegram и внутри функции: его создание читает
+    настройки, а `--help` и ввоз скрипта тестами не должны требовать `.env`.
+    """
+    redis_client = redis.from_url(settings.redis_url)
+    sources: dict[str, AccountSource] = {
+        "wa": WorkerStatusSource(
+            "wa", queue_len=lambda account_id: redis_client.llen(queue_key("wa", account_id))
+        ),
+        "max": WorkerStatusSource(
+            "max", queue_len=lambda account_id: redis_client.llen(queue_key("max", account_id))
+        ),
+    }
+    if telegram_from_container:
+        from app.worker.celery_app import celery
+
+        sources["tg_user"] = TelegramSource(
+            api_id=settings.telegram_api_id,
+            api_hash=settings.telegram_api_hash,
+            busy_probe=TelegramBusyProbe(
+                inspector_factory=lambda: celery.control.inspect(timeout=INSPECT_TIMEOUT),
+                redis_client=redis_client,
+            ),
+            client_factory=TelegramClient,
+        )
+    else:
+        sources["tg_user"] = TelegramOutsideContainerSource()
+    return sources
+
+
+async def amain(argv: list[str] | None = None, *, session_factory=None, sources=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    # Отказы аргументов — ДО любой работы: ни базы, ни источников, ни вывода (код 2).
+    if args.wake and args.dry_run:
+        parser.error("--wake несовместим с --dry-run: просмотр не поднимает контейнеры")
+    if args.account_id is not None and args.account_id <= 0:
+        parser.error("--account-id должен быть положительным целым")
+    if args.limit is not None and args.limit <= 0:
+        parser.error("--limit должен быть положительным целым")
+    options = options_from(args)
+
+    engine = None
+    try:
+        if session_factory is None:
+            engine = get_engine(get_settings().database_url)
+            session_factory = get_session_factory(engine)
+        if sources is None:
+            sources = build_sources(
+                get_settings(), telegram_from_container=args.telegram_from_container
+            )
+        await run(session_factory, options, sources)
+    except Exception as exc:  # noqa: BLE001 — только имя класса: текст может нести секрет
+        print(f"Прогон прерван: {type(exc).__name__}")
+        return 1
+    finally:
+        if engine is not None:
+            await engine.dispose()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(amain()))

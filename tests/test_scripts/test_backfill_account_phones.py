@@ -15,6 +15,7 @@
 
 import asyncio
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -1984,3 +1985,255 @@ async def test_busy_probe_reads_worker_queues_once_per_run(factory):
     assert inspector.calls.count("active_queues") == 1, "состав воркеров читается не один раз"
     assert inspector.calls.count("active") == 3, "снимок active берётся не на каждый аккаунт"
     assert inspector.calls.count("reserved") == 3, "снимок reserved берётся не на каждый аккаунт"
+
+
+# --- оболочка команды: рецепты `just`, справка, разбор аргументов, коды выхода ------
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _just(*words: str) -> str:
+    """Рецепты проверяются ТОЛЬКО `just --dry-run` / `just --list`: ни один не исполняется."""
+    result = subprocess.run(
+        ["just", *words], cwd=ROOT, capture_output=True, text=True, check=True
+    )
+    return result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+async def test_tracer_amain_parses_runs_and_exits_zero(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "wa")
+    wa = RecordingSource({account_id: script.SourceReply(outcome=None, reported=REPORTED)})
+    tg = RecordingSource()
+
+    code = await script.amain(
+        ["--type", "wa", "--account-id", str(account_id)],
+        session_factory=factory,
+        sources={"wa": wa, "tg_user": tg},
+    )
+
+    assert code == 0
+    assert await _columns(factory, account_id) == (STORED, False), "amain не провёл прогон"
+    assert wa.calls == [account_id]
+    assert tg.calls == [], "источник tg_user опрошен при --type wa"
+    first_line = capsys.readouterr().out.splitlines()[0]
+    assert first_line.startswith("РЕЖИМ ЗАПИСИ"), first_line
+
+
+def test_recipes_prod_uses_exec_t_web_and_local_has_no_docker():
+    prod = _just("--dry-run", "prod-backfill-phones", "--account-id", "7")
+    assert (
+        "docker compose -f docker-compose.prod.yml exec -T web uv run python "
+        "scripts/backfill_account_phones.py --telegram-from-container --account-id 7"
+    ) in prod
+
+    local = _just("--dry-run", "backfill-phones", "--dry-run")
+    assert "uv run python scripts/backfill_account_phones.py --dry-run" in local
+    assert "docker compose" not in local
+    assert "--telegram-from-container" not in local
+
+
+def _recipe_line(listing: str, name: str) -> str:
+    for line in listing.splitlines():
+        if line.strip().startswith(f"{name} "):
+            return line
+    raise AssertionError(f"рецепт {name} не найден в `just --list`")
+
+
+def test_recipes_say_they_write_by_default():
+    listing = _just("--list")
+    for name in ("backfill-phones", "prod-backfill-phones"):
+        assert "WRITES by default" in _recipe_line(listing, name), (
+            f"рецепт {name} не говорит, что запуск без флагов пишет"
+        )
+
+
+def test_script_help_runs_and_says_it_writes():
+    result = subprocess.run(
+        [sys.executable, "scripts/backfill_account_phones.py", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        encoding="utf-8",
+        env={**__import__("os").environ, "COLUMNS": "200", "PYTHONIOENCODING": "utf-8"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    for fragment in (
+        "ПИШЕТ",
+        "--dry-run",
+        "--wake",
+        "401/403/405",
+        "--type",
+        "--account-id",
+        "--limit",
+        "--telegram-from-container",
+    ):
+        assert fragment in result.stdout, f"справка не содержит {fragment!r}"
+
+
+# --- отказы аргументов, коды выхода, страж Telegram, сборка боевых источников -------
+
+
+@pytest.mark.asyncio
+async def test_wake_with_dry_run_is_rejected_before_any_source_call(factory):
+    user_id = await _seed_user(factory)
+    await _seed(factory, user_id, "wa")
+    recording = RecordingSource()
+    before = await _snapshot(factory)
+
+    try:
+        code = await script.amain(
+            ["--wake", "--dry-run"], session_factory=factory, sources={"wa": recording}
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError(f"--wake принят вместе с --dry-run (код выхода {code})")
+
+    assert recording.calls == [], "источник опрошен до отказа"
+    assert await _snapshot(factory) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--type", "tg"],
+        ["--limit", "0"],
+        ["--limit", "-1"],
+        ["--account-id", "0"],
+        ["--account-id", "x"],
+    ],
+    ids=["unknown-type", "limit-zero", "limit-negative", "account-zero", "account-not-int"],
+)
+async def test_argument_errors_exit_two(factory, argv):
+    user_id = await _seed_user(factory)
+    await _seed(factory, user_id, "wa")
+    recording = RecordingSource()
+
+    with pytest.raises(SystemExit) as exc:
+        await script.amain(argv, session_factory=factory, sources={"wa": recording})
+
+    assert exc.value.code == 2
+    assert recording.calls == [], "источник опрошен при ошибке аргументов"
+
+
+def test_type_filter_can_repeat():
+    parser = script.build_parser()
+
+    repeated = script.options_from(parser.parse_args(["--type", "wa", "--type", "max"]))
+    assert repeated.kinds == ("wa", "max")
+
+    bare = script.options_from(parser.parse_args([]))
+    assert bare.kinds == script.KINDS
+    assert bare.dry_run is False, "запуск без флагов не пишет (D-08)"
+    assert bare.wake is False
+
+
+@pytest.mark.asyncio
+async def test_exit_code_zero_even_when_nothing_was_filled(factory):
+    user_id = await _seed_user(factory)
+    unreachable = await _seed(factory, user_id, "wa")
+    busy = await _seed(factory, user_id, "wa")
+    no_number = await _seed(factory, user_id, "wa")
+    source = RecordingSource(
+        {
+            unreachable: script.SourceReply(script.Outcome.UNREACHABLE),
+            busy: script.SourceReply(script.Outcome.BUSY),
+            no_number: script.SourceReply(script.Outcome.NO_NUMBER),
+        }
+    )
+
+    code = await script.amain([], session_factory=factory, sources={"wa": source})
+
+    assert code == 0
+    assert sorted(source.calls) == sorted([unreachable, busy, no_number])
+    for account_id in (unreachable, busy, no_number):
+        assert await _columns(factory, account_id) == (None, False)
+
+
+@pytest_asyncio.fixture
+async def empty_factory(tmp_path):
+    """Фабрика сессий над файловой базой БЕЗ таблиц: любая выборка отказывает."""
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'empty.db'}")
+    yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_failure_exits_one_with_the_class_name(empty_factory, capsys):
+    code = await script.amain([], session_factory=empty_factory, sources={"wa": RecordingSource()})
+
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "Прогон прерван: OperationalError" in out
+    assert "no such table" not in out, "в строку прерывания попал текст исключения"
+
+
+@pytest.mark.asyncio
+async def test_build_sources_guards_telegram_outside_the_container(
+    factory, test_settings, capsys
+):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+
+    sources = script.build_sources(test_settings, telegram_from_container=False)
+
+    assert isinstance(sources["tg_user"], script.TelegramOutsideContainerSource)
+    await script.run(factory, script.RunOptions(), {"tg_user": sources["tg_user"]})
+    out = capsys.readouterr().out
+    line = _line(out, account_id, "tg_user")
+    assert line.startswith(f"#{account_id} tg_user: воркер недоступен"), line
+    assert "just prod-backfill-phones" in line
+    assert await _columns(factory, account_id) == (None, False)
+
+
+@pytest.mark.asyncio
+async def test_build_sources_wires_the_real_sources(test_settings, monkeypatch):
+    from app.config import get_settings
+
+    class RedisSpy:
+        def __init__(self):
+            self.journal: list[str] = []
+
+        def llen(self, key):
+            self.journal.append(key)
+            return 3
+
+    spy = RedisSpy()
+    urls: list[str] = []
+
+    def from_url(url, *args, **kwargs):
+        urls.append(url)
+        return spy
+
+    monkeypatch.setattr(script.redis, "from_url", from_url)
+    # Модуль `celery_app` читает настройки при ввозе; в чистом дереве без `.env` их нет.
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    get_settings.cache_clear()
+    try:
+        sources = script.build_sources(test_settings, telegram_from_container=True)
+    finally:
+        get_settings.cache_clear()
+
+    assert urls == [test_settings.redis_url]
+    assert spy.journal == [], "сборка обратилась к Redis"
+    assert set(sources) == set(script.KINDS)
+    for kind in ("wa", "max"):
+        assert isinstance(sources[kind], script.WorkerStatusSource)
+        assert sources[kind]._queue_len(5) == 3
+        assert spy.journal[-1] == script.queue_key(kind, 5)
+    telegram = sources["tg_user"]
+    assert isinstance(telegram, script.TelegramSource)
+    assert telegram._client_factory is script.TelegramClient
+    assert (telegram._api_id, telegram._api_hash) == (
+        test_settings.telegram_api_id,
+        test_settings.telegram_api_hash,
+    )
+    probe = telegram._busy_probe
+    assert isinstance(probe, script.TelegramBusyProbe)
+    assert probe.timeout == script.INSPECT_TIMEOUT
+    assert probe._redis is spy
+    assert probe._inspector_factory().timeout == script.INSPECT_TIMEOUT
