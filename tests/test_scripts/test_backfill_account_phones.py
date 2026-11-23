@@ -514,3 +514,149 @@ async def test_tracer_running_worker_status_fills_the_number(factory, capsys):
     )
     assert requests == [_status_url("wa", account_id)]
     assert f"#{account_id} wa: заполнено {MASKED}" in capsys.readouterr().out
+
+
+# --- таблица A6 для WA и MAX, край precision, отказы транспорта -----------------
+
+WORKER_KINDS = pytest.mark.parametrize("kind", ["wa", "max"])
+
+
+async def _poll_one_running(factory, kind: str, spec):
+    """Один аккаунт `kind` с работающим контейнером; воркер отвечает `spec`.
+
+    Возвращает `(id, колонки, итог, журнал запросов)` — всё читается из базы и
+    вывода, а не из внутренностей источника.
+    """
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, kind)
+    requests: list[str] = []
+    transport = _status_transport({_status_url(kind, account_id): spec}, requests)
+    source = script.WorkerStatusSource(
+        kind, list_containers=_listing([_container(kind, account_id)]), transport=transport
+    )
+    summary = await script.run(factory, script.RunOptions(), {kind: source})
+    return account_id, await _columns(factory, account_id), summary, requests
+
+
+def _line(out: str, account_id: int, kind: str) -> str:
+    return next(ln for ln in out.splitlines() if ln.startswith(f"#{account_id} {kind}:"))
+
+
+STATUS_TABLE = [
+    pytest.param([], script.Outcome.UNREACHABLE, "ответ не объект", id="not-an-object"),
+    pytest.param(
+        {"connected": False, "exists": False},
+        script.Outcome.DEAD_SESSION,
+        "сессии нет",
+        id="dead-session",
+    ),
+    pytest.param(
+        {"connected": False, "exists": True},
+        script.Outcome.UNREACHABLE,
+        "не подключён",
+        id="not-connected",
+    ),
+    pytest.param(
+        {"connected": "true", "exists": True, "phone": REPORTED},
+        script.Outcome.UNREACHABLE,
+        "не подключён",
+        id="string-true-is-not-connected",
+    ),
+    pytest.param(
+        {"connected": True, "exists": True},
+        script.Outcome.NO_NUMBER,
+        "образ воркера без поля phone",
+        id="old-image-without-phone-field",
+    ),
+    pytest.param(
+        {"connected": True, "exists": True, "phone": None},
+        script.Outcome.NO_NUMBER,
+        "",
+        id="phone-null",
+    ),
+    pytest.param(
+        {"connected": True, "exists": True, "phone": ""},
+        script.Outcome.NO_NUMBER,
+        "",
+        id="phone-empty",
+    ),
+    pytest.param(
+        {"connected": True, "exists": True, "phone": "мусор"},
+        script.Outcome.NO_NUMBER,
+        "",
+        id="phone-unparseable",
+    ),
+    pytest.param(
+        {"connected": True, "exists": True, "phone": REPORTED},
+        script.Outcome.FILLED,
+        "",
+        id="phone-good",
+    ),
+]
+
+
+@WORKER_KINDS
+@pytest.mark.parametrize(("body", "outcome", "note"), STATUS_TABLE)
+@pytest.mark.asyncio
+async def test_classify_status_table(factory, capsys, kind, body, outcome, note):
+    account_id, columns, summary, requests = await _poll_one_running(factory, kind, body)
+
+    out = capsys.readouterr().out
+    assert summary.counts[outcome] == 1, (
+        f"исход {outcome.value} не получен: {_line(out, account_id, kind)}"
+    )
+    assert sum(summary.counts.values()) == 1
+    if outcome is script.Outcome.FILLED:
+        assert columns == (STORED, False)
+        assert _line(out, account_id, kind) == f"#{account_id} {kind}: заполнено {MASKED}"
+    else:
+        assert columns == (None, False)
+        suffix = f" ({note})" if note else ""
+        assert _line(out, account_id, kind) == f"#{account_id} {kind}: {outcome.value}{suffix}"
+    assert len(requests) == 1
+
+
+PRECISION = [
+    pytest.param(79991234567, STORED, script.Outcome.FILLED, id="integer-is-exact"),
+    pytest.param(79991234567.0, None, script.Outcome.NO_NUMBER, id="float-is-no-number"),
+    pytest.param(True, None, script.Outcome.NO_NUMBER, id="bool-is-no-number"),
+]
+
+
+@WORKER_KINDS
+@pytest.mark.parametrize(("value", "stored", "outcome"), PRECISION)
+@pytest.mark.asyncio
+async def test_classify_status_precision_of_the_phone_field(factory, kind, value, stored, outcome):
+    """Край precision PHONE-19: целое из JSON пишется точно, дробное и `true` — не номер."""
+    body = {"connected": True, "exists": True, "phone": value}
+
+    _, columns, summary, _ = await _poll_one_running(factory, kind, body)
+
+    assert columns == (stored, False)
+    assert summary.counts[outcome] == 1
+
+
+SECRET = "secret-79991234567"
+
+TRANSPORT_FAILURES = [
+    pytest.param(httpx.ConnectError(SECRET), "ConnectError", id="connect-error"),
+    pytest.param(httpx.ReadTimeout(SECRET), "ReadTimeout", id="read-timeout"),
+    pytest.param((503, SECRET.encode()), "ответ 503", id="status-503"),
+    pytest.param((200, f"не json {SECRET}".encode()), "ответ не JSON", id="body-not-json"),
+]
+
+
+@WORKER_KINDS
+@pytest.mark.parametrize(("spec", "note"), TRANSPORT_FAILURES)
+@pytest.mark.asyncio
+async def test_classify_status_transport_failures_are_unreachable(
+    factory, capsys, kind, spec, note
+):
+    account_id, columns, summary, _ = await _poll_one_running(factory, kind, spec)
+
+    out = capsys.readouterr().out
+    assert summary.counts[script.Outcome.UNREACHABLE] == 1
+    assert columns == (None, False)
+    assert _line(out, account_id, kind) == f"#{account_id} {kind}: воркер недоступен ({note})"
+    assert SECRET not in out, "в вывод попал текст исключения или тело ответа воркера"
+    assert "79991234567" not in out
