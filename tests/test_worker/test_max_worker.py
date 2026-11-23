@@ -1090,3 +1090,139 @@ def test_requirements_pin_maxapi_2_5_0():
     lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
     locked = [package["version"] for package in lock["package"] if package["name"] == "maxapi-python"]
     assert locked == ["2.5.0"]
+
+
+# ---- Session transfer: a live account's ``session.db`` written by 2.3.1 is opened by 2.5.0 ----
+
+# The exact DDL PyMax 2.3.1 wrote (9 columns, no ``user_agent``) — the format of live sessions.
+SESSIONS_DDL_2_3_1 = """
+CREATE TABLE sessions (
+    token TEXT NOT NULL PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    mt_instance_id TEXT NOT NULL DEFAULT '',
+    chats_sync INTEGER NOT NULL DEFAULT -1,
+    contacts_sync INTEGER NOT NULL DEFAULT -1,
+    drafts_sync INTEGER NOT NULL DEFAULT -1,
+    presence_sync INTEGER NOT NULL DEFAULT -1,
+    config_hash TEXT NOT NULL DEFAULT ''
+)
+"""
+
+
+def create_session_db_2_3_1(path: Path, token: str, device_id: str) -> None:
+    connection = sqlite3.connect(path)
+    connection.execute(SESSIONS_DDL_2_3_1)
+    connection.execute(
+        "INSERT INTO sessions (token, device_id, phone) VALUES (?, ?, ?)", (token, device_id, "")
+    )
+    connection.commit()
+    connection.close()
+
+
+def session_columns(path: Path) -> list[str]:
+    connection = sqlite3.connect(path)
+    try:
+        return [row[1] for row in connection.execute("PRAGMA table_info(sessions)")]
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_a_2_3_1_session_db_is_read_and_migrated_in_place_by_the_real_2_5_0_store(worker):
+    """The live account's token and device_id survive the move; the library adds ``user_agent``."""
+    from pymax.session.store import SessionStore
+
+    directory = worker.session_dir()
+    directory.mkdir(parents=True)
+    database = worker.session_db_path()
+    create_session_db_2_3_1(database, "live-token", "live-device")
+    assert "user_agent" not in session_columns(database)
+
+    assert worker.has_reusable_session() is True
+
+    store = SessionStore(work_dir=str(directory), db_name="session.db")
+    try:
+        loaded = await store.load_session()
+    finally:
+        await store.close()
+
+    assert loaded is not None
+    assert loaded.token == "live-token"
+    assert loaded.device_id == "live-device"
+    assert loaded.user_agent is None
+    assert store.conn is None
+    assert "user_agent" in session_columns(database)
+    connection = sqlite3.connect(database)
+    try:
+        rows = connection.execute("SELECT token, device_id FROM sessions").fetchall()
+    finally:
+        connection.close()
+    assert rows == [("live-token", "live-device")]
+    assert worker.has_reusable_session() is True
+
+
+@pytest.mark.asyncio
+async def test_a_2_3_1_session_row_without_a_token_is_not_reusable(worker):
+    """Teeth for the test above: the worker refuses a row that holds no token."""
+    directory = worker.session_dir()
+    directory.mkdir(parents=True)
+    create_session_db_2_3_1(worker.session_db_path(), "", "live-device")
+
+    assert worker.has_reusable_session() is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True], ids=["qr-login", "legacy-session"])
+async def test_worker_extra_config_parameters_are_accepted_by_the_real_2_5_0_extra_config(
+    worker, monkeypatch, legacy
+):
+    from pymax import ExtraConfig
+
+    clients = install_fake_client(monkeypatch, worker)
+    if legacy:
+        directory = worker.session_dir()
+        directory.mkdir(parents=True)
+        create_session_db(directory / "session.db", "auth", ("legacy-token", "legacy-device"))
+
+    await worker.create_client("")
+
+    kwargs = clients[0].kwargs["extra_config"].kwargs
+    config = ExtraConfig(**kwargs)
+
+    assert config.url == MAX_WEBSOCKET_URL
+    assert config.reconnect is True
+    # A revoked token restarts QR login instead of crashing the worker (2.5.0 default).
+    assert config.relogin is True
+    if legacy:
+        assert config.token == "legacy-token"
+        assert config.device_id == "legacy-device"
+    else:
+        assert config.token is None
+        assert config.device_id is None
+
+
+@pytest.mark.asyncio
+async def test_real_web_client_keeps_the_session_where_the_worker_looks_and_carries_the_legacy_device_id(
+    worker,
+):
+    """No fakes: the WebClient the worker builds stores its session at ``session_db_path()``.
+
+    ``_prepare_config`` is a private PyMax hook; it is the one place the config the library
+    will actually run with is observable without opening a connection.
+    """
+    from pymax.session.store import SessionStore
+
+    directory = worker.session_dir()
+    directory.mkdir(parents=True)
+    create_session_db(directory / "session.db", "auth", ("legacy-token", "legacy-device"))
+
+    state = await worker.create_client("")
+    config = await state.client._prepare_config()
+
+    assert Path(config.work_dir) / config.session_name == worker.session_db_path()
+    assert SessionStore(config.work_dir, config.session_name).db_path == str(worker.session_db_path())
+    assert config.token == "legacy-token"
+    assert config.device.device_id == "legacy-device"
+    assert config.relogin is True
+    assert state.client.extra_config.url == MAX_WEBSOCKET_URL
