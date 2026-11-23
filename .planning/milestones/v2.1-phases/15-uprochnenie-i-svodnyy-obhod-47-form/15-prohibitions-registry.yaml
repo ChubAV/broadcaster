@@ -81,8 +81,8 @@
 # не меняется; вариант "живой реестр v2.2" владелец отверг. `rows_declared`: 741 (засев
 # 2026-09-25 по планам вехи v2.1) → 754 (засев 2026-10-08).
 
-measured: '2026-11-22'
-rows_declared: 993
+measured: '2026-11-23'
+rows_declared: 1019
 class_decisions:
 - {decision_branch: require-enforcement, decided_by: chubav, decided_on: '2026-09-24', decision_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', decision_scope: product-invariant, decision_covers_prohibitions: 70, work_addressee: 'планы 15-24…15-32 Фазы 15 — гэп-закрытие критерия 6 (б), решение владельца Г-1, 2026-09-25; прежде: «будущие фазы — так называет адресата план 15-12 (задача 3), номера фазы не называя; владелец фазы не назвал, и назначить её может только он» — верно на день ответа 2026-09-24'}
 - {permit_branch: permit-class, permitted_by: chubav, permitted_on: '2026-09-24', permit_basis: 'выбор варианта на чекпойнте плана 15-12 (задача 3), AskUserQuestion 2026-09-24T16:45Z; основания своими словами владелец не дал — слова выбранного варианта принадлежат оркестратору, а не владельцу, и записаны дословно в 15-12-SUMMARY.md', permit_scope: gate-integrity, permit_applies_to_phase: false, permit_applies_to_milestone: false, permit_covers_prohibitions: 61}
@@ -1092,3 +1092,29 @@ rows:
 - {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-08-PLAN.md, index: 0, phase: '19', statement_digest: 42dcacf51731, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-08-PLAN.md, index: 1, phase: '19', statement_digest: bf3f8b1904d7, class: unclassified, disposition: unresolved}
 - {plan: .planning/phases/19-zahvat-nomera-pri-podklyuchenii/19-08-PLAN.md, index: 2, phase: '19', statement_digest: 4e09d06ce5f2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-01-PLAN.md, index: 0, phase: '20', statement_digest: 708c7c417b89, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-01-PLAN.md, index: 1, phase: '20', statement_digest: 0e8bcb0cee15, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-01-PLAN.md, index: 2, phase: '20', statement_digest: 85779adfb035, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-01-PLAN.md, index: 3, phase: '20', statement_digest: 9f2b16f9c916, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-02-PLAN.md, index: 0, phase: '20', statement_digest: 884a0592cc57, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-02-PLAN.md, index: 1, phase: '20', statement_digest: a7c5d035fac2, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-02-PLAN.md, index: 2, phase: '20', statement_digest: e10ec0e30afe, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-02-PLAN.md, index: 3, phase: '20', statement_digest: f8f66b95230c, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-03-PLAN.md, index: 0, phase: '20', statement_digest: 787d1dc4f714, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-03-PLAN.md, index: 1, phase: '20', statement_digest: a899a9d8ddd6, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-03-PLAN.md, index: 2, phase: '20', statement_digest: 723ff3e728c3, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-03-PLAN.md, index: 3, phase: '20', statement_digest: 334990be8123, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-04-PLAN.md, index: 0, phase: '20', statement_digest: b21a7aa6a551, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-04-PLAN.md, index: 1, phase: '20', statement_digest: 708bba1bb616, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-04-PLAN.md, index: 2, phase: '20', statement_digest: 59431c533d55, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-04-PLAN.md, index: 3, phase: '20', statement_digest: 0cb884167fb9, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-05-PLAN.md, index: 0, phase: '20', statement_digest: 527ed5cb741b, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-05-PLAN.md, index: 1, phase: '20', statement_digest: 965f4fb18f6d, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-05-PLAN.md, index: 2, phase: '20', statement_digest: 89a61bdbdb2f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-06-PLAN.md, index: 0, phase: '20', statement_digest: e37d1aa3bc09, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-06-PLAN.md, index: 1, phase: '20', statement_digest: 10b57c68887a, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-06-PLAN.md, index: 2, phase: '20', statement_digest: d28f97be6478, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-06-PLAN.md, index: 3, phase: '20', statement_digest: eaf0e4fe645f, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-07-PLAN.md, index: 0, phase: '20', statement_digest: 9f2b16f9c916, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-07-PLAN.md, index: 1, phase: '20', statement_digest: c4153544d540, class: unclassified, disposition: unresolved}
+- {plan: .planning/phases/20-dozapolnenie-nomerov-suschestvuyuschih-akkauntov/20-07-PLAN.md, index: 2, phase: '20', statement_digest: 217db90a4263, class: unclassified, disposition: unresolved}
