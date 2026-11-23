@@ -164,6 +164,25 @@ def _preview(reply: SourceReply) -> SourceReply:
     return SourceReply(Outcome.FILLED, reported=reply.reported)
 
 
+class WorkerStatusSource:
+    """Источник номера WA / MAX: собственный запрос `/status` работающего воркера.
+
+    Каркас: наполняется в GREEN (план 20-02).
+    """
+
+    def __init__(self, kind: str, *, list_containers=None, transport=None) -> None:
+        if kind not in ("wa", "max"):
+            raise ValueError(kind)
+        self._kind = kind
+
+    async def poll(self, row: AccountRow, options: RunOptions) -> SourceReply:
+        return SourceReply(Outcome.UNREACHABLE)
+
+
+def classify_status(body: object) -> SourceReply:
+    return SourceReply(Outcome.UNREACHABLE)
+
+
 async def run(
     session_factory, options: RunOptions, sources: Mapping[str, AccountSource]
 ) -> RunSummary:

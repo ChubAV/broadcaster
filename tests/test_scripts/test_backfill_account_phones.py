@@ -16,6 +16,7 @@
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
@@ -28,6 +29,7 @@ import backfill_account_phones as script  # noqa: E402
 from app.database import Base  # noqa: E402
 from app.models.messenger_account import MessengerAccount  # noqa: E402
 from app.models.user import User  # noqa: E402
+from app.services import max_container_manager, wa_container_manager  # noqa: E402
 from tests.account_label_support import seed_account  # noqa: E402
 
 REPORTED = "79991234567"
@@ -412,3 +414,103 @@ async def test_dry_run_never_calls_the_writer(factory, monkeypatch, capsys):
     assert calls == ids
     for account_id in ids:
         assert await _columns(factory, account_id) == (STORED, False)
+
+
+# --- источник WA / MAX: Docker только читается, номер — собственный запрос /status ---
+
+
+@pytest.fixture(autouse=True)
+def _no_real_docker(monkeypatch):
+    """Страж: тест не трогает настоящий Docker (T-20-06).
+
+    Клиент Docker обоих менеджеров подменён заглушкой, пишущей в журнал и
+    поднимающей `RuntimeError`. Источник ловит отказ списка контейнеров, поэтому
+    обращение к настоящему Docker могло бы пройти незамеченным внутри источника:
+    потому утверждение стоит на разборке и краснеет самостоятельно.
+    """
+    journal: list[str] = []
+
+    def forbidden():
+        journal.append("docker.from_env")
+        raise RuntimeError("настоящий Docker в тесте запрещён")
+
+    monkeypatch.setattr(wa_container_manager, "_get_docker_client", forbidden)
+    monkeypatch.setattr(max_container_manager, "_get_docker_client", forbidden)
+    yield journal
+    assert not journal, "тест обратился к настоящему Docker"
+
+
+def _container(kind: str, account_id: int, status: str = "running") -> dict:
+    return {
+        "account_id": account_id,
+        "name": f"{kind}-worker-{account_id}",
+        "status": status,
+        "short_id": "s",
+    }
+
+
+def _listing(containers, journal=None):
+    """Двойник `list_worker_containers`: отдаёт список, считает вызовы."""
+
+    def list_containers():
+        if journal is not None:
+            journal.append("list")
+        if isinstance(containers, BaseException):
+            raise containers
+        return list(containers)
+
+    return list_containers
+
+
+def _status_url(kind: str, account_id: int) -> str:
+    return f"http://{kind}-worker-{account_id}:3000/api/sessions/{account_id}/status"
+
+
+def _status_transport(responses, journal):
+    """`httpx.MockTransport`: по адресу — заданный ответ или исключение транспорта.
+
+    Значение: `dict` — тело JSON с кодом 200; `Exception` — поднимается как отказ
+    транспорта; `(код, байты)` — ответ как есть. Адрес вне таблицы — ошибка теста.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        journal.append(url)
+        spec = responses[url]
+        if isinstance(spec, BaseException):
+            raise spec
+        if isinstance(spec, tuple):
+            status, content = spec
+            return httpx.Response(status, content=content)
+        return httpx.Response(200, json=spec)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+async def test_tracer_running_worker_status_fills_the_number(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "wa")
+    requests: list[str] = []
+    transport = _status_transport(
+        {
+            _status_url("wa", account_id): {
+                "connected": True,
+                "exists": True,
+                "syncState": "ready",
+                "phone": REPORTED,
+            }
+        },
+        requests,
+    )
+    source = script.WorkerStatusSource(
+        "wa", list_containers=_listing([_container("wa", account_id)]), transport=transport
+    )
+
+    await script.run(factory, script.RunOptions(), {"wa": source})
+
+    assert await _columns(factory, account_id) == (STORED, False), (
+        "номер работающего воркера не записан"
+    )
+    assert requests == [_status_url("wa", account_id)]
+    assert f"#{account_id} wa: заполнено {MASKED}" in capsys.readouterr().out
