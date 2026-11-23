@@ -519,6 +519,41 @@ async def test_legacy_session_is_promoted_via_extra_config(worker, monkeypatch):
     assert sqlite3.connect(database).execute("SELECT token FROM auth").fetchone() == ("legacy-token",)
 
 
+MAX_WEBSOCKET_URL = "wss://api.oneme.ru/websocket"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True], ids=["qr-login", "legacy-session"])
+async def test_client_dials_the_current_max_websocket_host(worker, monkeypatch, legacy):
+    """MAX переехал с ``ws-api.oneme.ru`` на ``api.oneme.ru`` (замер со стенда 2026-11-23).
+
+    Умолчание PyMax 2.3.1 — ``wss://ws-api.oneme.ru/websocket``: со стенда TCP до него не
+    соединяется, рукопожатие падает по таймауту, и ни один воркер MAX не подключается
+    (у живого аккаунта — с 2026-11-22T02:11Z). Новый адрес отвечает ``101 Switching
+    Protocols``; PyMax 2.5.0 сменил на него своё умолчание. Воркер обязан передавать его
+    явно на обоих путях входа — по QR и по перенесённой сессии.
+    """
+    clients = install_fake_client(monkeypatch, worker)
+    if legacy:
+        directory = worker.session_dir()
+        directory.mkdir(parents=True)
+        create_session_db(directory / "session.db", "auth", ("legacy-token", "legacy-device"))
+
+    await worker.create_client("")
+
+    config = clients[0].kwargs["extra_config"].kwargs
+    assert config.get("url") == MAX_WEBSOCKET_URL, (
+        f"воркер MAX подключается не к текущему адресу MAX: {config.get('url')!r}"
+    )
+
+
+def test_pinned_pymax_accepts_the_websocket_url_override():
+    """Переопределение — штатный параметр ``ExtraConfig.url`` закреплённой PyMax, не подмена."""
+    from pymax import ExtraConfig
+
+    assert ExtraConfig(url=MAX_WEBSOCKET_URL).url == MAX_WEBSOCKET_URL
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("contents", [None, b"", b"not sqlite"])
 async def test_empty_or_invalid_session_falls_back_to_qr(worker, monkeypatch, contents):
