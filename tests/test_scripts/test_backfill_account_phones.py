@@ -1631,3 +1631,92 @@ async def test_telegram_output_carries_no_session_or_exception_text(factory, cap
     assert "secret-79991234567" not in out
     assert "79991234567" not in out
     assert f"#{account_id} tg_user: воркер недоступен (OSError)" in out
+
+
+# --- занятые пропускаются в закрытую, строго по одному, просмотр (D-09, D-05) ------
+
+
+@pytest.mark.asyncio
+async def test_telegram_busy_account_is_never_connected(factory, capsys):
+    user_id = await _seed_user(factory)
+    busy_id = await _seed_tg(factory, user_id)
+    free_id = await _seed_tg(factory, user_id)
+    asked: list[int] = []
+
+    async def probe(account_id):
+        asked.append(account_id)
+        return account_id == busy_id
+
+    world = TelegramWorld()
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world, probe)})
+
+    out = capsys.readouterr().out
+    assert _line(out, busy_id, "tg_user") == f"#{busy_id} tg_user: занят, повторите позже (идёт рассылка)"
+    assert asked == [busy_id, free_id]
+    assert len(world.clients) == 1, "фабрика вызвана для занятого аккаунта"
+    assert world.events == [(name, 1) for name in _FULL_CALLS], "connect ожидался для занятого"
+    assert await _columns(factory, busy_id) == (None, False)
+    assert await _columns(factory, free_id) == (STORED, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer, note",
+    [
+        pytest.param(None, "статус рассылки не определён", id="none"),
+        pytest.param(
+            ConnectionError("redis-secret-79991234567"),
+            "статус рассылки не определён: ConnectionError",
+            id="raises",
+        ),
+    ],
+)
+async def test_telegram_busy_unknown_fails_closed(factory, capsys, answer, note):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+    world = TelegramWorld()
+
+    await script.run(
+        factory, script.RunOptions(), {"tg_user": _telegram_source(world, _busy_probe(answer))}
+    )
+
+    out = capsys.readouterr().out
+    assert _line(out, account_id, "tg_user") == f"#{account_id} tg_user: занят, повторите позже ({note})"
+    assert world.clients == [], "неопределённый признак не остановил подключение"
+    assert await _columns(factory, account_id) == (None, False)
+    assert "redis-secret-79991234567" not in out
+
+
+@pytest.mark.asyncio
+async def test_telegram_sequential_one_client_at_a_time(factory):
+    user_id = await _seed_user(factory)
+    for _ in range(3):
+        await _seed_tg(factory, user_id)
+    world = TelegramWorld(yield_loop=True)
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world)})
+
+    assert len(world.clients) == 3
+    assert world.max_open == 1, "одновременно подключено больше одного клиента Telegram"
+    assert world.events == [(name, tag) for tag in (1, 2, 3) for name in _FULL_CALLS], (
+        "disconnect не дождались до следующего connect"
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_dry_run_polls_but_writes_nothing(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+    world = TelegramWorld()
+    before = await _snapshot(factory)
+
+    await script.run(
+        factory, script.RunOptions(dry_run=True), {"tg_user": _telegram_source(world)}
+    )
+
+    out = capsys.readouterr().out
+    assert out.splitlines()[0].startswith("РЕЖИМ ПРОСМОТРА")
+    assert f"#{account_id} tg_user: было бы заполнено {MASKED}" in out
+    assert world.events == [(name, 1) for name in _FULL_CALLS], "просмотр не опросил Telegram"
+    assert await _snapshot(factory) == before, "просмотр изменил строки аккаунтов"
