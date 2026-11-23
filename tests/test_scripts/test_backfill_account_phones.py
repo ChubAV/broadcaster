@@ -1310,3 +1310,27 @@ async def test_wake_stops_the_container_on_failure_and_cancellation(
 
     assert events == _chain(steps, account_id, kind), "поднятый контейнер не погашен"
     assert await _columns(factory, account_id) == (None, False)
+
+
+@pytest.mark.asyncio
+async def test_wake_stop_failure_keeps_the_number_and_names_the_container(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "wa")
+    events: list[tuple] = []
+    doubles = _wake_doubles(events)
+
+    def stop_refused(account_id):
+        events.append(("stop", account_id))
+        raise RuntimeError("docker-secret-79991234567")
+
+    doubles["stop"] = stop_refused
+    source = script.WorkerStatusSource(
+        "wa", list_containers=_listing([_container("wa", account_id, "exited")]), **doubles
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {"wa": source})
+
+    out = capsys.readouterr().out
+    assert await _columns(factory, account_id) == (STORED, False), "отказ остановки спрятал номер"
+    assert "остановка не удалась (RuntimeError)" in _line(out, account_id, "wa")
+    assert "docker-secret-79991234567" not in out
