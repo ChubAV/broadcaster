@@ -886,3 +886,109 @@ async def test_running_max_not_connected_is_polled_once(factory, capsys):
     assert _line(capsys.readouterr().out, account_id, "max") == (
         f"#{account_id} max: воркер недоступен (не подключён)"
     )
+
+
+# --- подъём остановленного воркера по флагу (O-1 (а), D-04, D-16) ---------------
+
+
+def _wake_doubles(
+    events,
+    *,
+    kind: str = "wa",
+    queue=0,
+    running_now=None,
+    start_endpoint="default",
+    ready=True,
+    replies=None,
+    sleeps=None,
+):
+    """Двойники подъёма с ОБЩИМ журналом `events`: ни Docker, ни Redis, ни сети.
+
+    Журнал: `("start", id)`, `("wait", id, timeout)`, `("ask", id)`, `("stop", id)`.
+    `queue` — число (всегда), список (очередное чтение; последний элемент
+    повторяется; исключение в списке поднимается) или `None` (подключения к
+    Redis нет). `ready` — `bool` или исключение для `wait_ready`. `replies` —
+    `id -> тело` или `id -> список тел` (очередной запрос; исчерпание — ошибка
+    теста после записи в журнал). `sleeps` — журнал пауз опроса MAX.
+    """
+    reads = iter(range(10**6))
+    sequence = queue if isinstance(queue, list) else [queue]
+
+    def queue_len(account_id):
+        value = sequence[min(next(reads), len(sequence) - 1)]
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    def start(account_id):
+        events.append(("start", account_id))
+        if start_endpoint == "default":
+            return f"http://{kind}-worker-{account_id}:3000"
+        return start_endpoint
+
+    def stop(account_id):
+        events.append(("stop", account_id))
+        return True
+
+    def wait_ready(account_id, *, timeout):
+        events.append(("wait", account_id, timeout))
+        if isinstance(ready, BaseException):
+            raise ready
+        return ready
+
+    def endpoint_now(account_id):
+        return running_now
+
+    asked: dict[int, int] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        account_id = int(request.url.path.split("/")[3])
+        events.append(("ask", account_id))
+        spec = (replies or {}).get(account_id, GOOD_BODY)
+        if isinstance(spec, list):
+            index = asked.get(account_id, 0)
+            asked[account_id] = index + 1
+            assert index < len(spec), f"запрос №{index + 1} сверх заданных ответов"
+            spec = spec[index]
+        if isinstance(spec, BaseException):
+            raise spec
+        return httpx.Response(200, json=spec)
+
+    async def sleep(seconds):
+        if sleeps is not None:
+            sleeps.append(seconds)
+
+    return {
+        "start": start,
+        "stop": stop,
+        "wait_ready": wait_ready,
+        "running_now": endpoint_now,
+        "queue_len": None if queue is None else queue_len,
+        "sleep": sleep,
+        "transport": httpx.MockTransport(handler),
+    }
+
+
+@pytest.mark.asyncio
+async def test_tracer_wake_starts_polls_and_stops_a_stopped_worker(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed(factory, user_id, "wa", status="active")
+    events: list[tuple] = []
+    source = script.WorkerStatusSource(
+        "wa",
+        list_containers=_listing([_container("wa", account_id, "exited")]),
+        **_wake_doubles(events, replies={account_id: GOOD_BODY}),
+    )
+
+    await script.run(factory, script.RunOptions(wake=True), {"wa": source})
+
+    assert await _columns(factory, account_id) == (STORED, False), (
+        "поднятый по флагу воркер не дал номер"
+    )
+    assert events == [
+        ("start", account_id),
+        ("wait", account_id, 90.0),
+        ("ask", account_id),
+        ("stop", account_id),
+    ]
+    assert f"#{account_id} wa: заполнено {MASKED}" in capsys.readouterr().out

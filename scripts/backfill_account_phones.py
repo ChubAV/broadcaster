@@ -67,6 +67,7 @@ class RunOptions:
     kinds: tuple[str, ...] = KINDS
     account_id: int | None = None
     limit: int | None = None
+    wake: bool = False
 
 
 @dataclass(frozen=True)
@@ -189,13 +190,31 @@ class WorkerStatusSource:
     фраза таблицы (тело ответа и текст исключения номер несли бы в вывод).
     """
 
-    def __init__(self, kind: str, *, list_containers=None, transport=None) -> None:
+    def __init__(
+        self,
+        kind: str,
+        *,
+        list_containers=None,
+        transport=None,
+        start=None,
+        stop=None,
+        wait_ready=None,
+        running_now=None,
+        queue_len=None,
+        sleep=None,
+    ) -> None:
         if kind not in CONTAINER_MANAGERS:
             raise ValueError(f"неизвестный тип воркера: {kind!r}")
         self._kind = kind
         self._manager = CONTAINER_MANAGERS[kind]
         self._list_containers = list_containers or self._manager.list_worker_containers
         self._transport = transport
+        self._start = start or self._manager.start_container
+        self._stop = stop or self._manager.stop_container
+        self._wait_ready = wait_ready or self._manager.wait_for_container_ready
+        self._running_now = running_now or self._manager.get_container_endpoint
+        self._queue_len = queue_len
+        self._sleep = sleep or asyncio.sleep
         self._loaded = False
         self._running: dict[int, str] = {}
         self._docker_error: str | None = None
