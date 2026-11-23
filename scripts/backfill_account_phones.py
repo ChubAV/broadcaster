@@ -71,6 +71,9 @@ NOTE_NOT_CONNECTED = "не подключён"
 # длинных прогонах, не для защиты ключа авторизации (его защищает строгая очерёдность).
 TELEGRAM_PAUSE = 1.0
 
+# Ожидание ответов воркеров на `inspect`, секунды (допущение A8 RESEARCH).
+INSPECT_TIMEOUT = 2.0
+
 WRITE_OUTCOMES: dict[PhoneWrite, Outcome] = {
     PhoneWrite.WRITTEN: Outcome.FILLED,
     PhoneWrite.KEPT: Outcome.KEPT,
@@ -457,6 +460,18 @@ class TelegramSource:
         if self._pause > 0:
             await asyncio.sleep(self._pause)
         return reply
+
+
+class TelegramBusyProbe:
+    """Признак «TG-аккаунт занят рассылкой» (D-09); каркас RED: всегда «не занят»."""
+
+    def __init__(self, *, inspector_factory, redis_client, timeout: float = INSPECT_TIMEOUT):
+        self._inspector_factory = inspector_factory
+        self._redis = redis_client
+        self._timeout = timeout
+
+    async def __call__(self, account_id: int) -> bool | None:
+        return False
 
 
 def classify_status(body: object) -> SourceReply:

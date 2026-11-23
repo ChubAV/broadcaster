@@ -1720,3 +1720,92 @@ async def test_telegram_dry_run_polls_but_writes_nothing(factory, capsys):
     assert f"#{account_id} tg_user: было бы заполнено {MASKED}" in out
     assert world.events == [(name, 1) for name in _FULL_CALLS], "просмотр не опросил Telegram"
     assert await _snapshot(factory) == before, "просмотр изменил строки аккаунтов"
+
+
+# --- признак «занят»: Celery inspect и очередь `telegram` в Redis (D-09, PHONE-20) -----
+
+CELERY_SEND = "app.worker.tasks.send_telegram_message"
+
+
+class FakeInspector:
+    """Двойник `celery.control.inspect()`: три команды, ответы-словари и журнал вызовов.
+
+    Ответ — значение (словарь «воркер -> список» либо `None`, как у настоящего
+    инспектора без ответивших воркеров) или исключение, которое команда поднимет.
+    """
+
+    def __init__(self, active_queues, active, reserved):
+        self.replies = {"active_queues": active_queues, "active": active, "reserved": reserved}
+        self.calls: list[str] = []
+
+    def _answer(self, name: str):
+        self.calls.append(name)
+        reply = self.replies[name]
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    def active_queues(self):
+        return self._answer("active_queues")
+
+    def active(self):
+        return self._answer("active")
+
+    def reserved(self):
+        return self._answer("reserved")
+
+
+class FakeRedis:
+    """Двойник клиента Redis: только `lrange`; журнал ключей и границ."""
+
+    def __init__(self, items=()):
+        self.items = items
+        self.calls: list[tuple] = []
+
+    def lrange(self, key, start, end):
+        self.calls.append((key, start, end))
+        if isinstance(self.items, BaseException):
+            raise self.items
+        return list(self.items)
+
+
+TG_QUEUES = {
+    "celery@tg": [{"name": "telegram"}],
+    "celery@default": [{"name": "default"}],
+}
+IDLE = {"celery@tg": [], "celery@default": []}
+
+
+def _send_task(account_id: int, name: str = CELERY_SEND) -> dict:
+    return {"name": name, "args": [13, 1017, account_id, 41]}
+
+
+def _inspector(active=None, reserved=None, queues=None) -> FakeInspector:
+    return FakeInspector(
+        TG_QUEUES if queues is None else queues,
+        IDLE if active is None else active,
+        IDLE if reserved is None else reserved,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tracer_busy_probe_sees_an_active_send_and_blocks_the_connection(factory, capsys):
+    user_id = await _seed_user(factory)
+    first_id = await _seed_tg(factory, user_id)
+    second_id = await _seed_tg(factory, user_id)
+    inspector = _inspector(
+        active={"celery@tg": [_send_task(first_id)], "celery@default": []},
+    )
+    redis_double = FakeRedis([])
+    world = TelegramWorld()
+    probe = script.TelegramBusyProbe(inspector_factory=lambda: inspector, redis_client=redis_double)
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world, probe)})
+
+    out = capsys.readouterr().out
+    assert _line(out, first_id, "tg_user") == (
+        f"#{first_id} tg_user: занят, повторите позже (идёт рассылка)"
+    ), "занятый аккаунт получил подключение"
+    assert len(world.clients) == 1, "занятый аккаунт получил подключение"
+    assert await _columns(factory, first_id) == (None, False)
+    assert await _columns(factory, second_id) == (STORED, False)
