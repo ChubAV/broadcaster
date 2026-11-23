@@ -1,4 +1,4 @@
-"""Offline compatibility coverage for the MAX worker's PyMax 2.3.1 migration."""
+"""Offline compatibility coverage for the MAX worker on PyMax 2.5.0."""
 
 import asyncio
 import importlib
@@ -154,160 +154,103 @@ def create_session_db(path: Path, schema: str, values: tuple[str, str] | None = 
     connection.close()
 
 
-def test_pymax_2_3_1_contract():
+def test_pymax_2_5_0_contract(worker):
     import pymax
     from pymax import ExtraConfig, Photo, WebClient
+    from pymax.auth.providers import QrHandler
 
-    assert pymax.__version__ == "2.3.1"
+    assert pymax.__version__ == "2.5.0"
     for symbol in (WebClient, ExtraConfig, Photo):
         assert symbol is not None
     parameters = inspect.signature(WebClient).parameters
     assert {"session_name", "work_dir", "extra_config", "qr_provider"} <= set(parameters)
+    assert ExtraConfig().url == worker.MAX_WEBSOCKET_URL
+    assert list(inspect.signature(QrHandler.show_qr).parameters) == ["self", "qr_url"]
 
 
-def test_unmodified_pymax_rejects_contact_without_contact_id():
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from pymax.types.domain.chat import Chat; "
-            "Chat.model_validate({'id': 1, 'type': 'CHAT', 'status': 'ACTIVE', "
-            "'owner': 2, 'lastMessage': {'id': 9, 'time': 100, 'type': 'USER', "
-            "'attaches': [{'_type': 'CONTACT'}]}})",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "contactId" in result.stderr
-
-
-def test_contact_compatibility_accepts_raw_chat_and_login_payloads_idempotently():
-    from pymax.types.domain.attachments import ContactAttachment
-    from pymax.types.domain.chat import Chat
-    from pymax.types.domain.login import LoginResponse
-
-    from max_worker.pymax_compat import apply_contact_attachment_compatibility
-
-    assert apply_contact_attachment_compatibility() is True
-    assert apply_contact_attachment_compatibility() is False
-
-    chat = Chat.model_validate(incomplete_contact_chat_payload())
-    login = LoginResponse.model_validate(incomplete_contact_login_payload())
-
-    assert isinstance(chat.last_message.attaches[0], ContactAttachment)
-    assert chat.last_message.attaches[0].contact_id is None
-    assert login.chats[0].last_message.attaches[0].contact_id is None
-
-
-def test_contact_compatibility_preserves_ids_and_other_attachment_validation():
-    from pydantic import ValidationError
-    from pymax.types.domain.chat import Chat
-
-    from max_worker.pymax_compat import apply_contact_attachment_compatibility
-
-    apply_contact_attachment_compatibility()
-    identified_contact = Chat.model_validate(incomplete_contact_chat_payload(contact_id=7))
-
-    assert identified_contact.last_message.attaches[0].contact_id == 7
-
-    malformed_photo = incomplete_contact_chat_payload()
-    malformed_photo["lastMessage"]["attaches"] = [{"_type": "PHOTO"}]
-    with pytest.raises(ValidationError):
-        Chat.model_validate(malformed_photo)
-
-
-def test_unmodified_pymax_rejects_sticker_without_set_id():
-    """Pristine PyMax 2.3.1 is the reason group sync dies — reproduce it in a clean interpreter."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import json, sys; "
-            "from pymax.types.domain.chat import Chat; "
-            "Chat.model_validate(json.loads(sys.argv[1]))",
-            json.dumps(incomplete_sticker_chat_payload()),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode != 0
-    assert "setId" in result.stderr
-
-
-def test_sticker_compatibility_parses_chat_in_a_clean_interpreter():
-    """Order-independent proof: the shim alone makes a setId-less STICKER chat parse."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import json, sys; "
-            "from max_worker.pymax_compat import apply_sticker_attachment_compatibility; "
-            "assert apply_sticker_attachment_compatibility() is True; "
-            "from pymax.types.domain.chat import Chat; "
-            "chat = Chat.model_validate(json.loads(sys.argv[1])); "
-            "assert chat.last_message.attaches[0].set_id is None; "
-            "assert chat.last_message.attaches[0].sticker_id == 54954683",
-            json.dumps(incomplete_sticker_chat_payload()),
-        ],
+def _run_pristine(script: str, *argv: str) -> subprocess.CompletedProcess:
+    """Run ``script`` in a clean interpreter that never imports the worker."""
+    return subprocess.run(
+        [sys.executable, "-c", script, *argv],
         capture_output=True,
         text=True,
         check=False,
         cwd=str(REPO_ROOT),
     )
 
+
+def test_pristine_pymax_accepts_contact_without_contact_id():
+    """2.3.1 rejected a ``contactId``-less CONTACT; 2.5.0 declares it optional — no shim needed."""
+    result = _run_pristine(
+        "import json, sys; "
+        "from pymax.types.domain.attachments import ContactAttachment; "
+        "from pymax.types.domain.chat import Chat; "
+        "from pymax.types.domain.login import LoginResponse; "
+        "chat = Chat.model_validate(json.loads(sys.argv[1])); "
+        "assert isinstance(chat.last_message.attaches[0], ContactAttachment); "
+        "assert chat.last_message.attaches[0].contact_id is None; "
+        "login = LoginResponse.model_validate(json.loads(sys.argv[2])); "
+        "assert login.chats[0].last_message.attaches[0].contact_id is None; "
+        "ok = Chat.model_validate(json.loads(sys.argv[3])); "
+        "assert ok.last_message.attaches[0].contact_id == 7",
+        json.dumps(incomplete_contact_chat_payload()),
+        json.dumps(incomplete_contact_login_payload()),
+        json.dumps(incomplete_contact_chat_payload(contact_id=7)),
+    )
+
     assert result.returncode == 0, result.stderr
 
 
-def test_sticker_compatibility_accepts_raw_chat_and_login_payloads_idempotently():
-    from pymax.types.domain.attachments import StickerAttachment
-    from pymax.types.domain.chat import Chat
-    from pymax.types.domain.login import LoginResponse
+def test_pristine_pymax_accepts_sticker_without_set_id():
+    """2.3.1 rejected a ``setId``-less STICKER; 2.5.0 declares it optional — no shim needed."""
+    result = _run_pristine(
+        "import json, sys; "
+        "from pymax.types.domain.attachments import StickerAttachment; "
+        "from pymax.types.domain.chat import Chat; "
+        "chat = Chat.model_validate(json.loads(sys.argv[1])); "
+        "assert isinstance(chat.last_message.attaches[0], StickerAttachment); "
+        "assert chat.last_message.attaches[0].set_id is None; "
+        "assert chat.last_message.attaches[0].sticker_id == 54954683; "
+        "ok = Chat.model_validate(json.loads(sys.argv[2])); "
+        "assert ok.last_message.attaches[0].set_id == 12",
+        json.dumps(incomplete_sticker_chat_payload()),
+        json.dumps(incomplete_sticker_chat_payload(set_id=12)),
+    )
 
-    from max_worker.pymax_compat import apply_sticker_attachment_compatibility
-
-    assert apply_sticker_attachment_compatibility() is True
-    assert apply_sticker_attachment_compatibility() is False
-
-    chat = Chat.model_validate(incomplete_sticker_chat_payload())
-    login_payload = incomplete_contact_login_payload()
-    login_payload["chats"] = [incomplete_sticker_chat_payload()]
-    login = LoginResponse.model_validate(login_payload)
-
-    assert isinstance(chat.last_message.attaches[0], StickerAttachment)
-    assert chat.last_message.attaches[0].set_id is None
-    assert login.chats[0].last_message.attaches[0].set_id is None
-
-
-def test_sticker_compatibility_preserves_set_ids_and_other_sticker_validation():
-    from pydantic import ValidationError
-    from pymax.types.domain.chat import Chat
-
-    from max_worker.pymax_compat import apply_sticker_attachment_compatibility
-
-    apply_sticker_attachment_compatibility()
-
-    for set_id in (0, 1, 54954683):
-        identified = Chat.model_validate(incomplete_sticker_chat_payload(set_id=set_id))
-        assert identified.last_message.attaches[0].set_id == set_id
-
-    # The seam is exactly one field wide: every other required STICKER field still validates.
-    for dropped in ("url", "stickerId", "width", "time", "stickerType", "audio", "height"):
-        malformed = incomplete_sticker_chat_payload(set_id=1)
-        del malformed["lastMessage"]["attaches"][0][dropped]
-        with pytest.raises(ValidationError):
-            Chat.model_validate(malformed)
+    assert result.returncode == 0, result.stderr
 
 
-def test_worker_applies_sticker_compatibility_on_import(tmp_path):
-    """Importing the worker must relax STICKER before any client exists, and say so in the log.
+def test_pristine_pymax_still_validates_the_other_attachment_fields():
+    """Relaxing ``contactId``/``setId`` upstream did not turn attachment validation off."""
+    result = _run_pristine(
+        "import json, sys\n"
+        "from pydantic import ValidationError\n"
+        "from pymax.types.domain.chat import Chat\n"
+        "def rejected(payload):\n"
+        "    try:\n"
+        "        Chat.model_validate(payload)\n"
+        "    except ValidationError:\n"
+        "        return True\n"
+        "    return False\n"
+        "photo = json.loads(sys.argv[1])\n"
+        "photo['lastMessage']['attaches'] = [{'_type': 'PHOTO'}]\n"
+        "assert rejected(photo), 'PHOTO without fields must still be rejected'\n"
+        "for dropped in ('url', 'stickerId', 'width', 'time', 'stickerType', 'audio', 'height'):\n"
+        "    sticker = json.loads(sys.argv[2])\n"
+        "    del sticker['lastMessage']['attaches'][0][dropped]\n"
+        "    assert rejected(sticker), dropped\n",
+        json.dumps(incomplete_contact_chat_payload()),
+        json.dumps(incomplete_sticker_chat_payload(set_id=1)),
+    )
 
-    Runs in a clean interpreter: in-process the shim may already have been applied by an
-    earlier test, which would make the module-level flag ``False`` and the assertion vacuous.
+    assert result.returncode == 0, result.stderr
+
+
+def test_worker_logs_only_the_remaining_frame_size_shim_on_import(tmp_path):
+    """Importing the worker applies exactly one shim and names exactly that one in the log.
+
+    Clean interpreter: in-process an earlier test may already have applied the shim,
+    which would make the module-level flag ``False`` and the assertion vacuous.
     """
     env = {
         **os.environ,
@@ -319,13 +262,8 @@ def test_worker_applies_sticker_compatibility_on_import(tmp_path):
         [
             sys.executable,
             "-c",
-            "import json, sys; "
             "import max_worker.main as worker; "
-            "assert worker.STICKER_ATTACHMENT_COMPATIBILITY_APPLIED is True; "
-            "from pymax.types.domain.chat import Chat; "
-            "chat = Chat.model_validate(json.loads(sys.argv[1])); "
-            "assert chat.last_message.attaches[0].set_id is None",
-            json.dumps(incomplete_sticker_chat_payload()),
+            "assert worker.WEBSOCKET_FRAME_SIZE_COMPATIBILITY_APPLIED is True",
         ],
         capture_output=True,
         text=True,
@@ -335,7 +273,9 @@ def test_worker_applies_sticker_compatibility_on_import(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert "pymax_sticker_attachment_compatibility_applied" in result.stdout
+    assert result.stdout.count("pymax_websocket_frame_size_compatibility_applied") == 1
+    for lifted in ("contact_attachment", "sticker_attachment", "photo_upload"):
+        assert f"pymax_{lifted}_compatibility_applied" not in result.stdout
 
 
 @pytest.mark.asyncio
@@ -684,7 +624,7 @@ async def test_health_and_startup_diagnostics_identify_build_without_redis_crede
     worker.log_startup()
 
     assert health["build_revision"] == "abc123"
-    assert health["pymax_version"] == "2.3.1"
+    assert health["pymax_version"] == "2.5.0"
     rendered = " ".join(str(value) for call in log_info.call_args_list for value in call.args)
     assert "operator" not in rendered
     assert "secret" not in rendered
@@ -870,8 +810,9 @@ async def test_all_failed_images_fall_back_to_text(worker, monkeypatch):
 # The shape MAX has answered PHOTO_UPLOAD with since 2026-09-25 (for every request
 # since 2026-10-02): a one-shot URL that names no photo.
 UPLOAD_URL_WITHOUT_PHOTO_IDS = "https://iu.oneme.ru/uploadImage?r=one-shot-token"
-# The shape PyMax 2.3.1 was written against.
+# The shapes PyMax 2.5.0 reads the photo id from: ``photoIds`` (the original) or ``photos``.
 UPLOAD_URL_WITH_PHOTO_IDS = "https://iu.oneme.ru/uploadImage?photoIds=777&r=one-shot-token"
+UPLOAD_URL_WITH_PHOTOS_PARAM = "https://iu.oneme.ru/uploadImage?photos=777&r=one-shot-token"
 
 
 class FakeUploadPost:
@@ -901,13 +842,13 @@ class FakeUploadSession:
     async def __aexit__(self, *args):
         return None
 
-    def post(self, url, data):
+    def post(self, url, data, **kwargs):
         self.posted.append(url)
         return FakeUploadPost(self.results.pop(0))
 
 
 def pymax_photo_send_harness(monkeypatch, upload_urls, upload_results):
-    """Real PyMax 2.3.1 MessageService + UploadService; only MAX's socket and upload HTTP are faked.
+    """Real PyMax 2.5.0 MessageService + UploadService; only MAX's socket and upload HTTP are faked.
 
     Returns the message service, every (opcode, payload) sent over the socket, and every
     URL the photo bytes were POSTed to.
@@ -952,11 +893,11 @@ def sent_attaches(invoked):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("result_key", ["0", "4242"])
-async def test_photo_send_survives_upload_url_without_photo_ids(worker, monkeypatch, result_key):
-    """Every MAX photo send failed with "Photo upload URL does not contain photoIds".
+async def test_photo_send_survives_upload_url_without_photo_ids(monkeypatch, result_key):
+    """MAX's upload URL no longer names the photo (2.3.1 failed every send on it).
 
-    MAX's upload URL no longer names the photo.  A ``count=1`` upload result holds
-    exactly one entry, and that entry is our photo whatever its key.
+    PyMax 2.5.0 takes the single entry of a ``count=1`` upload result as our photo
+    whatever its key — the behavior the retired shim added.
     """
     from pymax import Photo
     from pymax.types import AttachmentType
@@ -976,7 +917,7 @@ async def test_photo_send_survives_upload_url_without_photo_ids(worker, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_photo_album_without_photo_ids_uploads_each_photo_on_its_own_url(worker, monkeypatch):
+async def test_photo_album_without_photo_ids_uploads_each_photo_on_its_own_url(monkeypatch):
     """A multi-image ad is N independent ``count=1`` uploads; tokens keep the photo order."""
     from pymax import Photo
     from pymax.protocol import Opcode
@@ -1007,7 +948,7 @@ async def test_photo_album_without_photo_ids_uploads_each_photo_on_its_own_url(w
     [{}, {"0": {"token": "tok-a"}, "1": {"token": "tok-b"}}],
     ids=["no-entry", "two-entries"],
 )
-async def test_photo_upload_without_photo_ids_refuses_to_guess_the_token(worker, monkeypatch, photos):
+async def test_photo_upload_without_photo_ids_refuses_to_guess_the_token(monkeypatch, photos):
     """Without an id in the URL only a single-entry result is unambiguous; never attach a guess."""
     from pymax import Photo
     from pymax.exceptions import UploadError
@@ -1017,7 +958,7 @@ async def test_photo_upload_without_photo_ids_refuses_to_guess_the_token(worker,
         monkeypatch, [UPLOAD_URL_WITHOUT_PHOTO_IDS], [{"photos": photos}]
     )
 
-    with pytest.raises(UploadError, match=r"expected exactly 1"):
+    with pytest.raises(UploadError, match=r"Expected one photo in upload response"):
         await messages.send_message(
             chat_id=17, text="Caption", attachments=[Photo(raw=b"png-data", name="a.png")]
         )
@@ -1026,7 +967,7 @@ async def test_photo_upload_without_photo_ids_refuses_to_guess_the_token(worker,
 
 
 @pytest.mark.asyncio
-async def test_photo_send_still_keys_token_by_photo_ids_when_url_carries_them(worker, monkeypatch):
+async def test_photo_send_keys_token_by_photo_ids_when_url_carries_them(monkeypatch):
     """MAX rolled the change out gradually; the URL that still names the photo keeps the exact lookup."""
     from pymax import Photo
     from pymax.types import AttachmentType
@@ -1045,7 +986,26 @@ async def test_photo_send_still_keys_token_by_photo_ids_when_url_carries_them(wo
 
 
 @pytest.mark.asyncio
-async def test_photo_ids_url_whose_id_is_missing_from_the_result_still_fails(worker, monkeypatch):
+async def test_photo_send_keys_token_by_photos_parameter_when_url_carries_it(monkeypatch):
+    """2.5.0 also reads the id from ``photos=``; it wins over a two-entry result."""
+    from pymax import Photo
+    from pymax.types import AttachmentType
+
+    messages, invoked, _ = pymax_photo_send_harness(
+        monkeypatch,
+        [UPLOAD_URL_WITH_PHOTOS_PARAM],
+        [{"photos": {"111": {"token": "someone-else"}, "777": {"token": "tok-777"}}}],
+    )
+
+    await messages.send_message(
+        chat_id=17, text="Caption", attachments=[Photo(raw=b"png-data", name="a.png")]
+    )
+
+    assert sent_attaches(invoked) == [{"_type": AttachmentType.PHOTO, "photoToken": "tok-777"}]
+
+
+@pytest.mark.asyncio
+async def test_photo_ids_url_whose_id_is_missing_from_the_result_still_fails(monkeypatch):
     """When MAX does name the photo, a result without that id is an error, not a positional pick."""
     from pymax import Photo
     from pymax.exceptions import UploadError
@@ -1063,135 +1023,68 @@ async def test_photo_ids_url_whose_id_is_missing_from_the_result_still_fails(wor
     assert Opcode.MSG_SEND not in sent_opcodes(invoked)
 
 
-def test_unmodified_pymax_rejects_upload_url_without_photo_ids():
-    """Pristine PyMax 2.3.1 is why every MAX photo send fails — keep that reproducible.
+_FRAME_PROBE = (
+    "import asyncio, sys\n"
+    "from websockets.asyncio import client\n"
+    "from pymax.transport.websocket import WebSocketTransport\n"
+    "seen = {}\n"
+    "def captured(*args, **kwargs):\n"
+    "    seen.clear(); seen['url'] = args[0]; seen.update(kwargs)\n"
+    "    return asyncio.sleep(0)\n"
+    "client.connect = captured\n"
+    "def dial(proxy):\n"
+    "    asyncio.run(WebSocketTransport('wss://api.oneme.ru/websocket', proxy).connect())\n"
+    "    return dict(seen)\n"
+    "def check(expected_max_size):\n"
+    "    for proxy in (None, 'http://proxy:8080'):\n"
+    "        kw = dial(proxy)\n"
+    "        assert kw['max_size'] == expected_max_size, kw\n"
+    "        assert str(kw['origin']) == 'https://web.max.ru', kw\n"
+    "        assert kw.get('proxy') == proxy, kw\n"
+    "check(10 * 1024 * 1024)\n"
+    "from max_worker import pymax_compat\n"
+    "assert pymax_compat.apply_websocket_frame_size_compatibility() is True\n"
+    "assert pymax_compat.apply_websocket_frame_size_compatibility() is False\n"
+    "check(None)\n"
+)
 
-    Runs in a clean interpreter that never imports the worker.  The day the pin moves
-    to a release that no longer needs ``photoIds``, this fails: drop the shim then.
+
+def test_websocket_frame_size_compatibility_lifts_the_10mib_cap():
+    """Pristine 2.5.0 caps frames at 10 MiB; the shim alone removes the cap.
+
+    MAX sends the whole chat list in one login frame (2.7 MB measured on a large
+    account) and the frame grows with the account.  The cap is checked on both
+    connect branches (with and without a proxy), and the origin is preserved.
     """
-    script = (
-        "import asyncio, sys\n"
-        "from types import SimpleNamespace\n"
-        "from pymax import Photo\n"
-        "from pymax.api.uploads.service import UploadService\n"
-        "async def invoke(opcode, payload=None):\n"
-        "    return SimpleNamespace(payload={'url': sys.argv[1]})\n"
-        "app = SimpleNamespace(invoke=invoke, config=SimpleNamespace(proxy=None),\n"
-        "    dispatcher=SimpleNamespace(on_internal=lambda event: (lambda handler: handler)))\n"
-        "asyncio.run(UploadService(app).upload_photo(Photo(raw=b'png-data', name='a.png')))\n"
-    )
-    result = subprocess.run(
-        [sys.executable, "-c", script, UPLOAD_URL_WITHOUT_PHOTO_IDS],
-        capture_output=True,
-        text=True,
-        check=False,
+    result = _run_pristine(_FRAME_PROBE)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_websocket_frame_size_compatibility_fails_closed_on_unaudited_pymax():
+    result = _run_pristine(
+        "from max_worker import pymax_compat; "
+        "pymax_compat.PYMAX_VERSION = '2.5.1'; "
+        "pymax_compat.apply_websocket_frame_size_compatibility()"
     )
 
     assert result.returncode != 0
-    assert "UploadError: Photo upload URL does not contain photoIds" in result.stderr
+    assert "RuntimeError" in result.stderr
+    assert "2.5.1" in result.stderr
+    assert "2.5.0" in result.stderr
 
 
-def test_worker_applies_photo_upload_compatibility_on_import(tmp_path):
-    """Importing the worker must fix photo uploads before any client exists, and say so in the log.
+def test_requirements_pin_maxapi_2_5_0():
+    import tomllib
 
-    Clean interpreter: in-process an earlier test may already have applied the shim,
-    which would make the module-level flag ``False`` and the assertion vacuous.
-    """
-    env = {
-        **os.environ,
-        "ACCOUNT_ID": "42",
-        "SESSIONS_DIR": str(tmp_path / "sessions"),
-        "PYTHONPATH": str(REPO_ROOT),
-    }
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import max_worker.main as worker; "
-            "assert worker.PHOTO_UPLOAD_COMPATIBILITY_APPLIED is True",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-        cwd=str(REPO_ROOT),
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "pymax_photo_upload_compatibility_applied" in result.stdout
-
-
-def test_photo_upload_compatibility_is_idempotent_and_fails_closed_on_unaudited_pymax():
-    applied = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from max_worker import pymax_compat; "
-            "assert pymax_compat.apply_photo_upload_compatibility() is True; "
-            "assert pymax_compat.apply_photo_upload_compatibility() is False",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=str(REPO_ROOT),
-    )
-    assert applied.returncode == 0, applied.stderr
-
-    unaudited = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "from max_worker import pymax_compat; "
-            "pymax_compat.PYMAX_VERSION = '2.4.1'; "
-            "pymax_compat.apply_photo_upload_compatibility()",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=str(REPO_ROOT),
-    )
-    assert unaudited.returncode != 0
-    assert "RuntimeError" in unaudited.stderr
-    assert "2.4.1" in unaudited.stderr
-
-
-def test_websocket_frame_size_compatibility_lifts_the_1mib_cap():
-    """A clean interpreter proves the shim alone removes the frame-size cap.
-
-    Without it, MAX closes the login frame with 1009 "message too big" for any
-    account whose chat list exceeds 1 MiB, and the worker reconnect-loops forever.
-    """
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import asyncio, inspect; "
-            "from websockets.asyncio import client; "
-            "from pymax.transport.websocket import WebSocketTransport; "
-            "assert inspect.signature(client.connect).parameters['max_size'].default == 1048576; "
-            "from max_worker.pymax_compat import apply_websocket_frame_size_compatibility; "
-            "assert apply_websocket_frame_size_compatibility() is True; "
-            "assert apply_websocket_frame_size_compatibility() is False; "
-            "seen = {}; "
-            "captured = lambda *a, **kw: seen.update(kw) or asyncio.sleep(0); "
-            "client.connect = captured; "
-            "t = WebSocketTransport('wss://ws-api.oneme.ru/websocket', None); "
-            "asyncio.run(t.connect()); "
-            "assert seen['max_size'] is None, seen; "
-            "t2 = WebSocketTransport('wss://ws-api.oneme.ru/websocket', 'http://proxy:8080'); "
-            "asyncio.run(t2.connect()); "
-            "assert seen['max_size'] is None and seen['proxy'] == 'http://proxy:8080', seen",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        cwd=str(REPO_ROOT),
-    )
-
-    assert result.returncode == 0, result.stderr
-
-
-def test_requirements_pin_maxapi_2_3_1():
-    requirements = Path("max_worker/requirements.txt").read_text().splitlines()
-    assert requirements.count("maxapi-python==2.3.1") == 1
+    requirements = (REPO_ROOT / "max_worker/requirements.txt").read_text().splitlines()
+    assert requirements.count("maxapi-python==2.5.0") == 1
     assert not any(line.startswith("maxapi-python>=") for line in requirements)
+
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    dev_group = pyproject["dependency-groups"]["dev"]
+    assert [item for item in dev_group if item.startswith("maxapi-python")] == ["maxapi-python==2.5.0"]
+
+    lock = tomllib.loads((REPO_ROOT / "uv.lock").read_text())
+    locked = [package["version"] for package in lock["package"] if package["name"] == "maxapi-python"]
+    assert locked == ["2.5.0"]
