@@ -174,14 +174,14 @@ async def _write(session_factory, row: AccountRow, reply: SourceReply) -> Source
                 raise
     except Exception as exc:  # noqa: BLE001 — прогон не падает на одном аккаунте
         return SourceReply(Outcome.FAILED, note=type(exc).__name__)
-    return SourceReply(WRITE_OUTCOMES[written], reported=reply.reported)
+    return SourceReply(WRITE_OUTCOMES[written], reported=reply.reported, note=reply.note)
 
 
 def _preview(reply: SourceReply) -> SourceReply:
     """Режим просмотра: писатель не вызывается ни в каком виде (D-06)."""
     if normalize_reported(reply.reported) is None:
-        return SourceReply(Outcome.NO_NUMBER)
-    return SourceReply(Outcome.FILLED, reported=reply.reported)
+        return SourceReply(Outcome.NO_NUMBER, note=reply.note)
+    return SourceReply(Outcome.FILLED, reported=reply.reported, note=reply.note)
 
 
 def queue_key(kind: str, account_id: int) -> str:
