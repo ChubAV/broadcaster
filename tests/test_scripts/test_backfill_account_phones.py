@@ -16,13 +16,17 @@
 import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import pytest_asyncio
 from docker.errors import DockerException
-from sqlalchemy import select, text
+from telethon import errors as telethon_errors
+from telethon.crypto import AuthKey
+from telethon.sessions import StringSession
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -1334,3 +1338,140 @@ async def test_wake_stop_failure_keeps_the_number_and_names_the_container(factor
     assert await _columns(factory, account_id) == (STORED, False), "отказ остановки спрятал номер"
     assert "остановка не удалась (RuntimeError)" in _line(out, account_id, "wa")
     assert "docker-secret-79991234567" not in out
+
+
+# --- источник Telegram: короткое последовательное подключение без обновлений ---------
+
+
+def _valid_session_string() -> str:
+    """Годная строка сессии Telethon, построенная без сети (ключ из нулей)."""
+    session = StringSession()
+    session.set_dc(2, "149.154.167.51", 443)
+    session.auth_key = AuthKey(bytes(256))
+    return session.save()
+
+
+async def _seed_tg(factory, user_id: int, credentials: str | None = None) -> int:
+    """Аккаунт `tg_user` со строкой сессии: годной по умолчанию, иначе — переданной."""
+    account_id = await _seed(factory, user_id, "tg_user")
+    value = _valid_session_string() if credentials is None else credentials
+    async with factory() as session:
+        await session.execute(
+            update(MessengerAccount)
+            .where(MessengerAccount.id == account_id)
+            .values(credentials=value)
+        )
+        await session.commit()
+    return account_id
+
+
+class FakeTelegramClient:
+    """Двойник клиента Telethon: журнал вызовов и общий счётчик подключений.
+
+    `world` — общее состояние прогона (`TelegramWorld`): журнал событий
+    `(событие, id)`, `open_now` / `max_open` — сколько клиентов подключено
+    одновременно (инкремент в начале `connect`, декремент в `disconnect`).
+    `start` и `check_connection` — `AsyncMock`: интерактивный вход и давняя
+    проверка соединения адаптера не должны вызываться вовсе.
+    """
+
+    def __init__(self, world, session, api_id, api_hash, receive_updates):
+        self.world = world
+        self.session = session
+        self.api_id = api_id
+        self.api_hash = api_hash
+        self.receive_updates = receive_updates
+        self.tag = len(world.clients) + 1
+        self.start = AsyncMock()
+        self.check_connection = AsyncMock()
+        self.calls: list[str] = []
+
+    async def _step(self, name: str):
+        self.calls.append(name)
+        self.world.events.append((name, self.tag))
+        if self.world.scenario.get("yield_loop"):
+            await asyncio.sleep(0)
+        raised = self.world.scenario.get("raise_on", {}).get(name)
+        if raised is not None:
+            raise raised
+
+    async def connect(self):
+        self.world.open_now += 1
+        self.world.max_open = max(self.world.max_open, self.world.open_now)
+        await self._step("connect")
+
+    async def is_user_authorized(self):
+        await self._step("is_user_authorized")
+        return self.world.scenario.get("authorized", True)
+
+    async def get_me(self):
+        await self._step("get_me")
+        return self.world.scenario.get("me", SimpleNamespace(phone=REPORTED))
+
+    async def disconnect(self):
+        self.world.open_now -= 1
+        await self._step("disconnect")
+
+
+class TelegramWorld:
+    """Общее состояние двойников клиента: фабрика, журнал, счётчик, сценарий."""
+
+    def __init__(self, **scenario):
+        self.scenario = scenario
+        self.events: list[tuple] = []
+        self.clients: list[FakeTelegramClient] = []
+        self.open_now = 0
+        self.max_open = 0
+
+    def factory(self, session, api_id, api_hash, *, receive_updates):
+        client = FakeTelegramClient(self, session, api_id, api_hash, receive_updates)
+        self.clients.append(client)
+        return client
+
+
+def _busy_probe(answer=False):
+    """Двойник признака «занят»: журнал `account_id`; ответ — значение или исключение."""
+    asked: list[int] = []
+
+    async def probe(account_id):
+        asked.append(account_id)
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    probe.asked = asked
+    return probe
+
+
+def _telegram_source(world, probe=None, **kw):
+    kw.setdefault("api_id", 1)
+    kw.setdefault("api_hash", "h")
+    return script.TelegramSource(
+        busy_probe=probe or _busy_probe(False),
+        client_factory=world.factory,
+        pause=0.0,
+        **kw,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tracer_telegram_number_reaches_the_writer_without_updates(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+    world = TelegramWorld()
+    probe = _busy_probe(False)
+    source = _telegram_source(world, probe)
+
+    await script.run(factory, script.RunOptions(), {"tg_user": source})
+
+    assert await _columns(factory, account_id) == (STORED, False), "номер Telegram не записан"
+    assert len(world.clients) == 1
+    client = world.clients[0]
+    assert client.receive_updates is False
+    assert (client.api_id, client.api_hash) == (1, "h")
+    assert client.calls == ["connect", "is_user_authorized", "get_me", "disconnect"]
+    client.start.assert_not_called()
+    client.check_connection.assert_not_called()
+    assert probe.asked == [account_id]
+    out = capsys.readouterr().out
+    assert f"#{account_id} tg_user: заполнено {MASKED}" in out

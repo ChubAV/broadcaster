@@ -64,6 +64,10 @@ MAX_POLL_INTERVAL = 2.0
 
 NOTE_NOT_CONNECTED = "не подключён"
 
+# Пауза после каждого TG-аккаунта, у которого строился клиент: против FloodWait на
+# длинных прогонах, не для защиты ключа авторизации (его защищает строгая очерёдность).
+TELEGRAM_PAUSE = 1.0
+
 WRITE_OUTCOMES: dict[PhoneWrite, Outcome] = {
     PhoneWrite.WRITTEN: Outcome.FILLED,
     PhoneWrite.KEPT: Outcome.KEPT,
@@ -366,6 +370,20 @@ class WorkerStatusSource:
         except ValueError:
             return SourceReply(Outcome.UNREACHABLE, note="ответ не JSON")
         return classify_status(body)
+
+
+class TelegramSource:
+    """Источник номера Telegram (каркас RED; тело — в GREEN)."""
+
+    def __init__(self, *, api_id, api_hash, busy_probe, client_factory, pause=TELEGRAM_PAUSE):
+        self._api_id = api_id
+        self._api_hash = api_hash
+        self._busy_probe = busy_probe
+        self._client_factory = client_factory
+        self._pause = pause
+
+    async def poll(self, row: AccountRow, options: RunOptions) -> SourceReply:
+        return SourceReply(Outcome.UNREACHABLE)
 
 
 def classify_status(body: object) -> SourceReply:
