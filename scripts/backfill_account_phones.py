@@ -26,9 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
 from sqlalchemy import select
+from telethon import errors as telethon_errors
+from telethon.sessions import StringSession
 
 from app.application.accounts.phone import PhoneWrite, fill_reported_phone
 from app.messengers.base import reported_phone_from_status
+from app.messengers.telegram_user import reported_phone_of
 from app.models.messenger_account import MessengerAccount
 from app.services import max_container_manager, wa_container_manager
 from app.services.phone import mask_phone, normalize_reported
@@ -63,6 +66,10 @@ MAX_CONNECT_ATTEMPTS = 45
 MAX_POLL_INTERVAL = 2.0
 
 NOTE_NOT_CONNECTED = "не подключён"
+
+# Пауза после каждого TG-аккаунта, у которого строился клиент: против FloodWait на
+# длинных прогонах, не для защиты ключа авторизации (его защищает строгая очерёдность).
+TELEGRAM_PAUSE = 1.0
 
 WRITE_OUTCOMES: dict[PhoneWrite, Outcome] = {
     PhoneWrite.WRITTEN: Outcome.FILLED,
@@ -366,6 +373,90 @@ class WorkerStatusSource:
         except ValueError:
             return SourceReply(Outcome.UNREACHABLE, note="ответ не JSON")
         return classify_status(body)
+
+
+def parse_session(credentials: object) -> StringSession | None:
+    """Строка сессии Telethon без сети; `None` — сессии нет или она не разбирается.
+
+    Пустая строка дала бы пустую сессию, и Telethon при подключении выпустил бы
+    НОВЫЙ ключ авторизации — поэтому пустое и пробельное отсеивается здесь, до
+    построения клиента. Разбор идёт без сети, так что любой его отказ — «строка
+    негодна», а не сбой источника.
+    """
+    if not isinstance(credentials, str) or not credentials.strip():
+        return None
+    try:
+        return StringSession(credentials)
+    except Exception:  # noqa: BLE001 — разбор без сети: любой отказ значит «негодна»
+        return None
+
+
+class TelegramSource:
+    """Источник номера Telegram: короткое подключение изнутри процесса скрипта.
+
+    Клиент строится внедряемой фабрикой с `receive_updates=False`: интерактивный
+    вход не вызывается, обновления не принимаются, строка сессии назад в базу не
+    пишется. Порядок до сети: разбор строки сессии, наличие `api_id` / `api_hash`,
+    признак «занят» (D-09, отказ в закрытую) — и только затем клиент. Параллельных
+    подключений нет: аккаунты опрашивает цикл ядра по одному.
+    """
+
+    def __init__(self, *, api_id, api_hash, busy_probe, client_factory, pause=TELEGRAM_PAUSE):
+        self._api_id = api_id
+        self._api_hash = api_hash
+        self._busy_probe = busy_probe
+        self._client_factory = client_factory
+        self._pause = pause
+
+    async def poll(self, row: AccountRow, options: RunOptions) -> SourceReply:
+        session = parse_session(row.credentials)
+        if session is None:
+            return SourceReply(Outcome.DEAD_SESSION, note="строка сессии пуста или не разбирается")
+        if not self._api_id or not self._api_hash:
+            return SourceReply(
+                Outcome.UNREACHABLE, note="TELEGRAM_API_ID / TELEGRAM_API_HASH не заданы"
+            )
+        try:
+            busy = await self._busy_probe(row.id)
+        except Exception as exc:  # noqa: BLE001 — признак не определён: отказ в закрытую
+            return SourceReply(
+                Outcome.BUSY, note=f"статус рассылки не определён: {type(exc).__name__}"
+            )
+        if busy is None:
+            return SourceReply(Outcome.BUSY, note="статус рассылки не определён")
+        if busy:
+            return SourceReply(Outcome.BUSY, note="идёт рассылка")
+        client = self._client_factory(session, self._api_id, self._api_hash, receive_updates=False)
+        try:
+            await client.connect()
+            if not await client.is_user_authorized():
+                reply = SourceReply(Outcome.DEAD_SESSION, note="не авторизована")
+            else:
+                me = await client.get_me()
+                if me is None:
+                    reply = SourceReply(Outcome.DEAD_SESSION, note="не авторизована")
+                else:
+                    reported = reported_phone_of(me)
+                    if reported is None:
+                        reply = SourceReply(Outcome.NO_NUMBER)
+                    else:
+                        reply = SourceReply(None, reported=reported)
+        except telethon_errors.AuthKeyError as exc:
+            # В том числе AuthKeyDuplicatedError: сервер уже отозвал этот ключ (D-17).
+            reply = SourceReply(Outcome.DEAD_SESSION, note=type(exc).__name__)
+        except telethon_errors.UnauthorizedError as exc:
+            reply = SourceReply(Outcome.DEAD_SESSION, note=type(exc).__name__)
+        except (telethon_errors.FloodWaitError, OSError, TimeoutError) as exc:
+            # У Telegram воркера нет: «источник недоступен». Текст исключения не кладётся.
+            reply = SourceReply(Outcome.UNREACHABLE, note=type(exc).__name__)
+        finally:
+            try:
+                await client.disconnect()
+            except Exception:  # noqa: BLE001 — отказ отключения исход не меняет
+                pass
+        if self._pause > 0:
+            await asyncio.sleep(self._pause)
+        return reply
 
 
 def classify_status(body: object) -> SourceReply:
