@@ -69,6 +69,7 @@ HEARTBEAT_INTERVAL_SEC = 30
 HEARTBEAT_TTL_SEC = HEARTBEAT_INTERVAL_SEC * 3
 CLIENT_CLOSE_TIMEOUT_SEC = 5
 SESSION_NAME = "session.db"
+MAX_WEBSOCKET_URL = "wss://api.oneme.ru/websocket"
 
 # Retry delays for failed task sends (seconds)
 RETRY_DELAYS = [15, 60, 180]
@@ -459,7 +460,9 @@ async def create_client(phone: str = "") -> SessionState:
         save_phone_to_disk(phone)
 
     _, legacy_credentials = _read_session_compatibility()
-    config_kwargs = {"reconnect": True, "log_level": LOG_LEVEL}
+    # MAX moved its websocket to api.oneme.ru; PyMax 2.3.1 still defaults to the
+    # unreachable ws-api.oneme.ru (handshake timeouts since 2026-11-22).
+    config_kwargs = {"reconnect": True, "log_level": LOG_LEVEL, "url": MAX_WEBSOCKET_URL}
     if legacy_credentials:
         config_kwargs.update(token=legacy_credentials[0], device_id=legacy_credentials[1])
     client = WebClient(
