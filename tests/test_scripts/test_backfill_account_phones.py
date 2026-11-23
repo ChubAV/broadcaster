@@ -425,6 +425,49 @@ async def test_dry_run_never_calls_the_writer(factory, monkeypatch, capsys):
         assert await _columns(factory, account_id) == (STORED, False)
 
 
+# --- трасер плана 20-07: просмотр предсказывает исход чтением строки (RESEARCH A3) ---
+
+
+@pytest.mark.asyncio
+async def test_dry_run_predicts_kept_and_gone_by_reading(factory, monkeypatch, capsys):
+    from sqlalchemy import delete
+
+    from app.application.accounts.phone import set_manual_phone
+
+    user_id = await _seed_user(factory)
+    manual, removed, garbage = [await _seed(factory, user_id, "wa") for _ in range(3)]
+
+    async def second_session_acts(row):
+        async with factory() as other:
+            if row.id == manual:
+                await set_manual_phone(other, row.id, "+7 999 000-11-22")
+            elif row.id == removed:
+                await other.execute(delete(MessengerAccount).where(MessengerAccount.id == row.id))
+            await other.commit()
+
+    source = RecordingSource(
+        {garbage: script.SourceReply(outcome=None, reported="мусор")},
+        before_reply=second_session_acts,
+    )
+    calls = _count_writer(monkeypatch)
+
+    summary = await script.run(factory, script.RunOptions(dry_run=True), {"wa": source})
+
+    out = capsys.readouterr().out
+    assert f"#{manual} wa: ручной / уже заполнен" in out, "просмотр не предсказал ручной номер"
+    assert f"#{removed} wa: удалён во время прогона" in out, "просмотр не предсказал удаление"
+    assert f"#{garbage} wa: номера нет" in out
+    assert summary.counts[script.Outcome.KEPT] == 1
+    assert summary.counts[script.Outcome.ACCOUNT_GONE] == 1
+    assert summary.counts[script.Outcome.NO_NUMBER] == 1
+    assert summary.counts[script.Outcome.FILLED] == 0
+    assert calls == [], "просмотр вызвал писатель Фазы 16"
+    assert "Итог просмотра (ничего не записано):" in out
+    # Строка, которую просмотр не писал, осталась как её оставила вторая сессия.
+    assert await _columns(factory, manual) == ("+79990001122", True)
+    assert await _columns(factory, garbage) == (None, False)
+
+
 # --- источник WA / MAX: Docker только читается, номер — собственный запрос /status ---
 
 
