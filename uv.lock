@@ -401,7 +401,7 @@ requires-dist = [
 dev = [
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "maxapi-python", specifier = "==2.3.1" },
+    { name = "maxapi-python", specifier = "==2.5.0" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -1194,7 +1194,7 @@ wheels = [
 
 [[package]]
 name = "maxapi-python"
-version = "2.3.1"
+version = "2.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1207,9 +1207,9 @@ dependencies = [
     { name = "websockets" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/37/49d261644c0df2a51cdefdf8d2cb95ff8881ada789152e32d959d2dda57a/maxapi_python-2.3.1.tar.gz", hash = "sha256:988d2bde8bb9c549630ab225b3aebda36ebb35850d33e0013bc64b96887cd7e6", size = 296272, upload-time = "2026-06-19T15:50:07.254Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/33/2cdfec83e03bbc8df65666f51ffe64cbcb8d802b9845538faddbce59c007/maxapi_python-2.5.0.tar.gz", hash = "sha256:e0e49707434e64d2befa7199b932005100b7608f82fd4457bbd638205fe41dd7", size = 375560, upload-time = "2026-10-25T18:35:42.553Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/95/8ea5c703ddffcd907278f1ae04066e1a718bf12034f35fc8c47bb981f0ba/maxapi_python-2.3.1-py3-none-any.whl", hash = "sha256:1e9980eb9e5b037bd5e8599f53f8438117b4e67a4ea5a937d709b5bcacfd5bd7", size = 134629, upload-time = "2026-06-19T15:50:05.985Z" },
+    { url = "https://files.pythonhosted.org/packages/35/ee/4d2f076da9849a45804d888252008a343be33d591960a4d9423a0fb6f649/maxapi_python-2.5.0-py3-none-any.whl", hash = "sha256:20dcf9bfe658fd75434cc370f12c6a0114d85ee109309789c19174710cb8f479", size = 195222, upload-time = "2026-10-25T18:35:41.483Z" },
 ]
 
 [[package]]
