@@ -69,7 +69,9 @@ from typing import Mapping, Protocol
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
+import redis
 from sqlalchemy import select
+from telethon import TelegramClient
 from telethon import errors as telethon_errors
 from telethon.sessions import StringSession
 
@@ -734,14 +736,64 @@ def options_from(args: argparse.Namespace) -> RunOptions:
     )
 
 
+class TelegramOutsideContainerSource:
+    """Источник Telegram вне боевого контейнера: не опрашивает и клиента не строит.
+
+    Локальный `.env`, указывающий на боевую базу, иначе дал бы второй адрес той же
+    сессии (допущение A1 исследования): боевой путь открывает только
+    `prod-backfill-phones`, который передаёт `--telegram-from-container`.
+    """
+
+    async def poll(self, row: AccountRow, options: RunOptions) -> SourceReply:
+        return SourceReply(
+            Outcome.UNREACHABLE,
+            note="Telegram опрашивается только из боевого контейнера: just prod-backfill-phones",
+        )
+
+
 def build_sources(settings, *, telegram_from_container: bool) -> dict[str, AccountSource]:
-    """Каркас: боевая сборка источников — задача 2 плана 20-06."""
-    raise NotImplementedError("сборка боевых источников")
+    """Боевые источники по типам; сборка ни к чему не подключается.
+
+    Клиент Redis ленив — соединение открывается при первом запросе. Приложение
+    Celery ввозится ТОЛЬКО на пути Telegram и внутри функции: его создание читает
+    настройки, а `--help` и ввоз скрипта тестами не должны требовать `.env`.
+    """
+    redis_client = redis.from_url(settings.redis_url)
+    sources: dict[str, AccountSource] = {
+        "wa": WorkerStatusSource(
+            "wa", queue_len=lambda account_id: redis_client.llen(queue_key("wa", account_id))
+        ),
+        "max": WorkerStatusSource(
+            "max", queue_len=lambda account_id: redis_client.llen(queue_key("max", account_id))
+        ),
+    }
+    if telegram_from_container:
+        from app.worker.celery_app import celery
+
+        sources["tg_user"] = TelegramSource(
+            api_id=settings.telegram_api_id,
+            api_hash=settings.telegram_api_hash,
+            busy_probe=TelegramBusyProbe(
+                inspector_factory=lambda: celery.control.inspect(timeout=INSPECT_TIMEOUT),
+                redis_client=redis_client,
+            ),
+            client_factory=TelegramClient,
+        )
+    else:
+        sources["tg_user"] = TelegramOutsideContainerSource()
+    return sources
 
 
 async def amain(argv: list[str] | None = None, *, session_factory=None, sources=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # Отказы аргументов — ДО любой работы: ни базы, ни источников, ни вывода (код 2).
+    if args.wake and args.dry_run:
+        parser.error("--wake несовместим с --dry-run: просмотр не поднимает контейнеры")
+    if args.account_id is not None and args.account_id <= 0:
+        parser.error("--account-id должен быть положительным целым")
+    if args.limit is not None and args.limit <= 0:
+        parser.error("--limit должен быть положительным целым")
     options = options_from(args)
 
     engine = None
