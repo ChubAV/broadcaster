@@ -174,6 +174,14 @@ recompress-attachments *args:
 prod-recompress-attachments *args:
     docker compose -f docker-compose.prod.yml exec web uv run python scripts/recompress_attachments.py {{ args }}
 
+# Backfill missing account phone numbers (WRITES by default; add --dry-run to preview)
+backfill-phones *args:
+    uv run python scripts/backfill_account_phones.py {{ args }}
+
+# Backfill missing account phone numbers in prod Docker (WRITES by default; add --dry-run to preview; polls Telegram)
+prod-backfill-phones *args:
+    docker compose -f docker-compose.prod.yml exec -T web uv run python scripts/backfill_account_phones.py --telegram-from-container {{ args }}
+
 # Stop all max-worker containers
 max-workers-stop:
     docker ps -q --filter "label=broadcaster.role=max-worker" | xargs -r docker stop
