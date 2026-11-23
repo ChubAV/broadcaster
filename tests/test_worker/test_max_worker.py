@@ -938,7 +938,9 @@ async def test_photo_album_without_photo_ids_uploads_each_photo_on_its_own_url(m
 
     assert posted == [first, second]
     upload_requests = [payload for opcode, payload in invoked if opcode == Opcode.PHOTO_UPLOAD]
-    assert upload_requests == [{"count": 1, "profile": False}] * 2
+    # 2.5.0 adds ``type``/``uploaderType`` to the request; what matters is one photo per upload.
+    assert len(upload_requests) == 2
+    assert all(request["count"] == 1 and request["profile"] is False for request in upload_requests)
     assert [attach["photoToken"] for attach in sent_attaches(invoked)] == ["tok-1", "tok-2"]
 
 

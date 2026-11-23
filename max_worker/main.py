@@ -31,18 +31,10 @@ from pydantic import BaseModel
 from pymax import ExtraConfig, Photo, WebClient
 from pymax.types.domain.enums import ChatType
 
-from max_worker.pymax_compat import (
-    apply_contact_attachment_compatibility,
-    apply_photo_upload_compatibility,
-    apply_sticker_attachment_compatibility,
-    apply_websocket_frame_size_compatibility,
-)
+from max_worker.pymax_compat import apply_websocket_frame_size_compatibility
 
 
-CONTACT_ATTACHMENT_COMPATIBILITY_APPLIED = apply_contact_attachment_compatibility()
-STICKER_ATTACHMENT_COMPATIBILITY_APPLIED = apply_sticker_attachment_compatibility()
 WEBSOCKET_FRAME_SIZE_COMPATIBILITY_APPLIED = apply_websocket_frame_size_compatibility()
-PHOTO_UPLOAD_COMPATIBILITY_APPLIED = apply_photo_upload_compatibility()
 
 
 # ---- 1. Config (env vars) ----
@@ -102,14 +94,8 @@ logging.root.handlers = [_handler]
 logging.root.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
 log = logging.getLogger("max_worker")
 
-if CONTACT_ATTACHMENT_COMPATIBILITY_APPLIED:
-    log.info("pymax_contact_attachment_compatibility_applied")
-if STICKER_ATTACHMENT_COMPATIBILITY_APPLIED:
-    log.info("pymax_sticker_attachment_compatibility_applied")
 if WEBSOCKET_FRAME_SIZE_COMPATIBILITY_APPLIED:
     log.info("pymax_websocket_frame_size_compatibility_applied")
-if PHOTO_UPLOAD_COMPATIBILITY_APPLIED:
-    log.info("pymax_photo_upload_compatibility_applied")
 
 # Force all loggers through our JSON formatter (no duplicate plain-text lines)
 for _ln in ("uvicorn", "uvicorn.access", "uvicorn.error", "pymax", "pymax.core"):
@@ -238,7 +224,7 @@ def session_db_path() -> Path:
 def own_phone_of(client) -> str | None:
     """Return the account's own number as MAX reports it, or None.
 
-    Source: ``client.me.contact.phone`` of pymax 2.3.1 (``types/domain/user.py``),
+    Source: ``client.me.contact.phone`` of pymax 2.5.0 (``types/domain/user.py``),
     filled by the LOGIN answer before ``on_start`` runs. ``sessions.phone`` of a
     ``WebClient`` is always empty and is not a source. Tolerates a client with no
     ``me`` at all. Only a positive ``int`` counts (``bool`` is an ``int`` subclass
@@ -460,8 +446,11 @@ async def create_client(phone: str = "") -> SessionState:
         save_phone_to_disk(phone)
 
     _, legacy_credentials = _read_session_compatibility()
-    # MAX moved its websocket to api.oneme.ru; PyMax 2.3.1 still defaults to the
-    # unreachable ws-api.oneme.ru (handshake timeouts since 2026-11-22).
+    # MAX moved its websocket to api.oneme.ru.  PyMax 2.5.0 defaults to the same
+    # address; the explicit url stays so a future change of the library default
+    # cannot silently move the worker (test_client_dials_the_current_max_websocket_host).
+    # relogin (default True: a revoked token restarts QR login) and telemetry
+    # (default True) are deliberately left at the 2.5.0 defaults.
     config_kwargs = {"reconnect": True, "log_level": LOG_LEVEL, "url": MAX_WEBSOCKET_URL}
     if legacy_credentials:
         config_kwargs.update(token=legacy_credentials[0], device_id=legacy_credentials[1])
