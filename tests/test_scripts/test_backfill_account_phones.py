@@ -14,6 +14,7 @@
 """
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -1720,3 +1721,266 @@ async def test_telegram_dry_run_polls_but_writes_nothing(factory, capsys):
     assert f"#{account_id} tg_user: было бы заполнено {MASKED}" in out
     assert world.events == [(name, 1) for name in _FULL_CALLS], "просмотр не опросил Telegram"
     assert await _snapshot(factory) == before, "просмотр изменил строки аккаунтов"
+
+
+# --- признак «занят»: Celery inspect и очередь `telegram` в Redis (D-09, PHONE-20) -----
+
+CELERY_SEND = "app.worker.tasks.send_telegram_message"
+
+
+class FakeInspector:
+    """Двойник `celery.control.inspect()`: три команды, ответы-словари и журнал вызовов.
+
+    Ответ — значение (словарь «воркер -> список» либо `None`, как у настоящего
+    инспектора без ответивших воркеров) или исключение, которое команда поднимет.
+    """
+
+    def __init__(self, active_queues, active, reserved):
+        self.replies = {"active_queues": active_queues, "active": active, "reserved": reserved}
+        self.calls: list[str] = []
+
+    def _answer(self, name: str):
+        self.calls.append(name)
+        reply = self.replies[name]
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+    def active_queues(self):
+        return self._answer("active_queues")
+
+    def active(self):
+        return self._answer("active")
+
+    def reserved(self):
+        return self._answer("reserved")
+
+
+class FakeRedis:
+    """Двойник клиента Redis: только `lrange`; журнал ключей и границ."""
+
+    def __init__(self, items=()):
+        self.items = items
+        self.calls: list[tuple] = []
+
+    def lrange(self, key, start, end):
+        self.calls.append((key, start, end))
+        if isinstance(self.items, BaseException):
+            raise self.items
+        return list(self.items)
+
+
+TG_QUEUES = {
+    "celery@tg": [{"name": "telegram"}],
+    "celery@default": [{"name": "default"}],
+}
+IDLE = {"celery@tg": [], "celery@default": []}
+
+
+def _send_task(account_id: int, name: str = CELERY_SEND) -> dict:
+    return {"name": name, "args": [13, 1017, account_id, 41]}
+
+
+def _inspector(active=None, reserved=None, queues=None) -> FakeInspector:
+    return FakeInspector(
+        TG_QUEUES if queues is None else queues,
+        IDLE if active is None else active,
+        IDLE if reserved is None else reserved,
+    )
+
+
+@pytest.mark.asyncio
+async def test_tracer_busy_probe_sees_an_active_send_and_blocks_the_connection(factory, capsys):
+    user_id = await _seed_user(factory)
+    first_id = await _seed_tg(factory, user_id)
+    second_id = await _seed_tg(factory, user_id)
+    inspector = _inspector(
+        active={"celery@tg": [_send_task(first_id)], "celery@default": []},
+    )
+    redis_double = FakeRedis([])
+    world = TelegramWorld()
+    probe = script.TelegramBusyProbe(inspector_factory=lambda: inspector, redis_client=redis_double)
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world, probe)})
+
+    out = capsys.readouterr().out
+    assert _line(out, first_id, "tg_user") == (
+        f"#{first_id} tg_user: занят, повторите позже (идёт рассылка)"
+    ), "занятый аккаунт получил подключение"
+    assert len(world.clients) == 1, "занятый аккаунт получил подключение"
+    assert await _columns(factory, first_id) == (None, False)
+    assert await _columns(factory, second_id) == (STORED, False)
+
+
+# --- отказ в закрытую: любая неопределённость значит «не определено» (T-20-19) --------
+
+
+def _probe(inspector, items=()):
+    """Признак с двойниками; `inspector` — двойник или исключение (его поднимет фабрика)."""
+
+    def inspector_factory():
+        if isinstance(inspector, BaseException):
+            raise inspector
+        return inspector
+
+    return script.TelegramBusyProbe(
+        inspector_factory=inspector_factory, redis_client=FakeRedis(items)
+    )
+
+
+def _list_item(task: str, argsrepr: str) -> bytes:
+    """Сообщение списка `telegram` той формы, что кладёт kombu (`headers.task`, `headers.argsrepr`)."""
+    message = {"body": "", "headers": {"task": task, "argsrepr": argsrepr}, "properties": {}}
+    return json.dumps(message).encode()
+
+
+FAIL_CLOSED = [
+    pytest.param(FakeInspector(None, IDLE, IDLE), [], id="active-queues-none"),
+    pytest.param(FakeInspector({}, IDLE, IDLE), [], id="active-queues-empty"),
+    pytest.param(
+        FakeInspector({"celery@default": [{"name": "default"}]}, IDLE, IDLE),
+        [],
+        id="no-worker-consumes-telegram",
+    ),
+    pytest.param(FakeInspector(TG_QUEUES, None, IDLE), [], id="active-none"),
+    pytest.param(FakeInspector(TG_QUEUES, IDLE, None), [], id="reserved-none"),
+    pytest.param(
+        FakeInspector(TG_QUEUES, {"celery@default": []}, IDLE),
+        [],
+        id="only-default-answered-active",
+    ),
+    pytest.param(
+        FakeInspector(TG_QUEUES, IDLE, {"celery@default": []}),
+        [],
+        id="only-default-answered-reserved",
+    ),
+    pytest.param(RuntimeError("no broker"), [], id="inspector-factory-raises"),
+    pytest.param(FakeInspector(TG_QUEUES, IDLE, IDLE), ConnectionError("redis"), id="lrange-raises"),
+    pytest.param(FakeInspector(TG_QUEUES, IDLE, IDLE), [b"not json"], id="list-item-not-json"),
+    pytest.param(
+        FakeInspector(TG_QUEUES, IDLE, IDLE),
+        [_list_item(CELERY_SEND, "garbage")],
+        id="list-send-with-garbage-argsrepr",
+    ),
+    pytest.param(
+        FakeInspector(
+            TG_QUEUES,
+            {"celery@tg": [{"name": CELERY_SEND, "args": "13, 1017, 20, 41"}], "celery@default": []},
+            IDLE,
+        ),
+        [],
+        id="active-send-with-string-args",
+    ),
+    pytest.param(
+        FakeInspector(
+            TG_QUEUES,
+            IDLE,
+            {"celery@tg": [{"name": CELERY_SEND, "args": [13, 1017]}], "celery@default": []},
+        ),
+        [],
+        id="reserved-send-with-short-args",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inspector, items", FAIL_CLOSED)
+async def test_busy_probe_fails_closed(inspector, items):
+    assert await _probe(inspector, items)(20) is None, "неопределённость принята за «не занят»"
+
+
+@pytest.mark.asyncio
+async def test_busy_probe_answers_by_task_and_account():
+    in_active = _inspector(active={"celery@tg": [_send_task(20)], "celery@default": []})
+    in_reserved = _inspector(reserved={"celery@tg": [_send_task(20)], "celery@default": []})
+    other_task = _inspector(
+        active={"celery@tg": [_send_task(20, "app.worker.tasks.check_schedules")], "celery@default": []}
+    )
+    other_account = _inspector(active={"celery@tg": [_send_task(21)], "celery@default": []})
+
+    assert await _probe(in_active)(20) is True, "задача отправки в active не признана"
+    assert await _probe(in_reserved)(20) is True, "задача отправки в reserved не признана"
+    assert await _probe(other_task)(20) is False, "чужая задача с тем же args[2] признана"
+    assert await _probe(other_account)(20) is False, "задача другого аккаунта признана"
+    assert await _probe(_inspector())(20) is False
+    queued = [_list_item(CELERY_SEND, "[13, 1017, 20, 41]")]
+    assert await _probe(_inspector(), queued)(20) is True, "сообщение списка не признано"
+    assert await _probe(_inspector(), queued)(21) is False
+
+
+def _real_kombu_item(account_id: int) -> bytes:
+    """Сообщение, построенное настоящей отправкой Celery через транспорт `memory://`.
+
+    Элемент списка Redis — `dumps(message)` того же словаря, что транспорт `memory`
+    кладёт в очередь (`kombu/transport/redis.py`, `Channel._put`): так форма сообщения
+    берётся у самого Celery, а не пишется руками. `_queue_for` — частный метод
+    транспорта `memory`, другого способа достать сообщение без воркера нет.
+    """
+    from celery import Celery
+    from kombu.utils.json import dumps
+
+    app = Celery("probe", broker="memory://")
+    with app.connection_for_write() as conn:
+        app.send_task(
+            script.SEND_TASK,
+            args=[13, 1017, account_id, 41],
+            queue=script.TELEGRAM_QUEUE,
+            connection=conn,
+        )
+        message = conn.default_channel._queue_for(script.TELEGRAM_QUEUE).get_nowait()
+    return dumps(message).encode()
+
+
+@pytest.mark.asyncio
+async def test_busy_probe_reads_a_real_kombu_message_from_the_telegram_list():
+    item = _real_kombu_item(20)
+    redis_double = FakeRedis([item])
+    probe = script.TelegramBusyProbe(
+        inspector_factory=lambda: _inspector(), redis_client=redis_double
+    )
+
+    assert await probe(20) is True, "сообщение очереди telegram не прочитано"
+    assert await probe(21) is False
+    assert redis_double.calls == [("telegram", 0, -1)] * 2, "прочитан не список telegram"
+
+
+def test_busy_probe_constants_match_the_send_task(monkeypatch):
+    import inspect as pyinspect
+
+    from app.config import get_settings
+
+    # Модуль `celery_app` читает настройки при ввозе; в чистом дереве (без `.env`)
+    # их нет, поэтому обязательные значения задаются тут, а кэш настроек сбрасывается
+    # до и после — тестовые настройки в нём не остаются.
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    get_settings.cache_clear()
+    try:
+        from app.worker.celery_app import celery
+    finally:
+        get_settings.cache_clear()
+    from app.worker.tasks import send_telegram_message
+
+    assert celery.conf.task_routes[script.SEND_TASK]["queue"] == script.TELEGRAM_QUEUE
+    assert send_telegram_message.name == script.SEND_TASK
+    parameters = list(pyinspect.signature(send_telegram_message.run).parameters)
+    assert parameters.index("account_id") == script.ACCOUNT_ARG_INDEX
+
+
+@pytest.mark.asyncio
+async def test_busy_probe_reads_worker_queues_once_per_run(factory):
+    user_id = await _seed_user(factory)
+    for _ in range(3):
+        await _seed_tg(factory, user_id)
+    inspector = _inspector()
+    probe = script.TelegramBusyProbe(
+        inspector_factory=lambda: inspector, redis_client=FakeRedis([])
+    )
+    world = TelegramWorld()
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world, probe)})
+
+    assert len(world.clients) == 3
+    assert inspector.calls.count("active_queues") == 1, "состав воркеров читается не один раз"
+    assert inspector.calls.count("active") == 3, "снимок active берётся не на каждый аккаунт"
+    assert inspector.calls.count("reserved") == 3, "снимок reserved берётся не на каждый аккаунт"
