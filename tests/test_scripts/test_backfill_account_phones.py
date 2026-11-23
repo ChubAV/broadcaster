@@ -1475,3 +1475,159 @@ async def test_tracer_telegram_number_reaches_the_writer_without_updates(factory
     assert probe.asked == [account_id]
     out = capsys.readouterr().out
     assert f"#{account_id} tg_user: заполнено {MASKED}" in out
+
+
+# --- карта исходов Telethon по классам, строка сессии до сети (D-17) ----------------
+
+_FULL_CALLS = ["connect", "is_user_authorized", "get_me", "disconnect"]
+
+TELEGRAM_OUTCOMES = [
+    pytest.param(
+        {"raise_on": {"connect": telethon_errors.AuthKeyDuplicatedError(request=None)}},
+        "сессия мертва (AuthKeyDuplicatedError)",
+        ["connect", "disconnect"],
+        id="auth-key-duplicated",
+    ),
+    pytest.param(
+        {"raise_on": {"connect": telethon_errors.SessionRevokedError(request=None)}},
+        "сессия мертва (SessionRevokedError)",
+        ["connect", "disconnect"],
+        id="session-revoked",
+    ),
+    pytest.param(
+        {"raise_on": {"get_me": telethon_errors.SessionRevokedError(request=None)}},
+        "сессия мертва (SessionRevokedError)",
+        _FULL_CALLS,
+        id="session-revoked-on-get-me",
+    ),
+    pytest.param(
+        {"raise_on": {"connect": telethon_errors.FloodWaitError(request=None, capture=30)}},
+        "воркер недоступен (FloodWaitError)",
+        ["connect", "disconnect"],
+        id="flood-wait",
+    ),
+    pytest.param(
+        {"raise_on": {"connect": OSError("net-down")}},
+        "воркер недоступен (OSError)",
+        ["connect", "disconnect"],
+        id="os-error",
+    ),
+    pytest.param(
+        {"raise_on": {"is_user_authorized": TimeoutError("slow")}},
+        "воркер недоступен (TimeoutError)",
+        ["connect", "is_user_authorized", "disconnect"],
+        id="timeout",
+    ),
+    pytest.param(
+        {"authorized": False},
+        "сессия мертва (не авторизована)",
+        ["connect", "is_user_authorized", "disconnect"],
+        id="not-authorized",
+    ),
+    pytest.param(
+        {"me": None},
+        "сессия мертва (не авторизована)",
+        _FULL_CALLS,
+        id="get-me-none",
+    ),
+    pytest.param(
+        {"me": SimpleNamespace(phone=None)},
+        "номера нет",
+        _FULL_CALLS,
+        id="user-without-a-number",
+    ),
+    pytest.param(
+        {"raise_on": {"get_me": RuntimeError("boom")}},
+        "сбой по аккаунту (RuntimeError)",
+        _FULL_CALLS,
+        id="other-exception",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario, line, calls", TELEGRAM_OUTCOMES)
+async def test_telegram_outcomes_map(factory, capsys, scenario, line, calls):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+    world = TelegramWorld(**scenario)
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world)})
+
+    out = capsys.readouterr().out
+    assert _line(out, account_id, "tg_user") == f"#{account_id} tg_user: {line}", (
+        "исход Telethon назван не по карте A3 (AuthKeyDuplicated не названа мёртвой сессией)"
+    )
+    client = world.clients[0]
+    assert client.calls == calls, "disconnect не ожидался ровно один раз на этом пути"
+    client.start.assert_not_called()
+    client.check_connection.assert_not_called()
+    assert await _columns(factory, account_id) == (None, False)
+    assert world.open_now == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credentials", ["", "   ", "pending", "creds", "1abc"])
+async def test_telegram_bad_session_string_never_connects(factory, capsys, credentials):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id, credentials)
+    world = TelegramWorld()
+    probe = _busy_probe(False)
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world, probe)})
+
+    out = capsys.readouterr().out
+    assert _line(out, account_id, "tg_user").startswith(f"#{account_id} tg_user: сессия мертва")
+    assert world.clients == [], "клиент построен из негодной строки сессии"
+    assert probe.asked == [], "признак «занят» опрошен для негодной строки сессии"
+
+
+@pytest.mark.asyncio
+async def test_telegram_disconnect_awaited_on_every_path(factory, capsys):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+    world = TelegramWorld(raise_on={"disconnect": OSError("close-failed")})
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world)})
+
+    assert await _columns(factory, account_id) == (STORED, False), (
+        "отказ отключения изменил исход"
+    )
+    assert world.clients[0].calls == _FULL_CALLS
+    out = capsys.readouterr().out
+    assert f"#{account_id} tg_user: заполнено {MASKED}" in out
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "creds", [{"api_id": 0, "api_hash": "h"}, {"api_id": 1, "api_hash": ""}], ids=["id", "hash"]
+)
+async def test_telegram_missing_api_credentials_never_connect(factory, capsys, creds):
+    user_id = await _seed_user(factory)
+    account_id = await _seed_tg(factory, user_id)
+    world = TelegramWorld()
+    probe = _busy_probe(False)
+
+    await script.run(
+        factory, script.RunOptions(), {"tg_user": _telegram_source(world, probe, **creds)}
+    )
+
+    out = capsys.readouterr().out
+    assert _line(out, account_id, "tg_user").startswith(f"#{account_id} tg_user: воркер недоступен")
+    assert world.clients == []
+
+
+@pytest.mark.asyncio
+async def test_telegram_output_carries_no_session_or_exception_text(factory, capsys):
+    user_id = await _seed_user(factory)
+    session_string = _valid_session_string()
+    account_id = await _seed_tg(factory, user_id, session_string)
+    world = TelegramWorld(raise_on={"connect": OSError("secret-79991234567")})
+
+    await script.run(factory, script.RunOptions(), {"tg_user": _telegram_source(world)})
+
+    out = capsys.readouterr().out
+    assert session_string not in out
+    assert "secret-79991234567" not in out
+    assert "79991234567" not in out
+    assert f"#{account_id} tg_user: воркер недоступен (OSError)" in out
