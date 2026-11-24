@@ -1,10 +1,12 @@
 ---
-status: diagnosed
+status: resolved
 trigger: "phone-anchor-under-sticky-head — Переход по «Указать номер» / «Изменить» с карточки аккаунта (`/accounts/{id}/groups#phone`) должен оставлять поле «Номер телефона» в видимой области, не под липкой шапкой `[data-head]`."
 created: 2026-11-21T19:00:00Z
-updated: 2026-11-21T19:40:00Z
+updated: 2026-11-24T00:00:00Z
 mode: find_root_cause_only
 ---
+
+> **СТАТУС 2026-11-24: закрыто при закрытии вехи v2.2.** Причина (нет отступа прокрутки под липкую шапку) устранена планом 18-04 (`html { scroll-padding-top }`); проверка 8 `18-UAT.md` — pass, принято владельцем 2026-11-22 («принимаю все»); `18-VERIFICATION.md` — passed.
 
 ## Current Focus
 
