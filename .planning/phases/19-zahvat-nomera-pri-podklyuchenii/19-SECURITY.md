@@ -102,3 +102,19 @@ created: "2026-11-23"
 - [x] `status: verified` set in frontmatter
 
 **Approval:** verified 2026-11-23
+
+## Security Audit 2026-11-24
+
+| Metric | Count |
+|---|---|
+| Threats found | 28 |
+| Closed | 28 |
+| Open | 0 |
+
+Перепроверка перед раундом 3 верификации (`/gsd-execute-phase 19`, вердикт `stale`: после раунда 2 фаза 20 дописала в `justfile` рецепты `backfill-phones` и `prod-backfill-phones`). Проводил оркестратор, без аудитора: сработало правило короткого пути `secure-phase` — `threats_open: 0`, реестр составлен при планировании (8 из 8 планов несут `<threat_model>`; все 27 номерных угроз и `T-19-SC` есть в реестре), `asvs_level: 1`. Реестр не менялся, ни одна строка не сменила статус. Это замер дерева `f7cefff4`. Вне `.planning/` оно совпадает с `eeb44eed`, где полная суита дала 6298 passed, 2 skipped, 0 failed (`.pytest_cache/gsd-orch/suite-p18r.log`).
+
+- **T-19-09…T-19-11 (`max_worker/main.py`).** После аудита файл правила быстрая задача 261123-bgc (`7153c9fb`, переход на PyMax 2.5.0). Она сняла три прослойки совместимости (`contact`/`sticker`-вложения, загрузка фото) и обновила комментарии. Код мер фазы не тронут, номера строк сдвинулись на 11: `/status` отдаёт `session.own_phone` (`max_worker/main.py:1032`); журнал отказа — `own_phone_capture_failed account_id=%s error_type=%s` (`:482`); захват стоит первым в `try/except` до `state.is_connected = True` (`:476–486`). Тесты-улики `test_the_form_number_never_leaks_into_the_status_answer`, `test_the_capture_writes_no_number_to_the_log` (3 случая) и `test_a_failing_capture_does_not_break_the_connection` (2 случая) — PASSED в суите на `eeb44eed`. Ссылки на строки в реестре — снимок аудита 2026-11-23, а не обещание.
+- **T-19-12, T-19-13 (`justfile`).** Фаза 20 (`b5ba2c6b`) дописала два рецепта ниже деплойных. Строки `just wa-worker-build` в `prod-hard-deploy`, `prod-deploy` и `prod-build` прежние (`justfile:108,121,134`). `tests/test_wa_worker_deployment.py` и `tests/test_max_worker_deployment.py` — 9 из 9 на дереве с новыми рецептами.
+- **T-19-SC (строка «npm/pip/cargo installs»).** Улика `git diff d7c4eba1~1..HEAD` по манифестам — снимок на момент аудита 2026-11-23. Сегодня тот же диапазон показывает ещё `7153c9fb` (быстрая задача 261123-bgc): `maxapi-python` 2.3.1 → 2.5.0 в `max_worker/requirements.txt`, в dev-группе `pyproject.toml` и в строках `maxapi-python` файла `uv.lock` (specifier, version, sdist, wheel). Это и есть отдельный todo `max-worker-pymax-2-5-0-upgrade`, названный в строке. Он выполнен вне фазы, быстрой задачей. Угроза фазы — подмена пакета, поставленного её планами, — закрыта прежней мерой: планы фазы ничего не ставили. Легитимность пакета 2.5.0 относится к быстрой задаче, а не к этому реестру.
+- **T-19-24 (`19-UAT.md`).** Мера держится: раздел `## Машинная улика обхода` отделён от отметок, `tests/test_planning/test_the_walkthrough_cannot_self_certify.py` зелёный (`tests/test_planning` на `f7cefff4`: 218 passed, 2 skipped). Слова строки «`status: testing`; `result: pass` только у проверки 4» — снимок аудита. Сейчас запись завершена `/gsd-verify-work 19` (`9f226ee8`): `status: complete`, 5 из 5 `result: pass`, отметки словами владельца.
+- **T-19-26 / AR-19-02 (наблюдение, не новая угроза).** После завершения обхода (`9f226ee8`) в `19-UAT.md` по-прежнему два номера владельца, но уже в 16 строках вместо четырёх, названных в AR-19-02. Риск в границах принятого: номера владельца, запись владельца. Вычистить цифры — решение владельца. Сами номера в этот реестр не выписаны.
