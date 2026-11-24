@@ -1,0 +1,5 @@
+.git
+.pytest_cache
+graphify-out
+.planning
+**/__pycache__
