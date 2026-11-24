@@ -91,7 +91,14 @@ PLAN_GLOB = ".planning/phases/*/[0-9]*-PLAN.md"
 # `.planning/milestones/v2.1-phases/`. Вселенная — объединение живого каталога и архива вехи;
 # тождество плана остаётся путём, под которым план исполнялся (`.planning/phases/<каталог>/…`),
 # поэтому 741 строка реестра не переписывается. Один каталог в обоих местах — `CensusError`.
+# ВТОРОЙ ПЕРЕЕЗД (закрытие вехи v2.2, 2026-11-24): фазы 16…20 ушли в `v2.2-phases/`. Вселенная —
+# живой каталог плюс архивы ВСЕХ вех из `ARCHIVED_PHASES_DIRS`; следующее закрытие дописывает
+# свой каталог сюда. `ARCHIVED_PHASES_DIR` остаётся адресом архива, где живёт сам реестр.
 ARCHIVED_PHASES_DIR = ".planning/milestones/v2.1-phases"
+ARCHIVED_PHASES_DIRS = (
+    ARCHIVED_PHASES_DIR,
+    ".planning/milestones/v2.2-phases",
+)
 LIVE_PHASES_DIR = ".planning/phases"
 REGISTRY_RELATIVE_PATH = (
     f"{ARCHIVED_PHASES_DIR}/15-uprochnenie-i-svodnyy-obhod-47-form/15-prohibitions-registry.yaml"
@@ -430,12 +437,15 @@ def _plan_sources(root: Path) -> dict[str, str]:
         path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
         for path in sorted(root.glob(PLAN_GLOB))
     }
-    archived_glob = PLAN_GLOB.replace(LIVE_PHASES_DIR, ARCHIVED_PHASES_DIR, 1)
-    for path in sorted(root.glob(archived_glob)):
-        identity = f"{LIVE_PHASES_DIR}/{path.relative_to(root / ARCHIVED_PHASES_DIR).as_posix()}"
-        if identity in sources:
-            raise CensusError(f"`{identity}`: план найден и в живом каталоге, и в архиве вехи")
-        sources[identity] = path.read_text(encoding="utf-8")
+    for archived_dir in ARCHIVED_PHASES_DIRS:
+        archived_glob = PLAN_GLOB.replace(LIVE_PHASES_DIR, archived_dir, 1)
+        for path in sorted(root.glob(archived_glob)):
+            identity = f"{LIVE_PHASES_DIR}/{path.relative_to(root / archived_dir).as_posix()}"
+            if identity in sources:
+                raise CensusError(
+                    f"`{identity}`: план найден дважды — в живом каталоге или в архивах двух вех"
+                )
+            sources[identity] = path.read_text(encoding="utf-8")
     return dict(sorted(sources.items()))
 
 
