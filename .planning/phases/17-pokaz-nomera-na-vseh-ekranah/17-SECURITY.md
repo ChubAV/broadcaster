@@ -101,3 +101,22 @@ created: "2026-11-21"
 - [x] `status: verified` set in frontmatter
 
 **Approval:** verified 2026-11-21
+
+## Security Audit 2026-11-24
+
+| Metric | Count |
+|---|---|
+| Threats found | 29 |
+| Closed | 29 |
+| Open | 0 |
+
+Перепроверка перед раундом 2 верификации (`/gsd-execute-phase 17`, вердикт `stale`); вёл оркестратор, аудитор не порождался. Сработало правило короткого пути `secure-phase`: `threats_open: 0`, реестр составлен при планировании (`<threat_model>` есть во всех 9 планах), `asvs_level: 1`. Реестр не менялся, ни одна угроза не переоткрыта. Меры сверены грепом L1 на `0f115213` — после закрытия фазы (`4f65d5f4`) фазы 18–20 правили 19 покрытых файлов.
+
+- **T-17-01 / T-17-09 / T-17-13 / T-17-17 / T-17-23 (автоэкранирование).** В `components/account_label.html`, `account_groups/list.html`, `worker_row.html`, `queue_row.html`, `history/list.html` и `admin/user_history.html` нет ни `|safe`, ни `Markup(`. Макрос подписи дополнила `f3c959d3` (18-01, знак ручного номера) — без небезопасной разметки.
+- **T-17-02 / T-17-03 (`load_account_rows`).** Отбор по-прежнему `MessengerAccount.user_id == user_id`, одной инструкцией. Проекция теперь из **четырёх** колонок: `phone_is_manual` добавил план 18-01 (`f3c959d3`). Слова «трёх колонок» в строке реестра — снимок 2026-11-21. Мера держится: `credentials`/`session_data` в проекции нет.
+- **T-17-04.** В `app/services/account_label.py` и `app/application/accounts/labels.py` нет `logger`/`logging`/`structlog`.
+- **T-17-05.** Опрос синхронизации строит подпись после `view is not None` (`app/pages/accounts.py:1098–1100`).
+- **T-17-06 / T-17-16.** В атрибутах `x-*`, `@…`, `hx-*` и в `$dispatch` по `app/templates` нет ни `acct_label`, ни `.plain`.
+- **T-17-12 / T-17-18 / T-17-19 / T-17-20 / T-17-22.** `app/pages/history.py` после `4f65d5f4` не менялся. Ссылки `:673`, `:796`, `:857`, `:876` и `export_phone_cell` на `:298` точны. В `app/pages/admin.py` строки сдвинулись, но маршруты `admin_user_history` (`:1391`) и `admin_user_history_partial` (`:1509`) по-прежнему за `require_admin`.
+- **T-17-24 / T-17-25 / T-17-26 (гейты не вакуумны).** `tests/test_templates/test_account_label_gate.py` и `tests/test_pages/test_account_label_sweep.py` зелёные на `0f115213` в объединённом прогоне карты Nyquist: 2985 passed, 0 skipped (`.pytest_cache/gsd-orch/p17r/map-union.log`).
+- **T-17-SC.** С `4f65d5f4` зависимости изменила только `7153c9fb` (quick-261123-bgc, 2026-11-23): `maxapi-python` в dev-группе поднят с 2.3.1 до 2.5.0. Правка вне фазы 17; её легитимность проверена в той быстрой задаче и в раунде 14 фазы 16.
